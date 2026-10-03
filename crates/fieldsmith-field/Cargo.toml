@@ -1,0 +1,10 @@
+[package]
+name = "fieldsmith-field"
+description = "Field IR: compiles Fieldsmith documents to signed-distance expressions, evaluates them (value + gradient), integrates volumes, and generates matching GLSL."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fieldsmith-doc = { workspace = true }
+serde = { workspace = true }

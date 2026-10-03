@@ -1,0 +1,17 @@
+[package]
+name = "fieldsmith-wasm"
+description = "WebAssembly bindings for the Fieldsmith browser app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fieldsmith-doc = { workspace = true }
+fieldsmith-field = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }

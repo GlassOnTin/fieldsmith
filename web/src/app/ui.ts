@@ -1,0 +1,65 @@
+// Ephemeral UI state (not part of the document, not undoable).
+import { useEffect, useReducer } from 'preact/hooks';
+import { store } from '../doc/store';
+
+type Listener = () => void;
+
+export type GizmoMode = 'translate' | 'rotate';
+
+class Ui {
+  paletteOpen = false;
+  menu: { kind: 'add' | 'file' | 'modifier'; x: number; y: number; target?: string } | null = null;
+  toast: { text: string; kind: 'info' | 'error' } | null = null;
+  renaming: string | null = null;
+  gizmo: GizmoMode = 'translate';
+  snap = true;
+  gridStep = 1;
+  angleStep = 15;
+  frameMs = 0;
+  compileMs = 0;
+  hover: { shape: string | null; face: string | null; point: [number, number, number] } | null = null;
+  collapsed = new Set<string>();
+  version = 0;
+  private listeners = new Set<Listener>();
+  private toastTimer = 0;
+
+  subscribe(l: Listener) {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
+  }
+  set<K extends keyof this>(k: K, v: this[K]) {
+    if (this[k] === v) return;
+    this[k] = v;
+    this.emit();
+  }
+  emit() {
+    this.version++;
+    for (const l of this.listeners) l();
+  }
+  notify(text: string, kind: 'info' | 'error' = 'info', ms = 3200) {
+    this.toast = { text, kind };
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      this.toast = null;
+      this.emit();
+    }, ms);
+    this.emit();
+  }
+}
+
+export const ui = new Ui();
+
+/** Re-render the calling component when the document store or UI state changes. */
+export function useApp() {
+  const [, bump] = useReducer((x: number, _: void) => x + 1, 0);
+  const force = () => bump(undefined);
+  useEffect(() => {
+    const a = store.subscribe(force);
+    const b = ui.subscribe(force);
+    return () => {
+      a();
+      b();
+    };
+  }, []);
+  return { store, ui };
+}

@@ -1,0 +1,6 @@
+fieldsmith 1
+name "Box minus cylinder"
+material pla
+
+box block size=(40, 30, 20) at=(0, 0, 10)
+cylinder bore r=8 h=30 at=(0, 0, 10) subtract

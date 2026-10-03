@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fieldsmith-doc",
+    "crates/fieldsmith-field",
+    "crates/fieldsmith-mesh",
+    "crates/fieldsmith-solve",
+    "crates/fieldsmith-core",
+    "crates/fieldsmith-wasm",
+    "crates/fieldsmith-cli",
+    "crates/fieldsmith-verify",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/GlassOnTin/fieldsmith"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+faer = "0.20"
+rayon = "1.10"
+miniz_oxide = "0.8"
+crc32fast = "1.4"
+wasm-bindgen = "=0.2.129"
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+
+fieldsmith-doc = { path = "crates/fieldsmith-doc" }
+fieldsmith-field = { path = "crates/fieldsmith-field" }
+fieldsmith-mesh = { path = "crates/fieldsmith-mesh" }
+fieldsmith-solve = { path = "crates/fieldsmith-solve" }
+fieldsmith-core = { path = "crates/fieldsmith-core" }
+
+# Upstream finite element framework, consumed as a sibling checkout (not vendored).
+fenics-element = { path = "../fenics-rs/crates/fenics-element" }
+fenics-mesh = { path = "../fenics-rs/crates/fenics-mesh" }
+fenics-assembly = { path = "../fenics-rs/crates/fenics-assembly" }
+
+# Numerical code is unusable at opt-level 0; keep debug builds fast enough for tests.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

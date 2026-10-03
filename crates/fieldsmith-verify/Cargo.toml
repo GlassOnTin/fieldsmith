@@ -1,0 +1,10 @@
+[package]
+name = "fieldsmith-verify"
+description = "Verification cases V1–V9: literate, executable checks against closed-form references that write Markdown reports."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fieldsmith-doc = { workspace = true }
+fieldsmith-field = { workspace = true }
