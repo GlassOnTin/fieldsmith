@@ -1,5 +1,5 @@
 // Model tree: the ordered list of shapes (and, in the Setup lens, the analysis items).
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { store } from '../doc/store';
 import { kindLabel } from '../doc/types';
@@ -14,7 +14,7 @@ const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: '
 export function RenameInput({ id, onDone }: { id: string; onDone: () => void }) {
   const ref = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(id);
-  useEffect(() => {
+  useLayoutEffect(() => {
     ref.current?.focus();
     ref.current?.select();
   }, []);
@@ -73,6 +73,9 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       class={`row ${selected ? 'selected' : ''} ${node.suppressed ? 'suppressed' : ''} ${drop ? `drop-${drop}` : ''}`}
       style={{ paddingLeft: `${8 + depth * 14}px` }}
       draggable
+      role="treeitem"
+      aria-selected={selected}
+      aria-label={`${node.id}, ${kindLabel(node.kind)}${node.suppressed ? ', suppressed' : ''}`}
       data-node={node.id}
       onDragStart={(e) => {
         dragId = node.id;
@@ -168,7 +171,7 @@ export function Tree() {
   useApp();
   const doc = store.doc;
   return (
-    <div class="tree" onClick={(e) => e.target === e.currentTarget && store.select(null)}>
+    <div class="tree" role="tree" aria-label="Model tree" onClick={(e) => e.target === e.currentTarget && store.select(null)}>
       <div class="section-label">
         <span>Shapes</span>
         <button

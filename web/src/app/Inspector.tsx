@@ -314,6 +314,8 @@ function NodeInspector({ node }: { node: Node }) {
             <span>Modifiers</span>
             <button
               class="btn ghost small"
+              data-action="add-modifier"
+              title="Add a modifier to this group"
               onClick={(e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 ui.set('menu', { kind: 'modifier', x: r.left - 100, y: r.bottom + 4, target: id });

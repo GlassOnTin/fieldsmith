@@ -26,6 +26,10 @@ export const viewApi = {
   view: (_dir: Vec3, _up?: Vec3) => {},
   /** A sensible insertion point for new shapes (on the ground under the view target). */
   insertionPoint: (): Vec3 => [0, 0, 0],
+  /** Project a model point (mm) to client pixel coordinates. */
+  project: (_p: Vec3): { x: number; y: number } => ({ x: 0, y: 0 }),
+  /** Gizmo handle under the pointer ('X', 'XY', …) or null. */
+  gizmoAxis: (): string | null => null,
 };
 
 export const EXAMPLES: { id: string; label: string; text: string }[] = [

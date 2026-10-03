@@ -79,6 +79,7 @@ export function ViewportHost() {
     let gizmoNode: string | null = null;
     let dragging = false;
     tc.addEventListener('change', () => vp.invalidate());
+    viewApi.gizmoAxis = () => tc.axis;
     tc.addEventListener('dragging-changed', (e) => {
       dragging = !!(e as unknown as { value: boolean }).value;
       vp.controls.enabled = !dragging;
@@ -162,10 +163,11 @@ export function ViewportHost() {
       const doc = store.doc;
       const selKey = JSON.stringify(store.selection);
       if (doc !== lastDoc) {
-        const refit = store.loads !== fittedLoad;
-        fittedLoad = store.loads;
+        const wasEmpty = !shader?.bounds;
         lastDoc = doc;
         shader = bodyShader(doc);
+        const refit = store.loads !== fittedLoad || (wasEmpty && !!shader.bounds);
+        fittedLoad = store.loads;
         void vp.setField({ source: shader.source, bounds: shader.bounds, ident: shader.ident }).then(() => {
           ui.compileMs = vp.lastCompileMs;
           updateHighlights();
@@ -204,6 +206,12 @@ export function ViewportHost() {
       if (!shader?.bounds) return [0, 0, 0];
       const t = vp.controls.target;
       return [Math.round(t.x), Math.round(t.y), 0];
+    };
+    viewApi.project = (p) => {
+      vp.camera.updateMatrixWorld();
+      const v = new THREE.Vector3(p[0], p[1], p[2]).project(vp.camera);
+      const r = vp.canvas.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
     };
 
     // ---- picking & hover ------------------------------------------------------------------

@@ -36,13 +36,13 @@ function ViewTools() {
       </button>
       {store.lens === 'shape' && (
         <>
-          <button class={`btn icon ${ui.gizmo === 'translate' ? 'primary' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
+          <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
             <Icon.move />
           </button>
-          <button class={`btn icon ${ui.gizmo === 'rotate' ? 'primary' : ''}`} title="Rotate (E)" onClick={() => runCommand('tool.rotate')}>
+          <button class={`btn icon ${ui.gizmo === 'rotate' ? 'on' : ''}`} title="Rotate (E)" onClick={() => runCommand('tool.rotate')}>
             <Icon.rotate />
           </button>
-          <button class={`btn icon ${ui.snap ? 'primary' : ''}`} title={`Snap to ${ui.gridStep} mm grid and shape centres (S)`} onClick={() => runCommand('tool.snap')}>
+          <button class={`btn icon ${ui.snap ? 'on' : ''}`} title={`Snap to ${ui.gridStep} mm grid and shape centres (S)`} onClick={() => runCommand('tool.snap')}>
             <Icon.magnet />
           </button>
         </>

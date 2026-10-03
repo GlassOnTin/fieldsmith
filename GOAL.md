@@ -39,12 +39,12 @@ without help, and the outputs satisfy the verification criteria below.
 ## Acceptance criteria
 
 ### A. Modelling
-- [ ] Primitives: box, cylinder, sphere, capsule, torus, extruded 2D profile (polyline + arcs).
-- [ ] Operations: union, subtract, intersect; smooth (filleted) variants with a radius in mm.
-- [ ] Modifiers: shell (inward/outward, thickness in mm), offset, linear and circular pattern, mirror.
-- [ ] Transform with in-viewport gizmo; snap to grid and to other features; exact values in inspector.
-- [ ] Editable model tree: select, rename, reorder, suppress, delete — all undoable.
-- [ ] Document is a readable text file (`*.fsm`) that round-trips losslessly through the UI.
+- [x] Primitives: box, cylinder, sphere, capsule, torus, extruded 2D profile (polyline + arcs).
+- [x] Operations: union, subtract, intersect; smooth (filleted) variants with a radius in mm.
+- [x] Modifiers: shell (inward/outward, thickness in mm), offset, linear and circular pattern, mirror.
+- [x] Transform with in-viewport gizmo; snap to grid and to other features; exact values in inspector.
+- [x] Editable model tree: select, rename, reorder, suppress, delete — all undoable.
+- [x] Document is a readable text file (`*.fsm`) that round-trips losslessly through the UI.
 
 ### B. Setup
 - [ ] Click a surface to create a **region**; region selection is a field (works on curved and blended faces).

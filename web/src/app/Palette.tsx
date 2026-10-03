@@ -27,19 +27,18 @@ export function Palette() {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
-  const list = useMemo(() => {
-    if (!ui.paletteOpen) return [];
-    return commands()
-      .map((c) => ({ c, s: score(c, q) }))
+  const matches = (query: string) =>
+    commands()
+      .map((c) => ({ c, s: score(c, query) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
       .map((x) => x.c);
-  }, [q, ui.paletteOpen]);
+  const list = useMemo(() => (ui.paletteOpen ? matches(q) : []), [q, ui.paletteOpen]);
   useEffect(() => {
-    if (ui.paletteOpen) {
+    if (ui.paletteOpen) input.current?.focus();
+    else {
       setQ('');
       setActive(0);
-      setTimeout(() => input.current?.focus(), 0);
     }
   }, [ui.paletteOpen]);
   if (!ui.paletteOpen) return null;
@@ -54,6 +53,7 @@ export function Palette() {
       <div class="palette" role="dialog" aria-label="Command palette">
         <input
           ref={input}
+          autoFocus
           placeholder="Type a command…"
           value={q}
           data-testid="palette-input"
@@ -69,7 +69,10 @@ export function Palette() {
             } else if (e.key === 'ArrowUp') {
               e.preventDefault();
               setActive((a) => Math.max(0, a - 1));
-            } else if (e.key === 'Enter') run(list[active]);
+            } else if (e.key === 'Enter') {
+              const value = (e.currentTarget as HTMLInputElement).value;
+              run(value === q ? list[active] : matches(value)[0]);
+            }
           }}
         />
         {list.length === 0 ? (

@@ -37,6 +37,34 @@ mod tests {
     }
 
     #[test]
+    fn shell_sides_place_the_wall_inside_outside_or_centred() {
+        // A 20 mm cube shelled 2 mm: wall spans [8, 10], [10, 12] or [9, 11] from the centre.
+        for (side, inner, outer) in [
+            ("inside", 8.0, 10.0),
+            ("outside", 10.0, 12.0),
+            ("centre", 9.0, 11.0),
+        ] {
+            let d = doc(&format!(
+                "group g {{\n  box b size=(20, 20, 20)\n  shell 2 {side}\n}}\n"
+            ));
+            let e = compile_body(&d);
+            let mid = 0.5 * (inner + outer);
+            assert!(
+                eval(&e, [mid, 0.0, 0.0]).v < 0.0,
+                "{side}: wall at x = {mid}"
+            );
+            assert!(
+                (eval(&e, [inner - 0.5, 0.0, 0.0]).v - 0.5).abs() < 1e-9,
+                "{side}: hollow inside"
+            );
+            assert!(
+                (eval(&e, [outer + 0.5, 0.0, 0.0]).v - 0.5).abs() < 1e-9,
+                "{side}: outer face at {outer}"
+            );
+        }
+    }
+
+    #[test]
     fn coplanar_seam_stays_sharp_but_corner_is_filleted() {
         // Two boxes side by side share the top plane z = 1: blending must not bulge the seam.
         let d = doc(

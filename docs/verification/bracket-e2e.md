@@ -4,14 +4,14 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.54 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 0.80 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 0.98 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 1.07 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 1.13 s | bracket-05.png |
-| Upright hole ⌀8.5 | 1.37 s | bracket-06.png |
+| Empty document | 0.50 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 0.91 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.14 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 1.65 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 1.65 s | bracket-05.png |
+| Upright hole ⌀8.5 | 2.09 s | bracket-06.png |
 
-Total scripted time: 6.0 s.
+Total scripted time: 8.1 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**

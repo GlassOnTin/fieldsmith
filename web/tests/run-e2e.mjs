@@ -10,6 +10,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { bracketTest } from './bracket.mjs';
+import { shapeTest } from './shape.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -91,6 +92,11 @@ try {
   if (!only || only === 'bracket') {
     const ok = await bracketTest(browser, url, { screens, docsDir, pct });
     console.log(`bracket test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'shape') {
+    const ok = await shapeTest(browser, url, { screens, docsDir });
+    console.log(`shape lens ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

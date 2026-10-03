@@ -58,11 +58,27 @@ void main() {
   vec4 f = vec4(1e9);
   bool hit = false;
   float eps = 0.0;
+  float tPrev = t;
   for (int i = 0; i < 300; i++) {
     vec3 p = ro + rd * t;
     f = fs_field(p);
     eps = max(1e-4, t * u_pixel * 0.6);
-    if (f.x < eps) { hit = true; break; }
+    if (f.x < eps) {
+      // A step that lands deep inside material overshot the surface (the field is not
+      // exactly Lipschitz where a fillet ends). Bisect back to the zero crossing.
+      if (f.x < -eps && i > 0) {
+        float lo = tPrev, hi = t;
+        for (int j = 0; j < 10; j++) {
+          float mid = 0.5 * (lo + hi);
+          vec4 fm = fs_field(ro + rd * mid);
+          if (fm.x < 0.0) { hi = mid; f = fm; } else lo = mid;
+        }
+        t = hi;
+      }
+      hit = true;
+      break;
+    }
+    tPrev = t;
     t += max(f.x * u_step, eps * 0.5);
     if (t > t1) break;
   }
