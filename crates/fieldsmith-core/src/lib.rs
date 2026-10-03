@@ -1,6 +1,7 @@
 //! The analysis pipeline: document → field → tetrahedral mesh → boundary conditions → P2 solve →
 //! nodal results. Runs identically natively (CLI, verification tests) and in a Web Worker.
 
+pub mod fill;
 pub mod probe;
 pub mod regions;
 
@@ -59,6 +60,7 @@ pub struct Provenance {
     pub iterations: usize,
 }
 
+#[derive(Debug)]
 pub struct Analysis {
     pub mesh: P2Mesh,
     pub young: Vec<f64>,
@@ -119,6 +121,103 @@ pub fn elem_von_mises(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> 
         .collect()
 }
 
+/// Support constraints as a per-node bit mask: bit 0/1/2 = x/y/z fixed. Shared by the solid and
+/// graded-fill solve paths, and by the verifier's resolved-model runs (same document semantics
+/// on a different mesh).
+pub fn fixed_mask(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    h: f64,
+) -> Result<Vec<u8>, SetupError> {
+    let mut fixed = vec![0u8; mesh.nodes.len()];
+    for s in &doc.supports {
+        let fs = region_facets(doc, &s.region, mesh, facets, h)?;
+        if fs.is_empty() {
+            return Err(SetupError(format!("support '{}': region '{}' does not touch the part's surface", s.id, s.region)));
+        }
+        let mask = (s.fixed[0] as u8) | (s.fixed[1] as u8) << 1 | (s.fixed[2] as u8) << 2;
+        for &fi in &fs {
+            for &n in &facets[fi].nodes {
+                fixed[n as usize] |= mask;
+            }
+        }
+    }
+    Ok(fixed)
+}
+
+/// Nodal force vector for one load case: uniform traction over the case's facets, corners 0 and
+/// each midside a/3. Shared by the solid and graded-fill solve paths, and by the verifier's
+/// resolved-model runs.
+pub fn case_force(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<Vec<f64>, SetupError> {
+    let mut force = vec![0.0; mesh.nodes.len() * 3];
+    for l in doc.loads.iter().filter(|l| l.case == name) {
+        let fs = region_facets(doc, &l.region, mesh, facets, h)?;
+        if fs.is_empty() {
+            return Err(SetupError(format!("load '{}': region '{}' does not touch the part's surface", l.id, l.region)));
+        }
+        let area: f64 = fs.iter().map(|&i| facets[i].area(mesh)).sum();
+        for &fi in &fs {
+            let fct = &facets[fi];
+            let a = fct.area(mesh);
+            let t = match l.kind {
+                LoadKind::Force { vector } => vector.map(|c| c / area),
+                LoadKind::Pressure { mpa } => fct.normal(mesh).map(|c| -mpa * c),
+            };
+            // Uniform traction on a 6-node triangle: corners 0, each midside a/3.
+            for &n in &fct.nodes[3..] {
+                for c in 0..3 {
+                    force[3 * n as usize + c] += t[c] * a / 3.0;
+                }
+            }
+        }
+    }
+    Ok(force)
+}
+
+/// Solve one case and recover per-node and per-element von Mises with the given per-element
+/// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
+/// runs.
+pub fn run_case(
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    fixed: &[u8],
+    force: Vec<f64>,
+    name: String,
+) -> Result<CaseResult, SetupError> {
+    let problem = Problem {
+        mesh: mesh.clone(),
+        material: Material { young: young.to_vec(), poisson },
+        fixed: fixed.to_vec(),
+        force,
+    };
+    let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+    let stress = nodal_stress(mesh, &u, young, poisson);
+    let vm: Vec<f64> = stress.iter().map(von_mises).collect();
+    let vm_elem = elem_von_mises(mesh, &u, young, poisson);
+    let max_d = (0..mesh.nodes.len())
+        .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
+        .fold(0.0, f64::max);
+    Ok(CaseResult {
+        name,
+        max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
+        max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
+        max_displacement: max_d,
+        u,
+        stress,
+        von_mises: vm,
+        vm_elem,
+        solve: rep,
+    })
+}
+
 pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis, SetupError> {
     let t0 = clock();
     let body = expr::compile_body(doc);
@@ -173,65 +272,16 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
 
     // Supports.
     let nn = mesh.nodes.len();
-    let mut fixed = vec![0u8; nn];
-    for s in &doc.supports {
-        let fs = region_facets(doc, &s.region, &mesh, &facets, h)?;
-        if fs.is_empty() {
-            return Err(SetupError(format!("support '{}': region '{}' does not touch the part's surface", s.id, s.region)));
-        }
-        let mask = (s.fixed[0] as u8) | (s.fixed[1] as u8) << 1 | (s.fixed[2] as u8) << 2;
-        for &fi in &fs {
-            for &n in &facets[fi].nodes {
-                fixed[n as usize] |= mask;
-            }
-        }
-    }
+    let fixed = fixed_mask(doc, &mesh, &facets, h)?;
 
     let young = vec![mat.e; mesh.tets.len()];
-    let material = Material { young: young.clone(), poisson: mat.nu };
     let mut cases = Vec::new();
     let mut iterations = 0;
     for name in case_names(doc) {
-        let mut force = vec![0.0; nn * 3];
-        for l in doc.loads.iter().filter(|l| l.case == name) {
-            let fs = region_facets(doc, &l.region, &mesh, &facets, h)?;
-            if fs.is_empty() {
-                return Err(SetupError(format!("load '{}': region '{}' does not touch the part's surface", l.id, l.region)));
-            }
-            let area: f64 = fs.iter().map(|&i| facets[i].area(&mesh)).sum();
-            for &fi in &fs {
-                let fct = &facets[fi];
-                let a = fct.area(&mesh);
-                let t = match l.kind {
-                    LoadKind::Force { vector } => vector.map(|c| c / area),
-                    LoadKind::Pressure { mpa } => fct.normal(&mesh).map(|c| -mpa * c),
-                };
-                // Uniform traction on a 6-node triangle: corners 0, each midside a/3.
-                for &n in &fct.nodes[3..] {
-                    for c in 0..3 {
-                        force[3 * n as usize + c] += t[c] * a / 3.0;
-                    }
-                }
-            }
-        }
-        let problem = Problem { mesh: mesh.clone(), material: material.clone(), fixed: fixed.clone(), force };
-        let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
-        iterations += rep.iterations;
-        let stress = nodal_stress(&mesh, &u, &young, mat.nu);
-        let vm: Vec<f64> = stress.iter().map(von_mises).collect();
-        let vm_elem = elem_von_mises(&mesh, &u, &young, mat.nu);
-        let max_d = (0..nn).map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt()).fold(0.0, f64::max);
-        cases.push(CaseResult {
-            name,
-            max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
-            max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
-            max_displacement: max_d,
-            u,
-            stress,
-            von_mises: vm,
-            vm_elem,
-            solve: rep,
-        });
+        let force = case_force(doc, &mesh, &facets, &name, h)?;
+        let case = run_case(&mesh, &young, mat.nu, &fixed, force, name)?;
+        iterations += case.solve.iterations;
+        cases.push(case);
     }
     let envelope = (0..nn).map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max)).collect();
     let envelope_elem = (0..mesh.tets.len()).map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max)).collect();

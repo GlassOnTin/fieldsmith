@@ -1,10 +1,11 @@
 //! WebAssembly bindings. Documents cross the boundary as JSON strings (the serde form of
 //! [`fieldsmith_doc::Document`]); bulk numeric data crosses as typed arrays.
 
-use fieldsmith_core::{analyse as core_analyse, Resolution};
+use fieldsmith_core::fill::{graded, Graded};
+use fieldsmith_core::{analyse as core_analyse, Analysis, Provenance, Resolution};
 use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
-use js_sys::{Float64Array, Uint32Array};
+use js_sys::{Float32Array, Float64Array, Uint32Array, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -286,5 +287,183 @@ impl AnalysisOut {
     #[wasm_bindgen(js_name = vmElemEnvelope)]
     pub fn vm_elem_envelope(&self) -> Float64Array {
         Float64Array::from(&self.a.envelope_elem[..])
+    }
+}
+
+#[derive(Serialize)]
+struct CaseSummary {
+    name: String,
+    max_vm_elem: f64,
+    max_displacement: f64,
+}
+
+#[derive(Serialize)]
+struct FillInfo {
+    family: String,
+    mode: String,
+    cell: f64,
+    skin: f64,
+    rho_min: f64,
+    rho_max: f64,
+    curve: f64,
+    min_wall: f64,
+    sigma_ref: f64,
+    mass_g: f64,
+    solid_mass_g: f64,
+    fill_ms: f64,
+    solve_ms: f64,
+}
+
+#[derive(Serialize)]
+struct GradedMeta {
+    provenance: Provenance,
+    /// The graded re-solve, one per load case, same order as the solid cases.
+    cases: Vec<fieldsmith_core::CaseResult>,
+    /// Solid-reference per-case maxima (before the fill was applied).
+    solid_cases: Vec<CaseSummary>,
+    fill: FillInfo,
+    yield_strength: f64,
+    poisson: f64,
+}
+
+/// A graded-fill analysis: the solid mesh plus the graded re-solve and fill result. The solid
+/// reference numbers live in `metaJson.solidCases`; the getter surface exposes the graded
+/// results (what the UI displays) and the fill itself.
+#[wasm_bindgen]
+pub struct GradedOut {
+    base: Analysis,
+    g: Graded,
+}
+
+/// Run the solid analysis and the graded fill re-solve in one call. `h`/`dofs` as in `analyse`.
+#[wasm_bindgen(js_name = analyseGraded)]
+pub fn analyse_graded(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Result<GradedOut, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let res = match (h, dofs) {
+        (Some(h), _) => Resolution::Size(h),
+        (_, Some(n)) => Resolution::Dofs(n),
+        (None, None) => Resolution::Dofs(150_000),
+    };
+    let (a, g) = graded(&doc, res, clock).map_err(js_err)?;
+    Ok(GradedOut { base: a, g })
+}
+
+#[wasm_bindgen]
+impl GradedOut {
+    /// Provenance, graded per-case maxima, solid-reference maxima and the fill spec as one JSON
+    /// object. `surfaceRegion` semantics are documented on `AnalysisOut`.
+    #[wasm_bindgen(js_name = metaJson)]
+    pub fn meta_json(&self) -> Result<String, JsValue> {
+        to_json(&GradedMeta {
+            provenance: self.base.provenance.clone(),
+            cases: self.g.cases.clone(),
+            solid_cases: self
+                .base
+                .cases
+                .iter()
+                .map(|c| CaseSummary { name: c.name.clone(), max_vm_elem: c.max_vm_elem, max_displacement: c.max_displacement })
+                .collect(),
+            fill: FillInfo {
+                family: format!("{:?}", self.g.spec.family),
+                mode: format!("{:?}", self.g.spec.mode),
+                cell: self.g.spec.cell,
+                skin: self.g.spec.skin,
+                rho_min: self.g.spec.rho_min,
+                rho_max: self.g.spec.rho_max,
+                curve: self.g.spec.curve,
+                min_wall: self.g.spec.min_wall,
+                sigma_ref: self.g.sigma_ref,
+                mass_g: self.g.mass_g,
+                solid_mass_g: self.g.solid_mass_g,
+                fill_ms: self.g.fill_ms,
+                solve_ms: self.g.solve_ms,
+            },
+            yield_strength: self.base.yield_strength,
+            poisson: self.base.poisson,
+        })
+    }
+
+    /// Nodal coordinates of the solid mesh, 3 per node (mm).
+    pub fn nodes(&self) -> Float64Array {
+        let flat = self.base.mesh.nodes.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Surface facets, 6 node ids each (corners, then midsides 01, 12, 20).
+    #[wasm_bindgen(js_name = surfaceFacets)]
+    pub fn surface_facets(&self) -> Uint32Array {
+        Uint32Array::from(&self.base.surface.concat()[..])
+    }
+
+    /// Owning element index per surface facet.
+    #[wasm_bindgen(js_name = surfaceOwner)]
+    pub fn surface_owner(&self) -> Uint32Array {
+        Uint32Array::from(&self.base.surface_owner[..])
+    }
+
+    /// Region index per surface facet (u32::MAX = no region).
+    #[wasm_bindgen(js_name = surfaceRegion)]
+    pub fn surface_region(&self) -> Uint32Array {
+        Uint32Array::from(&self.base.surface_region[..])
+    }
+
+    /// Graded nodal displacement of one case, 3 per node (mm).
+    pub fn u(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].u[..])
+    }
+
+    /// Graded nodal von Mises of one case (MPa).
+    #[wasm_bindgen(js_name = vmNodal)]
+    pub fn vm_nodal(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].von_mises[..])
+    }
+
+    /// Graded element-centroid von Mises of one case (MPa) — the readout statistic per V3.md.
+    #[wasm_bindgen(js_name = vmElem)]
+    pub fn vm_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].vm_elem[..])
+    }
+
+    /// Graded max over cases of nodal von Mises (MPa).
+    #[wasm_bindgen(js_name = vmEnvelope)]
+    pub fn vm_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.g.envelope[..])
+    }
+
+    /// Graded max over cases of element-centroid von Mises (MPa).
+    #[wasm_bindgen(js_name = vmElemEnvelope)]
+    pub fn vm_elem_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.g.envelope_elem[..])
+    }
+
+    /// Per-element class: 0 solid (skin, protected), 1 lattice, 2 void.
+    pub fn class(&self) -> Uint8Array {
+        Uint8Array::from(&self.g.class[..])
+    }
+
+    /// Per-element material fraction of the fill (1 solid, 0 void; the modulus input).
+    #[wasm_bindgen(js_name = rhoElem)]
+    pub fn rho_elem(&self) -> Float64Array {
+        Float64Array::from(&self.g.rho_elem[..])
+    }
+
+    /// Graded fill parameter grid spec `[ox, oy, oz, spacing]` (mm).
+    #[wasm_bindgen(js_name = fillParamSpec)]
+    pub fn fill_param_spec(&self) -> Float64Array {
+        let o = &self.g.fill.param.origin;
+        Float64Array::from(&[o[0], o[1], o[2], self.g.fill.param.spacing][..])
+    }
+
+    /// Graded fill parameter grid dims `[nx, ny, nz]`.
+    #[wasm_bindgen(js_name = fillParamDims)]
+    pub fn fill_param_dims(&self) -> Uint32Array {
+        let d = self.g.fill.param.dims.map(|x| x as u32);
+        Uint32Array::from(&d[..])
+    }
+
+    /// Graded fill parameter grid values, row-major with x fastest (mm).
+    #[wasm_bindgen(js_name = fillParamData)]
+    pub fn fill_param_data(&self) -> Float32Array {
+        Float32Array::from(&self.g.fill.param.data[..])
     }
 }

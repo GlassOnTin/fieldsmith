@@ -9,8 +9,6 @@ license.workspace = true
 fieldsmith-doc = { workspace = true }
 fieldsmith-field = { workspace = true }
 fieldsmith-core = { workspace = true }
-
-[dev-dependencies]
 fieldsmith-mesh = { workspace = true }
 fieldsmith-solve = { workspace = true }
 fenics-element = { workspace = true }

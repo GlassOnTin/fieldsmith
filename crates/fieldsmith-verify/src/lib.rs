@@ -8,6 +8,8 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+pub mod coupon;
+
 /// One compared quantity.
 #[derive(Clone, Debug)]
 pub struct Check {

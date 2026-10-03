@@ -9,7 +9,8 @@
 //! fieldsmith solve  FILE.fsm            mesh and solve the current setup
 //! ```
 
-use fieldsmith_core::{analyse, Resolution};
+use fieldsmith_core::fill::graded;
+use fieldsmith_core::{analyse, CaseResult, Resolution};
 use fieldsmith_doc::{fsm, Document};
 use fieldsmith_field::{expr, glsl, volume};
 use std::process::ExitCode;
@@ -21,7 +22,8 @@ const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl|solve> FILE
   json    print the document as JSON
   volume  integrate the field volume   [--h <spacing mm>]
   glsl    print the generated preview shader
-  solve   mesh and solve              [--h <mm> | --dofs <n>] [--report]";
+  solve   mesh and solve               [--h <mm> | --dofs <n>] [--report]
+          (documents with a fill statement also get the graded re-solve)";
 
 fn load(path: &str) -> Result<Document, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -108,9 +110,13 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 Resolution::Dofs(150_000)
             };
+            let report = args.iter().any(|a| a == "--report");
+            if doc.fill.is_some() {
+                return solve_graded(&doc, &res, report);
+            }
             let a = analyse(&doc, res, clock).map_err(|e| e.0)?;
             let p = &a.provenance;
-            if args.iter().any(|a| a == "--report") {
+            if report {
                 println!("## solve report — {}\n", doc.name);
                 println!(
                     "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, \
@@ -144,6 +150,96 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         _ => Err(USAGE.into()),
     }
+}
+
+/// Class counts and the achieved design-density range of the graded result (min-wall
+/// clamps included; the per-element values behind `rho_elem` are material fractions now).
+fn graded_shape(g: &fieldsmith_core::fill::Graded) -> ([usize; 3], (f64, f64)) {
+    let counts = g.class.iter().fold([0usize; 3], |mut m, &k| {
+        m[k as usize] += 1;
+        m
+    });
+    (counts, (g.rho_design[0], g.rho_design[1]))
+}
+
+fn print_case_table(cases: &[CaseResult], caption: &str) {
+    println!("| {caption} case | peak von Mises (MPa) | max deflection (mm) |");
+    println!("| :-- | --: | --: |");
+    for c in cases {
+        println!("| {} | {:.2} | {:.4} |", c.name, c.max_vm_elem, c.max_displacement);
+    }
+}
+
+fn print_case_lines(cases: &[CaseResult], tag: &str) {
+    for c in cases {
+        println!(
+            "{tag} {}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm",
+            c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement
+        );
+    }
+}
+
+/// `solve` on a document with a fill statement: the solid reference solve first, then the
+/// graded re-solve with mass and class summary.
+fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), String> {
+    let (a, g) = graded(doc, res.clone(), clock).map_err(|e| e.0)?;
+    let p = &a.provenance;
+    let fill = &g.spec;
+    let (counts, rho) = graded_shape(&g);
+    let n = (counts[0] + counts[1] + counts[2]) as f64;
+    let lighter = if g.solid_mass_g > 0.0 { (1.0 - g.mass_g / g.solid_mass_g) * 100.0 } else { 0.0 };
+    if report {
+        println!("## solve report — {} (solid reference)\n", doc.name);
+        println!(
+            "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, solve {:.0} ms, {} iterations. Peaks are element-centroid von Mises.",
+            p.element_size, p.elements, p.dofs, p.mesh_ms, p.solve_ms, p.iterations
+        );
+        print_case_table(&a.cases, "solid");
+        println!(
+            "\n## fill — {:?} {:?}, cell {} mm, skin {} mm, ρ {:.2}..{:.2}, curve {}, min wall {} mm\n",
+            fill.family, fill.mode, fill.cell, fill.skin, fill.rho_min, fill.rho_max, fill.curve, fill.min_wall
+        );
+        println!(
+            "mass {:.2} g vs {:.2} g solid ({:.0}% lighter); lattice {:.0}% of elements, skin/solid {:.0}%, void {:.0}%.",
+            g.mass_g,
+            g.solid_mass_g,
+            lighter,
+            100.0 * counts[1] as f64 / n,
+            100.0 * counts[0] as f64 / n,
+            100.0 * counts[2] as f64 / n
+        );
+        if counts[1] == 0 {
+            println!("no lattice elements in the graded part");
+        } else {
+            println!(
+                "achieved design lattice ρ {:.2}..{:.2}; grade σ_ref {:.2} MPa",
+                rho.0, rho.1, g.sigma_ref
+            );
+        }
+        println!("grade {:.0} ms, graded re-solve {:.0} ms", g.fill_ms, g.solve_ms);
+        println!();
+        print_case_table(&g.cases, "graded");
+    } else {
+        println!(
+            "{}: {} elements (P2), {} DOF, element size {:.2} mm",
+            doc.name, p.elements, p.dofs, p.element_size
+        );
+        println!(
+            "mesh {:.0} ms, solve {:.0} ms, {} iterations, min dihedral {:.1}°",
+            p.mesh_ms, p.solve_ms, p.iterations, p.quality.min_dihedral_deg
+        );
+        print_case_lines(&a.cases, "solid");
+        println!(
+            "fill {:?} {:?} cell {} mm: mass {:.2} g (solid {:.2} g), lattice {:.0}% of elements",
+            fill.family, fill.mode, fill.cell, g.mass_g, g.solid_mass_g, 100.0 * counts[1] as f64 / n
+        );
+        if counts[1] > 0 {
+            println!("achieved design lattice ρ {:.2}..{:.2}, σ_ref {:.2} MPa", rho.0, rho.1, g.sigma_ref);
+        }
+        print_case_lines(&g.cases, "graded");
+        println!("grade {:.0} ms, graded re-solve {:.0} ms", g.fill_ms, g.solve_ms);
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
