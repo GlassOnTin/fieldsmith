@@ -138,6 +138,7 @@ function deleteSelection() {
       d.regions = d.regions.filter((r) => r.id !== s.id);
       d.supports = d.supports.filter((r) => r.region !== s.id);
       d.loads = d.loads.filter((r) => r.region !== s.id);
+      if (d.fill) d.fill.protect = d.fill.protect.filter((r) => r !== s.id);
     });
   } else if (s.kind === 'support') {
     store.transact(`Delete ${s.id}`, (d) => {

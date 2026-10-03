@@ -9,6 +9,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+fieldsmith-core = { workspace = true }
 fieldsmith-doc = { workspace = true }
 fieldsmith-field = { workspace = true }
 serde = { workspace = true }

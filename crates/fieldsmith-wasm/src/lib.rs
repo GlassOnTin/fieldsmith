@@ -1,8 +1,10 @@
 //! WebAssembly bindings. Documents cross the boundary as JSON strings (the serde form of
 //! [`fieldsmith_doc::Document`]); bulk numeric data crosses as typed arrays.
 
+use fieldsmith_core::{analyse as core_analyse, Resolution};
 use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
+use js_sys::{Float64Array, Uint32Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -180,4 +182,109 @@ pub fn node_faces(doc_json: &str, id: &str) -> Result<String, JsValue> {
 pub fn body_bounds(doc_json: &str) -> Result<String, JsValue> {
     let doc = doc_from(doc_json)?;
     to_json(&bounds_of(&expr::compile_body(&doc)))
+}
+
+/// Wall-clock milliseconds (durations only; the browser wall clock is the monotonic-enough
+/// stand-in here).
+fn clock() -> f64 {
+    js_sys::Date::now()
+}
+
+#[derive(Serialize)]
+struct AnalysisMeta {
+    provenance: fieldsmith_core::Provenance,
+    /// Per-case summaries: name, maxima and the solve report (big arrays skipped).
+    cases: Vec<fieldsmith_core::CaseResult>,
+    yield_strength: f64,
+    poisson: f64,
+}
+
+/// One analysis, kept in wasm and queried through typed-array getters.
+#[wasm_bindgen]
+pub struct AnalysisOut {
+    a: fieldsmith_core::Analysis,
+}
+
+/// Run the analysis pipeline. `h` targets an element size (mm), `dofs` a degree-of-freedom
+/// count; pass one, leave the other `None`. Errors are user-fixable setup issues ("add a
+/// support: …").
+#[wasm_bindgen(js_name = analyse)]
+pub fn analyse(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Result<AnalysisOut, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let res = match (h, dofs) {
+        (Some(h), _) => Resolution::Size(h),
+        (_, Some(n)) => Resolution::Dofs(n),
+        (None, None) => Resolution::Dofs(150_000),
+    };
+    let a = core_analyse(&doc, res, clock).map_err(js_err)?;
+    Ok(AnalysisOut { a })
+}
+
+#[wasm_bindgen]
+impl AnalysisOut {
+    /// Provenance, per-case maxima and material constants as one JSON object. Region values
+    /// (`surface_region`) index the document's own `regions` array, which the caller has.
+    #[wasm_bindgen(js_name = metaJson)]
+    pub fn meta_json(&self) -> Result<String, JsValue> {
+        to_json(&AnalysisMeta {
+            provenance: self.a.provenance.clone(),
+            cases: self.a.cases.clone(),
+            yield_strength: self.a.yield_strength,
+            poisson: self.a.poisson,
+        })
+    }
+
+    /// Nodal coordinates, 3 per node (mm).
+    pub fn nodes(&self) -> Float64Array {
+        let flat = self.a.mesh.nodes.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Surface facets, 6 node ids each (corners, then midsides 01, 12, 20).
+    #[wasm_bindgen(js_name = surfaceFacets)]
+    pub fn surface_facets(&self) -> Uint32Array {
+        let flat = self.a.surface.concat();
+        Uint32Array::from(&flat[..])
+    }
+
+    /// Owning element index per surface facet.
+    #[wasm_bindgen(js_name = surfaceOwner)]
+    pub fn surface_owner(&self) -> Uint32Array {
+        Uint32Array::from(&self.a.surface_owner[..])
+    }
+
+    /// Region index per surface facet (u32::MAX = no region).
+    #[wasm_bindgen(js_name = surfaceRegion)]
+    pub fn surface_region(&self) -> Uint32Array {
+        Uint32Array::from(&self.a.surface_region[..])
+    }
+
+    /// Nodal displacement of one case, 3 per node (mm).
+    pub fn u(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.a.cases[case].u[..])
+    }
+
+    /// Nodal von Mises of one case (MPa).
+    #[wasm_bindgen(js_name = vmNodal)]
+    pub fn vm_nodal(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.a.cases[case].von_mises[..])
+    }
+
+    /// Element-centroid von Mises of one case (MPa) — the readout statistic per V3.md.
+    #[wasm_bindgen(js_name = vmElem)]
+    pub fn vm_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.a.cases[case].vm_elem[..])
+    }
+
+    /// Max over cases of nodal von Mises (MPa).
+    #[wasm_bindgen(js_name = vmEnvelope)]
+    pub fn vm_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.a.envelope[..])
+    }
+
+    /// Max over cases of element-centroid von Mises (MPa).
+    #[wasm_bindgen(js_name = vmElemEnvelope)]
+    pub fn vm_elem_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.a.envelope_elem[..])
+    }
 }

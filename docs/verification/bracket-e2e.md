@@ -4,17 +4,59 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.50 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 0.91 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.14 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 1.65 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 1.65 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.09 s | bracket-06.png |
+| Empty document | 0.64 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 0.90 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.15 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 1.73 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 1.80 s | bracket-05.png |
+| Upright hole ⌀8.5 | 2.34 s | bracket-06.png |
+| Setup lens | 0.66 s | bracket-07.png |
+| Region: base-hole walls | 0.87 s | bracket-08.png |
+| Region: upright-hole wall | 0.85 s | bracket-09.png |
+| Support on the base_holes | 0.58 s | bracket-10.png |
+| Load on the upright_hole | 0.73 s | bracket-11.png |
+| Coarse result streamed | 0.61 s | bracket-12.png |
+| Refined solve finished | 2.35 s | bracket-13.png |
+| Results lens: stress field | 0.22 s | bracket-14.png |
+| Probe the base plate | 0.20 s | bracket-15.png |
 
-Total scripted time: 8.1 s.
+Total scripted time: 15.7 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
+
+## Setup and solve checks
+
+| Check | Result | Detail |
+| :-- | :-- | :-- |
+| document material is PETG | pass | petg |
+| two regions were created | pass | ["base_holes","upright_hole"] |
+| base_holes region covers hole1 + hole2 walls | pass | [["hole1","side"],["hole2","side"]] |
+| upright_hole region covers hole3 wall | pass | [["hole3","side"]] |
+| support fixes all three axes on the base_holes | pass | [{"id":"support1","region":"base_holes","fixed":[true,true,true]}] |
+| force on the upright_hole, 400 N ±0.5 | pass | 400.00 N |
+| force points down and 15° outward ±0.2° (y negative, z negative) | pass | 15.00° from vertical, y -103.53, z -386.37 |
+| solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
+| peak von Mises 20–100 MPa | pass | 47.0 MPa |
+| max deflection 0.01–3 mm | pass | 1.676 mm |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 607 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 2955 ms measured in-page |
+| element order P2 | pass | order 2 |
+| probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
+| results panel, badge and legend render | pass |  |
+| provenance badge shows the refined level | pass | analysis-badge present once |
+
+## Ladder provenance
+
+| Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
+| :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 401 | 428 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 50 | 2296 | 2346 | 47.03 MPa | 1.676 mm |
+
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 607 ms of the 1500 ms budget; launch fired 158 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 2955 ms of the 10000 ms budget.
+- Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
+- Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 
 ## Document produced
 

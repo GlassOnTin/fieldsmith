@@ -5,6 +5,13 @@ import { store } from '../doc/store';
 type Listener = () => void;
 
 export type GizmoMode = 'translate' | 'rotate';
+export type ResultMode = 'stress' | 'safety' | 'deflection' | 'vectors';
+
+export interface Probe {
+  value: number;
+  unit: string;
+  point: [number, number, number];
+}
 
 class Ui {
   paletteOpen = false;
@@ -18,6 +25,13 @@ class Ui {
   frameMs = 0;
   compileMs = 0;
   hover: { shape: string | null; face: string | null; point: [number, number, number] } | null = null;
+  // Results lens display state (not undoable).
+  resultsMode: ResultMode = 'stress';
+  /** Case index, −1 = envelope. */
+  resultsCase = -1;
+  /** Deformed-shape exaggeration factor. */
+  resultsScale = 5;
+  probe: Probe | null = null;
   collapsed = new Set<string>();
   version = 0;
   private listeners = new Set<Listener>();

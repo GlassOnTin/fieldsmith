@@ -7,7 +7,7 @@ pub mod regions;
 use fieldsmith_doc::{materials, Document, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
-use fieldsmith_solve::{nodal_stress, solve, von_mises, Material, P2Mesh, Problem, SolveReport, SolverOptions, Stress};
+use fieldsmith_solve::{element_stress, nodal_stress, solve, von_mises, Material, P2Mesh, Problem, SolveReport, SolverOptions, Stress};
 use serde::Serialize;
 
 pub use regions::{region_facets, Facet};
@@ -34,7 +34,13 @@ pub struct CaseResult {
     pub stress: Vec<Stress>,
     #[serde(skip)]
     pub von_mises: Vec<f64>,
+    /// Von Mises at each element centroid. V3.md: P2 strains extrapolated to element corners
+    /// overshoot near curved free edges, so the stress readout is built on the centroid
+    /// statistic, not on recovered nodal maxima.
+    #[serde(skip)]
+    pub vm_elem: Vec<f64>,
     pub max_von_mises: f64,
+    pub max_vm_elem: f64,
     pub max_displacement: f64,
     pub solve: SolveReport,
 }
@@ -61,8 +67,16 @@ pub struct Analysis {
     pub cases: Vec<CaseResult>,
     /// Max over cases of nodal von Mises.
     pub envelope: Vec<f64>,
+    /// Max over cases of element-centroid von Mises.
+    pub envelope_elem: Vec<f64>,
     /// Boundary triangles of the P2 mesh: 6 node ids each (corners, then midsides 01, 12, 20).
     pub surface: Vec<[u32; 6]>,
+    /// Element that owns each surface facet (index into `mesh.tets`), same order as `surface`.
+    pub surface_owner: Vec<u32>,
+    /// Index into `doc.regions` of the region each surface facet matches, `u32::MAX` for none.
+    /// Best effort: a region whose field evaluation fails is left unmatched (`validate()`
+    /// reports those); where several regions claim a facet the last one in document order wins.
+    pub surface_region: Vec<u32>,
     pub provenance: Provenance,
 }
 
@@ -95,6 +109,14 @@ pub fn case_names(doc: &Document) -> Vec<String> {
 /// P2 on a BCC lattice gives about 48·V/h³ DOFs.
 pub fn size_for_dofs(volume: f64, dofs: usize) -> f64 {
     (48.0 * volume / dofs as f64).cbrt()
+}
+
+/// Von Mises at each element centroid. The centroid of a reference tetrahedron is the average
+/// of its four corners, [0.25; 3].
+pub fn elem_von_mises(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<f64> {
+    (0..mesh.tets.len())
+        .map(|e| von_mises(&element_stress(mesh, u, e, young[e], poisson, [0.25; 3])))
+        .collect()
 }
 
 pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis, SetupError> {
@@ -139,6 +161,15 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         })
         .collect();
     let surface: Vec<[u32; 6]> = facets.iter().map(|f| f.nodes).collect();
+    let surface_owner: Vec<u32> = boundary.iter().map(|(_, t)| *t).collect();
+    let mut surface_region = vec![u32::MAX; surface.len()];
+    for (ri, r) in doc.regions.iter().enumerate() {
+        if let Ok(fs) = region_facets(doc, &r.id, &mesh, &facets, h) {
+            for fi in fs {
+                surface_region[fi] = ri as u32;
+            }
+        }
+    }
 
     // Supports.
     let nn = mesh.nodes.len();
@@ -188,18 +219,22 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         iterations += rep.iterations;
         let stress = nodal_stress(&mesh, &u, &young, mat.nu);
         let vm: Vec<f64> = stress.iter().map(von_mises).collect();
+        let vm_elem = elem_von_mises(&mesh, &u, &young, mat.nu);
         let max_d = (0..nn).map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt()).fold(0.0, f64::max);
         cases.push(CaseResult {
             name,
             max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
+            max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
             max_displacement: max_d,
             u,
             stress,
             von_mises: vm,
+            vm_elem,
             solve: rep,
         });
     }
     let envelope = (0..nn).map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max)).collect();
+    let envelope_elem = (0..mesh.tets.len()).map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max)).collect();
     let t_end = clock();
     let provenance = Provenance {
         elements: mesh.tets.len(),
@@ -213,7 +248,19 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         quality,
         iterations,
     };
-    Ok(Analysis { mesh, young, poisson: mat.nu, yield_strength: mat.yield_strength, cases, envelope, surface, provenance })
+    Ok(Analysis {
+        mesh,
+        young,
+        poisson: mat.nu,
+        yield_strength: mat.yield_strength,
+        cases,
+        envelope,
+        envelope_elem,
+        surface,
+        surface_owner,
+        surface_region,
+        provenance,
+    })
 }
 
 /// The compiled body field (for callers that need to evaluate it alongside an analysis).

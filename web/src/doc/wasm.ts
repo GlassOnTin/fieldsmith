@@ -83,3 +83,98 @@ export function nodeFaces(doc: Document, id: string): Face[] {
 export function bodyBounds(doc: Document): [Vec3, Vec3] | null {
   return JSON.parse(w.body_bounds(JSON.stringify(doc)));
 }
+
+// ---- analysis ----------------------------------------------------------------------
+
+export interface Quality {
+  tets: number;
+  min_dihedral_deg: number;
+  max_dihedral_deg: number;
+  min_volume_ratio: number;
+}
+
+export interface SolveReport {
+  dofs: number;
+  free_dofs: number;
+  coarse_dofs: number;
+  iterations: number;
+  rel_residual: number;
+  converged: boolean;
+}
+
+export interface Provenance {
+  elements: number;
+  order: number;
+  nodes: number;
+  dofs: number;
+  element_size: number;
+  mesh_ms: number;
+  solve_ms: number;
+  total_ms: number;
+  quality: Quality;
+  iterations: number;
+}
+
+export interface CaseSummary {
+  name: string;
+  max_von_mises: number;
+  max_vm_elem: number;
+  max_displacement: number;
+  solve: SolveReport;
+}
+
+export interface AnalysisMeta {
+  provenance: Provenance;
+  cases: CaseSummary[];
+  yield_strength: number;
+  poisson: number;
+}
+
+/** The wasm `AnalysisOut` handle. Typed arrays are views into wasm memory — copy before
+ * transferring (`arr.slice()`). */
+export interface AnalysisHandle {
+  metaJson(): string;
+  nodes(): Float64Array;
+  surfaceFacets(): Uint32Array;
+  surfaceOwner(): Uint32Array;
+  surfaceRegion(): Uint32Array;
+  /** case index must be < `meta.cases.length` */
+  u(ci: number): Float64Array;
+  vmNodal(ci: number): Float64Array;
+  /** Case index must be < `meta.cases.length`. */
+  vmElem(ci: number): Float64Array;
+  vmEnvelope(): Float64Array;
+  vmElemEnvelope(): Float64Array;
+  free(): void;
+}
+
+export function analyse(doc: Document, opts: { h?: number; dofs?: number } = {}): AnalysisHandle {
+  return w.analyse(JSON.stringify(doc), opts.h, opts.dofs);
+}
+
+/** One ladder level streamed back from the analysis worker. Typed arrays are standalone
+ * copies (transferred buffers). */
+export interface LevelResult {
+  label: string;
+  meta: AnalysisMeta;
+  nodes: Float64Array;
+  surfaceFacets: Uint32Array;
+  surfaceOwner: Uint32Array;
+  /** Region index per surface facet (u32::MAX = none); indexes doc.regions. */
+  surfaceRegion: Uint32Array;
+  /** Nodal displacements per case, 3 per node (mm). */
+  u: Float64Array[];
+  /** Element-centroid von Mises per case (MPa). */
+  vmElem: Float64Array[];
+  /** Max over cases of element-centroid von Mises (MPa). */
+  vmElemEnvelope: Float64Array;
+}
+
+export type WorkerIn = { type: 'run'; doc: Document };
+
+export type WorkerOut =
+  | { type: 'level'; label: string }
+  | { type: 'levelDone'; result: LevelResult }
+  | { type: 'done'; skippedFine: string | null }
+  /** kind 'setup': the study is not analysable yet (no support or no load) — not a failure. */
+  | { type: 'error'; message: string; kind?: 'setup' };

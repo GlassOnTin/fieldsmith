@@ -6,19 +6,22 @@
 //! fieldsmith json   FILE.fsm            document as JSON
 //! fieldsmith volume FILE.fsm [--h MM]   field volume with error estimate
 //! fieldsmith glsl   FILE.fsm            generated preview shader
+//! fieldsmith solve  FILE.fsm            mesh and solve the current setup
 //! ```
 
+use fieldsmith_core::{analyse, Resolution};
 use fieldsmith_doc::{fsm, Document};
 use fieldsmith_field::{expr, glsl, volume};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl> FILE.fsm [options]
+const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl|solve> FILE.fsm [options]
 
   check   parse and validate a document
   print   print the canonical .fsm form
   json    print the document as JSON
   volume  integrate the field volume   [--h <spacing mm>]
-  glsl    print the generated preview shader";
+  glsl    print the generated preview shader
+  solve   mesh and solve              [--h <mm> | --dofs <n>] [--report]";
 
 fn load(path: &str) -> Result<Document, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -30,6 +33,11 @@ fn opt(args: &[String], name: &str) -> Option<String> {
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+fn clock() -> f64 {
+    thread_local!(static T0: std::time::Instant = std::time::Instant::now());
+    T0.with(|t| t.elapsed().as_secs_f64() * 1000.0)
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -90,6 +98,48 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "glsl" => {
             print!("{}", glsl::generate(&expr::compile_body(&doc)).source);
+            Ok(())
+        }
+        "solve" => {
+            let res = if let Some(s) = opt(args, "--dofs") {
+                Resolution::Dofs(s.parse::<usize>().map_err(|_| format!("bad --dofs value: {s}"))?)
+            } else if let Some(s) = opt(args, "--h") {
+                Resolution::Size(s.parse::<f64>().map_err(|_| format!("bad --h value: {s}"))?)
+            } else {
+                Resolution::Dofs(150_000)
+            };
+            let a = analyse(&doc, res, clock).map_err(|e| e.0)?;
+            let p = &a.provenance;
+            if args.iter().any(|a| a == "--report") {
+                println!("## solve report — {}\n", doc.name);
+                println!(
+                    "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, \
+                     solve {:.0} ms, {} iterations. Peaks are element-centroid von Mises.",
+                    p.element_size, p.elements, p.dofs, p.mesh_ms, p.solve_ms, p.iterations
+                );
+                println!(
+                    "| case | peak von Mises (MPa) | max deflection (mm) |\n\
+                     | :-- | --: | --: |"
+                );
+                for c in &a.cases {
+                    println!("| {} | {:.2} | {:.4} |", c.name, c.max_vm_elem, c.max_displacement);
+                }
+            } else {
+                println!(
+                    "{}: {} elements (P2), {} DOF, element size {:.2} mm",
+                    doc.name, p.elements, p.dofs, p.element_size
+                );
+                println!(
+                    "mesh {:.0} ms, solve {:.0} ms, {} iterations, min dihedral {:.1}°",
+                    p.mesh_ms, p.solve_ms, p.iterations, p.quality.min_dihedral_deg
+                );
+                for c in &a.cases {
+                    println!(
+                        "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm",
+                        c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement
+                    );
+                }
+            }
             Ok(())
         }
         _ => Err(USAGE.into()),

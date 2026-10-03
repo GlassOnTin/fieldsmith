@@ -391,6 +391,35 @@ function DocumentInspector() {
           ))}
         </div>
       )}
+      <div class="field-grid" style={{ marginTop: '8px' }}>
+        <label class="plain">Element size</label>
+        <Seg<'auto' | 'manual'>
+          value={doc.solve.size === null ? 'auto' : 'manual'}
+          options={[
+            { value: 'auto', label: 'Auto' },
+            { value: 'manual', label: 'Manual' },
+          ]}
+          onChange={(v) =>
+            store.transact('Set element size', (d) => {
+              d.solve.size = v === 'manual' ? 4 : null;
+            })
+          }
+          testId="solve-mode"
+        />
+        {doc.solve.size !== null && (
+          <NumRow
+            label="Size"
+            unit="mm"
+            min={0.5}
+            step={0.5}
+            get={(d) => d.solve.size ?? 4}
+            set={(d, v) => (d.solve.size = v)}
+            undoLabel="Set element size"
+            testId="solve-size"
+            title="Target element size for the refined pass"
+          />
+        )}
+      </div>
       <div class="hint" style={{ marginTop: '8px' }}>
         Select a shape in the tree or the viewport to edit it.
       </div>

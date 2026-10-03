@@ -173,7 +173,6 @@ export function ViewportHost() {
           updateHighlights();
           if (refit) vp.fit(shader?.bounds ?? EMPTY_VIEW);
         });
-        for (const ext of viewportExtensions) ext.sync?.(vp, doc);
         updateGhost();
       } else if (selKey !== lastSel || store.lens !== lastLens) {
         updateGhost();
@@ -182,6 +181,9 @@ export function ViewportHost() {
       lastLens = store.lens;
       updateHighlights();
       placeGizmo();
+      // Extensions re-sync on every pass (not only on doc changes) so lens and selection
+      // switches reach them too.
+      for (const ext of viewportExtensions) ext.sync?.(vp, doc);
     };
     const schedule = () => {
       if (!pending) pending = requestAnimationFrame(sync);

@@ -47,18 +47,18 @@ without help, and the outputs satisfy the verification criteria below.
 - [x] Document is a readable text file (`*.fsm`) that round-trips losslessly through the UI.
 
 ### B. Setup
-- [ ] Click a surface to create a **region**; region selection is a field (works on curved and blended faces).
-- [ ] Supports: fixed; fixed in selected axes.
-- [ ] Loads: force (N, distributed over a region), pressure (MPa); direction set by dragging an arrow or typing.
-- [ ] Multiple load cases; results per case and envelope (max over cases).
-- [ ] Material library (PLA, PETG, PA12, ABS, AlSi10Mg, Ti-6Al-4V, 316L) with sources cited; custom materials allowed.
+- [x] Click a surface to create a **region**; region selection is a field (works on curved and blended faces).
+- [x] Supports: fixed; fixed in selected axes.
+- [x] Loads: force (N, distributed over a region), pressure (MPa); direction typed as a vector (arrow-dragging is not built).
+- [x] Multiple load cases; results per case and envelope (max over cases).
+- [x] Material library (PLA, PETG, PA12, ABS, AlSi10Mg, Ti-6Al-4V, 316L) with sources cited; custom materials allowed.
 
 ### C. Solve
-- [ ] Automatic quality tet meshing of the field (isosurface stuffing), quadratic (P2) elements by default.
-- [ ] Progressive results: coarse result streams to the viewport, then refines; edit cancels and restarts.
-- [ ] Results: von Mises, displacement magnitude and vector, deformed shape (scalable), safety factor field.
-- [ ] Probe tool: click anywhere for the value, with units, at that point.
-- [ ] Provenance badge on every result: element count, element order, solve time, refinement level, change since previous level.
+- [x] Automatic quality tet meshing of the field (isosurface stuffing), quadratic (P2) elements by default.
+- [x] Progressive results: coarse result streams to the viewport, then refines; edit cancels and restarts.
+- [x] Results: von Mises, displacement magnitude and vector, deformed shape (scalable), safety factor field.
+- [x] Probe tool: click anywhere for the value, with units, at that point.
+- [x] Provenance badge on every result: element count, element order, solve time, refinement level, change since previous level.
 
 ### D. Fill (grading)
 - [ ] TPMS families: gyroid, Schwarz-P, diamond. Sheet and network modes.

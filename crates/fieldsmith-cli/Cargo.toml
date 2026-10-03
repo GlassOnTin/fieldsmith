@@ -10,6 +10,7 @@ name = "fieldsmith"
 path = "src/main.rs"
 
 [dependencies]
+fieldsmith-core = { workspace = true }
 fieldsmith-doc = { workspace = true }
 fieldsmith-field = { workspace = true }
 serde_json = { workspace = true }

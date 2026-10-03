@@ -1,7 +1,10 @@
 // The bracket test (GOAL.md), driven through the real UI in a headless browser.
 //
-// Each step uses only what a person would: buttons, menus, the inspector and the keyboard.
-// The run records per-step timings and screenshots and fails on any console error.
+// Modeling, setup and results all go through what a person would use: buttons, menus,
+// the inspector and the keyboard. Hole-wall regions are chosen by projected, verified
+// clicks (each candidate is checked with pickAt before the click, so a wrong pick is
+// impossible). The run records per-step timings and screenshots and fails on any
+// console error, and measures edit→coarse / edit→refined against the GOAL budgets.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +46,9 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   });
   page.on('pageerror', (e) => errors.push(String(e)));
   const steps = [];
+  let editAt = null;
+  const checks = [];
+  const check = (name, pass, detail = '') => checks.push({ name, pass: !!pass, detail });
   const t0 = Date.now();
   let last = t0;
   const step = async (name, fn) => {
@@ -108,8 +114,216 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     return { equal: JSON.stringify(got) === JSON.stringify(r.ok.root), got: text };
   }, reference);
 
+  // ---- study setup ---------------------------------------------------------------------
+
+  await step('Setup lens', async () => {
+    await page.locator('[data-lens="setup"]').click();
+    await page.waitForSelector('[data-testid="add-support"]', { timeout: 5000 });
+    // A person would orbit the view to look down at the base plate from the +y side,
+    // which is the only side from which the base-hole walls are visible (the upright
+    // plate blocks them from the default camera). Pick the +y,+z direction.
+    await page.evaluate(() => {
+      window.fieldsmith.view.view([0, 1, 1]);
+      window.fieldsmith.view.fit(false);
+    });
+    // With no support or load in the study yet, the status line shows the neutral setup
+    // hint (typed 'setup', not the red 'analysis failed').
+    await page.waitForSelector('[data-testid="setup-block"]', { timeout: 5000 });
+    if (await page.locator('[data-testid="badge-error"]').count()) {
+      throw new Error('an incomplete study rendered the red analysis-failed badge');
+    }
+  });
+
+  // Candidates for the visible hole walls, derived from the +y,+z camera above (rays
+  // travel about (0,-0.71,-0.71)): a vertical hole's wall is sighted around azimuth
+  // 270° on the hole's -y side at z ≈ 3..5 (rays clear the z=8 mouth when 4.75 - z ≤
+  // 3.25, so z ≥ 1.5), and the upright_hole's wall around 270° in the xz plane at
+  // y ≈ 1.5..4.5. Each candidate is verified with pickAt before the click, so unseen
+  // points are skipped and a wrong pick cannot write the document — the test fails
+  // loudly instead.
+  const deg = (d) => (d * Math.PI) / 180;
+  const vertWall = (cx, cy) => {
+    const c = [];
+    for (const z of [3, 4, 5]) for (let a = 250; a <= 290; a += 4) c.push([cx + 3.25 * Math.cos(deg(a)), cy + 3.25 * Math.sin(deg(a)), z]);
+    return c;
+  };
+  const endWall = (cx, cz) => {
+    const c = [];
+    for (const y of [1.5, 3, 4.5]) for (let a = 250; a <= 290; a += 4) c.push([cx + 4.25 * Math.cos(deg(a)), y, cz + 4.25 * Math.sin(deg(a))]);
+    return c;
+  };
+
+  const clickSurface = async (shape, face, cands) => {
+    const p = await page.evaluate(([sh, fc, cs]) => {
+      const F = window.fieldsmith;
+      for (const q of cs) {
+        const s = F.view.project(q);
+        if (!s) continue;
+        const h = F.pickAt(s.x, s.y);
+        if (h && h.shape === sh && h.face === fc) return { x: s.x, y: s.y };
+      }
+      return null;
+    }, [shape, face, cands]);
+    if (!p) throw new Error(`no visible ${face} face of ${shape} to click`);
+    await page.mouse.click(p.x, p.y);
+  };
+
+  await step('Region: base-hole walls', async () => {
+    await clickSurface('hole1', 'side', vertWall(15, 26));
+    await clickSurface('hole2', 'side', vertWall(45, 26));
+    await rename(page, 'base_holes');
+  });
+  await step('Region: upright-hole wall', async () => {
+    await page.keyboard.press('Escape');
+    await clickSurface('hole3', 'side', endWall(30, 28));
+    await rename(page, 'upright_hole');
+  });
+  await step('Support on the base_holes', async () => {
+    await page.locator('[data-testid="region-base_holes"]').click();
+    await page.locator('[data-testid="add-support"]').click();
+  });
+  await step('Load on the upright_hole', async () => {
+    await page.locator('[data-testid="region-upright_hole"]').click();
+    await page.locator('[data-testid="add-load"]').click();
+    // 400 N pointing down and 15° outward: down -z = 400·cos15°, outward -y = 400·sin15°.
+    await setVec(page, 'force', [0, -103.53, -386.37]);
+    editAt = await page.evaluate(() => performance.now());
+  });
+
+  // ---- solve ---------------------------------------------------------------------------
+
+  const runHas = async (fn, timeoutMs) => {
+    try {
+      await page.waitForFunction(fn, null, { timeout: timeoutMs, polling: 50 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const coarseSeen = await runHas(() => window.fieldsmith.analysis.state.levels.length >= 1, 20000);
+  await step('Coarse result streamed', async () => {});
+  await runHas(
+    () => ['ready', 'error'].includes(window.fieldsmith.analysis.state.status),
+    60000,
+  );
+  await step('Refined solve finished', async () => {});
+
+  const res = await page.evaluate(() => {
+    const F = window.fieldsmith;
+    const a = F.analysis.state;
+    const lvl = a.levels[a.levels.length - 1];
+    return {
+      status: a.status,
+      error: a.error,
+      skippedFine: a.skippedFine,
+      levelArrived: a.levelArrived,
+      startedMs: a.startedMs,
+      labels: a.levels.map((l) => l.label),
+      levels: a.levels.map((l) => ({
+        label: l.label,
+        p: l.meta.provenance,
+        peak: Math.max(0, ...l.meta.cases.map((c) => c.max_vm_elem)),
+        defl: Math.max(0, ...l.meta.cases.map((c) => c.max_displacement)),
+      })),
+      regions: F.store.doc.regions.map((r) => ({ id: r.id, selectors: r.selectors })),
+      supports: F.store.doc.supports.map((s) => ({ id: s.id, region: s.region, fixed: s.fixed })),
+      loads: F.store.doc.loads.map((l) => ({ id: l.id, region: l.region, case: l.case, kind: l.kind })),
+      material: F.store.doc.material,
+    };
+  });
+
+  const fine = res.levels[res.levels.length - 1];
+  const load = res.loads[0];
+  const vm = fine ? fine.peak : NaN;
+  const defl = fine ? fine.defl : NaN;
+  const edit = editAt ?? NaN;
+  const coarseMs = res.levelArrived[0] - edit;
+  const refinedMs = (res.levelArrived[1] ?? NaN) - edit;
+
+  check('document material is PETG', res.material === 'petg', res.material);
+  check('two regions were created', res.regions.length === 2, JSON.stringify(res.regions.map((r) => r.id)));
+  const sels = (name) => res.regions.find((r) => r.id === name)?.selectors ?? [];
+  const faces = (name) => sels(name).map((s) => [s.shape, s.face]).sort();
+  check(
+    'base_holes region covers hole1 + hole2 walls',
+    JSON.stringify(faces('base_holes')) === JSON.stringify([['hole1', 'side'], ['hole2', 'side']]),
+    JSON.stringify(faces('base_holes')),
+  );
+  check(
+    'upright_hole region covers hole3 wall',
+    faces('upright_hole').length === 1 && faces('upright_hole')[0][0] === 'hole3' && faces('upright_hole')[0][1] === 'side',
+    JSON.stringify(faces('upright_hole')),
+  );
+  check(
+    'support fixes all three axes on the base_holes',
+    res.supports.length === 1 && res.supports[0].region === 'base_holes' && JSON.stringify(res.supports[0].fixed) === '[true,true,true]',
+    JSON.stringify(res.supports),
+  );
+  const mag = load && load.kind.type === 'force' ? Math.hypot(...load.kind.vector) : NaN;
+  const ang = load && load.kind.type === 'force' ? (Math.atan2(Math.abs(load.kind.vector[1]), Math.abs(load.kind.vector[2])) * 180) / Math.PI : NaN;
+  check(
+    'force on the upright_hole, 400 N ±0.5',
+    load?.kind.type === 'force' && load.region === 'upright_hole' && Math.abs(mag - 400) <= 0.5,
+    `${mag.toFixed(2)} N`,
+  );
+  check(
+    'force points down and 15° outward ±0.2° (y negative, z negative)',
+    load?.kind.type === 'force' && load.kind.vector[1] < 0 && load.kind.vector[2] < 0 && Math.abs(ang - 15) <= 0.2,
+    `${ang.toFixed(2)}° from vertical, y ${load?.kind.vector[1]}, z ${load?.kind.vector[2]}`,
+  );
+  check('solve reached ready with coarse and refined levels', coarseSeen && res.status === 'ready' && res.labels.length === 2, `${res.status}; labels ${JSON.stringify(res.labels)}; ${coarseSeen ? '' : 'no coarse in 20 s'}`);
+  if (res.skippedFine) check('refined level was not skipped', false, res.skippedFine);
+  check('peak von Mises 20–100 MPa', vm >= 20 && vm <= 100, `${vm.toFixed(1)} MPa`);
+  check('max deflection 0.01–3 mm', defl >= 0.01 && defl <= 3, `${defl.toFixed(3)} mm`);
+  check('edit→coarse ≤ 1500 ms (GOAL budget)', coarseMs >= 0 && coarseMs <= 1500, `${Math.round(coarseMs)} ms measured in-page`);
+  check('edit→refined ≤ 10 s (GOAL budget)', refinedMs >= 0 && refinedMs <= 10000, `${Math.round(refinedMs)} ms measured in-page`);
+  check('element order P2', fine?.p?.order === 2, `order ${fine?.p?.order}`);
+
+  // ---- results lens ---------------------------------------------------------------------
+
+  let panelSeen = false;
+  let probe = null;
+  await step('Results lens: stress field', async () => {
+    await page.locator('[data-lens="results"]').click();
+    await page.waitForSelector('[data-testid="results-panel"]', { timeout: 5000 });
+    await page.waitForSelector('[data-testid="analysis-badge"]', { timeout: 5000 });
+    await page.waitForSelector('[data-testid="legend"]', { timeout: 5000 });
+    panelSeen = true;
+  });
+  await step('Probe the base plate', async () => {
+    // A point on the top face of the base plate, away from the fillet and the holes.
+    const at = await page.evaluate(() => {
+      const s = window.fieldsmith.view.project([30, 20, 8]);
+      return s ? { x: s.x, y: s.y } : null;
+    });
+    if (!at) throw new Error('could not project a probe point');
+    await page.mouse.click(at.x, at.y);
+    await page.waitForSelector('[data-testid="probe"]', { timeout: 5000 });
+    probe = await page.evaluate(() => window.fieldsmith.ui.probe);
+    check(
+      'probe returns a stress in MPa on the base plate',
+      !!probe && probe.unit === 'MPa' && probe.value > 0,
+      probe ? `${probe.value.toFixed(2)} MPa at (${probe.point.map((v) => v.toFixed(1)).join(', ')}) mm` : 'no probe reading',
+    );
+  });
+  check('results panel, badge and legend render', panelSeen, panelSeen ? '' : 'panel, badge or legend missing after switching to the results lens');
+  const badgeOk = (await page.locator('[data-testid="analysis-badge"]').count()) === 1;
+  check('provenance badge shows the refined level', badgeOk, 'analysis-badge present once');
+
+  // ---- verdict ---------------------------------------------------------------------------
+
   const total = Date.now() - t0;
-  const ok = cmp.equal && errors.length === 0;
+  const ok = cmp.equal && errors.length === 0 && checks.every((c) => c.pass);
+  const fmtLevels = () =>
+    res.levels
+      .map(
+        (l) =>
+          `| ${l.label} | ${l.p.elements} | ${l.p.dofs} | ${l.p.order} | ${l.p.iterations} | ${l.p.mesh_ms} | ${l.p.solve_ms} | ${l.p.total_ms} | ${l.peak.toFixed(2)} MPa | ${l.defl.toFixed(3)} mm |`,
+      )
+      .join('\n');
+  const fmtChecks = () =>
+    checks.map((c) => `| ${c.name} | ${c.pass ? 'pass' : '**FAIL**'} | ${c.detail} |`).join('\n');
   const lines = [
     '# Bracket test — headless UI run',
     '',
@@ -123,6 +337,25 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     '',
     `- Modelled shapes equal \`examples/bracket.fsm\`: **${cmp.equal ? 'yes' : 'no'}**`,
     `- Console errors: **${errors.length}**${errors.length ? '\n' + errors.map((e) => `  - ${e}`).join('\n') : ''}`,
+    '',
+    '## Setup and solve checks',
+    '',
+    '| Check | Result | Detail |',
+    '| :-- | :-- | :-- |',
+    fmtChecks(),
+    ...(res.error ? ['', `Analysis error: ${res.error}`] : []),
+    ...(res.skippedFine ? ['', `Refined level skipped: ${res.skippedFine}`] : []),
+    '',
+    '## Ladder provenance',
+    '',
+    '| Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |',
+    '| :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |',
+    fmtLevels(),
+    '',
+    `- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: ${Number.isFinite(coarseMs) ? Math.round(coarseMs) + ' ms' : 'not captured'} of the 1500 ms budget; launch fired ${Number.isFinite(coarseMs) ? Math.round(res.startedMs - edit) + ' ms' : '?'} after the edit (150 ms of that is the edit debounce).`,
+    `- Edit → refined: ${Number.isFinite(refinedMs) ? Math.round(refinedMs) + ' ms of the 10000 ms budget' : 'not captured'}.`,
+    '- Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.',
+    '- Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.',
     '',
     '## Document produced',
     '',
