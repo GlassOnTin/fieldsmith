@@ -128,6 +128,10 @@ export interface AnalysisMeta {
   cases: CaseSummary[];
   yield_strength: number;
   poisson: number;
+  /** Fill levels only: solid-reference per-case maxima in `cases` order (serde name). */
+  solid_cases?: CaseMax[];
+  /** Fill levels only: the fill spec, masses and the achieved density window. */
+  fill?: FillInfo;
 }
 
 /** The wasm `AnalysisOut` handle. Typed arrays are views into wasm memory — copy before
@@ -152,6 +156,52 @@ export function analyse(doc: Document, opts: { h?: number; dofs?: number } = {})
   return w.analyse(JSON.stringify(doc), opts.h, opts.dofs);
 }
 
+// ---- graded fill analysis -------------------------------------------------------------
+
+export interface CaseMax {
+  name: string;
+  max_vm_elem: number;
+  max_displacement: number;
+}
+
+export interface FillInfo {
+  family: string;
+  mode: string;
+  cell: number;
+  skin: number;
+  rho_min: number;
+  rho_max: number;
+  curve: number;
+  min_wall: number;
+  /** Achieved design density after wall clamps (min, max) — what the lattice actually is. */
+  rho_design: [number, number];
+  sigma_ref: number;
+  mass_g: number;
+  solid_mass_g: number;
+  fill_ms: number;
+  solve_ms: number;
+}
+
+/** The wasm `GradedOut` handle: solid mesh plus the graded re-solve. The solid reference
+ * maxima are in `metaJson().solidCases`; all displacement/stress getters are the graded
+ * solve. Typed arrays are views into wasm memory — copy before transferring (`arr.slice()`). */
+export interface GradedHandle extends AnalysisHandle {
+  /** Per-element class: 0 solid (skin, protected), 1 lattice, 2 void. */
+  class(): Uint8Array;
+  /** Per-element material fraction of the fill (1 solid, 0 void; the modulus input). */
+  rhoElem(): Float64Array;
+  /** Graded density parameter grid `[ox, oy, oz, spacing]` (mm). */
+  fillParamSpec(): Float64Array;
+  /** Graded density parameter grid dims `[nx, ny, nz]`. */
+  fillParamDims(): Uint32Array;
+  /** Graded density parameter grid values, row-major with x fastest. */
+  fillParamData(): Float32Array;
+}
+
+export function analyseGraded(doc: Document, opts: { h?: number; dofs?: number } = {}): GradedHandle {
+  return w.analyseGraded(JSON.stringify(doc), opts.h, opts.dofs);
+}
+
 /** One ladder level streamed back from the analysis worker. Typed arrays are standalone
  * copies (transferred buffers). */
 export interface LevelResult {
@@ -168,6 +218,8 @@ export interface LevelResult {
   vmElem: Float64Array[];
   /** Max over cases of element-centroid von Mises (MPa). */
   vmElemEnvelope: Float64Array;
+  /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */
+  class: Uint8Array | null;
 }
 
 export type WorkerIn = { type: 'run'; doc: Document };

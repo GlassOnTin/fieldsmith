@@ -152,6 +152,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button:hover { background: var(--panel-2); }
 .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips button { border: 1px solid var(--line-strong); border-radius: var(--radius); background: none; cursor: pointer; padding: 2px 8px; font-size: 11px; color: var(--text-2); }
+.chips button:hover { background: var(--panel-2); }
+.chips button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .check { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-2); }
 .check input { margin: 0; accent-color: var(--accent); }
 .insp-heading { display: flex; align-items: baseline; gap: 8px; padding: 12px 12px 4px; }

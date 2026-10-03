@@ -294,6 +294,8 @@ function AnalysisBadge() {
   const lvl = s.levels[s.levels.length - 1];
   const prev = s.levels[s.levels.length - 2];
   if (!lvl) return null;
+  // In the fill lens the fill badge shows these numbers plus mass — avoid the duplicate.
+  if (store.lens === 'fill' && lvl.meta.fill) return null;
   const peak = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem));
   const defl = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement));
   const p = lvl.meta.provenance;
@@ -397,6 +399,36 @@ function ResultsPanel() {
               </Fragment>
             ))}
           </div>
+          {lvl.meta.fill && (
+            <div class="field-grid" data-testid="fill-summary">
+              <span class="plain">Fill</span>
+              <span class="num">
+                {lvl.meta.fill.family.toLowerCase()} {lvl.meta.fill.mode.toLowerCase()} · cell {fmt(lvl.meta.fill.cell)} · skin {fmt(lvl.meta.fill.skin)} mm
+              </span>
+              <span class="plain">Achieved design ρ</span>
+              <span class="num">
+                {fmt(lvl.meta.fill.rho_design[0], 3)}…{fmt(lvl.meta.fill.rho_design[1], 3)}
+              </span>
+              <span class="plain">Mass</span>
+              <span class="num">
+                {fmt(lvl.meta.fill.mass_g, 2)} g · solid {fmt(lvl.meta.fill.solid_mass_g, 2)} g (−{fmt(100 * (1 - lvl.meta.fill.mass_g / lvl.meta.fill.solid_mass_g), 0)}%)
+              </span>
+              {(lvl.meta.solid_cases ?? []).map((sc, i) => {
+                const gc = lvl.meta.cases[i];
+                if (!gc || i >= 4) return null;
+                const sd = 100 * (gc.max_displacement - sc.max_displacement) / Math.max(1e-9, sc.max_displacement);
+                const sv = 100 * (gc.max_vm_elem - sc.max_vm_elem) / Math.max(1e-9, sc.max_vm_elem);
+                return (
+                  <Fragment key={`f${sc.name}`}>
+                    <span class="plain">{sc.name} vs solid</span>
+                    <span class="num">
+                      deflect {sd >= 0 ? '+' : ''}{fmt(sd, 1)}% · peak {sv >= 0 ? '+' : ''}{fmt(sv, 1)}%
+                    </span>
+                  </Fragment>
+                );
+              })}
+            </div>
+          )}
           {s.skippedFine && <div class="hint" data-testid="skipped-fine">{s.skippedFine}</div>}
           {ui.probe && (
             <div class="probe" data-testid="probe">

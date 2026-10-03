@@ -311,6 +311,94 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   const badgeOk = (await page.locator('[data-testid="analysis-badge"]').count()) === 1;
   check('provenance badge shows the refined level', badgeOk, 'analysis-badge present once');
 
+  // ---- fill lens ------------------------------------------------------------------------
+
+  const fillRun = async (timeoutMs = 30000) => {
+    // The run launches on a 150 ms debounce after the edit; waiting on bare 'ready' would
+    // resolve on the pre-edit run, so require the finished run to be for the current document.
+    await page.waitForFunction(
+      () => {
+        const a = window.fieldsmith.analysis.state;
+        return ['ready', 'error'].includes(a.status) && a.resultsFor === window.fieldsmith.store.docVersion;
+      },
+      null,
+      { timeout: timeoutMs, polling: 100 },
+    );
+    return page.evaluate(() => {
+      const a = window.fieldsmith.analysis.state;
+      const lvl = a.levels[a.levels.length - 1];
+      return {
+        status: a.status,
+        labels: a.levels.map((l) => l.label),
+        fi: lvl?.meta?.fill ?? null,
+        solid: lvl?.meta?.solid_cases?.[0] ?? null,
+        g: lvl?.meta?.cases?.[0] ?? null,
+      };
+    });
+  };
+
+  await step('Fill lens: add lattice fill', async () => {
+    await page.locator('[data-lens="fill"]').click();
+    await page.waitForSelector('[data-testid="fill-panel"]', { timeout: 5000 });
+    await page.waitForSelector('[data-testid="add-fill"]', { timeout: 5000 });
+    await page.locator('[data-testid="add-fill"]').click();
+    await page.waitForSelector('[data-testid="fill-family"]', { timeout: 5000 });
+    const chips = await page.locator('[data-testid="fill-protect"] button').count();
+    check('fill panel shows one protect chip per shape', chips === 5, `${chips} chips`);
+    const st = await fillRun();
+    check('graded ladder ran without error', st.status === 'ready', st.status);
+    const lvl = await page.evaluate(() => {
+      const a = window.fieldsmith.analysis.state;
+      const last = a.levels[a.levels.length - 1];
+      const fi = last?.meta?.fill ?? null;
+      const solid = last?.meta?.solid_cases?.[0] ?? null;
+      const g = last?.meta?.cases?.[0] ?? null;
+      return { labels: a.levels.map((l) => l.label), fi, solid, g, lens: window.fieldsmith.store.lens };
+    });
+    check('both levels carried fill results', lvl.labels.length === 2 && !!lvl.fi, JSON.stringify(lvl.labels));
+    check(
+      'fill mass 20–40 g on the bracket',
+      lvl.fi && lvl.fi.mass_g >= 20 && lvl.fi.mass_g <= 40,
+      lvl.fi ? `${lvl.fi.mass_g.toFixed(2)} g of ${lvl.fi.solid_mass_g.toFixed(2)} g solid` : 'no fill meta',
+    );
+    check(
+      'achieved design density inside the spec band',
+      lvl.fi && lvl.fi.rho_design[0] >= lvl.fi.rho_min - 0.02 && lvl.fi.rho_design[1] <= lvl.fi.rho_max + 0.02 && lvl.fi.rho_design[1] >= lvl.fi.rho_min,
+      lvl.fi ? `${lvl.fi.rho_design[0].toFixed(3)}–${lvl.fi.rho_design[1].toFixed(3)} of [${lvl.fi.rho_min}, ${lvl.fi.rho_max}]` : 'no fill meta',
+    );
+    const rd = lvl.fi && lvl.solid && lvl.g ? lvl.g.max_displacement / lvl.solid.max_displacement : NaN;
+    check('lattice deflects more than solid (1.0–1.6× for −33 % mass)', rd > 1.0 && rd < 1.6, `${rd.toFixed(3)}× deflection`);
+    const rs = lvl.fi && lvl.solid && lvl.g ? lvl.g.max_vm_elem / lvl.solid.max_vm_elem : NaN;
+    check('graded peak stress within 0.9–1.5× of solid', rs > 0.9 && rs < 1.5, `${rs.toFixed(3)}× peak vm`);
+  });
+
+  await step('Fill lens: badge and results rows', async () => {
+    const rows = await page.evaluate(() => ({
+      summary: document.querySelector('[data-testid=fill-summary]') ? document.querySelector('[data-testid=fill-summary]').textContent : '',
+      badge: document.querySelector('[data-testid=fill-badge]') ? document.querySelector('[data-testid=fill-badge]').textContent : '',
+      dupBadge: document.querySelectorAll('[data-testid=analysis-badge]').length,
+    }));
+    check('fill lens badge shows mass, peak and deflection', /mass \d/g.test(rows.badge) && /peak/.test(rows.badge), rows.badge || 'missing');
+    check('no duplicate analysis badge in the fill lens', rows.dupBadge === 0, `${rows.dupBadge} analysis badges`);
+    check('fill summary lists mass and per-case deltas', /Mass/.test(rows.summary) && /vs solid/.test(rows.summary), rows.summary.slice(0, 80));
+  });
+
+  await step('Fill lens: ρ band cross-clamp and undo/redo', async () => {
+    await setNum(page, 'fill-rho-max', 0.1);
+    const clamped = await page.evaluate(() => {
+      const f = window.fieldsmith.store.doc.fill;
+      return [f.rho_min, f.rho_max];
+    });
+    check('ρ max below ρ min clamps up to ρ min', JSON.stringify(clamped) === '[0.2,0.2]', JSON.stringify(clamped));
+    await page.locator('[data-testid="undo"]').click();
+    const undone = await page.evaluate(() => [window.fieldsmith.store.doc.fill.rho_min, window.fieldsmith.store.doc.fill.rho_max]);
+    check('undo restores the ρ band', JSON.stringify(undone) === '[0.2,0.8]', JSON.stringify(undone));
+    await page.locator('[data-testid="redo"]').click();
+    const redone = await page.evaluate(() => [window.fieldsmith.store.doc.fill.rho_min, window.fieldsmith.store.doc.fill.rho_max]);
+    check('redo restores the clamped band', JSON.stringify(redone) === '[0.2,0.2]', JSON.stringify(redone));
+    await page.locator('[data-testid="undo"]').click(); // leave the default band in place
+  });
+
   // ---- verdict ---------------------------------------------------------------------------
 
   const total = Date.now() - t0;
@@ -338,7 +426,7 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     `- Modelled shapes equal \`examples/bracket.fsm\`: **${cmp.equal ? 'yes' : 'no'}**`,
     `- Console errors: **${errors.length}**${errors.length ? '\n' + errors.map((e) => `  - ${e}`).join('\n') : ''}`,
     '',
-    '## Setup and solve checks',
+    '## Checks',
     '',
     '| Check | Result | Detail |',
     '| :-- | :-- | :-- |',

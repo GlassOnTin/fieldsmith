@@ -307,6 +307,8 @@ struct FillInfo {
     rho_max: f64,
     curve: f64,
     min_wall: f64,
+    /// Achieved design density after wall clamps (min, max) — what the lattice actually is.
+    rho_design: [f64; 2],
     sigma_ref: f64,
     mass_g: f64,
     solid_mass_g: f64,
@@ -372,6 +374,7 @@ impl GradedOut {
                 rho_max: self.g.spec.rho_max,
                 curve: self.g.spec.curve,
                 min_wall: self.g.spec.min_wall,
+                rho_design: self.g.rho_design,
                 sigma_ref: self.g.sigma_ref,
                 mass_g: self.g.mass_g,
                 solid_mass_g: self.g.solid_mass_g,
@@ -461,7 +464,7 @@ impl GradedOut {
         Uint32Array::from(&d[..])
     }
 
-    /// Graded fill parameter grid values, row-major with x fastest (mm).
+    /// Graded density values on the parameter grid, row-major with x fastest (relative density).
     #[wasm_bindgen(js_name = fillParamData)]
     pub fn fill_param_data(&self) -> Float32Array {
         Float32Array::from(&self.g.fill.param.data[..])

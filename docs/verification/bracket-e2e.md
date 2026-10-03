@@ -4,28 +4,31 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.64 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 0.90 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.15 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 1.73 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 1.80 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.34 s | bracket-06.png |
-| Setup lens | 0.66 s | bracket-07.png |
-| Region: base-hole walls | 0.87 s | bracket-08.png |
-| Region: upright-hole wall | 0.85 s | bracket-09.png |
-| Support on the base_holes | 0.58 s | bracket-10.png |
-| Load on the upright_hole | 0.73 s | bracket-11.png |
-| Coarse result streamed | 0.61 s | bracket-12.png |
-| Refined solve finished | 2.35 s | bracket-13.png |
-| Results lens: stress field | 0.22 s | bracket-14.png |
-| Probe the base plate | 0.20 s | bracket-15.png |
+| Empty document | 0.57 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 0.89 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.13 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 1.45 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 1.66 s | bracket-05.png |
+| Upright hole ⌀8.5 | 2.05 s | bracket-06.png |
+| Setup lens | 0.63 s | bracket-07.png |
+| Region: base-hole walls | 0.79 s | bracket-08.png |
+| Region: upright-hole wall | 0.68 s | bracket-09.png |
+| Support on the base_holes | 0.53 s | bracket-10.png |
+| Load on the upright_hole | 0.63 s | bracket-11.png |
+| Coarse result streamed | 0.55 s | bracket-12.png |
+| Refined solve finished | 2.04 s | bracket-13.png |
+| Results lens: stress field | 0.23 s | bracket-14.png |
+| Probe the base plate | 0.21 s | bracket-15.png |
+| Fill lens: add lattice fill | 6.22 s | bracket-16.png |
+| Fill lens: badge and results rows | 0.20 s | bracket-17.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 0.57 s | bracket-18.png |
 
-Total scripted time: 15.7 s.
+Total scripted time: 21.1 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
 
-## Setup and solve checks
+## Checks
 
 | Check | Result | Detail |
 | :-- | :-- | :-- |
@@ -39,22 +42,35 @@ Total scripted time: 15.7 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 607 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 2955 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 526 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 2559 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | results panel, badge and legend render | pass |  |
 | provenance badge shows the refined level | pass | analysis-badge present once |
+| fill panel shows one protect chip per shape | pass | 5 chips |
+| graded ladder ran without error | pass | ready |
+| both levels carried fill results | pass | ["coarse mesh","refined · 150k DOF"] |
+| fill mass 20–40 g on the bracket | pass | 29.43 g of 43.69 g solid |
+| achieved design density inside the spec band | pass | 0.380–0.800 of [0.2, 0.8] |
+| lattice deflects more than solid (1.0–1.6× for −33 % mass) | pass | 1.215× deflection |
+| graded peak stress within 0.9–1.5× of solid | pass | 1.053× peak vm |
+| fill lens badge shows mass, peak and deflection | pass | mass 29.43 g · deflect 2.0375 mm · peak 49.5407 MPa |
+| no duplicate analysis badge in the fill lens | pass | 0 analysis badges |
+| fill summary lists mass and per-case deltas | pass | Mass29.43 g · solid 43.69 g (−33%)Achieved design ρ0.38…0.8σ ref4.37 MPamain vs  |
+| ρ max below ρ min clamps up to ρ min | pass | [0.2,0.2] |
+| undo restores the ρ band | pass | [0.2,0.8] |
+| redo restores the clamped band | pass | [0.2,0.2] |
 
 ## Ladder provenance
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 401 | 428 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 50 | 2296 | 2346 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 31 | 321 | 352 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 40 | 1990 | 2030 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 607 ms of the 1500 ms budget; launch fired 158 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 2955 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 526 ms of the 1500 ms budget; launch fired 149 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 2559 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 

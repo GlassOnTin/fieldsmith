@@ -10,6 +10,7 @@ import { liveViewport } from './app/ViewportHost';
 // Lenses register their overlays/inspectors/tree sections as side effects.
 import './app/setup';
 import './app/results';
+import './app/fill';
 
 async function main() {
   await loadWasm();

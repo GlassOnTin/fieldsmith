@@ -1,8 +1,10 @@
 // The analysis ladder worker. Runs the wasm pipeline off the main thread and streams each
 // level back as it completes; the parent kills the worker to cancel an in-flight run.
+// Fill documents run the graded path: analyseGraded delivers the solid mesh, the graded
+// re-solve and the fill summary in one call, so each level packs both.
 import type { Document } from '../doc/types';
-import { loadWasm, analyse } from '../doc/wasm';
-import type { AnalysisHandle, AnalysisMeta, LevelResult, WorkerIn, WorkerOut } from '../doc/wasm';
+import { loadWasm, analyse, analyseGraded } from '../doc/wasm';
+import type { AnalysisHandle, LevelResult, WorkerIn, WorkerOut } from '../doc/wasm';
 
 export const COARSE_DOFS = 30_000;
 export const FINE_DOFS = 150_000;
@@ -14,8 +16,8 @@ function post(m: WorkerOut, transfers?: ArrayBuffer[]) {
 }
 
 /** Copy every array out of the wasm handle, then release it. */
-function pack(label: string, out: AnalysisHandle): LevelResult {
-  const meta: AnalysisMeta = JSON.parse(out.metaJson());
+function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array }): LevelResult {
+  const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
   for (let c = 0; c < meta.cases.length; c++) {
@@ -32,6 +34,7 @@ function pack(label: string, out: AnalysisHandle): LevelResult {
     u,
     vmElem,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
+    class: out.class ? out.class().slice() : null,
   };
   out.free();
   return r;
@@ -62,34 +65,41 @@ async function run(doc: Document) {
   }
   if (!ready) ready = loadWasm();
   await ready;
-  let coarse: LevelResult;
-  try {
-    post({ type: 'level', label: 'coarse' });
-    coarse = pack('coarse mesh', analyse(doc, { dofs: COARSE_DOFS }));
-  } catch (e) {
-    post({ type: 'error', message: errText(e) });
-    return;
-  }
-  post({ type: 'levelDone', result: coarse }, transfersOf(coarse));
-
+  const fill = doc.fill !== null;
   const size = doc.solve?.size ?? null;
-  if (size !== null && size >= coarse.meta.provenance.element_size - 0.01) {
-    // The chosen element size is already coarser than the coarse pass delivered; a second
-    // pass at that size would repeat the coarse result.
-    post({ type: 'done', skippedFine: `chosen element size ${size.toFixed(2)} mm is coarser than the coarse pass (${coarse.meta.provenance.element_size.toFixed(2)} mm)` });
+
+  /** One runLevel: meshes, solves, packs and posts the level; its packed result (or null on
+   * failure, with the error already posted). */
+  const runLevel = (opts: { h?: number; dofs?: number }, label: string): LevelResult | null => {
+    post({ type: 'level', label });
+    try {
+      const level = pack(label, fill ? analyseGraded(doc, opts) : analyse(doc, opts));
+      post({ type: 'levelDone', result: level }, transfersOf(level));
+      return level;
+    } catch (e) {
+      // The coarse level is already useful — report the failure without discarding it.
+      post({ type: 'error', message: errText(e) });
+      return null;
+    }
+  };
+  const skipFine = (coarseSize: number): string | null => {
+    if (size !== null && size >= coarseSize - 0.01) {
+      // The chosen element size is already coarser than the coarse pass delivered; a second
+      // pass at that size would repeat the coarse result.
+      return `chosen element size ${size.toFixed(2)} mm is coarser than the coarse pass (${coarseSize.toFixed(2)} mm)`;
+    }
+    return null;
+  };
+
+  const coarse = runLevel({ dofs: COARSE_DOFS }, 'coarse mesh');
+  if (!coarse) return;
+  const skip = skipFine(coarse.meta.provenance.element_size);
+  if (skip !== null) {
+    post({ type: 'done', skippedFine: skip });
     return;
   }
   const label = size !== null ? `refined · h ${size.toFixed(2)} mm` : `refined · ${Math.round(FINE_DOFS / 1000)}k DOF`;
-  try {
-    post({ type: 'level', label });
-    const out = size !== null ? analyse(doc, { h: size }) : analyse(doc, { dofs: FINE_DOFS });
-    const fine = pack(label, out);
-    post({ type: 'levelDone', result: fine }, transfersOf(fine));
-  } catch (e) {
-    // The coarse level is already useful — report the failure without discarding it.
-    post({ type: 'error', message: errText(e) });
-    return;
-  }
+  if (!runLevel(size !== null ? { h: size } : { dofs: FINE_DOFS }, label)) return;
   post({ type: 'done', skippedFine: null });
 }
 

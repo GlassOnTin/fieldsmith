@@ -150,7 +150,7 @@ export function App() {
           <button class="btn ghost icon" title={`Undo ${store.undoLabel()} (Ctrl Z)`} disabled={!store.canUndo()} onClick={() => store.undo()} data-testid="undo">
             <Icon.undo />
           </button>
-          <button class="btn ghost icon" title={`Redo ${store.redoLabel()} (Ctrl Shift Z)`} disabled={!store.canRedo()} onClick={() => store.redo()}>
+          <button class="btn ghost icon" title={`Redo ${store.redoLabel()} (Ctrl Shift Z)`} disabled={!store.canRedo()} onClick={() => store.redo()} data-testid="redo">
             <Icon.redo />
           </button>
           <button class="btn ghost icon" title="Save .fsm (Ctrl S)" onClick={saveFile} data-testid="save">
