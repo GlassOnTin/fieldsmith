@@ -5,3 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fieldsmith-doc = { workspace = true }
+fieldsmith-field = { workspace = true }
+fieldsmith-mesh = { workspace = true }
+fieldsmith-solve = { workspace = true }
+fenics-element = { workspace = true }
+serde = { workspace = true }

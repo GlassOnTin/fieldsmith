@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fenics-element = { workspace = true }
+fenics-assembly = { workspace = true }
+faer = { workspace = true }
+serde = { workspace = true }
