@@ -9,19 +9,23 @@ an edit even though the app JS costs ~0.5 ms per frame — see the note below.
 
 | Mode | Check | Result | Detail |
 | :-- | :-- | :-- | :-- |
-| headless | cold load (compressed) ≤ 3 MB | pass | 555 kB |
-| headless | edit → coarse ≤ 1500 ms | pass | 1224 ms |
-| headless | edit → refined ≤ 10000 ms | pass | 5793 ms |
-| headless | main-thread long tasks > 50 ms: none | FAIL | longtasks [[29,163]]; timer gaps [[28,165]] |
-| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | FAIL | 7.4 fps, frame-arrival p95 150.0 ms, render CPU med 0.30 ms |
-| headed | cold load (compressed) ≤ 3 MB | pass | 555 kB |
-| headed | edit → coarse ≤ 1500 ms | pass | 1199 ms |
-| headed | edit → refined ≤ 10000 ms | pass | 5758 ms |
+| headless | cold load (compressed) ≤ 3 MB | pass | 633 kB |
+| headless | edit → coarse ≤ 1500 ms | pass | 1389 ms |
+| headless | edit → refined ≤ 10000 ms | pass | 6028 ms |
+| headless | main-thread long tasks > 50 ms: none | FAIL | longtasks [[34,218]]; timer gaps [[31,221]] |
+| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | FAIL | 7 fps, frame-arrival p95 168.6 ms, render CPU med 0.29 ms |
+| headless | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.1 s (mesh 10.7, write 1.4; click→meta 29 s incl. scan 9 s; 254.8 MB, 18514666 tris vs 18514666) |
+| headed | cold load (compressed) ≤ 3 MB | pass | 633 kB |
+| headed | edit → coarse ≤ 1500 ms | pass | 1328 ms |
+| headed | edit → refined ≤ 10000 ms | pass | 5954 ms |
 | headed | main-thread long tasks > 50 ms: none | pass | none; no timer gaps |
-| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 59.9 fps, frame-arrival p95 17.4 ms, render CPU med 0.20 ms |
+| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 59.8 fps, frame-arrival p95 17.2 ms, render CPU med 0.25 ms |
+| headed | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 11.5 s (mesh 10.0, write 1.4; click→meta 28 s incl. scan 9 s; 254.8 MB, 18514666 tris vs 18514666) |
 
-- headless: setup solve 5806 ms; console errors 0
-- headed: setup solve 5813 ms; console errors 0
+- headless: wasm threaded (cross-origin isolated, pool of 32)
+- headless: setup solve 6029 ms; console errors 0
+- headed: wasm threaded (cross-origin isolated, pool of 32)
+- headed: setup solve 6003 ms; console errors 0
 
 Headless caveat, measured: every headless run here (SwiftShader and ANGLE/Vulkan
 on an RTX 5090) reports one 123-236 ms long task per edit; a trace ties it to a
@@ -32,13 +36,14 @@ overlays, forced GC and warm shader caches make no difference; the app JS costs
 a 59.9-60.0 fps presented cadence. The headless number is therefore a harness
 artifact, and the headed pass is the budget referee.
 
-Export budget (3MF of the graded bracket at 0.1 mm, ≤ 15 s): measured natively by
-`crates/fieldsmith-verify/tests/adaptive_probe.rs` through the same code path the browser
-calls — adaptive dual contouring (mesh 9.0 s + 3MF 2.7 s = 11.6 s, PASS) via the wasm
-`export_field`, now the export path in `crates/fieldsmith-wasm/src/lib.rs`. The uniform
-mesher misses the budget (411 s native at h = 0.1). The 3MF writer streams the model text
-through one DEFLATE stream in bounded chunks (the ~1.4 GB of XML at this spacing is never
-held whole, which is what keeps the wasm32 page inside its memory), so the same figure is
-expected in the browser; the in-browser 0.1 mm run is the remaining measurement. Defect
-classes the adaptive path carries on this model and their classification:
-`docs/verification/V8.md`, section "Adaptive dual contouring (the browser export path)".
+Export budget (3MF of the graded bracket at 0.1 mm feature resolution, ≤ 15 s): the
+"export 3MF at h 0.1" row measures it through the real Make UI in Chrome — mesh time
+from the export meta, write time from the timed download click. The click→meta wall
+also carries the export health report (field-volume reference and defect scan), which
+the budget row does not include; both wall and report times are in the detail.
+This run: the row passes in every pass above (headless, headed).
+Defect classes and their classification: `docs/verification/V8.md`, section
+"Adaptive dual contouring (the browser export path)".
+
+Machine: AMD Ryzen 9 9950X 16-Core Processor, 32 hardware threads, 249 GiB RAM, linux. Every timing above is this machine's; GOAL's mid-range laptop
+is not measured here.

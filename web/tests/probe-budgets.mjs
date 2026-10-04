@@ -14,6 +14,7 @@ import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { gzipSync, inflateRawSync } from 'node:zlib';
+import { cpus, totalmem, platform } from 'node:os';
 import { resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
@@ -39,8 +40,18 @@ const dist = (function list(dir) {
     return d.isDirectory() ? list(p) : [p];
   })];
 })(distDir).filter((p) => !p.endsWith('.map'));
-const coldKb = Math.round(dist.reduce((a, p) => a + gzipSync(readFileSync(p)).length, 0) / 1024);
-console.log(`cold load: ${coldKb} kB gzip over ${dist.length} files`);
+// dist carries two wasm builds (threaded and single-thread); a page fetches exactly one of
+// them, so the smaller is left out — the count is the threaded page's, the heavier variant.
+const gz = dist.map((p) => ({ p, n: gzipSync(readFileSync(p)).length }));
+const wasms = gz.filter((f) => f.p.endsWith('.wasm')).sort((a, b) => a.n - b.n);
+const skipped = wasms.length > 1 ? wasms[0] : null;
+const coldKb = Math.round(gz.reduce((a, f) => a + (f === skipped ? 0 : f.n), 0) / 1024);
+console.log(`cold load: ${coldKb} kB gzip over ${dist.length - (skipped ? 1 : 0)} files` +
+  (skipped ? ` (the other wasm variant, ${Math.round(skipped.n / 1024)} kB, is never fetched with it)` : ''));
+
+/** The machine the numbers belong to: budget timings are this host's facts, not a laptop's. */
+const machine = `${cpus()[0].model.trim()}, ${cpus().length} hardware threads, ` +
+  `${Math.round(totalmem() / 2 ** 30)} GiB RAM, ${platform()}`;
 
 /** Model entry of a self-produced 3MF package: EOCD → central directory → inflate. The
  * triangle count walks the inflated buffer with indexOf at 0.1 mm scale (a full-length UTF-8
@@ -279,6 +290,8 @@ for (const mode of modes) {
   } catch (e) {
     check('export 3MF at h 0.1: mesh + write ≤ 15 s', false, `probe error: ${e}`);
   }
+  const iso = await page.evaluate(() => ({ coi: crossOriginIsolated, hc: navigator.hardwareConcurrency }));
+  notes.push(`${mode}: wasm ${iso.coi ? `threaded (cross-origin isolated, pool of ${iso.hc})` : 'single thread (page not cross-origin isolated)'}`);
   notes.push(`${mode}: setup solve ${setupSolveMs} ms; console errors ${consoleErrors.length}${consoleErrors.length ? `: ${consoleErrors.join(' | ')}` : ''}`);
   await browser.close();
 }
@@ -315,18 +328,17 @@ md.push('');
 md.push('Export budget (3MF of the graded bracket at 0.1 mm feature resolution, ≤ 15 s): the');
 md.push('"export 3MF at h 0.1" row measures it through the real Make UI in Chrome — mesh time');
 md.push('from the export meta, write time from the timed download click. The click→meta wall');
-md.push('also carries the health scans, which the budget does not include. The rows FAILED with');
-md.push('a bare wasm `unreachable` trap in both passes: the export does not survive in the');
-md.push('browser at this resolution. Measured natively (`adaptive_mem_probe.rs`, release,');
-md.push('per-stage VmHWM deltas): the mesh stage peaks at 14.7 GB RSS — far beyond Chrome\'s 4 GB');
-md.push('wasm32 ceiling and even GOAL\'s 16 GB mid-range laptop — while the scan and write');
-md.push('stages add nothing to the peak. The time budget itself holds where the path runs: native');
-md.push('mesh 9.0 s + 3MF 2.7 s = 11.6 s (`adaptive_probe.rs`) vs the uniform mesher\'s 411 s,');
-md.push('and 0.25 mm in-browser passes (1.8 GB native peak, inside Chrome\'s 4 GB). The export');
-md.push('path needs the mesh stage\'s peak memory bounded (level corner tensors + per-leaf');
-md.push('records at the fill\'s whole-part refinement band) before the 0.1 mm box can be ticked');
-md.push('in Chrome, Firefox or the GOAL laptop. Defect classes and their classification:');
-md.push('`docs/verification/V8.md`, section "Adaptive dual contouring (the browser export path)".');
+md.push('also carries the export health report (field-volume reference and defect scan), which');
+md.push('the budget row does not include; both wall and report times are in the detail.');
+const exportRows = rows.filter((r) => r.label.startsWith('export 3MF'));
+md.push(exportRows.length && exportRows.every((r) => r.ok)
+  ? `This run: the row passes in every pass above (${exportRows.map((r) => r.mode).join(', ')}).`
+  : `This run: the row FAILS in ${exportRows.filter((r) => !r.ok).map((r) => r.mode).join(', ') || 'every pass (no row recorded)'}.`);
+md.push('Defect classes and their classification: `docs/verification/V8.md`, section');
+md.push('"Adaptive dual contouring (the browser export path)".');
+md.push('');
+md.push(`Machine: ${machine}. Every timing above is this machine's; GOAL's mid-range laptop`);
+md.push('is not measured here.');
 if (xauth && !rows.filter((r) => r.mode === 'headed').every((r) => r.ok)) headedOk = false;
 writeFileSync(resolve(ROOT, 'docs/verification/budgets.md'), md.join('\n') + '\n');
 
