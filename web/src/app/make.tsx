@@ -128,8 +128,9 @@ function healthLines(m: ExportMeta): string[] {
   ];
 }
 
-/** H spacing choices for the export mesh (mm) — uniform dual-contouring today; the adaptive
- * variant is a named follow-up, so 0.1 costs minutes at full part resolution. */
+/** H spacing choices for the export mesh (mm). The export path is adaptive dual contouring:
+ * it refines to h only near the surface, so 0.1 stays inside the 15 s budget where a uniform
+ * mesh of the full part volume would cost minutes. */
 const SPACINGS = [0.4, 0.25, 0.15, 0.1];
 
 function MakePanel() {

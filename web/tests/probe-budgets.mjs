@@ -7,12 +7,13 @@
 // socket is reachable, headed on the real display: the setting GOAL's budget table
 // names, and the referee for the long-task and fps rows. Writes
 // docs/verification/budgets.md with every number. Exits non-zero on a headed failure.
-// The export budget (3MF at 0.1 mm ≤ 15 s) is a CLI benchmark, recorded in
-// crates/fieldsmith-verify/tests/v8_export.rs; not re-measured here.
+// The export budget (3MF of the graded bracket at 0.1 mm ≤ 15 s) is measured through the
+// Make lens in the last section of each pass: mesh time from the export meta, write time
+// from the download click. The native mesh+3MF cross-check comes from adaptive_probe.rs.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, inflateRawSync } from 'node:zlib';
 import { resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
@@ -40,6 +41,41 @@ const dist = (function list(dir) {
 })(distDir).filter((p) => !p.endsWith('.map'));
 const coldKb = Math.round(dist.reduce((a, p) => a + gzipSync(readFileSync(p)).length, 0) / 1024);
 console.log(`cold load: ${coldKb} kB gzip over ${dist.length} files`);
+
+/** Model entry of a self-produced 3MF package: EOCD → central directory → inflate. The
+ * triangle count walks the inflated buffer with indexOf at 0.1 mm scale (a full-length UTF-8
+ * decode would exceed V8's string limit at this size). */
+function threeMfCheck(bytes) {
+  const i = bytes.lastIndexOf(Buffer.from('PK\x05\x06'));
+  const count = bytes.readUInt16LE(i + 10);
+  let p = bytes.readUInt32LE(i + 16);
+  const names = [];
+  let tris = 0;
+  for (let k = 0; k < count; k++) {
+    const csize = bytes.readUInt32LE(p + 20);
+    const usize = bytes.readUInt32LE(p + 24);
+    const nlen = bytes.readUInt16LE(p + 28);
+    const elen = bytes.readUInt16LE(p + 30);
+    const clen = bytes.readUInt16LE(p + 32);
+    const name = bytes.slice(p + 46, p + 46 + nlen).toString();
+    const lho = bytes.readUInt32LE(p + 42);
+    const noff = lho + 30 + bytes.readUInt16LE(lho + 26) + bytes.readUInt16LE(lho + 28);
+    names.push(name);
+    if (name.endsWith('.model')) {
+      const body = inflateRawSync(bytes.subarray(noff, noff + csize));
+      if (body.length !== usize) throw new Error(`${name}: inflated ${body.length} ≠ ${usize}`);
+      let at = 0;
+      for (;;) {
+        const j = body.indexOf('<triangle ', at);
+        if (j < 0) break;
+        tris++;
+        at = j + 1;
+      }
+    }
+    p += 46 + nlen + elen + clen;
+  }
+  return { names, tris };
+}
 
 const rows = [];
 const notes = [];
@@ -197,6 +233,52 @@ for (const mode of modes) {
   check('presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens)',
     fps >= 59 && cad.deltaP95 <= 17.5,
     `${fps} fps, frame-arrival p95 ${cad.deltaP95?.toFixed(1)} ms, render CPU med ${cad.cpuMed?.toFixed(2)} ms`);
+
+  // ---- Export budget: 3MF of the graded bracket at 0.1 mm, through the real Make UI ----
+  // GOAL's box is mesh + write; the click→meta wall also carries the health scans (not in
+  // the budget), and those wall times are in the detail. An abort (OOM at this spacing)
+  // lands on the exportError state and fails the row instead of killing the probe.
+  try {
+    await page.evaluate(() => {
+      window.fieldsmith.store.setLens('make');
+      // The export-done effect otherwise requests a layer slice in the worker, which
+      // would queue ahead of the bytes round-trip and bloat the timed write.
+      window.fieldsmith.ui.set('makeSliceOn', false);
+    });
+    await page.locator('[data-testid="make-h"] button[data-value="0.1"]').click();
+    const tExport = Date.now();
+    await page.locator('[data-testid="make-export"]').click();
+    await page.waitForFunction(() => {
+      const s = window.fieldsmith.analysis.state;
+      return s.export instanceof Object || s.exportError !== null;
+    }, null, { timeout: 600000, polling: 250 });
+    const wallS = (Date.now() - tExport) / 1000;
+    const es = await page.evaluate(() => {
+      const s = window.fieldsmith.analysis.state;
+      return { export: s.export, exportError: s.exportError };
+    });
+    if (es.exportError) {
+      check('export 3MF at h 0.1: mesh + write ≤ 15 s', false, `export error: ${es.exportError}`);
+    } else {
+      const meta = es.export.meta;
+      const t0 = Date.now();
+      const [dl] = await Promise.all([
+        page.waitForEvent('download', { timeout: 120000 }),
+        page.locator('[data-testid="make-download-3mf"]').click(),
+      ]);
+      const bytes = readFileSync(await dl.path());
+      const writeS = (Date.now() - t0) / 1000;
+      const pkg = threeMfCheck(bytes);
+      const budgetS = (meta.mesh_ms + writeS * 1000) / 1000;
+      check('export 3MF at h 0.1: mesh + write ≤ 15 s',
+        budgetS <= 15 && pkg.tris === meta.tris,
+        `${budgetS.toFixed(1)} s (mesh ${(meta.mesh_ms / 1000).toFixed(1)}, write ${writeS.toFixed(1)}; ` +
+        `click→meta ${wallS.toFixed(0)} s incl. scan ${(meta.scan_ms / 1000).toFixed(0)} s; ` +
+        `${(bytes.length / 1048576).toFixed(1)} MB, ${pkg.tris} tris vs ${meta.tris})`);
+    }
+  } catch (e) {
+    check('export 3MF at h 0.1: mesh + write ≤ 15 s', false, `probe error: ${e}`);
+  }
   notes.push(`${mode}: setup solve ${setupSolveMs} ms; console errors ${consoleErrors.length}${consoleErrors.length ? `: ${consoleErrors.join(' | ')}` : ''}`);
   await browser.close();
 }
@@ -230,7 +312,21 @@ md.push('0.2-0.6 ms per frame. The headed run on the same machine records no lon
 md.push('a 59.9-60.0 fps presented cadence. The headless number is therefore a harness');
 md.push('artifact, and the headed pass is the budget referee.');
 md.push('');
-md.push('Export budget (3MF at 0.1 mm): measured by `crates/fieldsmith-verify/tests/v8_export.rs`.');
+md.push('Export budget (3MF of the graded bracket at 0.1 mm feature resolution, ≤ 15 s): the');
+md.push('"export 3MF at h 0.1" row measures it through the real Make UI in Chrome — mesh time');
+md.push('from the export meta, write time from the timed download click. The click→meta wall');
+md.push('also carries the health scans, which the budget does not include. The rows FAILED with');
+md.push('a bare wasm `unreachable` trap in both passes: the export does not survive in the');
+md.push('browser at this resolution. Measured natively (`adaptive_mem_probe.rs`, release,');
+md.push('per-stage VmHWM deltas): the mesh stage peaks at 14.7 GB RSS — far beyond Chrome\'s 4 GB');
+md.push('wasm32 ceiling and even GOAL\'s 16 GB mid-range laptop — while the scan and write');
+md.push('stages add nothing to the peak. The time budget itself holds where the path runs: native');
+md.push('mesh 9.0 s + 3MF 2.7 s = 11.6 s (`adaptive_probe.rs`) vs the uniform mesher\'s 411 s,');
+md.push('and 0.25 mm in-browser passes (1.8 GB native peak, inside Chrome\'s 4 GB). The export');
+md.push('path needs the mesh stage\'s peak memory bounded (level corner tensors + per-leaf');
+md.push('records at the fill\'s whole-part refinement band) before the 0.1 mm box can be ticked');
+md.push('in Chrome, Firefox or the GOAL laptop. Defect classes and their classification:');
+md.push('`docs/verification/V8.md`, section "Adaptive dual contouring (the browser export path)".');
 if (xauth && !rows.filter((r) => r.mode === 'headed').every((r) => r.ok)) headedOk = false;
 writeFileSync(resolve(ROOT, 'docs/verification/budgets.md'), md.join('\n') + '\n');
 
