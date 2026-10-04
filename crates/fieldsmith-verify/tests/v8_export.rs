@@ -214,7 +214,7 @@ fn v8_export_the_bracket() {
             "{} verts, {} triangles at h = {MESH_H}, meshed in {:.2} s (uniform: {:.1} s; volume {:.1} mm³, \
              {:.3} % off the field reference). It refines to h only within the gradient certificate near the \
              surface, which is what makes the GOAL 0.1 mm export budget reachable: the probe (`adaptive_probe.rs`) \
-             measured the budget line at 0.1 mm — mesh 9.0 s + 3MF 2.7 s = 11.6 s against ≤ 15 s, volume +0.038 %, \
+             measured the budget line at 0.1 mm — mesh 7.0 s + 3MF 0.5 s = 7.5 s against ≤ 15 s, volume +0.038 %, \
              versus the uniform mesher's 411 s native at the same spacing. Its defect classes on the graded fill \
              are measured (`adaptive_defect_census.rs`): {} open edges, {} non-manifold edges, {} degenerate \
              triangles, {} self-intersecting pairs at h = {MESH_H}, and 8200 / 1213 / 2810 / 383834 at h = 0.1. The \

@@ -12,6 +12,7 @@ use miniz_oxide::deflate::core::{
 };
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// A triangle surface with shared vertices.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -391,10 +392,10 @@ impl TriMesh {
     ///
     /// At the export-budget spacings the model text would be gigabytes of XML (the bracket at
     /// 0.1 mm meshes to ~9 M vertices and ~18 M triangles), and a wasm32 page has ~4 GiB of
-    /// memory, so the text is never held: chunks of it are formatted in a bounded rayon window
-    /// and streamed straight through one sequential DEFLATE stream into the archive. Chunk
-    /// contents and feed order are fixed by element index, so the package is identical
-    /// whatever the thread count.
+    /// memory, so the text is never held: chunks of it are formatted and DEFLATE-compressed
+    /// into independent segments in a bounded rayon window, and appended to the archive in
+    /// order. Chunk contents, segment boundaries and append order are fixed by element index,
+    /// so the package is identical whatever the thread count.
     pub fn write_3mf(&self, name: &str, material: &str) -> Vec<u8> {
         let mut min = [f64::MAX; 3];
         for v in &self.verts {
@@ -443,20 +444,24 @@ impl TriMesh {
         );
         let tail = "</mesh></object></resources>\n<build><item objectid=\"2\"/></build>\n</model>\n";
 
-        // One window of chunk texts in flight at a time; 16 chunks (~55 MB of text) is the
-        // largest window the memory argument needs, whatever the host reports.
+        // One window of chunk texts (and their segments) in flight at a time; 16 chunks
+        // (~55 MB of text) is the largest window the memory argument needs, whatever the
+        // host reports.
         let window = rayon::current_num_threads().clamp(1, 16);
         let vfmt = |ci: usize| -> String {
             let a = ci * STREAM_CHUNK;
             let b = (a + STREAM_CHUNK).min(self.verts.len());
             let mut s = String::with_capacity((b - a) * 44);
+            // `write!` into the pre-sized chunk: no allocation per element (a per-element
+            // `format!` serialises the rayon window on the wasm allocator's global lock).
             for v in &self.verts[a..b] {
-                s.push_str(&format!(
+                let _ = write!(
+                    s,
                     "<vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>",
                     v[0] - min[0],
                     v[1] - min[1],
                     v[2] - min[2]
-                ));
+                );
             }
             s
         };
@@ -465,10 +470,7 @@ impl TriMesh {
             let b = (a + STREAM_CHUNK).min(self.tris.len());
             let mut s = String::with_capacity((b - a) * 52);
             for t in &self.tris[a..b] {
-                s.push_str(&format!(
-                    "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
-                    t[0], t[1], t[2]
-                ));
+                let _ = write!(s, "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]);
             }
             s
         };
@@ -480,9 +482,9 @@ impl TriMesh {
         let mut z = ZipStream::start(&mut out, "3D/3dmodel.model");
         z.push(head.as_bytes());
         z.push(b"<vertices>");
-        feed_chunked(&mut |d: &[u8]| z.push(d), self.verts.len(), window, &vfmt);
+        feed_chunked(&mut z, self.verts.len(), window, &vfmt);
         z.push(b"</vertices><triangles>");
-        feed_chunked(&mut |d: &[u8]| z.push(d), self.tris.len(), window, &tfmt);
+        feed_chunked(&mut z, self.tris.len(), window, &tfmt);
         z.push(b"</triangles>");
         z.push(tail.as_bytes());
         records.push(z.finish());
@@ -596,14 +598,18 @@ fn inside_trip(t: [V3; 3], q: V3, eps: f64) -> bool {
     true
 }
 
-// Streaming zip writer for the 3MF package: each entry's payload is fed through one
-// sequential DEFLATE stream into the archive, so no payload is ever held whole for
-// [`TriMesh::write_3mf`].
+// Streaming zip writer for the 3MF package. Each entry's payload is DEFLATE-compressed in
+// independent segments (pigz-style): every segment is a fresh level-1 compressor ending on a
+// sync flush, so it is a byte-aligned run of non-final blocks, and segments concatenate into
+// one valid raw stream that a final empty block closes. Segments of the model text are
+// formatted and compressed in parallel and appended in index order, so no payload is ever
+// held whole for [`TriMesh::write_3mf`] and the bytes do not depend on the thread count.
 
 /// Compressed-space scratch for one `deflate` pass; any single emitted block fits well below.
 const DEFLATE_BUF: usize = 512 * 1024;
-/// Elements per streamed text chunk. One window of chunks is formatted at a time.
-const STREAM_CHUNK: usize = 65536;
+/// Elements per streamed text chunk (one DEFLATE segment each). One window of chunks is
+/// formatted and compressed at a time. Tests run small chunks so packages carry many segments.
+const STREAM_CHUNK: usize = if cfg!(test) { 1024 } else { 65536 };
 
 fn push_u16(out: &mut Vec<u8>, v: u16) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -621,9 +627,45 @@ struct CentralEntry {
     uncomp: u32,
 }
 
-/// One streamed zip entry. [`ZipStream::push`] feeds payload bytes in order through a single
-/// DEFLATE stream; [`ZipStream::finish`] ends the stream and patches the local header's crc
-/// and size fields, so the sizes never have to be known before the payload is written.
+/// One independently compressed piece of an entry's payload: raw DEFLATE blocks ending on a
+/// sync flush (byte-aligned, none final), plus the crc and length of the bytes it encodes.
+struct Segment {
+    z: Vec<u8>,
+    crc: crc32fast::Hasher,
+    len: usize,
+}
+
+fn level1() -> CompressorOxide {
+    CompressorOxide::new(create_comp_flags_from_zip_params(1, 0, 0))
+}
+
+/// Compress `data` as one [`Segment`] with a fresh level-1 compressor.
+fn deflate_segment(data: &[u8]) -> Segment {
+    let mut crc = crc32fast::Hasher::default();
+    crc.update(data);
+    let mut d = level1();
+    let mut buf = vec![0; DEFLATE_BUF];
+    let mut z = Vec::with_capacity(data.len() / 4 + 64);
+    let mut input = data;
+    loop {
+        let (status, used, made) = deflate_compress(&mut d, input, &mut buf, TDEFLFlush::Sync);
+        assert_eq!(status, TDEFLStatus::Okay, "deflate segment failed: {status:?}");
+        z.extend_from_slice(&buf[..made]);
+        input = &input[used..];
+        // Done once the input is consumed and the flush fitted the scratch buffer.
+        if input.is_empty() && made < buf.len() {
+            break;
+        }
+        if used == 0 && made == 0 {
+            panic!("deflate made no progress on {} bytes", input.len());
+        }
+    }
+    Segment { z, crc, len: data.len() }
+}
+
+/// One streamed zip entry. Segments append in order; [`ZipStream::finish`] closes the stream
+/// with a final empty block and patches the local header's crc and size fields, so the sizes
+/// never have to be known before the payload is written.
 struct ZipStream<'a> {
     out: &'a mut Vec<u8>,
     hdr_at: usize,
@@ -631,8 +673,6 @@ struct ZipStream<'a> {
     crc: crc32fast::Hasher,
     uncompressed: usize,
     compressed: usize,
-    d: CompressorOxide,
-    buf: Vec<u8>,
 }
 
 impl<'a> ZipStream<'a> {
@@ -656,55 +696,44 @@ impl<'a> ZipStream<'a> {
             crc: crc32fast::Hasher::default(),
             uncompressed: 0,
             compressed: 0,
-            // Level 1, raw stream: the same flags the one-shot `compress_to_vec(.., 1)` builds
-            // from, so the sequential feed produces the same stream for the same bytes.
-            d: CompressorOxide::new(create_comp_flags_from_zip_params(1, 0, 0)),
-            buf: vec![0; DEFLATE_BUF],
             out,
         }
     }
 
+    /// Append an already compressed segment.
+    fn push_segment(&mut self, seg: Segment) {
+        self.out.extend_from_slice(&seg.z);
+        self.compressed += seg.z.len();
+        self.crc.combine(&seg.crc);
+        self.uncompressed += seg.len;
+    }
+
+    /// Compress and append a small payload piece as its own segment.
     fn push(&mut self, data: &[u8]) {
-        self.crc.update(data);
-        self.uncompressed += data.len();
-        let mut input = data;
-        while !input.is_empty() {
-            let (status, used, made) =
-                deflate_compress(&mut self.d, input, &mut self.buf, TDEFLFlush::None);
-            assert_eq!(status, TDEFLStatus::Okay, "deflate stream failed: {status:?}");
-            if used == 0 && made == 0 {
-                panic!("deflate made no progress on {} bytes", input.len());
-            }
-            self.out.extend_from_slice(&self.buf[..made]);
-            self.compressed += made;
-            input = &input[used..];
+        if !data.is_empty() {
+            self.push_segment(deflate_segment(data));
         }
     }
 
-    /// End the payload: flush the DEFLATE stream, patch the local header's crc and sizes, and
-    /// return the central-directory record.
-    fn finish(mut self) -> CentralEntry {
-        loop {
-            let (status, _, made) =
-                deflate_compress(&mut self.d, &[], &mut self.buf, TDEFLFlush::Finish);
-            self.out.extend_from_slice(&self.buf[..made]);
-            self.compressed += made;
-            match status {
-                TDEFLStatus::Done => break,
-                TDEFLStatus::Okay if made > 0 => {}
-                _ => panic!("deflate stream did not end: {status:?}"),
-            }
-        }
+    /// End the payload: the final (empty) block, then patch the local header's crc and
+    /// sizes, and return the central-directory record.
+    fn finish(self) -> CentralEntry {
+        let mut d = level1();
+        let mut buf = vec![0; 64];
+        let (status, _, made) = deflate_compress(&mut d, &[], &mut buf, TDEFLFlush::Finish);
+        assert_eq!(status, TDEFLStatus::Done, "deflate stream did not end: {status:?}");
+        self.out.extend_from_slice(&buf[..made]);
+        let compressed = self.compressed + made;
         let crc = self.crc.finalize();
         let hdr = &mut self.out[self.hdr_at..];
         hdr[14..18].copy_from_slice(&crc.to_le_bytes());
-        hdr[18..22].copy_from_slice(&(self.compressed as u32).to_le_bytes());
+        hdr[18..22].copy_from_slice(&(compressed as u32).to_le_bytes());
         hdr[22..26].copy_from_slice(&(self.uncompressed as u32).to_le_bytes());
         CentralEntry {
             name: self.name,
             offset: self.hdr_at as u32,
             crc,
-            comp: self.compressed as u32,
+            comp: compressed as u32,
             uncomp: self.uncompressed as u32,
         }
     }
@@ -717,11 +746,12 @@ fn stream_entry(out: &mut Vec<u8>, name: &str, data: &[u8], records: &mut Vec<Ce
     records.push(z.finish());
 }
 
-/// Feed `n` elements to `push`, formatted in [`STREAM_CHUNK`] chunks, `window` chunks at a
-/// time on the rayon pool, and fed to the stream in index order. At most one window's text
-/// exists at once, which is what bounds the writer's memory for the gigabyte model entries.
+/// Feed `n` elements to `z`, formatted in [`STREAM_CHUNK`] chunks, `window` chunks at a time
+/// on the rayon pool — each chunk formatted and compressed into its own segment — and
+/// appended in index order. At most one window's text and segments exist at once, which is
+/// what bounds the writer's memory for the gigabyte model entries.
 fn feed_chunked(
-    push: &mut dyn FnMut(&[u8]),
+    z: &mut ZipStream<'_>,
     n: usize,
     window: usize,
     fmt: &(impl Fn(usize) -> String + Sync),
@@ -730,9 +760,10 @@ fn feed_chunked(
     let mut at = 0;
     while at < chunks {
         let end = (at + window).min(chunks);
-        let texts: Vec<String> = (at..end).into_par_iter().map(fmt).collect();
-        for text in texts {
-            push(text.as_bytes());
+        let segs: Vec<Segment> =
+            (at..end).into_par_iter().map(|ci| deflate_segment(fmt(ci).as_bytes())).collect();
+        for seg in segs {
+            z.push_segment(seg);
         }
         at = end;
     }
@@ -1148,27 +1179,85 @@ mod tests {
         assert_eq!(one, four, "package bytes must not depend on the thread count");
     }
 
+    /// Golden digest of a whole package (compressed layout included). Re-pinned when the
+    /// model entry moved from one sequential DEFLATE stream to independent parallel
+    /// segments; the text itself is pinned unchanged by `three_mf_model_text_is_pinned`.
     #[test]
-    fn streamed_entry_deflate_matches_one_shot_compression() {
-        // The streamed feed runs the same level-1 flags a one-shot compression runs, and the
-        // compressor dictionary carries across the sequential pushes, so each entry's stored
-        // stream must equal a one-shot compression of its payload bytes.
-        let m = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
-        let bytes = m.write_3mf("x", "petg");
+    fn three_mf_package_bytes_are_pinned() {
+        let m = surface(sphere, [-10.0; 3], [10.0; 3], 0.5);
+        let bytes = m.write_3mf("pinned", "petg");
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in &bytes {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+        assert_eq!((bytes.len(), format!("{h:016x}")), (578625, "98494099064e7b7c".to_string()));
+    }
+
+    /// Every entry of a package: (name, compressed stream, header crc, header length).
+    fn zip_raw_entries(bytes: &[u8]) -> Vec<(String, Vec<u8>, u32, usize)> {
         let u32at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
         let u16at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
         let mut i = 0usize;
-        let mut entries = 0;
+        let mut out = Vec::new();
         while bytes.len() >= i + 30 && u32at(i) == 0x04034b50 {
+            let crc = u32at(i + 14);
             let csize = u32at(i + 18) as usize;
+            let usize_ = u32at(i + 22) as usize;
             let nlen = u16at(i + 26) as usize;
-            let raw = &bytes[i + 30 + nlen..i + 30 + nlen + csize];
-            let text = miniz_oxide::inflate::decompress_to_vec(raw).unwrap();
-            let one_shot = miniz_oxide::deflate::compress_to_vec(&text, 1);
-            assert_eq!(raw, &one_shot[..], "streamed entry {i} differs from one-shot deflate");
+            let name = String::from_utf8(bytes[i + 30..i + 30 + nlen].to_vec()).unwrap();
+            out.push((name, bytes[i + 30 + nlen..i + 30 + nlen + csize].to_vec(), crc, usize_));
             i += 30 + nlen + csize;
-            entries += 1;
         }
-        assert_eq!(entries, 3, "walked every streamed entry");
+        out
+    }
+
+    fn fnv(bytes: &[u8]) -> String {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    }
+
+    /// Golden digest of the model text (inflated), captured from the per-element `format!`
+    /// writer with one sequential DEFLATE stream: whatever the compression layout, the text
+    /// the slicer reads is pinned.
+    #[test]
+    fn three_mf_model_text_is_pinned() {
+        let m = surface(sphere, [-10.0; 3], [10.0; 3], 0.5);
+        let bytes = m.write_3mf("pinned", "petg");
+        let e = zip_raw_entries(&bytes);
+        let text = miniz_oxide::inflate::decompress_to_vec(&e[2].1).unwrap();
+        assert_eq!((text.len(), fnv(&text)), (4516761, "1304e423a349b9bc".to_string()));
+    }
+
+    #[test]
+    fn segmented_entries_inflate_to_their_payloads() {
+        // Each entry is concatenated sync-flushed segments closed by one final block: it must
+        // be a single valid raw DEFLATE stream that ends exactly at the entry's compressed
+        // size and inflates to the header's length and crc. The sphere at 0.5 with the test
+        // chunk of 1024 elements carries several segments per section.
+        let m = surface(sphere, [-10.0; 3], [10.0; 3], 0.5);
+        assert!(m.tris.len() > 4 * STREAM_CHUNK, "test mesh must span several segments");
+        let bytes = m.write_3mf("x", "petg");
+        let entries = zip_raw_entries(&bytes);
+        assert_eq!(entries.len(), 3, "walked every streamed entry");
+        for (name, raw, crc, len) in &entries {
+            let mut st =
+                miniz_oxide::inflate::stream::InflateState::new(miniz_oxide::DataFormat::Raw);
+            let mut text = vec![0u8; len + 1];
+            let r = miniz_oxide::inflate::stream::inflate(
+                &mut st,
+                raw,
+                &mut text,
+                miniz_oxide::MZFlush::Finish,
+            );
+            assert_eq!(r.status, Ok(miniz_oxide::MZStatus::StreamEnd), "{name}: stream must end");
+            assert_eq!(r.bytes_consumed, raw.len(), "{name}: final block ends the entry");
+            assert_eq!(r.bytes_written, *len, "{name}: inflated length");
+            let mut h = crc32fast::Hasher::new();
+            h.update(&text[..*len]);
+            assert_eq!(h.finalize(), *crc, "{name}: crc");
+        }
     }
 }
