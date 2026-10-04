@@ -108,9 +108,9 @@ fn main() {
     let nu = mat.nu;
     let pts = P2Tetrahedron.nodal_coordinates();
     let mut centroid_xi = [0.0f64; 3];
-    for k in 0..4 {
-        for j in 0..3 {
-            centroid_xi[j] += pts[k][j] / 4.0;
+    for &pk in pts.iter().take(4) {
+        for (j, x) in centroid_xi.iter_mut().enumerate() {
+            *x += pk[j] / 4.0;
         }
     }
 
@@ -126,11 +126,10 @@ fn main() {
     let mut top_y: Vec<(f64, usize)> = st.iter().enumerate().map(|(e, s)| (s[1], e)).collect();
     top_y.sort_by(|a, b2| b2.0.partial_cmp(&a.0).unwrap());
     let centroid = |e: usize| {
-        let tt = &mesh.tets[e];
         let mut c = [0.0f64; 3];
-        for k in 0..4 {
-            for j in 0..3 {
-                c[j] += mesh.nodes[tt[k] as usize][j] / 4.0;
+        for &v in mesh.tets[e].iter() {
+            for (j, x) in c.iter_mut().enumerate() {
+                *x += mesh.nodes[v as usize][j] / 4.0;
             }
         }
         c
@@ -165,12 +164,11 @@ fn main() {
             p[0], p[1], p[2], s[i][0], u[3 * i], u[3 * i + 1], u[3 * i + 2]
         );
         let mut count = 0usize;
-        for e in 0..mesh.tets.len() {
+        for (e, sc) in st.iter().enumerate() {
             let tt = &mesh.tets[e];
             let Some(a) = tt.iter().position(|&x| x as usize == i) else { continue };
             count += 1;
             let sn = element_stress(&mesh, &u, e, material.young[e], nu, pts[a]);
-            let sc = st[e];
             let c = centroid(e);
             println!(
                 "    e{:6} a={} centroid=({:8.5},{:8.5},{:7.4}) vol={:.3e} sxx@node={:9.3} sxx@cent={:9.3}",

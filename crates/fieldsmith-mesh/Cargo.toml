@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+miniz_oxide = { workspace = true }
+crc32fast = { workspace = true }

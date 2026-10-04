@@ -309,14 +309,14 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     let mut core_elems: Vec<f64> = Vec::new();
     let mut wsum = vec![0.0f32; n_nodes]; // Σ vol·σ per node
     let mut vsum = vec![0.0f32; n_nodes]; // Σ vol per node
-    for e in 0..base.mesh.tets.len() {
+    for (e, sigma_e) in drive.iter().enumerate() {
         let c = centroid(&base.mesh, e);
         if probe.in_core(c) {
-            core_elems.push(drive[e]);
+            core_elems.push(*sigma_e);
         }
         if let Some(idx) = node_near(&core, c) {
             let v = base.mesh.tet_volume(e) as f32;
-            wsum[idx] += v * drive[e] as f32;
+            wsum[idx] += v * *sigma_e as f32;
             vsum[idx] += v;
         }
     }
@@ -351,13 +351,13 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     // printable-ish, so network min-wall is disclosed rather than enforced.
     let mut param = grid_over(&b, spacing, pad)?;
     let mut rho_design = [f64::MAX, 0.0f64];
-    for i in 0..n_nodes {
+    for (i, &vs) in vsum.iter().enumerate() {
         let mut p = cal.param_for(rho.data[i] as f64, spec.cell);
         if spec.mode == FillMode::Sheet {
             p = p.max(spec.min_wall);
         }
         param.data[i] = p as f32;
-        if vsum[i] > 1e-9 {
+        if vs > 1e-9 {
             let achieved = cal.rho_for(p, spec.cell);
             rho_design[0] = rho_design[0].min(achieved);
             rho_design[1] = rho_design[1].max(achieved);
@@ -459,13 +459,15 @@ fn grid_over(b: &Aabb, spacing: f64, pad: f64) -> Result<Grid3, SetupError> {
     Ok(Grid3 { origin, spacing, dims, data: vec![0.0f32; n] })
 }
 
-/// Centroid of a tet's four corners.
+/// Centroid of a tet's four CORNER nodes — tets carry 10 P2 nodes and iterating the array
+/// would pull the average towards the midside nodes.
 fn centroid(mesh: &fieldsmith_solve::P2Mesh, e: usize) -> V3 {
-    let t = &mesh.tets[e];
+    let corners = [mesh.tets[e][0], mesh.tets[e][1], mesh.tets[e][2], mesh.tets[e][3]];
     let mut c = [0.0f64; 3];
-    for i in 0..4 {
+    for n in corners.iter() {
+        let p = mesh.nodes[*n as usize];
         for a in 0..3 {
-            c[a] += mesh.nodes[t[i] as usize][a];
+            c[a] += p[a];
         }
     }
     c.map(|x| x / 4.0)
@@ -482,7 +484,7 @@ fn node_near(g: &Grid3, p: V3) -> Option<usize> {
         if u < -0.5 || u > n as f64 - 0.5 {
             return None;
         }
-        idx[a] = (u.round() as f64).clamp(0.0, (n - 1) as f64) as usize;
+        idx[a] = u.round().clamp(0.0, (n - 1) as f64) as usize;
     }
     Some((idx[2] * ny + idx[1]) * nx + idx[0])
 }
@@ -526,8 +528,8 @@ fn masked_blur(a: &Grid3, mask: &Grid3, r: usize) -> Grid3 {
     out
 }
 
-/// q-quantile by sort (the caller guarantees a non-empty vector).
-fn quantile(v: &mut Vec<f64>, q: f64) -> f64 {
+/// q-quantile by sort (the caller guarantees a non-empty slice).
+fn quantile(v: &mut [f64], q: f64) -> f64 {
     v.sort_by(f64::total_cmp);
     let i = (((v.len() - 1) as f64) * q).round() as usize;
     v[i]
@@ -598,7 +600,7 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
         for i in 0..g.young.len() {
             let y = g.young[i];
             let phi = g.rho_elem[i];
-            assert!(0.0 <= phi && phi <= 1.0, "rho_elem[{i}] = {phi}");
+            assert!((0.0..=1.0).contains(&phi), "rho_elem[{i}] = {phi}");
             assert!(y > 0.0 && y <= mat.e * (1.0 + 1e-9), "young[{i}] = {y}");
             let mapped = mat.e * VOID_SCALE.max(element_stiffness(
                 g.spec.family,

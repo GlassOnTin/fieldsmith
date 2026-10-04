@@ -75,9 +75,9 @@ fn v3_plate_with_hole() {
 
         let pts = P2Tetrahedron.nodal_coordinates();
         let mut xi = [0.0f64; 3];
-        for k in 0..4 {
-            for j in 0..3 {
-                xi[j] += pts[k][j] / 4.0;
+        for &pk in pts.iter().take(4) {
+            for (j, x) in xi.iter_mut().enumerate() {
+                *x += pk[j] / 4.0;
             }
         }
 
@@ -85,9 +85,9 @@ fn v3_plate_with_hole() {
             .map(|e| {
                 let s = element_stress(&a.mesh, &c.u, e, young[e], mat.nu, xi);
                 let mut cen = [0.0f64; 3];
-                for k in 0..4 {
-                    for j in 0..3 {
-                        cen[j] += a.mesh.nodes[a.mesh.tets[e][k] as usize][j] / 4.0;
+                for &v in a.mesh.tets[e].iter() {
+                    for (j, c) in cen.iter_mut().enumerate() {
+                        *c += a.mesh.nodes[v as usize][j] / 4.0;
                     }
                 }
                 (s[0], cen)

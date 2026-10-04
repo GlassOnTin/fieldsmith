@@ -129,11 +129,11 @@ pub fn probe(a: &Analysis, loc: &Locator, case: Option<usize>, p: [f64; 3]) -> O
         match case {
             Some(c) => {
                 let r = &a.cases[c];
-                for j in 0..6 {
-                    s[j] += w * r.stress[n][j];
+                for (j, sj) in s.iter_mut().enumerate() {
+                    *sj += w * r.stress[n][j];
                 }
-                for j in 0..3 {
-                    u[j] += w * r.u[3 * n + j];
+                for (j, uj) in u.iter_mut().enumerate() {
+                    *uj += w * r.u[3 * n + j];
                 }
             }
             None => vm += w * a.envelope[n],

@@ -259,7 +259,7 @@ fn v7_graded_lattice_beam_deflection() {
     // ---- sections ----------------------------------------------------------------------------
     r.section(
         "Model",
-        &format!(
+        format!(
             "Beam 80 × 16 × 16 mm at (40, 8, 8), steel (E = 200 000 MPa, ν = 0.3, yield \
 250 MPa, density 7.85 g/cm³), cantilever clamp on the x = 0 face, 400 N down on the tip face \
 (x = 80). Euler–Bernoulli tip deflection of the solid beam 0.0625 mm, root bending stress \
@@ -313,7 +313,7 @@ Both paths call the same `fixed_mask` / `case_force` for the document's supports
         .collect();
     r.section(
         "Deflection comparison",
-        &format!(
+        format!(
             "Solid beam (no fill, engine mesh): tip uz {:.5} mm. Engine re-solve (homogenised \
 graded lattice): tip uz {:.5} mm, max displacement {:.5} mm, {} iters. The lattice multiplies \
 tip deflection by {:.0} % in the engine model and by {:.0} % in the resolved model.\n\nThe engine re-solve reads {:+.1} % against the resolved reference at \
@@ -337,7 +337,7 @@ h = 0.29, so the resolved reference's discretisation error is of that order.",
     r.section("Resolved model runs", &res_body);
     r.section(
         "Mass (grams)",
-        &format!(
+        format!(
             "Field-integrated (volume::integrate of the graded field, density 7.85): \
 filled part {:.2} g, same part without fill {:.2} g — the lattice removes {:.0} % of the mass. \
 Resolved mesh at h = 0.29: {:.2} g from mesh volume × density; the two filled estimates are \

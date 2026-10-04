@@ -15,6 +15,7 @@
 //!   consistent sub-cell answer (wall slabs carry E over their fraction, parallel-axis).
 //! * `phi-law-blend` — law(φ) below the band top 0.4, linear blend from law(0.4) to 1 at
 //!   φ=1: keeps the measured law where it was measured, heals only the capped-solid defect.
+//!
 //! The engine's old law path is re-run in the same process for a like-for-like column.
 //!
 //! Final three-point results (tip uz vs resolved −0.13223): phi-voigt −2.1 % / −0.5 % / +0.8 %
@@ -139,7 +140,7 @@ fn main() {
             .map(|e| phi_of(&base, e, &filled, 32, &mut rng))
             .collect();
         let (n_void, n_solid, n_lat) = ph.iter().fold((0, 0, 0), |a, &p| {
-            (a.0 + (p < 0.02) as usize, a.1 + (p > 0.98) as usize, a.2 + (p >= 0.02 && p <= 0.98) as usize)
+            (a.0 + (p < 0.02) as usize, a.1 + (p > 0.98) as usize, a.2 + (0.02..=0.98).contains(&p) as usize)
         });
         let t_ph = t0.elapsed().as_secs_f64();
 
@@ -149,7 +150,7 @@ fn main() {
             ("phi-voigt", voigt_young(&ph, mat.e)),
             ("phi-law-blend", law_blend_young(&ph, mat.e)),
         ] {
-            let case = run_case(&base.mesh, &young, mat.nu, &fixed, force.clone(), format!("{label}"))
+            let case = run_case(&base.mesh, &young, mat.nu, &fixed, force.clone(), label.to_string())
                 .expect("phi solve");
             let uz = case.u[3 * nearest(&base.mesh, [80.0, 8.0, 8.0]) + 2];
             let err = 100.0 * (uz - resolved) / resolved;

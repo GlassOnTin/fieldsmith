@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -66,6 +72,25 @@ name = "coe-rs"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e8f1e641542c07631228b1e0dc04b69ae3c1d58ef65d5691a439711d805c698"
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "crossbeam-deque"
@@ -267,6 +292,7 @@ dependencies = [
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
+ "fieldsmith-mesh",
  "serde_json",
 ]
 
@@ -302,6 +328,8 @@ dependencies = [
 name = "fieldsmith-mesh"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "miniz_oxide",
  "serde",
 ]
 
@@ -325,15 +353,18 @@ dependencies = [
  "fieldsmith-field",
  "fieldsmith-mesh",
  "fieldsmith-solve",
+ "miniz_oxide",
 ]
 
 [[package]]
 name = "fieldsmith-wasm"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
+ "fieldsmith-mesh",
  "js-sys",
  "serde",
  "serde_json",
@@ -568,6 +599,15 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
 
 [[package]]
 name = "nalgebra"

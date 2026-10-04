@@ -45,8 +45,8 @@ pub fn element_stiffness(mesh: &P2Mesh, e: usize, young: f64, poisson: f64, rd: 
     let mut k = Box::new([[0.0f64; 9]; 100]);
     let mut g = [[0.0f64; 3]; 10];
     for (q, w) in rd.weights.iter().enumerate() {
-        for a in 0..10 {
-            g[a] = map.transform_gradient(&rd.grads[q][a]);
+        for (ga, grad) in g.iter_mut().zip(rd.grads[q].iter()) {
+            *ga = map.transform_gradient(grad);
         }
         let s = w * det;
         for a in 0..10 {

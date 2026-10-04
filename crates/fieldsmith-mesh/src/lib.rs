@@ -14,6 +14,7 @@
 //! is a whole number of cells. Planar faces that coincide with lattice planes (the outer faces of
 //! most mechanical parts, and inner faces at grid multiples) are then reproduced exactly.
 
+pub mod export;
 pub mod quality;
 pub use quality::{quality, Quality};
 
@@ -68,7 +69,7 @@ impl Lattice {
     fn centre(&self, i: usize, j: usize, k: usize) -> usize {
         self.ncorners() + i + self.n[0] * (j + self.n[1] * k)
     }
-    fn nverts(&self) -> usize {
+    pub fn nverts(&self) -> usize {
         self.ncorners() + self.n[0] * self.n[1] * self.n[2]
     }
     fn position(&self, id: usize) -> V3 {
@@ -232,11 +233,15 @@ fn crossing(f: &impl Fn(V3) -> f64, a: V3, b: V3, fa: f64, fb: f64) -> f64 {
 }
 
 /// Mesh the solid `{p : f(p) < 0}` inside the box `[lo, hi]` with target spacing `h`.
+///
+/// Lattice positions are computed on demand ([`Lattice::position`] is O(1) arithmetic): at
+/// h = 0.25 mm across a 150 mm bracket the full-position table alone would be 1.6 GiB, which
+/// does not fit a browser's wasm linear memory alongside `val` and the remap table.
 pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice) {
     let lat = Lattice::fit(lo, hi, h);
     let nv = lat.nverts();
-    let mut pos: Vec<V3> = (0..nv).map(|i| lat.position(i)).collect();
-    let mut val: Vec<f64> = pos.iter().map(|&p| f(p)).collect();
+    let pos = |i: usize| -> V3 { lat.position(i) };
+    let mut val: Vec<f64> = (0..nv).map(|i| f(pos(i))).collect();
     // Points on lattice planes that coincide with faces evaluate to ±rounding noise; snap them.
     let tiny = 1e-9 * lat.h[0].max(lat.h[1]).max(lat.h[2]);
     for v in val.iter_mut() {
@@ -246,16 +251,18 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
     }
 
     // ---- warp vertices that lie too close to a crossing --------------------------------------
-    // For each violated vertex keep the nearest violating cut point (as an edge fraction).
+    // For each violated vertex keep the nearest violating cut point (as an edge fraction); the
+    // cut point becomes the vertex's emitted position (a handful of vertices, so a map, not a
+    // whole-lattice table).
     let mut warp: HashMap<usize, (f64, V3)> = HashMap::new();
     lat.edges(|a, b, long| {
         let (fa, fb) = (val[a], val[b]);
         if !((fa < 0.0 && fb > 0.0) || (fa > 0.0 && fb < 0.0)) {
             return;
         }
-        let t = crossing(&f, pos[a], pos[b], fa, fb);
+        let t = crossing(&f, pos(a), pos(b), fa, fb);
         let alpha = if long { ALPHA_LONG } else { ALPHA_SHORT };
-        let c = lerp(pos[a], pos[b], t);
+        let c = lerp(pos(a), pos(b), t);
         if t < alpha {
             let e = warp.entry(a).or_insert((f64::INFINITY, c));
             if t < e.0 {
@@ -268,12 +275,19 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             }
         }
     });
-    for (v, (_, c)) in warp {
-        pos[v] = c;
+    for &v in warp.keys() {
         val[v] = 0.0;
     }
 
     // ---- stencils ----------------------------------------------------------------------------
+    // Emitted position of a lattice vertex: its warped cut point when it was warped, else the
+    // lattice position.
+    let warp_pos = |v: usize| -> V3 {
+        match warp.get(&v) {
+            Some(&(_, c)) => c,
+            None => pos(v),
+        }
+    };
     let mut out = TetMesh::default();
     let mut remap: Vec<u32> = vec![u32::MAX; nv];
     let mut cuts: HashMap<(usize, usize), u32> = HashMap::new();
@@ -283,7 +297,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
     let mut lattice_vertex = |v: usize, out: &mut TetMesh, gid: &mut Vec<usize>| -> u32 {
         if remap[v] == u32::MAX {
             remap[v] = out.verts.len() as u32;
-            out.verts.push(pos[v]);
+            out.verts.push(warp_pos(v));
             gid.push(v);
         }
         remap[v]
@@ -305,7 +319,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             if npos == 0 {
                 // All four vertices on the surface: keep if the tet lies inside.
                 let c = [0, 1, 2]
-                    .map(|a| (pos[t[0]][a] + pos[t[1]][a] + pos[t[2]][a] + pos[t[3]][a]) * 0.25);
+                    .map(|a| (warp_pos(t[0])[a] + warp_pos(t[1])[a] + warp_pos(t[2])[a] + warp_pos(t[3])[a]) * 0.25);
                 if f(c) < 0.0 {
                     let v = t.map(|x| lattice_vertex(x, &mut out, &mut gid));
                     emit(&mut out, v);
@@ -323,7 +337,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
         let mut cut = |a: usize, b: usize, out: &mut TetMesh, gid: &mut Vec<usize>| -> u32 {
             let key = if t[a] < t[b] { (t[a], t[b]) } else { (t[b], t[a]) };
             *cuts.entry(key).or_insert_with(|| {
-                let (p, q) = (pos[key.0], pos[key.1]);
+                let (p, q) = (warp_pos(key.0), warp_pos(key.1));
                 let u = crossing(&f, p, q, val[key.0], val[key.1]);
                 out.verts.push(lerp(p, q, u));
                 gid.push(nv + out.verts.len());
@@ -443,18 +457,38 @@ impl TetMesh {
     }
 
     /// Boundary triangles (outward oriented) with the index of the owning tetrahedron.
+    ///
+    /// The face-usage table is split from the boundary-faces table deliberately: ~2·T distinct
+    /// faces across T tets means a combined `HashMap<[u32; 3], (count, face, owner)>` entry
+    /// costs 32 B, and at T ≈ 16 M that needs 2^26 buckets ≈ 2.15 GB — past the 32-bit linear
+    /// address space (wasm32 calls this "hash table capacity overflow", 64-bit platforms
+    /// never see it). A bare count per face fits in ~14 B per bucket, and the boundary faces
+    /// (count 1, ≤ T entries) go into their own small map on a second pass.
     pub fn boundary(&self) -> Vec<([u32; 3], u32)> {
-        let mut faces: HashMap<[u32; 3], (u32, [u32; 3], u32)> = HashMap::with_capacity(self.tets.len() * 2);
-        for (ti, t) in self.tets.iter().enumerate() {
+        let mut uses: HashMap<[u32; 3], u16> = HashMap::new();
+        for t in &self.tets {
             // Outward faces for a positively oriented tet (a, b, c, d).
             let fs = [[t[1], t[2], t[3]], [t[0], t[3], t[2]], [t[0], t[1], t[3]], [t[0], t[2], t[1]]];
             for f in fs {
                 let mut key = f;
                 key.sort_unstable();
-                faces.entry(key).and_modify(|e| e.0 += 1).or_insert((1, f, ti as u32));
+                uses.entry(key).and_modify(|c| *c = c.saturating_add(1)).or_insert(1);
             }
         }
-        let mut out: Vec<([u32; 3], u32)> = faces.into_values().filter(|e| e.0 == 1).map(|e| (e.1, e.2)).collect();
+        // Boundary faces: collect their outward orientation (the single occurrence's winding)
+        // and owning tet.
+        let mut faces: HashMap<[u32; 3], ([u32; 3], u32)> = HashMap::with_capacity(uses.len() / 16 + 1024);
+        for (ti, t) in self.tets.iter().enumerate() {
+            let fs = [[t[1], t[2], t[3]], [t[0], t[3], t[2]], [t[0], t[1], t[3]], [t[0], t[2], t[1]]];
+            for f in fs {
+                let mut key = f;
+                key.sort_unstable();
+                if uses.get(&key).is_some_and(|&c| c == 1) {
+                    faces.insert(key, (f, ti as u32));
+                }
+            }
+        }
+        let mut out: Vec<([u32; 3], u32)> = faces.into_values().collect();
         out.sort_unstable_by_key(|e| e.1);
         out
     }

@@ -12,3 +12,4 @@ fieldsmith-core = { workspace = true }
 fieldsmith-mesh = { workspace = true }
 fieldsmith-solve = { workspace = true }
 fenics-element = { workspace = true }
+miniz_oxide = { workspace = true }

@@ -21,7 +21,10 @@ impl P2Mesh {
         let nverts = verts.len();
         let mut nodes = verts.to_vec();
         let mut mid_edge = Vec::new();
-        let mut edge_id: HashMap<(u32, u32), u32> = HashMap::with_capacity(tets.len() * 2);
+        // No eager capacity: unique edges exceed tets·2 (the earlier estimate), and at
+        // solving resolutions a with_capacity(n·2) table is a multi-gigabyte single
+        // allocation — on wasm32 that crosses the 2^31 address-space ceiling.
+        let mut edge_id: HashMap<(u32, u32), u32> = HashMap::new();
         let mut out = Vec::with_capacity(tets.len());
         for t in tets {
             let mut n = [0u32; 10];

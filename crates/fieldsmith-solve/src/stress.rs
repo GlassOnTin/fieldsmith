@@ -49,10 +49,11 @@ pub fn nodal_stress(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Ve
     let pts = P2Tetrahedron.nodal_coordinates();
     let mut acc = vec![[0.0f64; 6]; mesh.nodes.len()];
     let mut w = vec![0.0f64; mesh.nodes.len()];
-    for e in 0..mesh.tets.len() {
+    assert_eq!(young.len(), mesh.tets.len(), "one modulus per element");
+    for (e, y) in young.iter().enumerate() {
         let vol = mesh.tet_volume(e).abs();
         for (a, xi) in pts.iter().enumerate() {
-            let s = element_stress(mesh, u, e, young[e], poisson, *xi);
+            let s = element_stress(mesh, u, e, *y, poisson, *xi);
             let n = mesh.tets[e][a] as usize;
             for k in 0..6 {
                 acc[n][k] += vol * s[k];

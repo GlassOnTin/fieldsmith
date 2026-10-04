@@ -623,9 +623,9 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     let rd_xi = {
         let pts = P2Tetrahedron.nodal_coordinates();
         let mut c = [0.0f64; 3];
-        for k in 0..4 {
-            for j in 0..3 {
-                c[j] += pts[k][j] / 4.0;
+        for xi in pts.iter() {
+            for (j, cj) in c.iter_mut().enumerate() {
+                *cj += xi[j] / 4.0;
             }
         }
         c
@@ -637,9 +637,10 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     for e in 0..mesh.tets.len() {
         let tt = &mesh.tets[e];
         let mut c = [0.0f64; 3];
-        for k in 0..4 {
-            for j in 0..3 {
-                c[j] += mesh.nodes[tt[k] as usize][j] / 4.0;
+        for &v in tt.iter() {
+            let n = mesh.nodes[v as usize];
+            for (j, cj) in c.iter_mut().enumerate() {
+                *cj += n[j] / 4.0;
             }
         }
         let interior = c[0] >= cell && c[0] <= l - cell && c[1] >= cell && c[1] <= l - cell
