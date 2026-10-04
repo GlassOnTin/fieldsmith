@@ -11,7 +11,7 @@ use miniz_oxide::deflate::core::{
     TDEFLStatus,
 };
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// A triangle surface with shared vertices.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -124,35 +124,60 @@ impl TriMesh {
 
     /// Count every diagnostic class. Degenerate triangles are excluded from the edge and
     /// intersection scans (their edges are meaningless) and reported on their own.
+    ///
+    /// The edge census sorts packed undirected edge keys, split by traversal direction,
+    /// and counts runs: 8 B per half-edge (a hash map of directed edges plus a seen-set
+    /// held ~4 GB at the 0.1 mm bracket export).
     pub fn defects(&self) -> Defects {
         let mut d = Defects::default();
-        let mut edges: HashMap<(u32, u32), i32> = HashMap::with_capacity(self.tris.len() * 3);
-        for &t in &self.tris {
-            if self.area(t) <= 1e-12 {
-                d.degenerate_triangles += 1;
+        let degen: Vec<bool> = self.tris.par_iter().map(|&t| self.area(t) <= 1e-12).collect();
+        d.degenerate_triangles = degen.iter().filter(|&&g| g).count();
+        // Undirected key (min << 32 | max), in `fwd` when traversed min -> max, else `bwd`.
+        let mut fwd: Vec<u64> = Vec::new();
+        let mut bwd: Vec<u64> = Vec::new();
+        for (t, &g) in self.tris.iter().zip(&degen) {
+            if g {
                 continue;
             }
             for i in 0..3 {
-                *edges.entry((t[i], t[(i + 1) % 3])).or_default() += 1;
+                let (u, v) = (t[i], t[(i + 1) % 3]);
+                if u == v {
+                    continue; // self-edge: not an edge of the surface
+                }
+                let key = ((u.min(v) as u64) << 32) | u.max(v) as u64;
+                if u < v { fwd.push(key) } else { bwd.push(key) }
             }
         }
-        let mut seen: HashSet<(u32, u32)> = HashSet::new();
-        for k in edges.keys().copied().collect::<Vec<_>>() {
-            let (a, b) = (k.0.min(k.1), k.0.max(k.1));
-            if a == b || !seen.insert((a, b)) {
-                continue; // each undirected edge once
+        drop(degen);
+        fwd.par_sort_unstable();
+        bwd.par_sort_unstable();
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < fwd.len() || j < bwd.len() {
+            let k = match (fwd.get(i), bwd.get(j)) {
+                (Some(&a), Some(&b)) => a.min(b),
+                (Some(&a), None) => a,
+                (None, Some(&b)) => b,
+                (None, None) => unreachable!(),
+            };
+            let (mut f, mut b) = (0usize, 0usize);
+            while i < fwd.len() && fwd[i] == k {
+                f += 1;
+                i += 1;
             }
-            let f = edges.get(&(a, b)).copied().unwrap_or(0);
-            let b_ = edges.get(&(b, a)).copied().unwrap_or(0);
-            let usage = f + b_;
+            while j < bwd.len() && bwd[j] == k {
+                b += 1;
+                j += 1;
+            }
+            let usage = f + b;
             if usage == 1 {
                 d.open_edges += 1;
             } else if usage >= 3 {
                 d.non_manifold_edges += 1;
-            } else if (f, b_) != (1, 1) {
+            } else if (f, b) != (1, 1) {
                 d.orientation_defects += 1;
             }
         }
+        drop((fwd, bwd));
         d.self_intersections = self.self_intersections();
         d
     }
@@ -167,43 +192,139 @@ impl TriMesh {
         0.5 * len(cross(sub(b, a), sub(c, a)))
     }
 
-    /// Pairs of triangles that cross without sharing a vertex, found through a spatial hash
-    /// of the triangle bounding boxes. Each intersecting pair is counted once.
+    /// Pairs of triangles that cross without sharing a vertex, found through a uniform grid
+    /// over the triangle bounding boxes. Each intersecting pair is counted once.
     /// Under-reporting (named gap): coplanar-touching pairs that overlap without crossing a
     /// transverse segment, and edges grazing the target plane nearly parallel, are missed.
+    ///
+    /// Candidates are the pairs whose grid-cell boxes (`floor(lo/cell) ..= ceil(hi/cell)`)
+    /// share a cell. Each such pair is tested in exactly one cell, the reference cell at
+    /// the componentwise max of the two boxes' low corners (it lies in both boxes), so no
+    /// per-triangle candidate set is needed. The grid is swept in x-slabs: a slab's
+    /// (cell, triangle) entries are sorted, cells are scanned in parallel, and the entries
+    /// are dropped before the next slab — memory is bounded by the slab, not the mesh.
     pub fn self_intersections(&self) -> usize {
-        let cell = self.hash_cell();
-        let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
-        for (i, t) in self.tris.iter().enumerate() {
-            let aabb = self.tri_aabb(t);
-            for k in aabb_cells(aabb, cell) {
-                grid.entry(k).or_default().push(i);
-            }
+        let n = self.tris.len();
+        if n == 0 {
+            return 0;
         }
+        let cell = self.hash_cell();
+        let cbox = |i: usize| -> [[i64; 3]; 2] {
+            let a = self.tri_aabb(&self.tris[i]);
+            [
+                [0, 1, 2].map(|k| (a[0][k] / cell).floor() as i64),
+                [0, 1, 2].map(|k| (a[1][k] / cell).ceil() as i64),
+            ]
+        };
+        // Triangles in order of their box's low x cell (counting sort when the range is
+        // sane, comparison sort otherwise).
+        let (xmin, xmax) = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let b = cbox(i);
+                (b[0][0], b[1][0])
+            })
+            .reduce(|| (i64::MAX, i64::MIN), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let range = (xmax - xmin + 1) as u64;
+        let order: Vec<u32> = if range <= 4 * n as u64 + 1024 {
+            let mut off = vec![0u32; range as usize + 1];
+            for i in 0..n {
+                off[(cbox(i)[0][0] - xmin) as usize + 1] += 1;
+            }
+            for k in 0..range as usize {
+                off[k + 1] += off[k];
+            }
+            let mut order = vec![0u32; n];
+            for i in 0..n {
+                let k = (cbox(i)[0][0] - xmin) as usize;
+                order[off[k] as usize] = i as u32;
+                off[k] += 1;
+            }
+            order
+        } else {
+            let mut order: Vec<u32> = (0..n as u32).collect();
+            order.par_sort_by_key(|&i| (cbox(i as usize)[0][0], i));
+            order
+        };
+
+        // ~8-27 cells per triangle box at 32 B per entry: ~0.1 GB of entries per slab.
+        const SLAB_TRIS: usize = 1 << 18;
         let mut hits = 0usize;
-        for (i, t) in self.tris.iter().enumerate() {
-            let aabb = self.tri_aabb(t);
-            let mut candidates: Vec<usize> = Vec::new();
-            for k in aabb_cells(aabb, cell) {
-                candidates.extend(grid.get(&k).into_iter().flatten().copied());
+        let mut active: Vec<u32> = Vec::new();
+        let mut next = 0usize;
+        let mut x0 = xmin;
+        while next < n || !active.is_empty() {
+            // Slab [x0, x1]: the slabs partition the x cells. It takes ~SLAB_TRIS more
+            // triangles in whole low-x columns (they all start inside it: earlier columns
+            // went to earlier slabs); once every triangle has started, it runs to the end.
+            let x1 = if next < n {
+                let mut end = (next + SLAB_TRIS).min(n);
+                while end < n && cbox(order[end] as usize)[0][0] == cbox(order[end - 1] as usize)[0][0] {
+                    end += 1;
+                }
+                let x1 = cbox(order[end - 1] as usize)[0][0];
+                active.extend_from_slice(&order[next..end]);
+                next = end;
+                x1
+            } else {
+                xmax
+            };
+            debug_assert!(x1 >= x0);
+            // Entries of the slab: every (cell, triangle) with the cell's x in [x0, x1].
+            let mut ent: Vec<([i64; 3], u32)> = Vec::new();
+            for &i in &active {
+                let b = cbox(i as usize);
+                for x in b[0][0].max(x0)..=b[1][0].min(x1) {
+                    for y in b[0][1]..=b[1][1] {
+                        for z in b[0][2]..=b[1][2] {
+                            ent.push(([x, y, z], i));
+                        }
+                    }
+                }
             }
-            candidates.sort_unstable();
-            candidates.dedup(); // one candidate per pair, whatever the cell overlap
-            for j in candidates {
-                if j <= i {
-                    continue; // visit each pair once
-                }
-                let t2 = self.tris[j];
-                if t.iter().any(|&v| t2.contains(&v)) {
-                    continue; // touching triangles share a vertex by construction
-                }
-                if !overlap(&aabb, &self.tri_aabb(&t2)) {
-                    continue;
-                }
-                if seg_vs_tri(self, t, &t2) || seg_vs_tri(self, &t2, t) {
-                    hits += 1;
+            ent.par_sort_unstable();
+            let mut starts: Vec<usize> = Vec::new();
+            for k in 0..ent.len() {
+                if k == 0 || ent[k].0 != ent[k - 1].0 {
+                    starts.push(k);
                 }
             }
+            starts.push(ent.len());
+            hits += starts
+                .par_windows(2)
+                .map(|w| {
+                    let g = &ent[w[0]..w[1]];
+                    let c = g[0].0;
+                    let mut h = 0usize;
+                    for a in 0..g.len() {
+                        let i = g[a].1 as usize;
+                        let bi = cbox(i);
+                        let t = &self.tris[i];
+                        for e in &g[a + 1..] {
+                            let j = e.1 as usize; // j > i: entries sort by triangle within a cell
+                            let bj = cbox(j);
+                            if [0, 1, 2].map(|k| bi[0][k].max(bj[0][k])) != c {
+                                continue; // this pair's reference cell is elsewhere
+                            }
+                            let t2 = self.tris[j];
+                            if t.iter().any(|&v| t2.contains(&v)) {
+                                continue; // touching triangles share a vertex by construction
+                            }
+                            if !overlap(&self.tri_aabb(t), &self.tri_aabb(&t2)) {
+                                continue;
+                            }
+                            if seg_vs_tri(self, t, &t2) || seg_vs_tri(self, &t2, t) {
+                                h += 1;
+                            }
+                        }
+                    }
+                    h
+                })
+                .sum::<usize>();
+            drop(ent);
+            // Triangles reaching past this slab stay active for the next one.
+            active.retain(|&i| cbox(i as usize)[1][0] > x1);
+            x0 = x1 + 1;
         }
         hits
     }
@@ -400,6 +521,7 @@ fn dot(u: V3, v: V3) -> f64 {
     u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
 }
 
+#[cfg(test)]
 fn aabb_cells(aabb: [[f64; 3]; 2], cell: f64) -> impl Iterator<Item = [i64; 3]> {
     let mut out = Vec::with_capacity(8);
     for x in (aabb[0][0] / cell).floor() as i64..=(aabb[1][0] / cell).ceil() as i64 {
@@ -691,6 +813,141 @@ pub fn read_stl(bytes: &[u8]) -> Option<TriMesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    /// The previous defect scan (hash maps of directed edges and of grid cells), kept as
+    /// the reference the bounded-memory scan must reproduce count for count.
+    fn defects_reference(m: &TriMesh) -> Defects {
+        let mut d = Defects::default();
+        let mut edges: HashMap<(u32, u32), i32> = HashMap::with_capacity(m.tris.len() * 3);
+        for &t in &m.tris {
+            if m.area(t) <= 1e-12 {
+                d.degenerate_triangles += 1;
+                continue;
+            }
+            for i in 0..3 {
+                *edges.entry((t[i], t[(i + 1) % 3])).or_default() += 1;
+            }
+        }
+        let mut seen: HashSet<(u32, u32)> = HashSet::new();
+        for k in edges.keys().copied().collect::<Vec<_>>() {
+            let (a, b) = (k.0.min(k.1), k.0.max(k.1));
+            if a == b || !seen.insert((a, b)) {
+                continue;
+            }
+            let f = edges.get(&(a, b)).copied().unwrap_or(0);
+            let b_ = edges.get(&(b, a)).copied().unwrap_or(0);
+            let usage = f + b_;
+            if usage == 1 {
+                d.open_edges += 1;
+            } else if usage >= 3 {
+                d.non_manifold_edges += 1;
+            } else if (f, b_) != (1, 1) {
+                d.orientation_defects += 1;
+            }
+        }
+        let cell = m.hash_cell();
+        let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+        for (i, t) in m.tris.iter().enumerate() {
+            for k in aabb_cells(m.tri_aabb(t), cell) {
+                grid.entry(k).or_default().push(i);
+            }
+        }
+        for (i, t) in m.tris.iter().enumerate() {
+            let aabb = m.tri_aabb(t);
+            let mut candidates: Vec<usize> = Vec::new();
+            for k in aabb_cells(aabb, cell) {
+                candidates.extend(grid.get(&k).into_iter().flatten().copied());
+            }
+            candidates.sort_unstable();
+            candidates.dedup();
+            for j in candidates {
+                if j <= i {
+                    continue;
+                }
+                let t2 = m.tris[j];
+                if t.iter().any(|&v| t2.contains(&v)) {
+                    continue;
+                }
+                if !overlap(&aabb, &m.tri_aabb(&t2)) {
+                    continue;
+                }
+                if seg_vs_tri(m, t, &t2) || seg_vs_tri(m, &t2, t) {
+                    d.self_intersections += 1;
+                }
+            }
+        }
+        d
+    }
+
+    #[test]
+    fn defects_match_reference_scan() {
+        // Gyroid sheet through the adaptive mesher: open, non-manifold, degenerate and
+        // self-intersecting classes all present, thousands of each kind of cell bucket.
+        let gyroid = |p: V3| -> crate::adaptive::Sample {
+            let k = 2.0 * std::f64::consts::PI / 6.0;
+            let (x, y, z) = (k * p[0], k * p[1], k * p[2]);
+            let g = x.sin() * y.cos() + y.sin() * z.cos() + z.sin() * x.cos();
+            let dg = [
+                x.cos() * y.cos() - z.sin() * x.sin(),
+                -x.sin() * y.sin() + y.cos() * z.cos(),
+                -y.sin() * z.sin() + z.cos() * x.cos(),
+            ];
+            let s = g.signum();
+            let sheet = (g.abs() - 0.35) / k;
+            let b = p.iter().map(|c| c.abs() - 9.0).fold(f64::MIN, f64::max);
+            if sheet >= b {
+                crate::adaptive::Sample { v: sheet, g: [s * dg[0], s * dg[1], s * dg[2]] }
+            } else {
+                let mut g = [0.0; 3];
+                let a = (0..3).max_by(|&i, &j| p[i].abs().total_cmp(&p[j].abs())).unwrap();
+                g[a] = p[a].signum();
+                crate::adaptive::Sample { v: b, g }
+            }
+        };
+        let adaptive = crate::adaptive::surface_adaptive(
+            gyroid,
+            [-10.0; 3],
+            [10.0; 3],
+            0.25,
+            &crate::adaptive::AdaptiveOpts::default(),
+        );
+        let mut scrambled = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
+        for (i, t) in scrambled.tris.iter_mut().enumerate() {
+            if i % 7 == 0 {
+                t.swap(1, 2); // orientation defects
+            }
+        }
+        scrambled.tris.truncate(scrambled.tris.len() - 5); // open edges
+        let crossing = TriMesh {
+            verts: vec![
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [1.0, 1.0, -1.0],
+                [3.0, 1.0, 1.0],
+                [1.0, 3.0, 1.0],
+            ],
+            tris: vec![[0, 1, 2], [3, 4, 5], [0, 0, 1]],
+        };
+        let nm = TriMesh {
+            verts: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]],
+            tris: vec![[0, 1, 2], [0, 1, 3], [0, 1, 4], [1, 0, 2]],
+        };
+        for (name, m) in [
+            ("adaptive gyroid", &adaptive),
+            ("scrambled sphere", &scrambled),
+            ("crossing", &crossing),
+            ("non-manifold fan", &nm),
+        ] {
+            let want = defects_reference(m);
+            let got = m.defects();
+            println!("{name}: {} tris {got:?}", m.tris.len());
+            assert_eq!(got, want, "{name}: bounded scan diverged from the reference");
+        }
+        let d = adaptive.defects();
+        assert!(d.open_edges > 0 && d.self_intersections > 0, "test mesh must exercise the classes: {d:?}");
+    }
 
     /// Walk the local file headers of a zip written by [`zip`] and inflate each entry,
     /// re-checking the CRCs on the way.
