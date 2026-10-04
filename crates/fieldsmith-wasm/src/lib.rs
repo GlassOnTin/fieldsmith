@@ -5,9 +5,17 @@ use fieldsmith_core::fill::{graded, Graded};
 use fieldsmith_core::{analyse as core_analyse, Analysis, Provenance, Resolution};
 use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
+use fieldsmith_mesh::export::{surface as mesh_surface, TriMesh};
 use js_sys::{Float32Array, Float64Array, Uint32Array, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+/// Route Rust panics to the devtools console — wasm panics otherwise trap as a bare
+/// `unreachable` with no message.
+#[wasm_bindgen(start)]
+fn start() {
+    console_error_panic_hook::set_once();
+}
 
 fn js_err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -335,6 +343,8 @@ struct GradedMeta {
 pub struct GradedOut {
     base: Analysis,
     g: Graded,
+    name: String,
+    material: String,
 }
 
 /// Run the solid analysis and the graded fill re-solve in one call. `h`/`dofs` as in `analyse`.
@@ -347,7 +357,7 @@ pub fn analyse_graded(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Re
         (None, None) => Resolution::Dofs(150_000),
     };
     let (a, g) = graded(&doc, res, clock).map_err(js_err)?;
-    Ok(GradedOut { base: a, g })
+    Ok(GradedOut { base: a, g, name: doc.name, material: doc.material })
 }
 
 #[wasm_bindgen]
@@ -469,4 +479,175 @@ impl GradedOut {
     pub fn fill_param_data(&self) -> Float32Array {
         Float32Array::from(&self.g.fill.param.data[..])
     }
+
+    /// Export the stored graded fill at mesh spacing `h` (mm): meshes the filled field
+    /// without re-solving. `metaJson` reports what the mesh is relative to the field
+    /// (`what: "graded fill"`), including the mesh/field volume delta and any defects.
+    pub fn export(&self, h: f64) -> Result<MeshOut, JsValue> {
+        if !h.is_finite() || h <= 0.0 {
+            return Err(js_err("mesh spacing h must be positive and finite (mm)"));
+        }
+        let field = Expr::Filled(Box::new(self.g.fill.clone()));
+        export_field(&field, &self.name, &self.material, h, "graded fill", 0.0)
+    }
+}
+
+#[derive(Serialize)]
+struct ExportMeta {
+    /// What was meshed: "solid" or "graded fill".
+    what: &'static str,
+    h: f64,
+    verts: usize,
+    tris: usize,
+    field_volume: f64,
+    field_err: f64,
+    mesh_volume: f64,
+    delta_pct: f64,
+    open_edges: usize,
+    non_manifold_edges: usize,
+    orientation_defects: usize,
+    degenerate_triangles: usize,
+    self_intersections: usize,
+    build_ms: f64,
+    mesh_ms: f64,
+    ref_ms: f64,
+    scan_ms: f64,
+}
+
+/// An export mesh: typed-array access to the triangles, a health report on `metaJson`, byte
+/// writers for the download formats, and plane slicing for the layer preview.
+#[wasm_bindgen]
+pub struct MeshOut {
+    m: TriMesh,
+    name: String,
+    material: String,
+    meta: ExportMeta,
+}
+
+#[wasm_bindgen]
+impl MeshOut {
+    #[wasm_bindgen(js_name = metaJson)]
+    pub fn meta_json(&self) -> Result<String, JsValue> {
+        to_json(&self.meta)
+    }
+
+    /// Vertices, 3 per vertex (mm).
+    pub fn verts(&self) -> Float64Array {
+        let flat = self.m.verts.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Triangles, 3 vertex ids each.
+    pub fn tris(&self) -> Uint32Array {
+        let flat = self.m.tris.iter().flat_map(|t| t.iter()).copied().collect::<Vec<u32>>();
+        Uint32Array::from(&flat[..])
+    }
+
+    /// Binary STL bytes (millimetre units).
+    #[wasm_bindgen(js_name = stlBytes)]
+    pub fn stl_bytes(&self) -> Uint8Array {
+        Uint8Array::from(self.m.write_stl().as_slice())
+    }
+
+    /// 3MF package bytes: the part name and material recorded, vertices translated into the
+    /// positive octant (3MF requires it).
+    #[wasm_bindgen(js_name = threeMfBytes)]
+    pub fn three_mf_bytes(&self) -> Uint8Array {
+        Uint8Array::from(self.m.write_3mf(&self.name, &self.material).as_slice())
+    }
+
+    /// Segments of the plane z through the mesh, packed `[x0, y0, x1, y1, …]` (mm): the
+    /// contours of the exact exported mesh, for the layer preview.
+    #[wasm_bindgen(js_name = sliceAt)]
+    pub fn slice_at(&self, z: f64) -> Float64Array {
+        Float64Array::from(&self.m.slice_at(z)[..])
+    }
+}
+
+/// The export surface plus its measured health report. `build_ms` is time already spent
+/// preparing `field` (the graded solve) so callers can show it separately.
+fn export_field(
+    field: &Expr,
+    name: &str,
+    material: &str,
+    h: f64,
+    what: &'static str,
+    build_ms: f64,
+) -> Result<MeshOut, JsValue> {
+    let b = expr::bounds(field);
+    if b.is_empty() {
+        return Err(js_err("document has no solid"));
+    }
+    let t0 = clock();
+    let m = mesh_surface(
+        |p: [f64; 3]| expr::eval(field, p).v,
+        [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h],
+        [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
+        h,
+    );
+    let mesh_ms = clock() - t0;
+    #[cfg(target_arch = "wasm32")]
+    let t0 = clock();
+    // Reference pair at the MESH spacing, not a coarser auto spacing: on TPMS fill fields
+    // the interval's error is plate-thickness-quantisation and it grows with h, so a coarser
+    // reference understates the volume and its Richardson band misses the truth (bracket
+    // fill at h ≈ 0.35: −1.3 % off the converged integral while reporting ± 0.8 %). The
+    // mesh-h pair keeps the reported band honest for the same ~0.6 s cost (see the
+    // v8_ref_probe ladder: at h = 0.25 the pair's band is ± 0.76 % around −0.65 %).
+    let v_field = fieldsmith_field::volume::volume(field, h);
+    let ref_ms = clock() - t0;
+    let v_mesh = m.volume();
+    let delta =
+        if v_field.volume > 0.0 { (v_mesh - v_field.volume) / v_field.volume * 100.0 } else { f64::NAN };
+    let t0 = clock();
+    let d = m.defects();
+    let scan_ms = clock() - t0;
+    let meta = ExportMeta {
+        what,
+        h,
+        verts: m.verts.len(),
+        tris: m.tris.len(),
+        field_volume: v_field.volume,
+        field_err: v_field.error,
+        mesh_volume: v_mesh,
+        delta_pct: delta,
+        open_edges: d.open_edges,
+        non_manifold_edges: d.non_manifold_edges,
+        orientation_defects: d.orientation_defects,
+        degenerate_triangles: d.degenerate_triangles,
+        self_intersections: d.self_intersections,
+        build_ms,
+        mesh_ms,
+        ref_ms,
+        scan_ms,
+    };
+    Ok(MeshOut { m, name: name.to_string(), material: material.to_string(), meta })
+}
+
+/// Export the solid body at mesh spacing `h` (mm). The reported field volume comes from the
+/// same field the mesh was cut from, so the delta in `metaJson` is the mesher's
+/// representation error, not a modelling difference.
+#[wasm_bindgen(js_name = exportSolid)]
+pub fn export_solid(doc_json: &str, h: f64) -> Result<MeshOut, JsValue> {
+    if !h.is_finite() || h <= 0.0 {
+        return Err(js_err("mesh spacing h must be positive and finite (mm)"));
+    }
+    let doc = doc_from(doc_json)?;
+    let e = expr::compile_body(&doc);
+    export_field(&e, &doc.name, &doc.material, h, "solid", 0.0)
+}
+
+/// Export the graded fill at mesh spacing `h` (mm), building the graded fill first (stress
+/// solve included, ~5 s at the browser default). Reuse an existing `GradedOut` through its
+/// `export` method when one is already solved.
+#[wasm_bindgen(js_name = exportGraded)]
+pub fn export_graded(doc_json: &str, h: f64) -> Result<MeshOut, JsValue> {
+    if !h.is_finite() || h <= 0.0 {
+        return Err(js_err("mesh spacing h must be positive and finite (mm)"));
+    }
+    let doc = doc_from(doc_json)?;
+    let t0 = clock();
+    let (_, g) = graded(&doc, Resolution::Dofs(150_000), clock).map_err(js_err)?;
+    let field = expr::Expr::Filled(Box::new(g.fill));
+    export_field(&field, &doc.name, &doc.material, h, "graded fill", clock() - t0)
 }

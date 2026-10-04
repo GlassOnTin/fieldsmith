@@ -1,22 +1,31 @@
 // The analysis ladder worker. Runs the wasm pipeline off the main thread and streams each
 // level back as it completes; the parent kills the worker to cancel an in-flight run.
 // Fill documents run the graded path: analyseGraded delivers the solid mesh, the graded
-// re-solve and the fill summary in one call, so each level packs both.
+// re-solve and the fill summary in one call, so each level packs both. The fine level's
+// graded handle is kept alive after the run so the Make lens can export the stored fill
+// without a re-solve; it dies with the worker on the next run or edit.
 import type { Document } from '../doc/types';
-import { loadWasm, analyse, analyseGraded } from '../doc/wasm';
-import type { AnalysisHandle, LevelResult, WorkerIn, WorkerOut } from '../doc/wasm';
+import { loadWasm, analyse, analyseGraded, exportSolid, exportGraded } from '../doc/wasm';
+import type { AnalysisHandle, GradedHandleWithExport, LevelResult, MeshHandle, WorkerIn, WorkerOut } from '../doc/wasm';
 
 export const COARSE_DOFS = 30_000;
 export const FINE_DOFS = 150_000;
 
 let ready: Promise<void> | null = null;
 
+/** The fine (or, when the fine level skipped, the coarse) graded handle of the last run.
+ * `null` for solid documents and after this worker has never run a fill document. */
+let graded: GradedHandleWithExport | null = null;
+/** The export mesh of the last `export` message (both solid and fill exports). */
+let mesh: MeshHandle | null = null;
+
 function post(m: WorkerOut, transfers?: ArrayBuffer[]) {
   (self as unknown as { postMessage(m: WorkerOut, transfers: ArrayBuffer[]): void }).postMessage(m, transfers ?? []);
 }
 
-/** Copy every array out of the wasm handle, then release it. */
-function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array }): LevelResult {
+/** Copy every array out of the wasm handle, then release it (keep=false keeps it for the
+ * Make lens export path). */
+function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array }, keep = false): LevelResult {
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
@@ -36,7 +45,7 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array })
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     class: out.class ? out.class().slice() : null,
   };
-  out.free();
+  if (!keep) out.free();
   return r;
 }
 
@@ -49,6 +58,11 @@ function transfersOf(r: LevelResult): ArrayBuffer[] {
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** The export mesh is being sliced (wasm runs on this thread to completion). */
+let slicing = false;
+/** A scrub that arrived mid-slice: answered with the newest z once the running one returns. */
+let sliceQueued: number | null = null;
 
 async function run(doc: Document) {
   // Setup validation before wasm: an incomplete study is not a failure, and the badge
@@ -70,10 +84,15 @@ async function run(doc: Document) {
 
   /** One runLevel: meshes, solves, packs and posts the level; its packed result (or null on
    * failure, with the error already posted). */
-  const runLevel = (opts: { h?: number; dofs?: number }, label: string): LevelResult | null => {
+  const runLevel = (opts: { h?: number; dofs?: number }, label: string, keep = false): LevelResult | null => {
     post({ type: 'level', label });
     try {
-      const level = pack(label, fill ? analyseGraded(doc, opts) : analyse(doc, opts));
+      const out = fill ? analyseGraded(doc, opts) : analyse(doc, opts);
+      const level = pack(label, out, keep && fill);
+      if (keep && fill) {
+        if (graded) graded.free();
+        graded = out as GradedHandleWithExport;
+      }
       post({ type: 'levelDone', result: level }, transfersOf(level));
       return level;
     } catch (e) {
@@ -91,7 +110,7 @@ async function run(doc: Document) {
     return null;
   };
 
-  const coarse = runLevel({ dofs: COARSE_DOFS }, 'coarse mesh');
+  const coarse = runLevel({ dofs: COARSE_DOFS }, 'coarse mesh', true);
   if (!coarse) return;
   const skip = skipFine(coarse.meta.provenance.element_size);
   if (skip !== null) {
@@ -99,11 +118,77 @@ async function run(doc: Document) {
     return;
   }
   const label = size !== null ? `refined · h ${size.toFixed(2)} mm` : `refined · ${Math.round(FINE_DOFS / 1000)}k DOF`;
-  if (!runLevel(size !== null ? { h: size } : { dofs: FINE_DOFS }, label)) return;
+  if (!runLevel(size !== null ? { h: size } : { dofs: FINE_DOFS }, label, true)) return;
   post({ type: 'done', skippedFine: null });
+}
+
+/** Run the Make-lens export. Solid documents (or an explicit solid export) mesh the body
+ * field; fill documents reuse the run's stored graded handle when one exists, else build
+ * the graded fill on the spot. */
+async function doExport(doc: Document, h: number, solid: boolean) {
+  if (!ready) ready = loadWasm();
+  await ready;
+  post({ type: 'exportStart', h, solid });
+  try {
+    let out: MeshHandle;
+    if (solid || doc.fill === null) {
+      out = exportSolid(doc, h);
+    } else if (graded) {
+      out = graded.export(h);
+    } else {
+      out = exportGraded(doc, h);
+    }
+    if (mesh) mesh.free();
+    mesh = out;
+    post({ type: 'exportDone', mesh: { meta: JSON.parse(out.metaJson()) } });
+  } catch (e) {
+    post({ type: 'exportError', message: errText(e) });
+  }
+}
+
+/** Layer preview: one slice of the export mesh. A scrub posts faster than the wasm answer
+ * returns, so only the newest request survives — the older computation is dropped. */
+function doSlice(z: number) {
+  if (slicing) {
+    sliceQueued = z;
+    return;
+  }
+  if (!mesh) {
+    post({ type: 'sliceDone', z, segs: null });
+    return;
+  }
+  slicing = true;
+  try {
+    let segs = mesh.sliceAt(z).slice();
+    slicing = false;
+    if (sliceQueued !== null) {
+      const z2 = sliceQueued;
+      sliceQueued = null;
+      doSlice(z2);
+      return; // newer request already answered the panel
+    }
+    post({ type: 'sliceDone', z, segs }, [segs.buffer as ArrayBuffer]);
+  } catch (e) {
+    slicing = false;
+    sliceQueued = null;
+    post({ type: 'exportError', message: errText(e) });
+  }
+}
+
+function doBytes(what: 'stl' | '3mf', name: string) {
+  if (!mesh) {
+    post({ type: 'exportError', message: 'export the mesh first' });
+    return;
+  }
+  // The Uint8Array is a view into wasm memory; copy so the buffer can transfer.
+  const bytes = (what === 'stl' ? mesh.stlBytes() : mesh.threeMfBytes()).slice();
+  post({ type: 'bytesDone', what, name, bytes: bytes.buffer as ArrayBuffer }, [bytes.buffer as ArrayBuffer]);
 }
 
 (self as unknown as { onmessage: ((e: MessageEvent<WorkerIn>) => void) | null }).onmessage = (e) => {
   const m = e.data;
   if (m.type === 'run') void run(m.doc);
+  else if (m.type === 'export') void doExport(m.doc, m.h, m.solid);
+  else if (m.type === 'slice') doSlice(m.z);
+  else if (m.type === 'bytes') doBytes(m.what, m.name);
 };

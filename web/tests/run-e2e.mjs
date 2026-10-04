@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5) and the scripted bracket test.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|bracket] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|bracket|shape|make] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md and
 // docs/verification/bracket-e2e.md, and exits non-zero on any failure or console error.
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { bracketTest } from './bracket.mjs';
 import { shapeTest } from './shape.mjs';
+import { makeTest } from './make.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -97,6 +98,11 @@ try {
   if (!only || only === 'shape') {
     const ok = await shapeTest(browser, url, { screens, docsDir });
     console.log(`shape lens ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'make') {
+    const ok = await makeTest(browser, url, { screens, docsDir });
+    console.log(`make lens ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

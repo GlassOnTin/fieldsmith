@@ -202,6 +202,55 @@ export function analyseGraded(doc: Document, opts: { h?: number; dofs?: number }
   return w.analyseGraded(JSON.stringify(doc), opts.h, opts.dofs);
 }
 
+// ---- export (make lens) -------------------------------------------------------------
+
+/** What the export mesh is, measured against the field it came from. */
+export interface ExportMeta {
+  /** "solid" or "graded fill". */
+  what: string;
+  /** Mesh spacing (mm). */
+  h: number;
+  verts: number;
+  tris: number;
+  field_volume: number;
+  field_err: number;
+  mesh_volume: number;
+  delta_pct: number;
+  open_edges: number;
+  non_manifold_edges: number;
+  orientation_defects: number;
+  degenerate_triangles: number;
+  self_intersections: number;
+  build_ms: number;
+  mesh_ms: number;
+  ref_ms: number;
+  scan_ms: number;
+}
+
+/** The wasm `MeshOut` handle: the exported triangles plus queries over them. Typed arrays
+ * are views into wasm memory — copy before transferring (`arr.slice()`). */
+export interface MeshHandle {
+  metaJson(): string;
+  verts(): Float64Array;
+  tris(): Uint32Array;
+  stlBytes(): Uint8Array;
+  threeMfBytes(): Uint8Array;
+  sliceAt(z: number): Float64Array;
+  free(): void;
+}
+
+/** A graded handle also exports its stored fill without re-solving. */
+export type GradedHandleWithExport = GradedHandle & { export(h: number): MeshHandle };
+
+export function exportSolid(doc: Document, h: number): MeshHandle {
+  return w.exportSolid(JSON.stringify(doc), h);
+}
+
+/** Export the graded fill, building it (stress solve included) when no handle is at hand. */
+export function exportGraded(doc: Document, h: number): MeshHandle {
+  return w.exportGraded(JSON.stringify(doc), h);
+}
+
 /** One ladder level streamed back from the analysis worker. Typed arrays are standalone
  * copies (transferred buffers). */
 export interface LevelResult {
@@ -222,11 +271,27 @@ export interface LevelResult {
   class: Uint8Array | null;
 }
 
-export type WorkerIn = { type: 'run'; doc: Document };
+export type WorkerIn =
+  | { type: 'run'; doc: Document }
+  | { type: 'export'; doc: Document; h: number; solid: boolean }
+  /** Scrub request for the layer preview of the last export (no-op while none exists). */
+  | { type: 'slice'; z: number }
+  /** Fetch the last export's file bytes as a copy; name echoes back for the filename. */
+  | { type: 'bytes'; what: 'stl' | '3mf'; name: string };
+
+export type ExportDone = { meta: ExportMeta };
 
 export type WorkerOut =
   | { type: 'level'; label: string }
   | { type: 'levelDone'; result: LevelResult }
   | { type: 'done'; skippedFine: string | null }
   /** kind 'setup': the study is not analysable yet (no support or no load) — not a failure. */
-  | { type: 'error'; message: string; kind?: 'setup' };
+  | { type: 'error'; message: string; kind?: 'setup' }
+  | { type: 'exportStart'; h: number; solid: boolean }
+  /** The mesh stays in the worker; `meta` is its health report, `slice`/`bytes` query it. */
+  | { type: 'exportDone'; mesh: ExportDone }
+  | { type: 'exportError'; message: string }
+  /** Latest-wins: `z` is the slice this answer belongs to (ignore stale ones), `segs` is
+   * packed `[x0, y0, x1, y1, …]` (mm) or null when there is no export mesh. */
+  | { type: 'sliceDone'; z: number; segs: Float64Array | null }
+  | { type: 'bytesDone'; what: 'stl' | '3mf'; name: string; bytes: ArrayBuffer };

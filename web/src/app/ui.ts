@@ -31,6 +31,17 @@ class Ui {
   resultsCase = -1;
   /** Deformed-shape exaggeration factor. */
   resultsScale = 5;
+  // Make lens display state (not undoable).
+  /** Export mesh spacing (mm). */
+  makeH = 0.25;
+  /** Export the plain body instead of the stored graded fill. */
+  makeSolid = false;
+  /** Layer-height of the slice preview (mm); layers sit at (k + 0.5)·h within the body. */
+  makeLayerH = 1;
+  /** Preview layer index (0-based from the body's bottom). */
+  makeLayer = 0;
+  /** Whether the slice preview contour overlay is shown. */
+  makeSliceOn = true;
   probe: Probe | null = null;
   collapsed = new Set<string>();
   version = 0;

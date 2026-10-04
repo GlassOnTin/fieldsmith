@@ -11,6 +11,7 @@ import { liveViewport } from './app/ViewportHost';
 import './app/setup';
 import './app/results';
 import './app/fill';
+import './app/make';
 
 async function main() {
   await loadWasm();
