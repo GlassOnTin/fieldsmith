@@ -18,7 +18,25 @@ for the export budget's current numbers.
     npm --prefix web -- run build             # production build into web/dist
 
 For development, `bash scripts/build-wasm.sh && npm --prefix web -- run dev` serves the app
-locally. Or work headless with the CLI:
+locally.
+
+### Threads and hosting
+
+`build-wasm.sh` builds two packages of the same crate: `web/src/pkg` (single thread, stable
+toolchain) and `web/src/pkg-mt` (shared memory plus a rayon pool on Web Workers via
+wasm-bindgen-rayon; needs a nightly toolchain with `rust-src` for `-Z build-std`;
+`FIELDSMITH_WASM_ST_ONLY=1` skips it). The browser fetches one of them: the threaded package
+only when the page is cross-origin isolated, which takes two response headers on every file
+the host serves:
+
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
+
+The Vite dev and preview servers send both (`web/vite.config.ts`). A static host without them
+still serves a working app on one thread, with meshing and export several times slower; the
+budget numbers in `docs/verification/budgets.md` are measured on the threaded build.
+
+Or work headless with the CLI:
 
     cargo run -p fieldsmith-cli -- volume examples/bracket.fsm
     cargo run -p fieldsmith-cli -- solve examples/bracket.fsm --report

@@ -64,6 +64,7 @@ export async function makeTest(browser, url, { screens, docsDir }) {
   const text = readFileSync(resolve(here, '../../examples/bracket-filled.fsm'), 'utf8');
   await page.evaluate(async (fsm) => {
     const w = await import('/src/doc/wasm.ts');
+    await w.loadWasm();
     const r = w.parseFsm(fsm);
     if (!r.ok) throw new Error(r.error?.message ?? 'parse failed');
     window.fieldsmith.store.load(r.ok);
@@ -125,6 +126,7 @@ export async function makeTest(browser, url, { screens, docsDir }) {
   // ---- layer preview: scrub two layers ---------------------------------------------------
   const bounds = await page.evaluate(async () => {
     const w = await import('/src/doc/wasm.ts');
+    await w.loadWasm();
     return w.bodyBounds(window.fieldsmith.store.doc);
   });
   // Layer height 2 mm, then layers 4 and 9; the panel requests the slice, the worker

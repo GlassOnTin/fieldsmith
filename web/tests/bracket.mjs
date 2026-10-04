@@ -107,6 +107,7 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   const reference = readFileSync(resolve(here, '../../examples/bracket.fsm'), 'utf8');
   const cmp = await page.evaluate(async (ref) => {
     const w = await import('/src/doc/wasm.ts');
+    await w.loadWasm();
     const r = w.parseFsm(ref);
     // Compare in canonical form (round-trip through the Rust serialiser).
     const text = w.printFsm(window.fieldsmith.store.doc);

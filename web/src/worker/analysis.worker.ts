@@ -77,7 +77,7 @@ async function run(doc: Document) {
     });
     return;
   }
-  if (!ready) ready = loadWasm();
+  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
   await ready;
   const fill = doc.fill !== null;
   const size = doc.solve?.size ?? null;
@@ -126,7 +126,7 @@ async function run(doc: Document) {
  * field; fill documents reuse the run's stored graded handle when one exists, else build
  * the graded fill on the spot. */
 async function doExport(doc: Document, h: number, solid: boolean) {
-  if (!ready) ready = loadWasm();
+  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
   await ready;
   post({ type: 'exportStart', h, solid });
   try {
@@ -142,6 +142,16 @@ async function doExport(doc: Document, h: number, solid: boolean) {
     mesh = out;
     post({ type: 'exportDone', mesh: { meta: JSON.parse(out.metaJson()) } });
   } catch (e) {
+    // A trap (out of memory surfaces as a bare `unreachable`) leaves this wasm instance
+    // unusable: say so in words and let the engine replace the worker.
+    if (e instanceof WebAssembly.RuntimeError) {
+      post({
+        type: 'exportError',
+        trapped: true,
+        message: `the export at ${h} mm stopped inside the wasm module (${e.message}) — most likely out of browser memory; try a coarser mesh spacing`,
+      });
+      return;
+    }
     post({ type: 'exportError', message: errText(e) });
   }
 }

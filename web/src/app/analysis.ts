@@ -159,6 +159,13 @@ export class AnalysisEngine {
     } else if (m.type === 'exportDone') {
       this.set({ export: { meta: m.mesh.meta, version: this.makeVersion } });
     } else if (m.type === 'exportError') {
+      if (m.trapped && this.worker) {
+        // The instance is poisoned: retire it (the next request spawns a fresh one; the
+        // graded handle it held is rebuilt on demand by exportGraded).
+        this.worker.terminate();
+        this.worker = null;
+        this.gen++;
+      }
       this.set({ export: null, exportError: m.message });
     } else if (m.type === 'sliceDone') {
       this.set({ slice: m.segs ? { z: m.z, segs: m.segs } : null });

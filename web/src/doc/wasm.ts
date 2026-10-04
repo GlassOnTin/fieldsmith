@@ -1,16 +1,47 @@
-// Main-thread WebAssembly access. All documents cross the boundary as JSON.
-import init, * as w from '../pkg/fieldsmith_wasm.js';
-import wasmUrl from '../pkg/fieldsmith_wasm_bg.wasm?url';
+// WebAssembly access (main thread and the analysis worker). All documents cross the
+// boundary as JSON.
+//
+// Two builds of the same crate: `pkg-mt` (shared memory, a rayon pool on Web Workers) and
+// `pkg` (single thread). Shared memory needs a cross-origin isolated page (COOP/COEP
+// headers), so the threaded build loads only when `crossOriginIsolated` holds; only the
+// chosen variant is fetched.
+import type * as W from '../pkg/fieldsmith_wasm.js';
 import type { Document, Face, Material, Vec3 } from './types';
 
+/** The bound API (the two builds differ only in their init entry points). */
+let w: Omit<typeof W, 'default' | 'initSync'>;
 let ready: Promise<void> | null = null;
 
-export function loadWasm(): Promise<void> {
-  if (!ready) ready = init({ module_or_path: wasmUrl }).then(() => undefined);
+/** Whether this context can run the threaded build. */
+export const threaded: boolean = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+
+/** Load the wasm module. `pool` (worker only): start the rayon pool on that many threads
+ * — the threaded build runs rayon work on the calling thread until it does. */
+export function loadWasm(opts: { pool?: number } = {}): Promise<void> {
+  if (!ready) {
+    ready = (async () => {
+      if (threaded) {
+        const [m, u] = await Promise.all([
+          import('../pkg-mt/fieldsmith_wasm.js'),
+          import('../pkg-mt/fieldsmith_wasm_bg.wasm?url'),
+        ]);
+        await m.default({ module_or_path: u.default });
+        if (opts.pool && opts.pool > 1) {
+          await m.initThreadPool(opts.pool);
+        }
+        w = m;
+      } else {
+        const [m, u] = await Promise.all([
+          import('../pkg/fieldsmith_wasm.js'),
+          import('../pkg/fieldsmith_wasm_bg.wasm?url'),
+        ]);
+        await m.default({ module_or_path: u.default });
+        w = m;
+      }
+    })();
+  }
   return ready;
 }
-
-export { wasmUrl };
 
 export type ParseResult = { ok: Document } | { error: { line: number; message: string } };
 
@@ -290,7 +321,8 @@ export type WorkerOut =
   | { type: 'exportStart'; h: number; solid: boolean }
   /** The mesh stays in the worker; `meta` is its health report, `slice`/`bytes` query it. */
   | { type: 'exportDone'; mesh: ExportDone }
-  | { type: 'exportError'; message: string }
+  /** `trapped`: the wasm instance hit a trap (e.g. out of memory) and is unusable. */
+  | { type: 'exportError'; message: string; trapped?: boolean }
   /** Latest-wins: `z` is the slice this answer belongs to (ignore stale ones), `segs` is
    * packed `[x0, y0, x1, y1, …]` (mm) or null when there is no export mesh. */
   | { type: 'sliceDone'; z: number; segs: Float64Array | null }

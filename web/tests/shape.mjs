@@ -31,12 +31,14 @@ const selected = (page) => page.evaluate(() => window.fieldsmith.store.selection
 const canonical = (page) =>
   page.evaluate(async () => {
     const w = await import('/src/doc/wasm.ts');
+    await w.loadWasm();
     return w.printFsm(window.fieldsmith.store.doc);
   });
 /** Field value (mm, negative inside) at each point, from the Rust evaluator. */
 const field = (page, pts) =>
   page.evaluate(async (pts) => {
     const w = await import('/src/doc/wasm.ts');
+    await w.loadWasm();
     const r = w.evalBody(window.fieldsmith.store.doc, new Float64Array(pts.flat()));
     return pts.map((_, i) => r[i * 4]);
   }, pts);

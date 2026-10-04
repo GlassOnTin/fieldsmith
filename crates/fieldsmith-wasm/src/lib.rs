@@ -11,6 +11,12 @@ use js_sys::{Float32Array, Float64Array, Uint32Array, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+/// Threaded build only: start the rayon pool on `n` Web Workers. JS calls
+/// `await initThreadPool(n)` once after `init`; before it (and in the single-thread
+/// build) rayon work runs on the calling thread.
+#[cfg(all(feature = "threads", target_arch = "wasm32"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 /// Route Rust panics to the devtools console — wasm panics otherwise trap as a bare
 /// `unreachable` with no message.
 #[wasm_bindgen(start)]

@@ -18,3 +18,11 @@ serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 console_error_panic_hook = "0.1"
+
+[features]
+# Threaded build (shared memory + a Web Worker rayon pool). Needs nightly
+# `-Z build-std` with `+atomics,+bulk-memory`; scripts/build-wasm.sh builds it.
+threads = ["dep:wasm-bindgen-rayon"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-rayon = { version = "1.3", optional = true }
