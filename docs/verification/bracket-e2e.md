@@ -4,26 +4,26 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.53 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 0.82 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.09 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 1.74 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 1.48 s | bracket-05.png |
-| Upright hole ⌀8.5 | 1.97 s | bracket-06.png |
-| Setup lens | 0.58 s | bracket-07.png |
-| Region: base-hole walls | 0.79 s | bracket-08.png |
-| Region: upright-hole wall | 0.81 s | bracket-09.png |
-| Support on the base_holes | 0.37 s | bracket-10.png |
-| Load on the upright_hole | 0.62 s | bracket-11.png |
-| Coarse result streamed | 0.54 s | bracket-12.png |
-| Refined solve finished | 2.09 s | bracket-13.png |
+| Empty document | 0.59 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 0.80 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.15 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 1.60 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 1.57 s | bracket-05.png |
+| Upright hole ⌀8.5 | 2.01 s | bracket-06.png |
+| Setup lens | 0.60 s | bracket-07.png |
+| Region: base-hole walls | 0.85 s | bracket-08.png |
+| Region: upright-hole wall | 0.80 s | bracket-09.png |
+| Support on the base_holes | 0.63 s | bracket-10.png |
+| Load on the upright_hole | 0.72 s | bracket-11.png |
+| Coarse result streamed | 0.55 s | bracket-12.png |
+| Refined solve finished | 2.25 s | bracket-13.png |
 | Results lens: stress field | 0.22 s | bracket-14.png |
 | Probe the base plate | 0.20 s | bracket-15.png |
-| Fill lens: add lattice fill | 6.21 s | bracket-16.png |
-| Fill lens: badge and results rows | 0.20 s | bracket-17.png |
-| Fill lens: ρ band cross-clamp and undo/redo | 0.57 s | bracket-18.png |
+| Fill lens: add lattice fill | 6.24 s | bracket-16.png |
+| Fill lens: badge and results rows | 0.18 s | bracket-17.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 0.63 s | bracket-18.png |
 
-Total scripted time: 20.9 s.
+Total scripted time: 21.6 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
@@ -42,8 +42,8 @@ Total scripted time: 20.9 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 507 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 2622 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 539 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 2753 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | results panel, badge and legend render | pass |  |
@@ -66,11 +66,11 @@ Total scripted time: 20.9 s.
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 25 | 314 | 339 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 46 | 2067 | 2113 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 345 | 372 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 51 | 2160 | 2211 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 507 ms of the 1500 ms budget; launch fired 149 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 2622 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 539 ms of the 1500 ms budget; launch fired 148 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 2753 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 

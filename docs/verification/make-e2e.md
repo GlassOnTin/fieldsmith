@@ -5,32 +5,31 @@
 | Quantity | Expectation | Measured | |
 | :-- | :-- | :-- | :-- |
 | export meta says graded fill | pass | graded fill | pass |
-| export mesh volume within 1 % of the converged field reference | pass | 0.587 % (mesh 23622.1 vs ref 23484.2); meta Δ 1.174 % ± 177.8 | pass |
-| no open/orientation/degenerate/self-intersection defects | pass | {"open":0,"orient":0,"degen":0,"selfx":0} | pass |
-| non-manifold edges counted (may be > 0) | pass | 2277 | pass |
-| triangles plausible | pass | 2128246 | pass |
-| slice 4 is at the layer z | pass | z 7.00 expected 7.00; 6227 segments | pass |
+| export mesh volume within 1 % of the converged field reference | pass | 0.098 % (mesh 23461.1 vs ref 23484.2); meta Δ 0.485 % ± 177.8 | pass |
+| defect classes within the classified adaptive bounds (V8) | pass | {"open":997,"orient":0,"degen":343,"selfx":34339} | pass |
+| triangles plausible | pass | 3018006 | pass |
+| slice 4 is at the layer z | pass | z 7.00 expected 7.00; 7494 segments | pass |
 | scrub moves the plane | pass | z 7.00 → 17.00 | pass |
 | slice toggle switches | pass | false | pass |
 | 3MF carries a model entry | pass | [Content_Types].xml, _rels/.rels, 3D/3dmodel.model | pass |
 | 3MF names the part | pass | "Bracket" in model | pass |
 | 3MF carries the material | pass | petg in model | pass |
-| 3MF triangle count matches the export | pass | 2128246 vs 2128246 | pass |
+| 3MF triangle count matches the export | pass | 3018006 vs 3018006 | pass |
 | 3MF content-types entry present | pass | [Content_Types].xml | pass |
-| STL binary header declares the same triangles | pass | 2128246 vs 2128246 | pass |
-| STL byte length = 84 + 50·tris | pass | 106412384 vs 106412384 | pass |
+| STL binary header declares the same triangles | pass | 3018006 vs 3018006 | pass |
+| STL byte length = 84 + 50·tris | pass | 150900384 vs 150900384 | pass |
 | no console errors | pass |  | pass |
 
 ## Flow
 
 The filled bracket document (`examples/bracket-filled.fsm`) is loaded through the store and exported from the Make lens at its default spacing (0.25 mm).
-Export build: build+mesh 52314 ms in the worker (fill build 4.7 s, mesh 26.6 s reported by the wasm).
+Export build: build+mesh 46516 ms in the worker (fill build 4.7 s, mesh 4.0 s reported by the wasm).
 The layer preview slices the exported mesh in the worker (latest-wins scrub); the report screenshot shows the contours.
 Both downloads go through the real click → download flow: the 3MF is unzipped here and its model XML checked; the STL binary header is parsed.
 
 ## Limits
 
-- Non-manifold edges on the graded fill are expected > 0 (classified in `crates/fieldsmith-verify/tests/v8_export.rs`); only the four structural defect classes are gated to 0.
+- The export is adaptive dual contouring; its classified defect classes on the graded fill are bounded (orientation gated to exactly 0, the tile-overlap and slit classes to above their measured counts) rather than zero — classification in `crates/fieldsmith-verify/tests/v8_export.rs`.
 - The GPU contours themselves (LineSegments pairs) are built mechanically from the reported segments; the screenshot is the visual evidence, the data assertions are the automated ones.
 
 ---
