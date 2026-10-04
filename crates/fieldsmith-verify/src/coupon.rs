@@ -621,11 +621,13 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
 
     // ---- interior mean σxx (volume-weighted element average) ----------------------------------
     let rd_xi = {
+        // The mean of the element's nodal barycentrics is the element centroid, (0.25, …) for a
+        // P2 tet: the divisor is the node COUNT, however many nodes the element carries.
         let pts = P2Tetrahedron.nodal_coordinates();
         let mut c = [0.0f64; 3];
         for xi in pts.iter() {
             for (j, cj) in c.iter_mut().enumerate() {
-                *cj += xi[j] / 4.0;
+                *cj += xi[j] / pts.len() as f64;
             }
         }
         c
