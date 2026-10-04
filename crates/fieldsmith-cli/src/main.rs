@@ -7,7 +7,7 @@
 //! fieldsmith volume FILE.fsm [--h MM]   field volume with error estimate
 //! fieldsmith glsl   FILE.fsm            generated preview shader
 //! fieldsmith solve  FILE.fsm            mesh and solve the current setup
-//! fieldsmith export FILE.fsm --stl X [--3mf Y] [--h MM] [--solid]
+//! fieldsmith export FILE.fsm --stl X [--3mf Y] [--h MM] [--solid] [--adaptive]
 //! ```
 
 use fieldsmith_core::fill::graded;
@@ -29,7 +29,10 @@ const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl|solve|expor
   export  write a printable mesh       [--stl PATH] [--3mf PATH]
           [--h <mesh spacing mm>] (default 0.25); [--solid] exports the
           body without the fill; fill documents build the graded part
-          and report its volume against the field volume";
+          and report its volume against the field volume.
+          [--adaptive] meshes with adaptive dual contouring (finer only
+          near the surface; needed for the 0.1 mm budget, carries the
+          defect classes measured in V8)";
 
 fn load(path: &str) -> Result<Document, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -177,6 +180,10 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         return Err("bad --h value: must be positive and finite".into());
     }
     let solid_only = args.iter().any(|a| a == "--solid");
+    // Adaptive dual contouring refines only near the surface, which is what makes the
+    // 0.1 mm export budget reachable; see V8 for the measured defect classes against this
+    // model (and the uniform mesher's, for comparison).
+    let adaptive = args.iter().any(|a| a == "--adaptive");
     let t_all = clock();
 
     let e = expr::compile_body(doc);
@@ -202,12 +209,27 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
 
     let t0 = clock();
     let field_ref = &field;
-    let tri = surface(
-        |p: [f64; 3]| expr::eval(field_ref, p).v,
-        [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h],
-        [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
-        h,
-    );
+    let tri = if adaptive {
+        let lo = [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h];
+        let hi = [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h];
+        fieldsmith_mesh::adaptive::surface_adaptive(
+            |p| {
+                let d = expr::eval(field_ref, p);
+                fieldsmith_mesh::adaptive::Sample { v: d.v, g: d.g }
+            },
+            lo,
+            hi,
+            h,
+            &fieldsmith_mesh::adaptive::AdaptiveOpts::default(),
+        )
+    } else {
+        surface(
+            |p: [f64; 3]| expr::eval(field_ref, p).v,
+            [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h],
+            [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
+            h,
+        )
+    };
     let mesh_s = (clock() - t0) / 1000.0;
 
     let t0 = clock();
@@ -223,9 +245,10 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
     let scan_s = (clock() - t0) / 1000.0;
 
     println!(
-        "mesh {} verts, {} tris at h={h} mm (mesh {:.2} s, defect scan {:.2} s)",
+        "mesh {} verts, {} tris at h={h} mm ({}, mesh {:.2} s, defect scan {:.2} s)",
         tri.verts.len(),
         tri.tris.len(),
+        if adaptive { "adaptive dc" } else { "uniform dc" },
         mesh_s,
         scan_s
     );

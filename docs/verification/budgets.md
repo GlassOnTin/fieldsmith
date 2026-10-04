@@ -32,4 +32,10 @@ overlays, forced GC and warm shader caches make no difference; the app JS costs
 a 59.9-60.0 fps presented cadence. The headless number is therefore a harness
 artifact, and the headed pass is the budget referee.
 
-Export budget (3MF at 0.1 mm): measured by `crates/fieldsmith-verify/tests/v8_export.rs`.
+Export budget (3MF of the graded bracket at 0.1 mm, ≤ 15 s): measured natively by
+`crates/fieldsmith-verify/tests/adaptive_probe.rs` through the same code path the browser
+calls — adaptive dual contouring (mesh 9.0 s + 3MF 3.4 s = 12.5 s, PASS) via the wasm
+`export_field`, now the export path in `crates/fieldsmith-wasm/src/lib.rs`. The uniform
+mesher misses the budget (411 s native at h = 0.1). Defect classes the adaptive path
+carries on this model and their classification: `docs/verification/V8.md`, section
+"Adaptive dual contouring (the browser export path)".

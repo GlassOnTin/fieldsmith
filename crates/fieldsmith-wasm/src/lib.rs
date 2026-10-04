@@ -5,7 +5,8 @@ use fieldsmith_core::fill::{graded, Graded};
 use fieldsmith_core::{analyse as core_analyse, Analysis, Provenance, Resolution};
 use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
-use fieldsmith_mesh::export::{surface as mesh_surface, TriMesh};
+use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
+use fieldsmith_mesh::export::TriMesh;
 use js_sys::{Float32Array, Float64Array, Uint32Array, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -579,11 +580,20 @@ fn export_field(
         return Err(js_err("document has no solid"));
     }
     let t0 = clock();
-    let m = mesh_surface(
-        |p: [f64; 3]| expr::eval(field, p).v,
+    // Adaptive dual contouring: finer only near the surface, which is what makes GOAL's
+    // 0.1 mm export budget reachable. The defect classes it carries on the graded fill
+    // (flat wall tiles overlapping within multi-sheet cells, corner-snap degeneracies) are
+    // the mesher's own version of the same fill-surface structure V8 classifies for the
+    // uniform path; the measured class counts travel in `metaJson` below.
+    let m = surface_adaptive(
+        |p| {
+            let d = expr::eval(field, p);
+            Sample { v: d.v, g: d.g }
+        },
         [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h],
         [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
         h,
+        &AdaptiveOpts::default(),
     );
     let mesh_ms = clock() - t0;
     #[cfg(target_arch = "wasm32")]

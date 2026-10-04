@@ -4,16 +4,21 @@
 //! STL through its reader, and inflates the 3MF's model bytes to confirm the metadata.
 //! Writes docs/verification/V8.md before asserting.
 //!
-//! Limits, stated in the report: the mesh spacing is uniform (0.25 mm), so the GOAL budget
-//! "graded bracket at 0.1 mm feature resolution in ≤ 15 s" is not met (411 s measured
-//! natively — adaptive dual contouring is the named follow-up); the non-manifold edge count
-//! on the graded fill is measured and classified rather than zero (docs/verification/V8.md,
-//! section "Non-manifold edges"), whose source is the fill surface itself — the same mesher
-//! on the plain solid is defect-free at every probed spacing (`v8_probe3.rs`).
+//! Scope, stated in the report: the package checks run on the uniform mesh at h = 0.25 mm.
+//! The browser export's default is adaptive dual contouring (finer only near the surface),
+//! measured in its own section here at the same spacing; it is the only route to the GOAL
+//! budget "graded bracket at 0.1 mm feature resolution in ≤ 15 s", which the uniform
+//! mesher misses at 411 s native (its 0.1 mm run is `adaptive_probe.rs`, ignored and
+//! heavy). Both meshers leave the classified non-manifold zipping class on the fill
+//! surface (docs/verification/V8.md, section "Non-manifold edges"); the plain solid is
+//! defect-free on the uniform path at every probed spacing (`v8_probe3.rs`) and carries
+//! only 51 residual self-intersecting pairs on the adaptive path
+//! (`adaptive_plain_probe.rs`).
 
 use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
 use fieldsmith_field::{expr, volume, V3};
+use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_mesh::export::{read_stl, surface};
 use fieldsmith_verify::{example, Check, Report};
 use std::time::Instant;
@@ -139,6 +144,30 @@ fn v8_export_the_bracket() {
         segs.len() / 4
     );
 
+    // The adaptive path the browser export uses, measured on the same field at the same
+    // spacing. The counts below travel into the report section; the 0.1 mm budget run is
+    // `adaptive_probe.rs` (ignored, heavy).
+    let t = Instant::now();
+    let amesh = surface_adaptive(
+        |p: V3| {
+            let d = expr::eval(&filled, p);
+            Sample { v: d.v, g: d.g }
+        },
+        lo,
+        hi,
+        MESH_H,
+        &AdaptiveOpts::default(),
+    );
+    let amesh_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let av_mesh = amesh.volume();
+    let ad = amesh.defects();
+    println!(
+        "  adaptive mesh {} verts {} tris ({:.1} s) volume {av_mesh:.1} mm³; defects {ad:?}",
+        amesh.verts.len(),
+        amesh.tris.len(),
+        amesh_ms / 1000.0
+    );
+
     let mut r = Report::new("V8", "Export of the filled bracket: volume, defects, package integrity");
     r.section(
         "Method",
@@ -159,6 +188,7 @@ fn v8_export_the_bracket() {
     r.check(Check::absolute("degenerate triangles", 0.0, d.degenerate_triangles as f64, "", 0.0));
     r.check(Check::absolute("self-intersections", 0.0, d.self_intersections as f64, "", 0.0));
     r.check(Check::relative("STL round-trip volume", v_mesh, v_stl, "mm³", 0.002));
+    r.check(Check::relative("adaptive mesh volume vs field volume", v_field, av_mesh, "mm³", VOL_TOL));
 
     r.section(
         "Non-manifold edges of the graded fill",
@@ -179,15 +209,52 @@ fn v8_export_the_bracket() {
         ),
     );
     r.section(
+        "Adaptive dual contouring (the browser export path)",
+        format!(
+            "{} verts, {} triangles at h = {MESH_H}, meshed in {:.2} s (uniform: {:.1} s; volume {:.1} mm³, \
+             {:.3} % off the field reference). It refines to h only within the gradient certificate near the \
+             surface, which is what makes the GOAL 0.1 mm export budget reachable: the probe (`adaptive_probe.rs`) \
+             measured the budget line at 0.1 mm — mesh 9.0 s + 3MF 3.4 s = 12.5 s against ≤ 15 s, volume +0.038 %, \
+             versus the uniform mesher's 411 s native at the same spacing. Its defect classes on the graded fill \
+             are measured (`adaptive_defect_census.rs`): {} open edges, {} non-manifold edges, {} degenerate \
+             triangles, {} self-intersecting pairs at h = {MESH_H}, and 8200 / 1213 / 2810 / 383834 at h = 0.1. The \
+             uniform mesher on the same field reports none of those three classes, so they are adaptive-owned: \
+             17598 of 3075633 leaves carry two or more wall sheets in one cell (QEF residual > 0.3 cell) — the same \
+             two-sheets-in-a-cell structure V8 classifies for the uniform mesher above — and the adaptive fan, one \
+             vertex per leaf, overlaps the sheets' tiles instead of abutting them; the open edges are slits along \
+             the wall-collapse lines and cross-level T-junctions of the flat wall patches, the degenerate \
+             triangles are fan corners fused by the exact weld at lattice corners lying on the wall planes. \
+             Refinement cannot close them (wall planes on the fill lattice are self-similar at every level, \
+             17598 multi-sheet cells at h 0.25 → 233113 at h 0.1). Named work: sub-cell sheet separation in the \
+             adaptive stitch — per-sheet vertices — which is the same named work the uniform path's zipping class \
+             already carries. The plain solid control on this path reports zero edges and geometry classes, with \
+             51 residual self-intersecting pairs from crease cells (`adaptive_plain_probe.rs`).",
+            amesh.verts.len(),
+            amesh.tris.len(),
+            amesh_ms / 1000.0,
+            mesh_ms / 1000.0,
+            av_mesh,
+            (av_mesh - v_field) / v_field * 100.0,
+            ad.open_edges,
+            ad.non_manifold_edges,
+            ad.degenerate_triangles,
+            ad.self_intersections,
+        ),
+    );
+    r.section(
         "Timings",
         format!(
-            "Build: {:.1} s (graded fill incl. re-solve). Mesh: {:.1} s ({:.0} verts at uniform h = {MESH_H}). \
-             STL write+read: {:.1} ms. The uniform mesher does not meet the GOAL 0.1 mm budget (3MF export ≤ 15 s): \
-             h = 0.1 measured 411 s natively in probe 1 (52 M verts; the on-demand positions refactor cost ~50 % of mesh time there — 270 s before it — in exchange for a 389 MiB smaller high-water mark). Adaptive dual contouring — finer only near \
-             the surface and the fill — is the named follow-up.",
+            "Build: {:.1} s (graded fill incl. re-solve). Uniform mesh: {:.1} s ({:.0} verts at h = {MESH_H}); \
+             adaptive mesh: {:.1} s ({} verts). STL write+read: {:.1} ms. The uniform mesher does not meet the \
+             GOAL 0.1 mm budget (3MF export ≤ 15 s): h = 0.1 measured 411 s natively in probe 1 (52 M verts; the \
+             on-demand positions refactor cost ~50 % of mesh time there — 270 s before it — in exchange for a 389 \
+             MiB smaller high-water mark). Adaptive dual contouring is the export path that meets it, measured in \
+             the section above.",
             build_ms / 1000.0,
             mesh_ms / 1000.0,
             mesh.verts.len(),
+            amesh_ms / 1000.0,
+            amesh.verts.len(),
             stl_ms
         ),
     );
