@@ -6,6 +6,10 @@
 //! rather than a repair pass; [`TriMesh::defects`] measures them anyway.
 
 use crate::{stuff, V3};
+use miniz_oxide::deflate::core::{
+    compress as deflate_compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush,
+    TDEFLStatus,
+};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
@@ -264,8 +268,12 @@ impl TriMesh {
     /// material. Vertices are translated into the positive octant (3MF requires it), so the
     /// model's own origin is the part's bounding-box minimum.
     ///
-    /// The element text is formatted in fixed-size parallel chunks: chunking changes only the
-    /// work split, not the joined bytes, so the package is identical whatever the thread count.
+    /// At the export-budget spacings the model text would be gigabytes of XML (the bracket at
+    /// 0.1 mm meshes to ~9 M vertices and ~18 M triangles), and a wasm32 page has ~4 GiB of
+    /// memory, so the text is never held: chunks of it are formatted in a bounded rayon window
+    /// and streamed straight through one sequential DEFLATE stream into the archive. Chunk
+    /// contents and feed order are fixed by element index, so the package is identical
+    /// whatever the thread count.
     pub fn write_3mf(&self, name: &str, material: &str) -> Vec<u8> {
         let mut min = [f64::MAX; 3];
         for v in &self.verts {
@@ -273,49 +281,6 @@ impl TriMesh {
                 min[k] = min[k].min(v[k]);
             }
         }
-        let mut verts = String::from("<vertices>");
-        let n_workers = rayon::current_num_threads().max(1);
-        let vstep = self.verts.len().div_ceil(n_workers).max(1);
-        verts.push_str(
-            &self
-                .verts
-                .par_chunks(vstep)
-                .map(|chunk| {
-                    let mut s = String::with_capacity(chunk.len() * 44);
-                    for v in chunk {
-                        s.push_str(&format!(
-                            "<vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>",
-                            v[0] - min[0],
-                            v[1] - min[1],
-                            v[2] - min[2]
-                        ));
-                    }
-                    s
-                })
-                .collect::<Vec<String>>()
-                .concat(),
-        );
-        verts.push_str("</vertices>");
-        let mut tris = String::from("<triangles>");
-        let tstep = self.tris.len().div_ceil(n_workers).max(1);
-        tris.push_str(
-            &self
-                .tris
-                .par_chunks(tstep)
-                .map(|chunk| {
-                    let mut s = String::with_capacity(chunk.len() * 52);
-                    for t in chunk {
-                        s.push_str(&format!(
-                            "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
-                            t[0], t[1], t[2]
-                        ));
-                    }
-                    s
-                })
-                .collect::<Vec<String>>()
-                .concat(),
-        );
-        tris.push_str("</triangles>");
 
         let mat = if material.is_empty() {
             String::new()
@@ -331,15 +296,7 @@ impl TriMesh {
         } else {
             format!(" name=\"{}\"", esc(name))
         };
-        let model = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-             <model unit=\"millimeter\" xml:lang=\"en-US\" \
-             xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
-             <resources>{mat}<object id=\"2\" type=\"model\"{name_attr}{pid}>\
-             <mesh>{verts}{tris}</mesh></object></resources>\n\
-             <build><item objectid=\"2\"/></build>\n</model>\n"
-        );
-        let content_types = concat!(
+        let types = concat!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
             "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
             "<Default Extension=\"rels\" \
@@ -355,11 +312,61 @@ impl TriMesh {
              Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>",
             "</Relationships>"
         );
-        zip(&[
-            ("[Content_Types].xml".into(), content_types.as_bytes().to_vec()),
-            ("_rels/.rels".into(), rels.as_bytes().to_vec()),
-            ("3D/3dmodel.model".into(), model.into_bytes()),
-        ])
+        // The model text starts at the xml declaration and the object header; the streamed
+        // vertex and triangle chunks fill the middle.
+        let head = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <model unit=\"millimeter\" xml:lang=\"en-US\" \
+             xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
+             <resources>{mat}<object id=\"2\" type=\"model\"{name_attr}{pid}><mesh>"
+        );
+        let tail = "</mesh></object></resources>\n<build><item objectid=\"2\"/></build>\n</model>\n";
+
+        // One window of chunk texts in flight at a time; 16 chunks (~55 MB of text) is the
+        // largest window the memory argument needs, whatever the host reports.
+        let window = rayon::current_num_threads().clamp(1, 16);
+        let vfmt = |ci: usize| -> String {
+            let a = ci * STREAM_CHUNK;
+            let b = (a + STREAM_CHUNK).min(self.verts.len());
+            let mut s = String::with_capacity((b - a) * 44);
+            for v in &self.verts[a..b] {
+                s.push_str(&format!(
+                    "<vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>",
+                    v[0] - min[0],
+                    v[1] - min[1],
+                    v[2] - min[2]
+                ));
+            }
+            s
+        };
+        let tfmt = |ci: usize| -> String {
+            let a = ci * STREAM_CHUNK;
+            let b = (a + STREAM_CHUNK).min(self.tris.len());
+            let mut s = String::with_capacity((b - a) * 52);
+            for t in &self.tris[a..b] {
+                s.push_str(&format!(
+                    "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+                    t[0], t[1], t[2]
+                ));
+            }
+            s
+        };
+
+        let mut out = Vec::new();
+        let mut records = Vec::new();
+        stream_entry(&mut out, "[Content_Types].xml", types.as_bytes(), &mut records);
+        stream_entry(&mut out, "_rels/.rels", rels.as_bytes(), &mut records);
+        let mut z = ZipStream::start(&mut out, "3D/3dmodel.model");
+        z.push(head.as_bytes());
+        z.push(b"<vertices>");
+        feed_chunked(&mut |d: &[u8]| z.push(d), self.verts.len(), window, &vfmt);
+        z.push(b"</vertices><triangles>");
+        feed_chunked(&mut |d: &[u8]| z.push(d), self.tris.len(), window, &tfmt);
+        z.push(b"</triangles>");
+        z.push(tail.as_bytes());
+        records.push(z.finish());
+        write_central(&mut out, &records);
+        out
     }
 }
 
@@ -467,68 +474,181 @@ fn inside_trip(t: [V3; 3], q: V3, eps: f64) -> bool {
     true
 }
 
-/// Minimal zip archive: DEFLATE-compressed entries, no zip64 (entries < 4 GiB), no encryption,
-/// no extra fields. Sufficient for a conformant 3MF package.
-fn zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
-    fn push_u16(out: &mut Vec<u8>, v: u16) {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    fn push_u32(out: &mut Vec<u8>, v: u32) {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    let mut out = Vec::new();
-    let mut central = Vec::new();
-    for (name, data) in entries {
-        let crc = crc32fast::hash(data);
-        // Level 1: ~4x faster than level 6 on this repetitive XML at a ~1.3x size cost, and
-        // still a standard DEFLATE stream, which is all the 3MF packaging spec requires.
-        let comp = miniz_oxide::deflate::compress_to_vec(data, 1);
-        let offset = out.len() as u32;
-        push_u32(&mut out, 0x04034b50);
-        push_u16(&mut out, 20); // version needed
-        push_u16(&mut out, 0); // flags
-        push_u16(&mut out, 8); // method: deflate
-        push_u16(&mut out, 0); // mod time
-        push_u16(&mut out, 0); // mod date (1980-01-01, the epoch zip pickers accept)
-        push_u32(&mut out, crc);
-        push_u32(&mut out, comp.len() as u32);
-        push_u32(&mut out, data.len() as u32);
-        push_u16(&mut out, name.len() as u16);
-        push_u16(&mut out, 0); // extra len
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(&comp);
+// Streaming zip writer for the 3MF package: each entry's payload is fed through one
+// sequential DEFLATE stream into the archive, so no payload is ever held whole for
+// [`TriMesh::write_3mf`].
 
-        push_u32(&mut central, 0x02014b50);
-        push_u16(&mut central, 20); // version made by
-        push_u16(&mut central, 20); // version needed
-        push_u16(&mut central, 0); // flags
-        push_u16(&mut central, 8); // method
-        push_u16(&mut central, 0); // time
-        push_u16(&mut central, 0); // date
-        push_u32(&mut central, crc);
-        push_u32(&mut central, comp.len() as u32);
-        push_u32(&mut central, data.len() as u32);
-        push_u16(&mut central, name.len() as u16);
-        push_u16(&mut central, 0); // extra
-        push_u16(&mut central, 0); // comment
-        push_u16(&mut central, 0); // disk start
-        push_u16(&mut central, 0); // internal attrs
-        push_u32(&mut central, 0); // external attrs
-        push_u32(&mut central, offset);
-        central.extend_from_slice(name.as_bytes());
+/// Compressed-space scratch for one `deflate` pass; any single emitted block fits well below.
+const DEFLATE_BUF: usize = 512 * 1024;
+/// Elements per streamed text chunk. One window of chunks is formatted at a time.
+const STREAM_CHUNK: usize = 65536;
+
+fn push_u16(out: &mut Vec<u8>, v: u16) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn push_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// Central-directory record of one entry, built when it finishes.
+struct CentralEntry {
+    name: String,
+    offset: u32,
+    crc: u32,
+    comp: u32,
+    uncomp: u32,
+}
+
+/// One streamed zip entry. [`ZipStream::push`] feeds payload bytes in order through a single
+/// DEFLATE stream; [`ZipStream::finish`] ends the stream and patches the local header's crc
+/// and size fields, so the sizes never have to be known before the payload is written.
+struct ZipStream<'a> {
+    out: &'a mut Vec<u8>,
+    hdr_at: usize,
+    name: String,
+    crc: crc32fast::Hasher,
+    uncompressed: usize,
+    compressed: usize,
+    d: CompressorOxide,
+    buf: Vec<u8>,
+}
+
+impl<'a> ZipStream<'a> {
+    fn start(out: &'a mut Vec<u8>, name: &str) -> Self {
+        let hdr_at = out.len();
+        push_u32(out, 0x04034b50);
+        push_u16(out, 20); // version needed
+        push_u16(out, 0); // flags
+        push_u16(out, 8); // method: deflate
+        push_u16(out, 0); // mod time
+        push_u16(out, 0); // mod date (1980-01-01, the epoch zip pickers accept)
+        push_u32(out, 0); // crc, patched in finish
+        push_u32(out, 0); // compressed size, patched in finish
+        push_u32(out, 0); // uncompressed size, patched in finish
+        push_u16(out, name.len() as u16);
+        push_u16(out, 0); // extra len
+        out.extend_from_slice(name.as_bytes());
+        Self {
+            hdr_at,
+            name: name.into(),
+            crc: crc32fast::Hasher::default(),
+            uncompressed: 0,
+            compressed: 0,
+            // Level 1, raw stream: the same flags the one-shot `compress_to_vec(.., 1)` builds
+            // from, so the sequential feed produces the same stream for the same bytes.
+            d: CompressorOxide::new(create_comp_flags_from_zip_params(1, 0, 0)),
+            buf: vec![0; DEFLATE_BUF],
+            out,
+        }
     }
+
+    fn push(&mut self, data: &[u8]) {
+        self.crc.update(data);
+        self.uncompressed += data.len();
+        let mut input = data;
+        while !input.is_empty() {
+            let (status, used, made) =
+                deflate_compress(&mut self.d, input, &mut self.buf, TDEFLFlush::None);
+            assert_eq!(status, TDEFLStatus::Okay, "deflate stream failed: {status:?}");
+            if used == 0 && made == 0 {
+                panic!("deflate made no progress on {} bytes", input.len());
+            }
+            self.out.extend_from_slice(&self.buf[..made]);
+            self.compressed += made;
+            input = &input[used..];
+        }
+    }
+
+    /// End the payload: flush the DEFLATE stream, patch the local header's crc and sizes, and
+    /// return the central-directory record.
+    fn finish(mut self) -> CentralEntry {
+        loop {
+            let (status, _, made) =
+                deflate_compress(&mut self.d, &[], &mut self.buf, TDEFLFlush::Finish);
+            self.out.extend_from_slice(&self.buf[..made]);
+            self.compressed += made;
+            match status {
+                TDEFLStatus::Done => break,
+                TDEFLStatus::Okay if made > 0 => {}
+                _ => panic!("deflate stream did not end: {status:?}"),
+            }
+        }
+        let crc = self.crc.finalize();
+        let hdr = &mut self.out[self.hdr_at..];
+        hdr[14..18].copy_from_slice(&crc.to_le_bytes());
+        hdr[18..22].copy_from_slice(&(self.compressed as u32).to_le_bytes());
+        hdr[22..26].copy_from_slice(&(self.uncompressed as u32).to_le_bytes());
+        CentralEntry {
+            name: self.name,
+            offset: self.hdr_at as u32,
+            crc,
+            comp: self.compressed as u32,
+            uncomp: self.uncompressed as u32,
+        }
+    }
+}
+
+/// One in-memory payload through the streamed path (the two small package entries).
+fn stream_entry(out: &mut Vec<u8>, name: &str, data: &[u8], records: &mut Vec<CentralEntry>) {
+    let mut z = ZipStream::start(out, name);
+    z.push(data);
+    records.push(z.finish());
+}
+
+/// Feed `n` elements to `push`, formatted in [`STREAM_CHUNK`] chunks, `window` chunks at a
+/// time on the rayon pool, and fed to the stream in index order. At most one window's text
+/// exists at once, which is what bounds the writer's memory for the gigabyte model entries.
+fn feed_chunked(
+    push: &mut dyn FnMut(&[u8]),
+    n: usize,
+    window: usize,
+    fmt: &(impl Fn(usize) -> String + Sync),
+) {
+    let chunks = n.div_ceil(STREAM_CHUNK);
+    let mut at = 0;
+    while at < chunks {
+        let end = (at + window).min(chunks);
+        let texts: Vec<String> = (at..end).into_par_iter().map(fmt).collect();
+        for text in texts {
+            push(text.as_bytes());
+        }
+        at = end;
+    }
+}
+
+/// Central directory for the finished entries, then the package's end record; fields as the
+/// one-shot writer before it.
+fn write_central(out: &mut Vec<u8>, records: &[CentralEntry]) {
     let cd_offset = out.len() as u32;
-    out.extend_from_slice(&central);
-    let cd_size = (out.len() as u32) - cd_offset;
-    push_u32(&mut out, 0x06054b50);
-    push_u16(&mut out, 0);
-    push_u16(&mut out, 0);
-    push_u16(&mut out, entries.len() as u16);
-    push_u16(&mut out, entries.len() as u16);
-    push_u32(&mut out, cd_size);
-    push_u32(&mut out, cd_offset);
-    push_u16(&mut out, 0);
-    out
+    for e in records {
+        push_u32(out, 0x02014b50);
+        push_u16(out, 20); // version made by
+        push_u16(out, 20); // version needed
+        push_u16(out, 0); // flags
+        push_u16(out, 8); // method
+        push_u16(out, 0); // time
+        push_u16(out, 0); // date
+        push_u32(out, e.crc);
+        push_u32(out, e.comp);
+        push_u32(out, e.uncomp);
+        push_u16(out, e.name.len() as u16);
+        push_u16(out, 0); // extra
+        push_u16(out, 0); // comment
+        push_u16(out, 0); // disk start
+        push_u16(out, 0); // internal attrs
+        push_u32(out, 0); // external attrs
+        push_u32(out, e.offset);
+        out.extend_from_slice(e.name.as_bytes());
+    }
+    let cd_size = out.len() as u32 - cd_offset;
+    push_u32(out, 0x06054b50);
+    push_u16(out, 0);
+    push_u16(out, 0);
+    push_u16(out, records.len() as u16);
+    push_u16(out, records.len() as u16);
+    push_u32(out, cd_size);
+    push_u32(out, cd_offset);
+    push_u16(out, 0);
 }
 
 /// Parse a strict binary STL produced by [`TriMesh::write_stl`] or an equivalent writer that
@@ -759,5 +879,39 @@ mod tests {
         assert!(model.contains("<build><item objectid=\"2\"/></build>"), "{model}");
         let types = String::from_utf8(entries[0].1.clone()).unwrap();
         assert!(types.contains("3dmanufacturing-3dmodel+xml"), "{types}");
+    }
+
+    #[test]
+    fn three_mf_package_is_identical_across_thread_counts() {
+        let m = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
+        let p1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let p4 = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let one = p1.install(|| m.write_3mf("stable", "petg"));
+        let four = p4.install(|| m.write_3mf("stable", "petg"));
+        assert_eq!(one, four, "package bytes must not depend on the thread count");
+    }
+
+    #[test]
+    fn streamed_entry_deflate_matches_one_shot_compression() {
+        // The streamed feed runs the same level-1 flags a one-shot compression runs, and the
+        // compressor dictionary carries across the sequential pushes, so each entry's stored
+        // stream must equal a one-shot compression of its payload bytes.
+        let m = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
+        let bytes = m.write_3mf("x", "petg");
+        let u32at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        let u16at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+        let mut i = 0usize;
+        let mut entries = 0;
+        while bytes.len() >= i + 30 && u32at(i) == 0x04034b50 {
+            let csize = u32at(i + 18) as usize;
+            let nlen = u16at(i + 26) as usize;
+            let raw = &bytes[i + 30 + nlen..i + 30 + nlen + csize];
+            let text = miniz_oxide::inflate::decompress_to_vec(raw).unwrap();
+            let one_shot = miniz_oxide::deflate::compress_to_vec(&text, 1);
+            assert_eq!(raw, &one_shot[..], "streamed entry {i} differs from one-shot deflate");
+            i += 30 + nlen + csize;
+            entries += 1;
+        }
+        assert_eq!(entries, 3, "walked every streamed entry");
     }
 }

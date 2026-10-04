@@ -34,8 +34,11 @@ artifact, and the headed pass is the budget referee.
 
 Export budget (3MF of the graded bracket at 0.1 mm, ≤ 15 s): measured natively by
 `crates/fieldsmith-verify/tests/adaptive_probe.rs` through the same code path the browser
-calls — adaptive dual contouring (mesh 9.0 s + 3MF 3.4 s = 12.5 s, PASS) via the wasm
+calls — adaptive dual contouring (mesh 9.0 s + 3MF 2.7 s = 11.6 s, PASS) via the wasm
 `export_field`, now the export path in `crates/fieldsmith-wasm/src/lib.rs`. The uniform
-mesher misses the budget (411 s native at h = 0.1). Defect classes the adaptive path
-carries on this model and their classification: `docs/verification/V8.md`, section
-"Adaptive dual contouring (the browser export path)".
+mesher misses the budget (411 s native at h = 0.1). The 3MF writer streams the model text
+through one DEFLATE stream in bounded chunks (the ~1.4 GB of XML at this spacing is never
+held whole, which is what keeps the wasm32 page inside its memory), so the same figure is
+expected in the browser; the in-browser 0.1 mm run is the remaining measurement. Defect
+classes the adaptive path carries on this model and their classification:
+`docs/verification/V8.md`, section "Adaptive dual contouring (the browser export path)".
