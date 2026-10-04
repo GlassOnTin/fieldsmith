@@ -384,7 +384,7 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load'; id: string; s
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
-        <span class="glyph">{props.kind === 'support' ? '⛨' : '↓'}</span>
+        <span class="glyph">{props.kind === 'support' ? '⛨︎' : '↓'}</span>
       )}
       <span class="row-name">{props.id}</span>
       <span class="meta">{props.meta}</span>

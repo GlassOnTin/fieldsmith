@@ -16,25 +16,47 @@ import type { LevelResult } from '../doc/wasm';
 
 // ---- colour ramp ---------------------------------------------------------------------
 
-/** 0..1 → colour. A five-stop blue→cyan→green→yellow→red ramp. */
+/** 0..1 → colour. Viridis (9 uniform stops, sampled from matplotlib): lightness rises
+ * monotonically, so the map stays ordered in print and for red–green colour blindness —
+ * a jet-style rainbow does neither. */
 const RAMP: [number, number, number][] = [
-  [0.22, 0.27, 0.75],
-  [0.1, 0.66, 0.76],
-  [0.35, 0.77, 0.3],
-  [0.97, 0.78, 0.12],
-  [0.79, 0.11, 0.12],
+  [0.266667, 0.00392157, 0.329412], // 0.000  #440154
+  [0.278431, 0.176471, 0.482353], // 0.125  #472d7b
+  [0.231373, 0.321569, 0.545098], // 0.250  #3b528b
+  [0.172549, 0.447059, 0.556863], // 0.375  #2c728e
+  [0.129412, 0.568627, 0.54902], // 0.500  #21918c
+  [0.156863, 0.682353, 0.501961], // 0.625  #28ae80
+  [0.368627, 0.788235, 0.384314], // 0.750  #5ec962
+  [0.678431, 0.862745, 0.188235], // 0.875  #addc30
+  [0.992157, 0.905882, 0.145098], // 1.000  #fde725
 ];
 
-export function rampColor(t: number, out: [number, number, number]) {
+/** Safety factor: a diverging map (coolwarm, 9 uniform stops from matplotlib) centred on
+ * SF = 1 — the critical threshold. Above it recedes to blue, below it goes to red, so the
+ * alarm is where the legend says it is. A sequential map cannot keep both ends readable. */
+const RAMP_SAFETY: [number, number, number][] = [
+  [0.231373, 0.298039, 0.752941], // 0.000  #3b4cc0
+  [0.384314, 0.509804, 0.917647], // 0.125  #6282ea
+  [0.552941, 0.690196, 0.996078], // 0.250  #8db0fe
+  [0.72549, 0.815686, 0.976471], // 0.375  #b9d0f9
+  [0.866667, 0.862745, 0.862745], // 0.500  #dddcdc
+  [0.960784, 0.768627, 0.67451], // 0.625  #f5c4ac
+  [0.956863, 0.596078, 0.478431], // 0.750  #f4987a
+  [0.866667, 0.372549, 0.294118], // 0.875  #dd5f4b
+  [0.705882, 0.0156863, 0.14902], // 1.000  #b40426
+];
+
+export function rampColor(t: number, out: [number, number, number], ramp: [number, number, number][] = RAMP) {
   const x = Math.min(1, Math.max(0, t));
-  const n = RAMP.length - 1;
+  const n = ramp.length - 1;
   const i = Math.min(n - 1, Math.floor(x * n));
   const f = x * n - i;
-  for (let k = 0; k < 3; k++) out[k] = RAMP[i][k] + f * (RAMP[i + 1][k] - RAMP[i][k]);
+  for (let k = 0; k < 3; k++) out[k] = ramp[i][k] + f * (ramp[i + 1][k] - ramp[i][k]);
 }
 
-function gradientCss(): string {
-  const parts = RAMP.map((c, i) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)}) ${(i / (RAMP.length - 1)) * 100}%`);
+function gradientCss(mode: ResultMode): string {
+  const ramp = mode === 'safety' ? RAMP_SAFETY : RAMP;
+  const parts = ramp.map((c, i) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)}) ${(i / (ramp.length - 1)) * 100}%`);
   return `linear-gradient(90deg, ${parts.join(', ')})`;
 }
 
@@ -85,7 +107,7 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
 
 function legendLabels(mode: ResultMode, max: number, yieldMpa: number): { min: string; max: string; caption: string } {
   if (mode === 'stress') return { min: '0', max: `${fmt(max)} MPa`, caption: 'von Mises stress, element centroids' };
-  if (mode === 'safety') return { min: `≥ ${fmt(max)}`, max: '0', caption: `safety factor = yield ÷ stress (yield ${fmt(yieldMpa)} MPa); red below 1.0` };
+  if (mode === 'safety') return { min: `≥ ${fmt(max)}`, max: '0', caption: `safety factor = yield ÷ stress (yield ${fmt(yieldMpa)} MPa); red shades below 1.0, blue above` };
   if (mode === 'deflection') return { min: '0', max: `${fmt(max)} mm`, caption: 'displacement magnitude' };
   return { min: '', max: '', caption: 'displacement direction arrows on the deformed shape' };
 }
@@ -140,7 +162,15 @@ function rebuild(lvl: LevelResult) {
   for (let f = 0; f < nFacets; f++) {
     const owner = lvl.surfaceOwner[f];
     if (mode === 'stress') rampColor(vmArr[owner] / vmax, col);
-    else if (mode === 'safety') rampColor(vmArr[owner] > 0 ? 1 - Math.min(1, (yieldMpa / vmArr[owner]) / vmax) : 0, col);
+    else if (mode === 'safety') {
+      // Diverging about the critical SF: 1 → the map's centre, ≥ cap → blue, → 0 → full
+      // red. A vanishing vm means infinite SF, so it clamps onto the blue end.
+      const sf = vmArr[owner] > 0 ? yieldMpa / vmArr[owner] : Infinity;
+      const t = sf <= 1
+        ? 0.5 + 0.5 * Math.max(0, 1 - sf)
+        : 0.5 - 0.5 * Math.min(1, (sf - 1) / Math.max(1, vmax - 1));
+      rampColor(t, col, RAMP_SAFETY);
+    }
     else if (mode === 'deflection') {
       let m = 0;
       for (let j = 0; j < 3; j++) {
@@ -376,7 +406,7 @@ function ResultsPanel() {
               {legend.max !== '' && (
                 <div class="legend-range">
                   <span class="num">{legend.min}</span>
-                  <span class="legend-gradient" style={{ background: gradientCss() }} />
+                  <span class="legend-gradient" style={{ background: gradientCss(mode) }} />
                   <span class="num">{legend.max}</span>
                 </div>
               )}
