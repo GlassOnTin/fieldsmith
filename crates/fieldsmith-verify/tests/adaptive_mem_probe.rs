@@ -101,7 +101,14 @@ fn adaptive_bracket_export_memory() {
 
         let t0 = Instant::now();
         let st = stage_open(&format!("[{}] defect scan", tag));
-        let d = mesh.defects();
+        // The scan is 100 s at 0.1 and adds nothing to the peak; when only the mesh stage is
+        // under study (FIELDSMITH_PROBE_NO_SCAN set) skip it — the digest below pins the mesh
+        // bytes, so identical digests imply identical defect counts.
+        let d = if std::env::var_os("FIELDSMITH_PROBE_NO_SCAN").is_some() {
+            None
+        } else {
+            Some(mesh.defects())
+        };
         let scan_s = t0.elapsed().as_secs_f64();
         st.close();
 
@@ -123,6 +130,7 @@ fn adaptive_bracket_export_memory() {
             write_s,
             bytes.len() as f64 / 1048576.0
         );
+        println!("  [{}] mesh digest {:016x} (fnv-1a over vertex f64 bits, then triangle ids)", tag, digest(&mesh));
         println!(
             "  [{}] end of export path: rss {:.0} MiB (mesh+field resident), hwm {:.0} MiB; field ref {:.1} mm³ ({ref_s:.1} s, build {build_s:.1} s), defects {d:?}",
             tag, rss / 1048576.0, hwm / 1048576.0, v_field
@@ -132,4 +140,27 @@ fn adaptive_bracket_export_memory() {
     println!(
         "  stage peak contributions above are VmHWM deltas: native peak that the wasm32 page must hold inside its 4 GB (Chrome) / 2 GB (Firefox) linear-memory limit."
     );
+}
+
+/// FNV-1a over every vertex coordinate's f64 bits, then every triangle's ids: equal digests
+/// on the same input mean byte-identical meshes (to FNV's collision odds).
+fn digest(m: &fieldsmith_mesh::export::TriMesh) -> u64 {
+    let mut x: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |w: u64| {
+        for b in w.to_le_bytes() {
+            x ^= b as u64;
+            x = x.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for v in &m.verts {
+        for c in v {
+            eat(c.to_bits());
+        }
+    }
+    for t in &m.tris {
+        for &c in t {
+            eat(c as u64);
+        }
+    }
+    x
 }

@@ -32,6 +32,7 @@
 use crate::{V3};
 use crate::export::TriMesh;
 use rayon::prelude::*;
+#[cfg(test)]
 use std::collections::HashMap;
 
 /// One field sample: value (mm, negative inside) and spatial gradient (from
@@ -125,69 +126,180 @@ fn edge_key(a: u64, b: u64) -> (u64, u64) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-/// One octree level: tested cells (sorted by cell key) and their corner samples (sorted by
-/// corner key). Kept until stitching, which reads neighbours' corners.
+/// Per-phase memory trace for the export-memory work, enabled by the environment variable
+/// `FIELDSMITH_ADAPTIVE_TRACE` (native Linux only; a no-op elsewhere, including wasm32).
+/// Each mark prints the phase's own peak RSS (VmHWM, reset between marks through
+/// `/proc/self/clear_refs`), the RSS left resident, the wall time, and caller-supplied
+/// counts. Diagnostic output only: it never changes what the mesher computes.
+struct Trace {
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    t0: Option<std::time::Instant>,
+}
+
+impl Trace {
+    fn start() -> Trace {
+        #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+        {
+            let on = std::env::var_os("FIELDSMITH_ADAPTIVE_TRACE").is_some();
+            let t = Trace { t0: on.then(std::time::Instant::now) };
+            t.reset_hwm();
+            t
+        }
+        #[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+        Trace {}
+    }
+
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    fn reset_hwm(&self) {
+        if self.t0.is_some() {
+            let _ = std::fs::write("/proc/self/clear_refs", "5");
+        }
+    }
+
+    #[allow(unused_variables)]
+    fn mark(&self, phase: &str, counts: impl FnOnce() -> String) {
+        #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+        if let Some(t0) = self.t0 {
+            let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let field = |p: &str| -> f64 {
+                s.lines()
+                    .find_map(|l| l.strip_prefix(p))
+                    .and_then(|u| u.split_whitespace().next())
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+                    / 1024.0
+            };
+            eprintln!(
+                "    adaptive {:<14} {:>8.0} ms  phase peak {:>6.0} MiB  rss {:>6.0} MiB  {}",
+                phase,
+                t0.elapsed().as_secs_f64() * 1000.0,
+                field("VmHWM:"),
+                field("VmRSS:"),
+                counts()
+            );
+            self.reset_hwm();
+        }
+    }
+}
+
+/// Candidate parents per refinement block (each brings 8 candidates). Bounds the transient
+/// corner tables of one block — about 0.2 GB at 2^17 — independently of the part size; a
+/// smaller block re-evaluates more corners on block boundaries.
+const BLOCK_PARENTS: usize = 1 << 17;
+
+/// What persists of one octree level after its blocks are processed.
 struct Level {
     /// 2^d cells per side.
     units: u64,
-    cell_keys: Vec<u64>,
-    refined: Vec<bool>,
-    /// Flat leaf id per cell (u32::MAX when refined).
-    leaf_ix: Vec<u32>,
-    corner_keys: Vec<u64>,
-    corner_vals: Vec<Sample>,
+    /// Refined cells, sorted by key: the next level's parents, and the occupancy test (a
+    /// cell is present at level d iff d = 0 or its parent is refined at d - 1).
+    refined: Vec<u64>,
+    /// This level's mixed leaves in the record list (records are level-major, key-sorted).
+    recs: std::ops::Range<usize>,
 }
 
-/// Per-leaf record for the stitch passes.
+/// Per-leaf record for the stitch passes (mixed leaves only). The stitch needs from a leaf
+/// only its vertex, which faces straddle, and which perimeter edges are crossed; the
+/// crossing points themselves live once per fine-grid edge in the crossing table.
+#[derive(Clone, Copy)]
 struct LeafRec {
+    /// Cell key (min corner, fine units).
+    key: u64,
     /// The leaf's dual vertex (QEF, or the cell centre when nothing is crossed).
     qpos: V3,
+    /// Octree level.
+    level: u8,
     /// Bit k set = face k's corner signs straddle.
     mixed: u8,
-    /// The 8 corner values, corner-bit order.
-    vals: [f64; 8],
-    /// Crossings of this leaf's sign-changing edges (empty for unmixed leaves).
-    xings: Vec<Xing>,
+    /// Bit e set = edge `EDGES[e]` is sign-changing (its crossing is in the table).
+    crossed: u16,
 }
+
+/// The cell's 12 edges as corner-bit pairs, lower-coordinate endpoint first.
+const EDGES: [(u8, u8); 12] = [
+    (0, 1), (2, 3), (4, 5), (6, 7), // along x
+    (0, 2), (1, 3), (4, 6), (5, 7), // along y
+    (0, 4), (1, 5), (2, 6), (3, 7), // along z
+];
+/// Edge index in `EDGES` of the corner pair (a, b), either order; 255 for non-edges.
+const EDGE_OF: [[u8; 8]; 8] = {
+    let mut t = [[255u8; 8]; 8];
+    let mut e = 0;
+    while e < 12 {
+        let (a, b) = EDGES[e];
+        t[a as usize][b as usize] = e as u8;
+        t[b as usize][a as usize] = e as u8;
+        e += 1;
+    }
+    t
+};
 
 /// Crossing of the isosurface through a fine-grid edge: sorted endpoint keys, the
 /// linear-interpolation point, and the unit normal at the crossing (nearer endpoint's
 /// gradient) for the QEF planes and quad orientation.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Xing {
     ekey: (u64, u64),
     p: V3,
     n: V3,
 }
 
-/// Who occupies the region of a queried cell: the leaf that covers it, refined cells (only
-/// possible for the query cell itself), or nothing (kept as a defensive case; the root is
-/// always present, so this only means "outside the domain").
+/// Sort crossings by edge key and keep one per edge. Copies of one edge's crossing are
+/// bit-identical (same samples, same endpoint positions, same arithmetic), which the
+/// debug build checks; the keys are then unique, so the unstable sort is deterministic.
+fn sort_dedup_xings(xs: &mut Vec<Xing>) {
+    if xs.len() > 1 << 16 {
+        xs.par_sort_unstable_by_key(|x| x.ekey);
+    } else {
+        xs.sort_unstable_by_key(|x| x.ekey);
+    }
+    xs.dedup_by(|a, b| {
+        let same = a.ekey == b.ekey;
+        debug_assert!(!same || a.p.map(f64::to_bits) == b.p.map(f64::to_bits));
+        debug_assert!(!same || a.n.map(f64::to_bits) == b.n.map(f64::to_bits));
+        same
+    });
+}
+
+/// Who occupies the region of a queried cell: the leaf that covers it (with its vertex id,
+/// `u32::MAX` for an unmixed leaf, which has none), refined cells (only possible for the
+/// query cell itself), or nothing (kept as a defensive case; the root is always present,
+/// so this only means "outside the domain").
 enum Occupant {
     None,
     Refined,
-    Leaf { level: u32, flat: u32 },
+    Leaf { level: u32, key: u64, vert: u32 },
 }
 
 /// Walk up from `from_level` to the leaf covering the queried cell, given as the neighbouring
 /// cell's min-corner key at `from_level`. Ancestors strictly below a present cell are absent
 /// from the tested set by construction, so the first present ancestor is the covering leaf.
-fn occupant(levels: &[Level], depth: u32, from_level: u32, nk: u64) -> Occupant {
+fn occupant(levels: &[Level], recs: &[LeafRec], depth: u32, from_level: u32, nk: u64) -> Occupant {
     for dd in (0..=from_level as u64).rev() {
         let step = 1u64 << (depth as u64 - dd);
         // Floor each axis to this level's grid: the cell containing the queried region.
-        let ax = (key_x(nk) / step) * step;
-        let ay = (key_y(nk) / step) * step;
-        let az = (key_z(nk) / step) * step;
-        let ak = fine_key(ax, ay, az);
-        let lvl = &levels[dd as usize];
-        if let Ok(ci) = lvl.cell_keys.binary_search(&ak) {
-            if lvl.refined[ci] {
-                debug_assert_eq!(dd as u32, from_level, "only the queried cell itself can be refined");
-                return Occupant::Refined;
-            }
-            return Occupant::Leaf { level: dd as u32, flat: lvl.leaf_ix[ci] };
+        let ak = fine_key((key_x(nk) / step) * step, (key_y(nk) / step) * step, (key_z(nk) / step) * step);
+        // Present (tested) at dd iff it is the root or its parent was refined.
+        let present = if dd == 0 {
+            ak == 0
+        } else {
+            let ps = 2 * step;
+            let pk = fine_key((key_x(ak) / ps) * ps, (key_y(ak) / ps) * ps, (key_z(ak) / ps) * ps);
+            levels[dd as usize - 1].refined.binary_search(&pk).is_ok()
+        };
+        if !present {
+            continue;
         }
+        let lvl = &levels[dd as usize];
+        if lvl.refined.binary_search(&ak).is_ok() {
+            debug_assert_eq!(dd as u32, from_level, "only the queried cell itself can be refined");
+            return Occupant::Refined;
+        }
+        let vert = match recs[lvl.recs.clone()].binary_search_by_key(&ak, |r| r.key) {
+            Ok(i) => (lvl.recs.start + i) as u32,
+            Err(_) => u32::MAX,
+        };
+        return Occupant::Leaf { level: dd as u32, key: ak, vert };
     }
     Occupant::None
 }
@@ -218,145 +330,211 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
     let side = w as f64 * h;
     let origin: V3 = std::array::from_fn(|a| (lo[a] + hi[a]) * 0.5 - side * 0.5);
 
-    // ---- refine level by level; only refined cells' children are candidates ----------------
-    let mut todo: Vec<u64> = vec![0];
+    // ---- refine level by level, streaming ---------------------------------------------------
+    // Only refined cells' children are candidates. A level is processed in blocks of whole
+    // parent x-columns: a block's candidates, their corner samples, the refine/certify
+    // decisions and the records of its mixed leaves are built together and the samples are
+    // dropped before the next block. What persists per level is only the refined cells (the
+    // next level's parents, and the occupancy test of the stitch); per mixed leaf, a compact
+    // record; per crossed fine-grid edge, one crossing. Unmixed leaves leave no trace: they
+    // are recognisable as present (parent refined), not refined, and not mixed.
+    //
+    // Determinism: samples are a pure function of the corner key, so a corner on a block
+    // boundary evaluated in both blocks is the same bits; decisions and records depend only
+    // on samples; blocks run in key order and children of a block's parents sort within the
+    // block (parent x-columns are 2*step apart, child x-columns are the parent's and +step),
+    // so records come out level-major and key-sorted exactly as the single-table pass built
+    // them, at any thread count.
+    let trace = Trace::start();
     let mut levels: Vec<Level> = Vec::with_capacity(depth as usize + 1);
+    let mut recs: Vec<LeafRec> = Vec::new();
+    let mut xtab: Vec<Xing> = Vec::new();
+    let mut n_cells = 0usize;
+    let mut n_corners = 0usize;
     for d in 0..=depth {
         let step = 1u64 << (depth - d);
         let units = 1u64 << d;
-        todo.sort_unstable();
-        todo.dedup();
-
-        // All candidates' corners, deduplicated (adjacent cells share corners), evaluated in
-        // parallel. Fixed chunks of an indexed parallel map preserve order, so the sample
-        // values — and everything built from them — are run-to-run identical.
-        let mut ckeys: Vec<u64> = Vec::with_capacity(todo.len() * 8);
-        for &ck in &todo {
-            for bit in 0..8u64 {
-                ckeys.push(corner_key(ck, step, bit));
-            }
-        }
-        ckeys.par_sort_unstable();
-        ckeys.dedup();
-        let chunk = 1usize << 13;
-        let corner_vals: Vec<Sample> = ckeys
-            .par_chunks(chunk)
-            .flat_map_iter(|ch| {
-                ch.iter()
-                    .map(|&k| {
-                        let p = [
-                            origin[0] + key_x(k) as f64 * h,
-                            origin[1] + key_y(k) as f64 * h,
-                            origin[2] + key_z(k) as f64 * h,
-                        ];
-                        let mut s = field(p);
-                        if s.v.abs() < 1e-9 * h {
-                            s.v = 0.0; // plane-aligned snap, same convention as the uniform mesher
-                        }
-                        s
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        // Certify or refine each candidate (parallel); children assembled sequentially.
-        let refined: Vec<bool> = todo
-            .par_iter()
-            .map(|&ck| {
-                let mut inside = false;
-                let mut outside = false;
-                let mut vmin = f64::INFINITY;
-                let mut gmax = 0.0f64;
-                for c in 0..8u64 {
-                    let s = corner_vals[lookup(&ckeys, corner_key(ck, step, c))];
-                    if s.v <= 0.0 {
-                        inside = true;
-                    } else {
-                        outside = true;
+        let rec_start = recs.len();
+        let mut refined_keys: Vec<u64> = Vec::new();
+        let (lv_cells, lv_corners) = {
+            let parents: &[u64] = if d == 0 { &[] } else { &levels[d as usize - 1].refined };
+            let mut lv_cells = 0usize;
+            let mut lv_corners = 0usize;
+            let mut pi = 0usize;
+            let mut first = true;
+            loop {
+                // This block's candidates, sorted.
+                let cands: Vec<u64> = if d == 0 {
+                    if !first {
+                        break;
                     }
-                    vmin = vmin.min(s.v.abs());
-                    gmax = gmax.max(gmag(s));
+                    vec![0]
+                } else {
+                    if pi >= parents.len() {
+                        break;
+                    }
+                    let mut end = (pi + BLOCK_PARENTS).min(parents.len());
+                    while end < parents.len() && key_x(parents[end]) == key_x(parents[end - 1]) {
+                        end += 1;
+                    }
+                    let mut c: Vec<u64> = Vec::with_capacity((end - pi) * 8);
+                    for &pk in &parents[pi..end] {
+                        let (ix, iy, iz) = (key_x(pk), key_y(pk), key_z(pk));
+                        for b in 0..8u64 {
+                            let (bx, by, bz) = (b & 1, (b >> 1) & 1, (b >> 2) & 1);
+                            c.push(fine_key(ix + bx * step, iy + by * step, iz + bz * step));
+                        }
+                    }
+                    c.par_sort_unstable();
+                    pi = end;
+                    c
+                };
+                first = false;
+                lv_cells += cands.len();
+
+                // The block's corners, deduplicated (adjacent cells share corners), evaluated
+                // in parallel. Fixed chunks of an indexed parallel map preserve order.
+                let mut ckeys: Vec<u64> = Vec::with_capacity(cands.len() * 8);
+                for &ck in &cands {
+                    for bit in 0..8u64 {
+                        ckeys.push(corner_key(ck, step, bit));
+                    }
                 }
-                // Refine when the surface may pass through the cell. At the finest level all
-                // candidates are leaves: the boundary then has h resolution.
-                d < depth && ((inside && outside) || vmin <= opts.lip * 0.5 * (step as f64 * h) * 3f64.sqrt() * gmax)
-            })
-            .collect();
-        let mut next: Vec<u64> = Vec::new();
-        for (ci, &ck) in todo.iter().enumerate() {
-            if !refined[ci] {
-                continue;
+                ckeys.par_sort_unstable();
+                ckeys.dedup();
+                ckeys.shrink_to_fit();
+                lv_corners += ckeys.len();
+                let chunk = 1usize << 13;
+                let cvals: Vec<Sample> = ckeys
+                    .par_chunks(chunk)
+                    .flat_map_iter(|ch| {
+                        ch.iter()
+                            .map(|&k| {
+                                let p = [
+                                    origin[0] + key_x(k) as f64 * h,
+                                    origin[1] + key_y(k) as f64 * h,
+                                    origin[2] + key_z(k) as f64 * h,
+                                ];
+                                let mut s = field(p);
+                                if s.v.abs() < 1e-9 * h {
+                                    s.v = 0.0; // plane-aligned snap, same convention as the uniform mesher
+                                }
+                                s
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+
+                // Certify or refine each candidate (parallel).
+                let refined: Vec<bool> = cands
+                    .par_iter()
+                    .map(|&ck| {
+                        let mut inside = false;
+                        let mut outside = false;
+                        let mut vmin = f64::INFINITY;
+                        let mut gmax = 0.0f64;
+                        for c in 0..8u64 {
+                            let s = cvals[lookup(&ckeys, corner_key(ck, step, c))];
+                            if s.v <= 0.0 {
+                                inside = true;
+                            } else {
+                                outside = true;
+                            }
+                            vmin = vmin.min(s.v.abs());
+                            gmax = gmax.max(gmag(s));
+                        }
+                        // Refine when the surface may pass through the cell. At the finest
+                        // level all candidates are leaves: the boundary then has h resolution.
+                        d < depth
+                            && ((inside && outside) || vmin <= opts.lip * 0.5 * (step as f64 * h) * 3f64.sqrt() * gmax)
+                    })
+                    .collect();
+                for (ci, &ck) in cands.iter().enumerate() {
+                    if refined[ci] {
+                        refined_keys.push(ck);
+                    }
+                }
+
+                // Records of the block's mixed leaves (parallel, order-preserving), and their
+                // crossings, deduplicated within the block.
+                let rchunk = 1usize << 12;
+                let parts: Vec<(Vec<LeafRec>, Vec<Xing>)> = cands
+                    .par_chunks(rchunk)
+                    .zip(refined.par_chunks(rchunk))
+                    .map(|(cs, rs)| {
+                        let mut out = Vec::new();
+                        let mut xs = Vec::new();
+                        for (&key, &r) in cs.iter().zip(rs) {
+                            if r {
+                                continue;
+                            }
+                            if let Some(rec) = leaf_record(&ckeys, &cvals, d, key, depth, &origin, h, &mut xs) {
+                                out.push(rec);
+                            }
+                        }
+                        (out, xs)
+                    })
+                    .collect();
+                let mut bx: Vec<Xing> = Vec::with_capacity(parts.iter().map(|p| p.1.len()).sum());
+                for (r, x) in parts {
+                    recs.extend_from_slice(&r);
+                    bx.extend_from_slice(&x);
+                }
+                sort_dedup_xings(&mut bx);
+                xtab.extend_from_slice(&bx);
             }
-            let sub = step / 2;
-            let (ix, iy, iz) = (key_x(ck), key_y(ck), key_z(ck));
-            for b in 0..8u64 {
-                let (bx, by, bz) = (b & 1, (b >> 1) & 1, (b >> 2) & 1);
-                next.push(fine_key(ix + bx * sub, iy + by * sub, iz + bz * sub));
-            }
-        }
-        levels.push(Level {
-            units,
-            cell_keys: std::mem::take(&mut todo),
-            refined,
-            leaf_ix: Vec::new(),
-            corner_keys: ckeys,
-            corner_vals,
+            (lv_cells, lv_corners)
+        };
+        refined_keys.shrink_to_fit();
+        n_cells += lv_cells;
+        n_corners += lv_corners;
+        let n_ref = refined_keys.len();
+        levels.push(Level { units, refined: refined_keys, recs: rec_start..recs.len() });
+        trace.mark(&format!("level {d}"), || {
+            format!(
+                "cells {} refined {} corners {} mixed {} crossings {}",
+                lv_cells,
+                n_ref,
+                lv_corners,
+                recs.len() - rec_start,
+                xtab.len()
+            )
         });
-        todo = next;
     }
+    // Crossings repeated across block boundaries: merge to one per edge.
+    let pre = xtab.len();
+    sort_dedup_xings(&mut xtab);
+    xtab.shrink_to_fit();
+    recs.shrink_to_fit();
+    trace.mark("crossings", || {
+        format!(
+            "cells {} corners {} mixed {} crossings {} (pre-merge {}) rec {} B xing {} B",
+            n_cells,
+            n_corners,
+            recs.len(),
+            xtab.len(),
+            pre,
+            std::mem::size_of::<LeafRec>(),
+            std::mem::size_of::<Xing>()
+        )
+    });
 
-    // ---- flat leaf list (level-major, key-sorted) and per-level cell -> leaf index ---------
-    let mut leaves: Vec<(u32, u64)> = Vec::new();
-    {
-        let mut ix: Vec<Vec<u32>> = levels.iter().map(|l| vec![u32::MAX; l.cell_keys.len()]).collect();
-        for (li, lvl) in levels.iter().enumerate() {
-            for (ci, &ck) in lvl.cell_keys.iter().enumerate() {
-                if !lvl.refined[ci] {
-                    ix[li][ci] = leaves.len() as u32;
-                    leaves.push((li as u32, ck));
-                }
-            }
-        }
-        for (li, lvl) in levels.iter_mut().enumerate() {
-            lvl.leaf_ix = std::mem::take(&mut ix[li]);
-        }
-    }
-
-    // ---- per-leaf records (parallel): vertex, mixed faces, crossings -----------------------
-    let chunk = 1usize << 12;
-    let per_leaf: Vec<LeafRec> = leaves
-        .par_chunks(chunk)
-        .flat_map_iter(|blk| {
-            blk.iter().map(|&(li, key)| leaf_record(&levels, li as usize, key, depth, &origin, h))
-        })
-        .collect();
-
-    // ---- stitch: one vertex per leaf, canonical crossings, quads ---------------------------
-    // Vertex ids: leaves in flat order own the id slots. Only mixed leaves are referenced
-    // (an emitted pair straddles on the shared face, so both of its cells straddle).
-    let mut leaf_vert: Vec<u32> = Vec::with_capacity(per_leaf.len());
-    let mut verts: Vec<V3> = Vec::new();
-    for rec in &per_leaf {
-        if rec.mixed != 0 {
-            leaf_vert.push(verts.len() as u32);
-            verts.push(rec.qpos);
-        } else {
-            leaf_vert.push(u32::MAX);
-        }
-    }
+    // ---- stitch: one vertex per mixed leaf, canonical crossings, quads ----------------------
+    // Vertex ids: mixed leaves in record order (level-major, key-sorted) own the id slots, so a
+    // record's index is its vertex id. An emitted pair straddles on the shared face, so both
+    // of its cells straddle and both have a vertex.
+    let mut verts: Vec<V3> = Vec::with_capacity(recs.len() + xtab.len());
+    verts.extend(recs.iter().map(|r| r.qpos));
     let mut tris: Vec<[u32; 3]> = Vec::new();
-    // Crossing vertices are keyed by fine-grid edge; whichever leaf first emits the edge's
-    // crossing creates the vertex, later users reuse it. Points computed from the same
-    // corner samples interpolate identically, so this is exact.
-    let mut crossing_vert: HashMap<(u64, u64), u32> = HashMap::new();
-    for (li, rec) in per_leaf.iter().enumerate() {
-        if rec.mixed == 0 {
-            continue;
-        }
-        let (lvl_ix, ckey) = leaves[li];
+    // Crossing vertices, one slot per table entry; whichever leaf first emits the edge's
+    // crossing creates the vertex, later users reuse it.
+    let mut crossing_vert: Vec<u32> = vec![u32::MAX; xtab.len()];
+    for (va, rec) in recs.iter().enumerate() {
+        let va = va as u32;
+        let lvl_ix = rec.level as u32;
+        let ckey = rec.key;
         let lvl = &levels[lvl_ix as usize];
         let step = 1u64 << (depth - lvl_ix);
-        let va = leaf_vert[li];
         for f in 0..6usize {
             if rec.mixed & (1 << f) == 0 {
                 continue;
@@ -371,35 +549,36 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
             if nx >= lvl.units * step || ny >= lvl.units * step || nz >= lvl.units * step {
                 continue;
             }
-            match occupant(&levels, depth, lvl_ix, fine_key(nx, ny, nz)) {
+            match occupant(&levels, &recs, depth, lvl_ix, fine_key(nx, ny, nz)) {
                 Occupant::None | Occupant::Refined => continue,
-                Occupant::Leaf { level: od, flat: bf } => {
+                Occupant::Leaf { level: od, key: bkey, vert: vb } => {
                     // Canonical owner: the finer leaf of the pair, the lower key at equal
                     // size. A coarser occupant sees me as the fine side and skips; refined
                     // neighbours' children emit their sub-faces.
-                    if od == lvl_ix && !(ckey < leaves[bf as usize].1) {
+                    if od == lvl_ix && !(ckey < bkey) {
                         continue;
                     }
-                    emit_face(
-                        rec,
-                        va,
-                        leaf_vert[bf as usize],
-                        f,
-                        ckey,
-                        step,
-                        &mut verts,
-                        &mut tris,
-                        &mut crossing_vert,
-                    );
+                    emit_face(rec, va, vb, f, ckey, step, &mut verts, &mut tris, &xtab, &mut crossing_vert);
                 }
             }
         }
     }
 
+    trace.mark("stitch", || {
+        format!("verts {} tris {} crossing_vert {}", verts.len(), tris.len(), crossing_vert.len())
+    });
+    drop(crossing_vert);
+    drop(xtab);
+    drop(recs);
+    drop(levels);
+    trace.mark("free tables", String::new);
+
     // Crossings sitting exactly on a corner (t = 0 or 1: the plane-aligned snap) coincide
     // positionally across different edges; weld them so the surface is edge-closed there.
     weld_exact(&mut verts, &mut tris);
+    trace.mark("weld", String::new);
     orient(&mut tris);
+    trace.mark("orient", String::new);
     // Per-quad winding is only a first guess: at plane-aligned creases the field gradient
     // ties between planes and emission can wind a band of quads backwards. Consistency is
     // restored by `orient`; with the surface closed its global sign is then uniform, so
@@ -410,6 +589,7 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
         }
     }
     compact(&mut verts, &mut tris);
+    trace.mark("compact", || format!("verts {} tris {}", verts.len(), tris.len()));
     TriMesh { verts, tris }
 }
 
@@ -427,7 +607,8 @@ fn emit_face(
     step: u64,
     verts: &mut Vec<V3>,
     tris: &mut Vec<[u32; 3]>,
-    crossing_vert: &mut HashMap<(u64, u64), u32>,
+    xtab: &[Xing],
+    crossing_vert: &mut [u32],
 ) {
     // A strip between two cells whose fan centres coincide (both collapse onto a plane
     // seam, where every crossing snaps to the same lattice plane) carries no area: emit
@@ -444,17 +625,18 @@ fn emit_face(
     let mut n_x = 0usize;
     for e in 0..4 {
         let (b0, b1) = (bits[e] as u64, bits[(e + 1) % 4] as u64);
-        let (a_, b_) = (arec.vals[b0 as usize], arec.vals[b1 as usize]);
-        if !((a_ <= 0.0 && b_ > 0.0) || (b_ <= 0.0 && a_ > 0.0)) {
+        // Crossed iff the leaf recorded this edge's crossing (same predicate, same samples).
+        if arec.crossed & (1 << EDGE_OF[b0 as usize][b1 as usize]) == 0 {
             continue;
         }
         let ek = edge_key(corner_key(ckey, step, b0), corner_key(ckey, step, b1));
-        let x = xings_find(arec, ek);
-        let id = *crossing_vert.entry(ek).or_insert_with(|| {
+        let xi = xings_find(xtab, ek);
+        let x = xtab[xi];
+        if crossing_vert[xi] == u32::MAX {
             verts.push(x.p);
-            (verts.len() - 1) as u32
-        });
-        xp[n_x] = id;
+            crossing_vert[xi] = (verts.len() - 1) as u32;
+        }
+        xp[n_x] = crossing_vert[xi];
         xn[n_x] = x.n;
         n_x += 1;
     }
@@ -531,24 +713,27 @@ fn emit_quad(
 }
 
 /// The leaf's record: corner values and positions from its level's tables, mixed-face mask,
-/// QEF vertex, and its sign-change edges' crossings.
+/// QEF vertex, and its sign-change edges' crossings. None for an unmixed leaf (all eight
+/// corners share a sign: no face straddles and no edge is crossed).
+#[allow(clippy::too_many_arguments)]
 fn leaf_record(
-    levels: &[Level],
-    li: usize,
+    ckeys: &[u64],
+    cvals: &[Sample],
+    level: u32,
     key: u64,
     depth: u32,
     origin: &V3,
     h: f64,
-) -> LeafRec {
-    let lvl = &levels[li];
-    let step = 1u64 << (depth - li as u32);
+    xtab: &mut Vec<Xing>,
+) -> Option<LeafRec> {
+    let step = 1u64 << (depth - level);
     let (ix, iy, iz) = (key_x(key), key_y(key), key_z(key));
     let mut vals = [0.0f64; 8];
     let mut gs = [[0.0f64; 3]; 8];
     let mut pos = [[0.0f64; 3]; 8];
     for b in 0..8u64 {
         let c = corner_key(key, step, b);
-        let s = lvl.corner_vals[lookup(&lvl.corner_keys, c)];
+        let s = cvals[lookup(ckeys, c)];
         vals[b as usize] = s.v;
         gs[b as usize] = s.g;
         let (bx, by, bz) = (b & 1, (b >> 1) & 1, (b >> 2) & 1);
@@ -574,15 +759,14 @@ fn leaf_record(
             mixed |= 1 << k;
         }
     }
+    if mixed == 0 {
+        return None;
+    }
     // Crossings of the leaf's 12 edges; QEF planes with nearer-endpoint normals.
-    const EDGES: [(u8, u8); 12] = [
-        (0, 1), (2, 3), (4, 5), (6, 7), // along x
-        (0, 2), (1, 3), (4, 6), (5, 7), // along y
-        (0, 4), (1, 5), (2, 6), (3, 7), // along z
-    ];
-    let mut planes: Vec<(V3, V3)> = Vec::new();
-    let mut xings: Vec<Xing> = Vec::new();
-    for (a, b) in EDGES {
+    let mut planes = [([0.0f64; 3], [0.0f64; 3]); 12];
+    let mut np = 0usize;
+    let mut crossed = 0u16;
+    for (e, &(a, b)) in EDGES.iter().enumerate() {
         let (ua, ub) = (vals[a as usize], vals[b as usize]);
         if !((ua <= 0.0 && ub > 0.0) || (ub <= 0.0 && ua > 0.0)) {
             continue;
@@ -599,11 +783,13 @@ fn leaf_record(
         if na < 1e-30 && nb < 1e-30 {
             n = [0.0, 0.0, 0.0]; // no usable gradient: QEF skips, orientation falls back
         }
-        planes.push((p, n));
-        xings.push(Xing { ekey: edge_key(corner_key(key, step, a as u64), corner_key(key, step, b as u64)), p, n });
+        planes[np] = (p, n);
+        np += 1;
+        crossed |= 1 << e;
+        xtab.push(Xing { ekey: edge_key(corner_key(key, step, a as u64), corner_key(key, step, b as u64)), p, n });
     }
-    let qpos = qef_vertex(&planes, key, step, origin, h);
-    LeafRec { qpos, mixed, vals, xings }
+    let qpos = qef_vertex(&planes[..np], key, step, origin, h);
+    Some(LeafRec { key, qpos, level: level as u8, mixed, crossed })
 }
 
 /// Mass-point QEF over the leaf's crossing planes: minimise sum (n·(q - x))^2 + mu |q - c|^2,
@@ -708,8 +894,8 @@ fn lookup(keys: &[u64], k: u64) -> usize {
 }
 
 #[inline]
-fn xings_find(rec: &LeafRec, ek: (u64, u64)) -> Xing {
-    rec.xings.iter().copied().find(|x| x.ekey == ek).expect("perimeter crossing missing from the leaf's edge records")
+fn xings_find(xtab: &[Xing], ek: (u64, u64)) -> usize {
+    xtab.binary_search_by_key(&ek, |x| x.ekey).expect("perimeter crossing missing from the crossing table")
 }
 
 /// Weld exactly coincident vertices (bit-identical f64 positions). Positions are compared as
@@ -721,43 +907,73 @@ fn xings_find(rec: &LeafRec, ek: (u64, u64)) -> Xing {
 /// open on each side (open edges, phantom self-intersections at the identical point), so
 /// everything at one position becomes one vertex and the pinch is what it already is.
 ///
-/// Welding keys are bit triples hashed with a fixed-seed fx-style hasher (no random seed, so
-/// run-to-run behaviour is identical) — tens of millions of bit keys at SipHash rates cost
-/// seconds the export budget does not have.
+/// Every vertex maps to the lowest index at its position (the first occurrence). Built by
+/// sorting (position hash, index) pairs rather than through a hash map: 12 B per vertex
+/// plus the id map, where a map of bit-triple keys held ~60 B per vertex at the 0.1 mm
+/// export's peak. Positions sharing a hash are told apart by their bits, so a collision
+/// costs a comparison, never a wrong weld.
 fn weld_exact(verts: &mut [V3], tris: &mut Vec<[u32; 3]>) {
-    type Key = (u64, u64, u64);
-    let mut seen: HashMap<Key, u32, BuildFx> = HashMap::default();
-    let new_ids: Vec<u32> = (0..verts.len())
-        .map(|i| {
-            let v = verts[i];
-            let k = (v[0].to_bits(), v[1].to_bits(), v[2].to_bits());
-            match seen.get(&k) {
-                Some(&head) => head,
-                None => {
-                    seen.insert(k, i as u32);
-                    i as u32
+    let bits = |i: u32| {
+        let v = verts[i as usize];
+        [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]
+    };
+    let mut ord: Vec<(u64, u32)> = (0..verts.len() as u32).into_par_iter().map(|i| (fx3(bits(i)), i)).collect();
+    ord.par_sort_unstable();
+    let mut new_ids: Vec<u32> = (0..verts.len() as u32).collect();
+    let mut heads: Vec<u32> = Vec::new();
+    let mut s = 0usize;
+    while s < ord.len() {
+        let mut e = s + 1;
+        while e < ord.len() && ord[e].0 == ord[s].0 {
+            e += 1;
+        }
+        if e - s > 1 {
+            // Same hash, indices ascending: the first vertex at each distinct position is its
+            // head, and every later one at that position maps to it.
+            heads.clear();
+            for &(_, i) in &ord[s..e] {
+                let bi = bits(i);
+                match heads.iter().find(|&&k| bits(k) == bi) {
+                    Some(&k) => new_ids[i as usize] = k,
+                    None => heads.push(i),
                 }
             }
-        })
-        .collect();
-    for t in &mut *tris {
+        }
+        s = e;
+    }
+    drop(ord);
+    tris.par_iter_mut().for_each(|t| {
         for c in t.iter_mut() {
             *c = new_ids[*c as usize];
         }
-    }
+    });
 }
 
+/// fx-style mix of a position's three coordinate bit patterns (no seed: deterministic).
+#[inline]
+fn fx3(k: [u64; 3]) -> u64 {
+    let mut h = 0u64;
+    for w in k {
+        h = (h.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    h
+}
+
+#[cfg(test)]
 /// fx-style hasher (rustc's): word-wise rotate-xor-multiply, no seed, hence deterministic
 /// hashing for the weld keys.
 #[derive(Default, Clone, Copy)]
 struct BuildFx;
+#[cfg(test)]
 impl std::hash::BuildHasher for BuildFx {
     type Hasher = FxHasher;
     fn build_hasher(&self) -> FxHasher {
         FxHasher(0)
     }
 }
+#[cfg(test)]
 struct FxHasher(u64);
+#[cfg(test)]
 impl std::hash::Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
@@ -793,40 +1009,71 @@ impl std::hash::Hasher for FxHasher {
 ///
 /// Propagation only crosses manifold edges (two incident triangles): a non-manifold seam
 /// edge carries more, and no 2-colouring exists there.
-fn orient(tris: &mut [ [u32; 3] ]) {
-    // Undirected edge -> the two directed half-edges through it, laid out contiguously by
-    // sorting (packed edge key, half-edge index). At tens of millions of edges a sorted
-    // adjacency array is several times faster than a hash map of per-key vectors.
+fn orient(tris: &mut [[u32; 3]]) {
+    // Undirected edge -> its half-edges, bucketed by the edge's lower vertex (counting sort:
+    // offsets per vertex, then one u32 per half-edge), and within a bucket matched by the
+    // upper vertex. An edge with exactly two half-edges becomes a `mate` pair; any other
+    // count (boundary, non-manifold seam, self-edge of a degenerate triangle) propagates
+    // nothing. About 8 B per half-edge at the peak, where a sorted (key, index) array with
+    // group ids held 24.
     let n_t = tris.len();
     let nh = 3 * n_t;
-    let mut he: Vec<(u64, u32)> = Vec::with_capacity(nh);
-    for (ti, t) in tris.iter().enumerate() {
-        let base = 3 * ti as u32;
-        for e in 0..3 {
-            let (u, v) = (t[e], t[(e + 1) % 3]);
-            // Self-edges of degenerate triangles carry no adjacency: keep them in the
-            // array (their group is never a propagator) so the indices stay uniform.
-            let key = ((u.min(v) as u64) << 32) | u.max(v) as u64;
-            he.push((key, base + e as u32));
-        }
+    let n_v = tris.iter().flat_map(|t| t.iter()).map(|&v| v as usize + 1).max().unwrap_or(0);
+    let lo_hi = |h: usize| {
+        let t = tris[h / 3];
+        let (u, v) = (t[h % 3], t[(h % 3 + 1) % 3]);
+        (u.min(v), u.max(v))
+    };
+    let mut off: Vec<u32> = vec![0; n_v + 1];
+    for h in 0..nh {
+        off[lo_hi(h).0 as usize + 1] += 1;
     }
-    he.par_sort_unstable();
-
-    // Group boundaries and each half-edge's group: a new group starts where the key
-    // changes. Serial scan of the sorted array, one pass.
-    let mut gid: Vec<u32> = vec![0; nh];
-    let mut starts: Vec<u32> = Vec::new();
+    for i in 0..n_v {
+        off[i + 1] += off[i];
+    }
+    let mut bucket: Vec<u32> = vec![0; nh];
     {
-        let mut prev: Option<u64> = None;
-        for (j, &(k, idx)) in he.iter().enumerate() {
-            if prev != Some(k) {
-                starts.push(j as u32);
-                prev = Some(k);
-            }
-            gid[idx as usize] = (starts.len() - 1) as u32;
+        let mut fill = off.clone();
+        for h in 0..nh {
+            let lo = lo_hi(h).0 as usize;
+            bucket[fill[lo] as usize] = h as u32;
+            fill[lo] += 1;
         }
     }
+    let mut mate: Vec<u32> = vec![u32::MAX; nh];
+    for u in 0..n_v {
+        let b = &bucket[off[u] as usize..off[u + 1] as usize];
+        for (i, &h) in b.iter().enumerate() {
+            let (lo, hi) = lo_hi(h as usize);
+            if lo == hi {
+                continue; // self-edge of a degenerate triangle: no adjacency
+            }
+            let mut count = 0usize;
+            let mut other = u32::MAX;
+            for (j, &g) in b.iter().enumerate() {
+                if lo_hi(g as usize).1 == hi {
+                    count += 1;
+                    if j != i {
+                        other = g;
+                    }
+                }
+            }
+            if count == 2 {
+                mate[h as usize] = other;
+            }
+        }
+    }
+    drop(bucket);
+    drop(off);
 
+    // Propagate from seeds in index order. The build-time triangles stay in `tris` (their
+    // slots index `mate`); a triangle's current winding is its build-time one, flipped if
+    // `flip` says so. A flip only permutes the corners, so the edge set never changes.
+    let cur = |tris: &[[u32; 3]], flip: &[bool], i: usize| {
+        let t = tris[i];
+        if flip[i] { [t[0], t[2], t[1]] } else { t }
+    };
+    let mut flip = vec![false; n_t];
     let mut seen = vec![false; n_t];
     let mut stack: Vec<u32> = Vec::new();
     for seed in 0..n_t {
@@ -837,63 +1084,53 @@ fn orient(tris: &mut [ [u32; 3] ]) {
         stack.push(seed as u32);
         while let Some(ti) = stack.pop() {
             let ti = ti as usize;
-            // Walk this triangle's build-time half-edges (gid indexes them). A flip only
-            // permutes the corners; the undirected edge set never changes, so these stay
-            // the triangle's own edges however the pass has rewound it so far.
             for slot in 0..3 {
-                let g = gid[3 * ti + slot] as usize;
-                let s = starts[g] as usize;
-                let en = if g + 1 < starts.len() { starts[g + 1] as usize } else { nh };
-                if en - s != 2 {
-                    continue; // self-pair or non-manifold seam edge: no 2-colouring exists there
+                let m = mate[3 * ti + slot];
+                if m == u32::MAX {
+                    continue; // boundary, non-manifold seam or self-edge: no 2-colouring there
                 }
-                let key = he[s].0;
-                let (a, b) = ((key >> 32) as u32, key as u32);
-                if a == b {
-                    continue;
-                }
+                let (a, b) = lo_hi(3 * ti + slot);
                 // The triangle's current traversal of that edge, from its present winding.
-                let t = tris[ti];
+                let t = cur(tris, &flip, ti);
                 let mut dir = None;
                 for e in 0..3 {
                     let (p, q) = (t[e], t[(e + 1) % 3]);
-                    if p == a && q == b {
-                        dir = Some((p, q));
-                        break;
-                    }
-                    if p == b && q == a {
+                    if (p == a && q == b) || (p == b && q == a) {
                         dir = Some((p, q));
                         break;
                     }
                 }
                 let Some((u, v)) = dir else { continue };
-                for &(_, mhalf) in &he[s..en] {
-                    let nt = (mhalf / 3) as usize;
-                    if nt == ti || seen[nt] {
-                        continue;
-                    }
-                    let t2 = tris[nt];
-                    // The neighbour must traverse the shared edge opposite to `t`; find
-                    // which direction it currently does.
-                    let mut same_dir = None;
-                    for k in 0..3 {
-                        if t2[k] == u && t2[(k + 1) % 3] == v {
-                            same_dir = Some(true);
-                            break;
-                        }
-                        if t2[k] == v && t2[(k + 1) % 3] == u {
-                            same_dir = Some(false);
-                            break;
-                        }
-                    }
-                    let Some(same) = same_dir else { continue };
-                    if same {
-                        tris[nt] = [t2[0], t2[2], t2[1]];
-                    }
-                    seen[nt] = true;
-                    stack.push(nt as u32);
+                let nt = (m / 3) as usize;
+                if nt == ti || seen[nt] {
+                    continue;
                 }
+                let t2 = cur(tris, &flip, nt);
+                // The neighbour must traverse the shared edge opposite to `t`; find which
+                // direction it currently does.
+                let mut same_dir = None;
+                for k in 0..3 {
+                    if t2[k] == u && t2[(k + 1) % 3] == v {
+                        same_dir = Some(true);
+                        break;
+                    }
+                    if t2[k] == v && t2[(k + 1) % 3] == u {
+                        same_dir = Some(false);
+                        break;
+                    }
+                }
+                let Some(same) = same_dir else { continue };
+                if same {
+                    flip[nt] = !flip[nt];
+                }
+                seen[nt] = true;
+                stack.push(nt as u32);
             }
+        }
+    }
+    for (t, &f) in tris.iter_mut().zip(&flip) {
+        if f {
+            *t = [t[0], t[2], t[1]];
         }
     }
 }
@@ -978,6 +1215,63 @@ mod tests {
                 "{name}: orient did not recover the solid volume: {vol1} vs {vol_ref}"
             );
         }
+    }
+
+    /// The previous weld (hash map, first occurrence wins) for comparison.
+    fn weld_exact_hm(verts: &mut [V3], tris: &mut Vec<[u32; 3]>) {
+        type Key = (u64, u64, u64);
+        let mut seen: HashMap<Key, u32, BuildFx> = HashMap::default();
+        let new_ids: Vec<u32> = (0..verts.len())
+            .map(|i| {
+                let v = verts[i];
+                let k = (v[0].to_bits(), v[1].to_bits(), v[2].to_bits());
+                match seen.get(&k) {
+                    Some(&head) => head,
+                    None => {
+                        seen.insert(k, i as u32);
+                        i as u32
+                    }
+                }
+            })
+            .collect();
+        for t in &mut *tris {
+            for c in t.iter_mut() {
+                *c = new_ids[*c as usize];
+            }
+        }
+    }
+
+    #[test]
+    fn weld_matches_hashmap_reference() {
+        // Positions drawn from a small lattice so many coincide (runs of 1..~40 copies),
+        // plus -0.0 vs 0.0 (distinct bits: must not weld), in scrambled index order.
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut verts: Vec<V3> = (0..20_000)
+            .map(|_| {
+                let r = next();
+                [(r % 7) as f64 * 0.5, ((r >> 8) % 5) as f64 * 0.25, ((r >> 16) % 3) as f64]
+            })
+            .collect();
+        verts.push([-0.0, 0.0, 0.0]);
+        verts.push([0.0, 0.0, 0.0]);
+        let tris: Vec<[u32; 3]> = (0..30_000)
+            .map(|_| {
+                let r = next();
+                let n = verts.len() as u64;
+                [(r % n) as u32, ((r >> 20) % n) as u32, ((r >> 40) % n) as u32]
+            })
+            .collect();
+        let (mut a, mut b) = (tris.clone(), tris);
+        let mut va = verts.clone();
+        weld_exact(&mut va, &mut a);
+        weld_exact_hm(&mut verts, &mut b);
+        assert_eq!(a, b, "sort-based weld diverged from the hash-map reference");
     }
 
     /// The previous orient implementation (hash-map adjacency) for comparison.
@@ -1156,5 +1450,88 @@ mod tests {
         let a = surface_adaptive(&f, [-7.0; 3], [7.0; 3], 0.5, &AdaptiveOpts::default());
         let b = surface_adaptive(&f, [-7.0; 3], [7.0; 3], 0.5, &AdaptiveOpts::default());
         assert_eq!(a, b);
+    }
+
+    /// Gyroid sheet `|G(p)| - t` (G scaled to mm by the cell size) clipped to a box: many
+    /// thin walls, saddle faces, multi-sheet cells and level jumps, the structures of the
+    /// graded fill in a unit-test-sized field.
+    fn gyroid_sheet(cell: f64, t: f64, half: f64) -> impl Fn(V3) -> Sample {
+        move |p: V3| {
+            let k = 2.0 * std::f64::consts::PI / cell;
+            let (x, y, z) = (k * p[0], k * p[1], k * p[2]);
+            let g = x.sin() * y.cos() + y.sin() * z.cos() + z.sin() * x.cos();
+            let dg = [
+                k * (x.cos() * y.cos() - z.sin() * x.sin()),
+                k * (-x.sin() * y.sin() + y.cos() * z.cos()),
+                k * (-y.sin() * z.sin() + z.cos() * x.cos()),
+            ];
+            let s = g.signum();
+            let sheet = Sample { v: (g.abs() - t) / k, g: [s * dg[0] / k, s * dg[1] / k, s * dg[2] / k] };
+            let b = box_c([0.0; 3], [half; 3])(p);
+            if sheet.v >= b.v { sheet } else { b }
+        }
+    }
+
+    fn digest(m: &TriMesh) -> u64 {
+        let mut x: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |w: u64| {
+            for b in w.to_le_bytes() {
+                x ^= b as u64;
+                x = x.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for v in &m.verts {
+            for c in v {
+                eat(c.to_bits());
+            }
+        }
+        for t in &m.tris {
+            for &c in t {
+                eat(c as u64);
+            }
+        }
+        x
+    }
+
+    /// The meshes, byte for byte, that the mesher produced before its storage was reworked
+    /// for the 0.1 mm memory bound (the per-level corner tensors and per-leaf crossing
+    /// copies). Any storage change must reproduce them exactly: same vertices in the same
+    /// order, same triangles, same windings.
+    #[test]
+    fn pinned_mesh_digests() {
+        type Case = (&'static str, Box<dyn Fn(V3) -> Sample + Sync>, V3, V3, f64, u64);
+        let cases: Vec<Case> = vec![
+            ("aligned box", Box::new(box_c([0.0; 3], [5.0, 4.0, 3.0])), [-7.0; 3], [7.0; 3], 0.5, 0x465ae98d203822d5),
+            ("offset box", Box::new(box_c([0.0; 3], [5.05, 3.95, 2.95])), [-7.0; 3], [7.0; 3], 0.5, 0x9e94ae42050be8ed),
+            ("sphere", Box::new(sample_sphere([0.0; 3], 5.0)), [-7.0; 3], [7.0; 3], 0.5, 0xbfd2d0608550d4f1),
+            ("thin slab", Box::new(box_c([0.0; 3], [15.0, 15.0, 0.15])), [-17.0; 3], [17.0; 3], 0.5, 0x38bd9005695a6e3e),
+            ("tube", Box::new(tube_shell(2.0, 10.0, 6.0)), [-14.0; 3], [14.0; 3], 1.0, 0x6f0599aad0fdae21),
+            ("gyroid sheet", Box::new(gyroid_sheet(6.0, 0.35, 9.0)), [-10.0; 3], [10.0; 3], 0.25, 0xf0ba5a49777f5f22),
+        ];
+        let mut bad = Vec::new();
+        for (name, f, lo, hi, h, want) in &cases {
+            let m = surface_adaptive(f, *lo, *hi, *h, &AdaptiveOpts::default());
+            let got = digest(&m);
+            println!("{name}: {} verts {} tris digest {got:#018x}", m.verts.len(), m.tris.len());
+            if got != *want {
+                bad.push(format!("{name}: {got:#018x} != pinned {want:#018x}"));
+            }
+        }
+        assert!(bad.is_empty(), "mesh bytes changed: {bad:?}");
+    }
+
+    #[test]
+    fn identical_across_thread_counts() {
+        let f = gyroid_sheet(6.0, 0.35, 9.0);
+        let run = |n: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("pool")
+                .install(|| surface_adaptive(&f, [-10.0; 3], [10.0; 3], 0.25, &AdaptiveOpts::default()))
+        };
+        let a = run(1);
+        let b = run(4);
+        assert_eq!(a, b, "adaptive mesh differs between 1 and 4 threads");
     }
 }
