@@ -14,6 +14,7 @@
 //! is a whole number of cells. Planar faces that coincide with lattice planes (the outer faces of
 //! most mechanical parts, and inner faces at grid multiples) are then reproduced exactly.
 
+pub mod adaptive;
 pub mod export;
 pub mod quality;
 pub use quality::{quality, Quality};
