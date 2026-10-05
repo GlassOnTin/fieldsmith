@@ -217,24 +217,32 @@ export function ViewportHost() {
     };
 
     // ---- picking & hover ------------------------------------------------------------------
-    let down: { x: number; y: number } | null = null;
+    let down: { x: number; y: number; button: number } | null = null;
     const hitAt = (x: number, y: number) => {
       const r = vp.ray(x, y);
       return pick(store.doc, r.origin, r.dir);
     };
     const onDown = (e: PointerEvent) => {
-      down = (tc as unknown as { axis: string | null }).axis ? null : { x: e.clientX, y: e.clientY };
+      down = (tc as unknown as { axis: string | null }).axis
+        ? null
+        : { x: e.clientX, y: e.clientY, button: e.button };
     };
     const onUp = (e: PointerEvent) => {
-      if (!down || e.button !== 0) return;
+      if (!down || e.button !== down.button) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       down = null;
-      if (moved > 4) return;
+      if (moved > 4) return; // drag = orbit/pan/rotate, never a pick
       const hit = hitAt(e.clientX, e.clientY);
-      for (const ext of viewportExtensions) if (ext.click?.(hit, e)) return;
-      if (store.lens !== 'shape') return;
-      if (hit?.shape) store.select({ kind: 'node', id: hit.shape });
-      else store.select(null);
+      if (e.button === 0) {
+        for (const ext of viewportExtensions) if (ext.click?.(hit, e)) return;
+        // Empty space deselects in every lens; a shape click selects only in the
+        // shape lens, where the other lens extensions own the other clicks.
+        if (hit?.shape) {
+          if (store.lens === 'shape') store.select({ kind: 'node', id: hit.shape });
+        } else store.select(null);
+        return;
+      }
+      if (e.button === 2) store.select(null); // right-click deselects (drag pans)
     };
     let hoverPending = 0;
     let lastMove: PointerEvent | null = null;

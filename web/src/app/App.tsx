@@ -106,7 +106,11 @@ function StatusBar() {
       {statusItems.map((S, i) => (
         <S key={i} />
       ))}
-      {s && <span>Selected: {s.id}</span>}
+      {s && (
+        <span title="Deselect with Esc, a right-click in the viewport, or clicking empty space">
+          Selected: {s.id} · Esc / right-click / empty space to deselect
+        </span>
+      )}
       <span class="sep">|</span>
       <span class="num" title="Render time of the last frames">
         {ui.frameMs.toFixed(1)} ms{fps ? ` · ${fps} fps max` : ''}
