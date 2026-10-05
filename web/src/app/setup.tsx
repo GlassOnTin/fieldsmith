@@ -128,6 +128,9 @@ const UP = new THREE.Vector3(0, 0, 1);
 interface Cluster {
   pos: THREE.Vector3;
   normal: THREE.Vector3;
+  /** Facet centroids in this bucket, flat xyz — bounds the support patch to the
+   * surface the region actually claims, so markers never stick out past a face. */
+  pts: number[];
 }
 
 /** Surface facets of one region, bucketed on a 2 mm grid and combined face-normal. Reads the
@@ -137,7 +140,10 @@ function clusters(lvl: LevelResult, ri: number): Cluster[] {
   const sets = lvl.regionFacetSets;
   const offs = lvl.regionFacetOffsets;
   if (!sets || !offs || ri < 0 || ri >= offs.length - 1) return [];
-  const sums = new Map<string, { x: number; y: number; z: number; nx: number; ny: number; nz: number; n: number }>();
+  const sums = new Map<
+    string,
+    { x: number; y: number; z: number; nx: number; ny: number; nz: number; pts: number[] }
+  >();
   const f = lvl.surfaceFacets;
   const nodes = lvl.nodes;
   for (let k = offs[ri]; k < offs[ri + 1]; k++) {
@@ -151,10 +157,10 @@ function clusters(lvl: LevelResult, ri: number): Cluster[] {
     E2.subVectors(C, A);
     E1.cross(E2);
     const key = `${Math.round(TMP.x / 2)},${Math.round(TMP.y / 2)},${Math.round(TMP.z / 2)}`;
-    const acc = sums.get(key) ?? { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, n: 0 };
+    const acc = sums.get(key) ?? { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, pts: [] };
     acc.x = TMP.x; acc.y = TMP.y; acc.z = TMP.z;
+    acc.pts.push(TMP.x, TMP.y, TMP.z);
     acc.nx += E1.x; acc.ny += E1.y; acc.nz += E1.z;
-    acc.n++;
     sums.set(key, acc);
   }
   const out: Cluster[] = [];
@@ -163,7 +169,7 @@ function clusters(lvl: LevelResult, ri: number): Cluster[] {
     const normal = new THREE.Vector3(acc.nx, acc.ny, acc.nz);
     if (normal.lengthSq() < 1e-9) normal.set(0, 0, 1);
     normal.normalize();
-    out.push({ pos, normal });
+    out.push({ pos, normal, pts: acc.pts });
   }
   return out;
 }
@@ -256,7 +262,6 @@ function buildGlyphs(lvl: LevelResult) {
     const ri = d.regions.findIndex((r) => r.id === s.region);
     if (ri < 0) continue;
     const cs = regionClusters(ri);
-    const discGeo = new THREE.PlaneGeometry(size, size);
     const discMat = new THREE.MeshBasicMaterial({
       color: SUPPORT_COLOR,
       transparent: true,
@@ -267,9 +272,35 @@ function buildGlyphs(lvl: LevelResult) {
     const linePos: number[] = [];
     const lineCol: number[] = [];
     for (const c of cs) {
-      const mesh = new THREE.Mesh(discGeo, discMat);
-      mesh.quaternion.setFromUnitVectors(UP, c.normal);
-      mesh.position.copy(c.pos).addScaledVector(c.normal, 0.3);
+      // Support patch bounded by the bucket's own facet centroids, rotated into the patch
+      // plane, and floated just off the surface on the non-material side. A patch bigger
+      // than the bucket sticks out past the part's faces; one sunk into the material is
+      // hidden by the surface and only shows where it pokes out.
+      const quat = new THREE.Quaternion().setFromUnitVectors(UP, c.normal);
+      const ux = new THREE.Vector3(1, 0, 0).applyQuaternion(quat);
+      const uy = new THREE.Vector3(0, 1, 0).applyQuaternion(quat);
+      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+      for (let i = 0; i < c.pts.length; i += 3) {
+        const dx = c.pts[i] - c.pos.x;
+        const dy = c.pts[i + 1] - c.pos.y;
+        const dz = c.pts[i + 2] - c.pos.z;
+        const u = dx * ux.x + dy * ux.y + dz * ux.z;
+        const v = dx * uy.x + dy * uy.y + dz * uy.z;
+        uMin = Math.min(uMin, u);
+        uMax = Math.max(uMax, u);
+        vMin = Math.min(vMin, v);
+        vMax = Math.max(vMax, v);
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.max(0.6, uMax - uMin), Math.max(0.6, vMax - vMin)),
+        discMat,
+      );
+      mesh.quaternion.copy(quat);
+      mesh.position
+        .copy(c.pos)
+        .addScaledVector(c.normal, -0.15)
+        .addScaledVector(ux, (uMin + uMax) / 2)
+        .addScaledVector(uy, (vMin + vMax) / 2);
       mesh.renderOrder = 2;
       glyphs.add(mesh);
       const anchor = c.pos.clone().addScaledVector(c.normal, 0.4);
