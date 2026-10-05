@@ -23,7 +23,7 @@
 ## Flow
 
 The filled bracket document (`examples/bracket-filled.fsm`) is loaded through the store and exported from the Make lens at its default spacing (0.25 mm).
-Export build: build+mesh 8956 ms in the worker (fill build 4.8 s, mesh 1.4 s reported by the wasm).
+Export build: build+mesh 9239 ms in the worker (fill build 4.9 s, mesh 1.5 s reported by the wasm).
 The layer preview slices the exported mesh in the worker (latest-wins scrub); the report screenshot shows the contours.
 Both downloads go through the real click → download flow: the 3MF is unzipped here and its model XML checked; the STL binary header is parsed.
 
