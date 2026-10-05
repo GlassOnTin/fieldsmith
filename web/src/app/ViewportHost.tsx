@@ -195,6 +195,9 @@ export function ViewportHost() {
       if (now.gizmo !== lastUi.gizmo || now.snap !== lastUi.snap) placeGizmo();
       if (now.hover !== lastUi.hover) updateHighlights();
       lastUi = now;
+      // Data arrivals that bypass the store (analysis level completions bridge through ui)
+      // still need a synced pass: extension overlays pick them up only via ext.sync.
+      schedule();
     });
     sync();
 
