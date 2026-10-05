@@ -175,6 +175,25 @@ function clusters(lvl: LevelResult, ri: number): Cluster[] {
 }
 const TMP = new THREE.Vector3();
 
+/** Cluster nearest the centroid of a cluster list — the anchor for the single glyph that
+ * stands for a support or a force load, whose fixed axes and direction don't vary per
+ * cluster. */
+function centroidAnchor(cs: Cluster[]): Cluster {
+  const mean = cs
+    .reduce((acc, c) => acc.add(c.pos), new THREE.Vector3())
+    .multiplyScalar(1 / cs.length);
+  let best = cs[0];
+  let bd = Infinity;
+  for (const c of cs) {
+    const dd = c.pos.distanceToSquared(mean);
+    if (dd < bd) {
+      bd = dd;
+      best = c;
+    }
+  }
+  return best;
+}
+
 /** Outward-oriented cluster normals: the field crosses zero at the surface, so a point a
  * half-millimetre along +normal must read positive. */
 function orientOutward(d: Document, cls: Cluster[]) {
@@ -303,7 +322,13 @@ function buildGlyphs(lvl: LevelResult) {
         .addScaledVector(uy, (vMin + vMax) / 2);
       mesh.renderOrder = 2;
       glyphs.add(mesh);
-      const anchor = c.pos.clone().addScaledVector(c.normal, 0.4);
+    }
+    // One axis cross per support, not per cluster: the fixed axes are a property of the
+    // support, so a cross per cluster stacks identical x-ray streaks. Anchor it at the
+    // cluster nearest the support's centroid.
+    if (cs.length) {
+      const anchorC = centroidAnchor(cs);
+      const anchor = anchorC.pos.clone().addScaledVector(anchorC.normal, 0.4);
       const L = Math.max(2.5, Math.min(7, size * 0.55));
       for (let ax = 0; ax < 3; ax++) {
         if (!s.fixed[ax]) continue;
@@ -336,10 +361,14 @@ function buildGlyphs(lvl: LevelResult) {
       if (mag < 1e-9) continue;
       const dir = new THREE.Vector3(v[0] / mag, v[1] / mag, v[2] / mag);
       const len = base * (0.35 + 0.65 * (mag / maxMag));
-      for (const c of cs) {
+      // One arrow per force load: the direction is constant across the region, so
+      // per-cluster arrows stack identical glyphs. Pressure keeps per-patch arrows
+      // because its directions genuinely vary over the surface.
+      if (cs.length) {
+        const anchorC = centroidAnchor(cs);
         const arrow = new THREE.ArrowHelper(
           dir,
-          c.pos.clone().addScaledVector(dir, 0.2),
+          anchorC.pos.clone().addScaledVector(dir, 0.2),
           len,
           LOAD_COLOR,
           Math.min(2.2, len * 0.3),
