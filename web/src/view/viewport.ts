@@ -28,6 +28,10 @@ uniform vec3 u_base;
 uniform vec3 u_camRight;
 uniform vec3 u_camUp;
 uniform float u_ghost;      // 1 = draw as translucent ghost
+uniform vec3 u_gridCol;     // floor line colour (shared; dark mode flips it)
+uniform float u_gridOn;     // 0 hides the floor (shared)
+uniform vec2 u_gridCenter;  // fade centre = document centre
+uniform vec2 u_gridFade;    // fade radius (inner, outer) in mm from u_gridCenter
 uniform vec2 u_hlKey[${MAX_HIGHLIGHTS}];  // (leaf index, face code or -1 for every face)
 uniform vec3 u_hlCol[${MAX_HIGHLIGHTS}];
 uniform int u_hlN;
@@ -45,6 +49,42 @@ bool boxHit(vec3 ro, vec3 rd, out float t0, out float t1) {
   t1 = min(min(mx.x, mx.y), mx.z);
   return t1 > max(t0, 0.0);
 }
+
+// Floor grid: drawn only where the ray misses the part, so it can never appear
+// over the surface, from any camera side. Line layout matches the old GridHelper
+// (5 mm minor, 50 mm major, 400 mm extent); both families fade past the
+// document's neighbourhood so larger documents get a proportionally wider
+// clear region. Writes true depth so the axis lines sort against it.
+// Coverage is alpha in the fragment itself (three.js uses premultipliedAlpha).
+float floorLines(float d, float px, float spacing) {
+// Drop lines that alias (spacing under ~2 px) instead of letting them moire.
+// spacing/px is small when lines are resolvable, so keep the low end.
+  float res = smoothstep(1.5, 3.0, spacing / max(px, 1e-6));
+  float aa = 0.7 * px + 1e-5;
+  return (1.0 - smoothstep(0.0, aa, d)) * res;
+}
+bool floorFragment(vec3 ro, vec3 rd, out vec4 col, out float depthOut) {
+  if (u_gridOn < 0.5 || u_ghost > 0.5) return false;
+  if (abs(rd.z) < 1e-5) return false;
+  float tG = -ro.z / rd.z;
+  if (tG <= 0.0) return false;
+  vec3 pG = ro + rd * tG;
+  if (abs(pG.x) > 200.0 || abs(pG.y) > 200.0) return false;
+  float fx = fwidth(pG.x);
+  float fy = fwidth(pG.y);
+  vec2 dm = abs(fract(pG.xy / 5.0) - 0.5) * 5.0;
+  vec2 dM = abs(fract(pG.xy / 50.0) - 0.5) * 50.0;
+  float fade = 1.0 - smoothstep(u_gridFade.x, u_gridFade.y, length(pG.xy - u_gridCenter));
+  float aMinor = max(floorLines(dm.x, fx, 5.0), floorLines(dm.y, fy, 5.0));
+  float aMajor = max(floorLines(dM.x, fx, 50.0), floorLines(dM.y, fy, 50.0));
+  float a = max(aMinor * 0.06, aMajor * 0.12) * fade;
+  if (a < 0.004) return false;
+  vec4 clip = u_viewProj * vec4(pG, 1.0);
+  if (clip.w <= 0.0) return false;
+  depthOut = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+  col = vec4(u_gridCol * a, a);
+  return true;
+}
 void main() {
   vec4 a = u_invViewProj * vec4(v_ndc, -1.0, 1.0); a /= a.w;
   vec4 b = u_invViewProj * vec4(v_ndc, 1.0, 1.0); b /= b.w;
@@ -52,7 +92,15 @@ void main() {
   vec3 rd = normalize(b.xyz - a.xyz);
   float tmax = length(b.xyz - a.xyz);
   float t0, t1;
-  if (!boxHit(ro, rd, t0, t1)) discard;
+  vec4 floorCol;
+  float floorDepth;
+  if (!boxHit(ro, rd, t0, t1)) {
+    // Ray never enters the part's bounds: only the floor can be visible here.
+    if (!floorFragment(ro, rd, floorCol, floorDepth)) discard;
+    gl_FragDepth = floorDepth;
+    fragColor = floorCol;
+    return;
+  }
   float t = max(t0, 0.0);
   t1 = min(t1, tmax);
   vec4 f = vec4(1e9);
@@ -82,7 +130,13 @@ void main() {
     t += max(f.x * u_step, eps * 0.5);
     if (t > t1) break;
   }
-  if (!hit) discard;
+  if (!hit) {
+    // Marched inside the bounds but never converged on a surface.
+    if (!floorFragment(ro, rd, floorCol, floorDepth)) discard;
+    gl_FragDepth = floorDepth;
+    fragColor = floorCol;
+    return;
+  }
   vec3 p = ro + rd * t;
   vec3 n = normalize(f.yzw);
   if (dot(n, rd) > 0.0) n = -n;
@@ -145,9 +199,17 @@ export class Viewport {
   readonly overlays = new THREE.Group();
   private quad: THREE.Mesh;
   private ghostQuad: THREE.Mesh;
+  // Floor-only pass for the lens/empty-document states without a field shader
+  // (results lens, empty doc). Same floorFragment code, trivial always-miss field.
+  private floorQuad: THREE.Mesh;
+  private floorMaterial: THREE.RawShaderMaterial | null = null;
   private material: THREE.RawShaderMaterial | null = null;
   private ghostMaterial: THREE.RawShaderMaterial | null = null;
   private grid: THREE.Group;
+  // Shared floor-grid uniform objects: every field material aliases these, so a
+  // colour flip or toggle updates all of them at once.
+  private gridCol = { value: new THREE.Color(0x000000) };
+  private gridOn = { value: 1 };
   private dirty = true;
   private interacting = false;
   private idleTimer = 0;
@@ -185,7 +247,14 @@ export class Viewport {
     this.ghostQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.ghostQuad.frustumCulled = false;
     this.ghostQuad.renderOrder = 10;
-    this.scene.add(this.quad, this.ghostQuad);
+    this.floorQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
+    this.floorQuad.frustumCulled = false;
+    this.floorQuad.renderOrder = -20;
+    this.scene.add(this.quad, this.ghostQuad, this.floorQuad);
+    this.floorMaterial = this.buildMaterial(
+      { source: 'vec4 fs_field(vec3 p) { return vec4(1.0, 0.0, 0.0, 0.0); }', bounds: null, stepScale: 1.0 },
+      false);
+    this.floorQuad.material = this.floorMaterial;
 
     this.grid = this.makeGrid();
     this.scene.add(this.grid);
@@ -213,38 +282,39 @@ export class Viewport {
   }
 
   private makeGrid(): THREE.Group {
+    // The lattice lives in the field shaders (floorFragment); only the small
+    // origin axes remain as scene geometry. They sit 0.05 mm above the z=0 plane
+    // (far below one screen pixel at working zoom) so they cannot interpenetrate
+    // the coplanar part faces or the floor the way same-depth geometry does, and
+    // the triad is shifted 2 mm so axis lines are never coplanar with a part
+    // face: axis lines coincident with a part's silhouette edges tint those
+    // pixels from corner-aligned camera poses (measured 96-172 px).
     const g = new THREE.Group();
-    const minor = new THREE.GridHelper(400, 80, 0x000000, 0x000000);
-    minor.rotation.x = Math.PI / 2;
-    (minor.material as THREE.Material).transparent = true;
-    (minor.material as THREE.Material).opacity = 0.06;
-    const major = new THREE.GridHelper(400, 8, 0x000000, 0x000000);
-    major.rotation.x = Math.PI / 2;
-    (major.material as THREE.Material).transparent = true;
-    (major.material as THREE.Material).opacity = 0.12;
     const axes = new THREE.Group();
+    axes.position.set(-2, -2, 0);
     const axis = (dir: Vec3, color: number) => {
-      const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(...dir).multiplyScalar(20)]);
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0.05),
+        new THREE.Vector3(...dir).multiplyScalar(20).setZ(0.05 + dir[2] * 20),
+      ]);
       const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 }));
       axes.add(line);
     };
     axis([1, 0, 0], 0xd0453b);
     axis([0, 1, 0], 0x3f9b4a);
     axis([0, 0, 1], 0x3b6fd0);
-    g.add(minor, major, axes);
+    g.add(axes);
     return g;
   }
 
   setGridColor(dark: boolean) {
-    const c = dark ? 0xffffff : 0x000000;
-    this.grid.traverse((o) => {
-      if (o instanceof THREE.GridHelper) {
-        const m = o.material as THREE.LineBasicMaterial;
-        m.color.setHex(c);
-        m.vertexColors = false;
-        m.needsUpdate = true;
-      }
-    });
+    this.gridCol.value.setHex(dark ? 0xffffff : 0x000000);
+    this.invalidate();
+  }
+
+  /** Show or hide the floor grid (lattice + axes). */
+  toggleGrid(on: boolean) {
+    this.gridOn.value = on ? 1 : 0;
     this.invalidate();
   }
 
@@ -289,6 +359,10 @@ export class Viewport {
       u_camRight: { value: new THREE.Vector3() },
       u_camUp: { value: new THREE.Vector3() },
       u_ghost: { value: ghost ? 1 : 0 },
+      u_gridCol: this.gridCol,
+      u_gridOn: this.gridOn,
+      u_gridCenter: { value: new THREE.Vector2() },
+      u_gridFade: { value: new THREE.Vector2(90, 153) },
       u_hlKey: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector2()) },
       u_hlCol: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector3()) },
       u_hlN: { value: 0 },
@@ -406,6 +480,14 @@ export class Viewport {
     mat.uniforms.u_invViewProj.value.copy(vp).invert();
     mat.uniforms.u_lo.value.set(bounds[0][0] - 0.05, bounds[0][1] - 0.05, bounds[0][2] - 0.05);
     mat.uniforms.u_hi.value.set(bounds[1][0] + 0.05, bounds[1][1] + 0.05, bounds[1][2] + 0.05);
+    const uLo = mat.uniforms.u_lo.value as THREE.Vector3;
+    const uHi = mat.uniforms.u_hi.value as THREE.Vector3;
+    (mat.uniforms.u_gridCenter.value as THREE.Vector2).set(
+      0.5 * (uLo.x + uHi.x), 0.5 * (uLo.y + uHi.y));
+    // Fade radius from the document's bounds, floor at 90/153 (the default look
+    // for a document-sized bracket) so small documents still get a full floor.
+    const diag = Math.max(90, Math.hypot(uHi.x - uLo.x, uHi.y - uLo.y, uHi.z - uLo.z));
+    (mat.uniforms.u_gridFade.value as THREE.Vector2).set(diag, diag * 1.7);
     const h = this.renderer.domElement.height;
     mat.uniforms.u_pixel.value = (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / Math.max(1, h);
     const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
@@ -426,6 +508,19 @@ export class Viewport {
     if (this.material && this.bounds) this.updateUniforms(this.material, this.bounds);
     if (this.ghostMaterial) this.updateUniforms(this.ghostMaterial, this.ghostMaterial.userData.bounds);
     this.quad.visible = this.showField;
+    // The lattice draws in the field shader whenever a field is visible; the
+    // results lens (showField false) and empty documents use the floor-only pass.
+    const floorVisible = !(this.showField && this.material) && this.gridOn.value > 0.5;
+    this.floorQuad.visible = floorVisible;
+    if (floorVisible && this.floorMaterial) {
+      this.updateUniforms(this.floorMaterial, [[-0.06, -0.06, -0.06], [0.06, 0.06, 0.06]]);
+      // fade around the document centre whenever one is loaded, else the origin
+      const centre = this.material
+        ? (this.material.uniforms.u_gridCenter.value as THREE.Vector2)
+        : new THREE.Vector2(0, 0);
+      (this.floorMaterial.uniforms.u_gridCenter.value as THREE.Vector2).copy(centre);
+    }
+    this.grid.visible = this.gridOn.value > 0.5;
     this.renderer.render(this.scene, this.camera);
   }
 
