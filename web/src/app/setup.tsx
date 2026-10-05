@@ -130,14 +130,18 @@ interface Cluster {
   normal: THREE.Vector3;
 }
 
-/** Surface facets of one region, bucketed on a 2 mm grid and combined face-normal. */
+/** Surface facets of one region, bucketed on a 2 mm grid and combined face-normal. Reads the
+ * analysis's per-region facet sets, so a region overlapped by a later region (which the
+ * shared surfaceRegion map reassigns) still yields its own facets. */
 function clusters(lvl: LevelResult, ri: number): Cluster[] {
+  const sets = lvl.regionFacetSets;
+  const offs = lvl.regionFacetOffsets;
+  if (!sets || !offs || ri < 0 || ri >= offs.length - 1) return [];
   const sums = new Map<string, { x: number; y: number; z: number; nx: number; ny: number; nz: number; n: number }>();
   const f = lvl.surfaceFacets;
-  const reg = lvl.surfaceRegion;
   const nodes = lvl.nodes;
-  for (let i = 0; i < reg.length; i++) {
-    if (reg[i] !== ri) continue;
+  for (let k = offs[ri]; k < offs[ri + 1]; k++) {
+    const i = sets[k];
     const a = f[6 * i], b = f[6 * i + 1], c = f[6 * i + 2];
     A.set(nodes[3 * a], nodes[3 * a + 1], nodes[3 * a + 2]);
     B.set(nodes[3 * b], nodes[3 * b + 1], nodes[3 * b + 2]);
@@ -188,6 +192,22 @@ function disposeDeep(o: THREE.Object3D) {
     if (Array.isArray(m.material)) m.material.forEach((x) => x.dispose());
     else m.material?.dispose();
   });
+}
+
+/** How many surface facets the latest analysis matched for region `ri` (null while no
+ * analysis has run or the region is not in the document order the analysis used). */
+function matchedFaceCount(ri: number): number | null {
+  const lvl = analysis.latest;
+  if (!lvl) return null;
+  if (ri < 0 || ri >= lvl.regionFacetOffsets.length - 1) return null;
+  return lvl.regionFacetOffsets[ri + 1] - lvl.regionFacetOffsets[ri];
+}
+
+/** Tree/inspector face label: the matched facet count once the analysis has run (that is
+ * what supports and loads act on), otherwise the count of clicked selectors. */
+function faceCountLabel(ri: number, selectors: number): string {
+  const n = matchedFaceCount(ri) ?? selectors;
+  return `${n} ${n === 1 ? 'face' : 'faces'}`;
 }
 
 const glyphs = new THREE.Group();
@@ -406,7 +426,7 @@ function SetupTree() {
           kind="region"
           id={r.id}
           swatch={REGION_COLORS_CSS[ri % REGION_COLORS_CSS.length]}
-          meta={`${r.selectors.length} ${r.selectors.length === 1 ? 'face' : 'faces'}`}
+          meta={faceCountLabel(ri, r.selectors.length)}
         />
       ))}
       <SectionHead label="Supports" add={() => addAnalysis('support')} title="Add support on the selected region" testId="add-support" />
@@ -569,7 +589,7 @@ function SupportInspector({ id }: { id: string }) {
       </div>
       <div class="hint">
         {region
-          ? `${region.selectors.length} ${region.selectors.length === 1 ? 'face' : 'faces'} constrained where they touch.`
+          ? `${faceCountLabel(store.doc.regions.findIndex((r) => r.id === region.id), region.selectors.length)} constrained where they touch.`
           : 'Region missing.'}
       </div>
     </div>

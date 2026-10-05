@@ -173,6 +173,12 @@ export interface AnalysisHandle {
   surfaceFacets(): Uint32Array;
   surfaceOwner(): Uint32Array;
   surfaceRegion(): Uint32Array;
+  /** Concatenated per-region facet sets, blocks in doc.regions order; block `ri` spans
+   * `regionFacetOffsets[ri] .. [ri + 1]`. Unlike `surfaceRegion` a facet claimed by several
+   * regions appears in every claiming region's block. */
+  regionFacetSets(): Uint32Array;
+  /** Cumulative sizes of the `regionFacetSets` blocks, length = number of regions + 1. */
+  regionFacetOffsets(): Uint32Array;
   /** case index must be < `meta.cases.length` */
   u(ci: number): Float64Array;
   vmNodal(ci: number): Float64Array;
@@ -292,6 +298,10 @@ export interface LevelResult {
   surfaceOwner: Uint32Array;
   /** Region index per surface facet (u32::MAX = none); indexes doc.regions. */
   surfaceRegion: Uint32Array;
+  /** Concatenated per-region facet sets (blocks in doc.regions order) plus their cumulative
+   * offsets, length regions+1. Overlapping regions each keep the facets they claim. */
+  regionFacetSets: Uint32Array;
+  regionFacetOffsets: Uint32Array;
   /** Nodal displacements per case, 3 per node (mm). */
   u: Float64Array[];
   /** Element-centroid von Mises per case (MPa). */

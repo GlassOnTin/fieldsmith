@@ -79,6 +79,11 @@ pub struct Analysis {
     /// Best effort: a region whose field evaluation fails is left unmatched (`validate()`
     /// reports those); where several regions claim a facet the last one in document order wins.
     pub surface_region: Vec<u32>,
+    /// Facet ids matched by each region, blocks in `doc.regions` order. Unlike
+    /// `surface_region`, every claimant keeps its set: a facet claimed by several regions
+    /// appears in each claiming region's block, so per-region consumers (view glyphs) find
+    /// the facets their constraints actually act on.
+    pub region_facet_sets: Vec<Vec<u32>>,
     pub provenance: Provenance,
 }
 
@@ -262,8 +267,10 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     let surface: Vec<[u32; 6]> = facets.iter().map(|f| f.nodes).collect();
     let surface_owner: Vec<u32> = boundary.iter().map(|(_, t)| *t).collect();
     let mut surface_region = vec![u32::MAX; surface.len()];
+    let mut region_facet_sets: Vec<Vec<u32>> = vec![Vec::new(); doc.regions.len()];
     for (ri, r) in doc.regions.iter().enumerate() {
         if let Ok(fs) = region_facets(doc, &r.id, &mesh, &facets, h) {
+            region_facet_sets[ri] = fs.iter().map(|&i| i as u32).collect();
             for fi in fs {
                 surface_region[fi] = ri as u32;
             }
@@ -309,6 +316,7 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         surface,
         surface_owner,
         surface_region,
+        region_facet_sets,
         provenance,
     })
 }
@@ -316,4 +324,55 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
 /// The compiled body field (for callers that need to evaluate it alongside an analysis).
 pub fn body(doc: &Document) -> Expr {
     expr::compile_body(doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fieldsmith_doc::fsm;
+
+    fn parse(src: &str) -> Document {
+        fsm::parse(&format!("fieldsmith 1\n{src}")).expect("valid test document")
+    }
+
+    fn now() -> f64 {
+        use std::time::Instant;
+        thread_local!(static T0: Instant = Instant::now());
+        T0.with(|t| t.elapsed().as_secs_f64() * 1000.0)
+    }
+
+    /// Two regions claiming the same face: the shared map keeps the last claim, while each
+    /// region's own facet set keeps the facets it actually matched.
+    const OVERLAP: &str = "\
+name \"Region overlap\"
+custommaterial steel200 e=200000 nu=0.3 yield=250 density=7.85
+material steel200
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region one = bar.px
+region two = bar.px
+support clamp one fixed=xyz
+load pull two force=(100, 0, 0)
+";
+
+    #[test]
+    fn region_overlap_keeps_per_region_facet_sets() {
+        let d = parse(OVERLAP);
+        let a = analyse(&d, Resolution::Size(1.5), now).expect("analyse");
+        let one = &a.region_facet_sets[0];
+        let two = &a.region_facet_sets[1];
+        assert!(!one.is_empty(), "region 'one' matched no facets");
+        assert_eq!(one, two, "both regions claim the same face");
+
+        // The shared map's last claim wins, and every claimed surface facet is exactly one of
+        // the two sets.
+        for (fi, &ri) in a.surface_region.iter().enumerate() {
+            assert!(ri == 0 || ri == 1 || ri == u32::MAX, "facet {fi} mapped to region {ri}");
+            if ri != u32::MAX {
+                assert!(
+                    a.region_facet_sets[ri as usize].contains(&(fi as u32)),
+                    "facet {fi} maps to region {ri} but its set lacks it"
+                );
+            }
+        }
+    }
 }

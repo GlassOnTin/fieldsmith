@@ -275,6 +275,26 @@ impl AnalysisOut {
         Uint32Array::from(&self.a.surface_region[..])
     }
 
+    /// Concatenated per-region facet sets, blocks in document order; block `ri` spans
+    /// `regionFacetOffsets[ri] .. regionFacetOffsets[ri + 1]`. Unlike `surfaceRegion` a facet
+    /// claimed by several regions appears in every claiming region's block.
+    #[wasm_bindgen(js_name = regionFacetSets)]
+    pub fn region_facet_sets(&self) -> Uint32Array {
+        let flat: Vec<u32> = self.a.region_facet_sets.iter().flatten().copied().collect();
+        Uint32Array::from(&flat[..])
+    }
+
+    /// Cumulative sizes of the `regionFacetSets` blocks, length = number of regions + 1.
+    #[wasm_bindgen(js_name = regionFacetOffsets)]
+    pub fn region_facet_offsets(&self) -> Uint32Array {
+        let mut off = Vec::with_capacity(self.a.region_facet_sets.len() + 1);
+        off.push(0);
+        for set in &self.a.region_facet_sets {
+            off.push(off[off.len() - 1] + set.len() as u32);
+        }
+        Uint32Array::from(&off[..])
+    }
+
     /// Nodal displacement of one case, 3 per node (mm).
     pub fn u(&self, case: usize) -> Float64Array {
         Float64Array::from(&self.a.cases[case].u[..])
@@ -425,6 +445,25 @@ impl GradedOut {
     #[wasm_bindgen(js_name = surfaceRegion)]
     pub fn surface_region(&self) -> Uint32Array {
         Uint32Array::from(&self.base.surface_region[..])
+    }
+
+    /// Concatenated per-region facet sets of the solid base mesh, blocks in document order;
+    /// see `AnalysisOut::region_facet_sets`.
+    #[wasm_bindgen(js_name = regionFacetSets)]
+    pub fn region_facet_sets(&self) -> Uint32Array {
+        let flat: Vec<u32> = self.base.region_facet_sets.iter().flatten().copied().collect();
+        Uint32Array::from(&flat[..])
+    }
+
+    /// Cumulative sizes of the `regionFacetSets` blocks, length = number of regions + 1.
+    #[wasm_bindgen(js_name = regionFacetOffsets)]
+    pub fn region_facet_offsets(&self) -> Uint32Array {
+        let mut off = Vec::with_capacity(self.base.region_facet_sets.len() + 1);
+        off.push(0);
+        for set in &self.base.region_facet_sets {
+            off.push(off[off.len() - 1] + set.len() as u32);
+        }
+        Uint32Array::from(&off[..])
     }
 
     /// Graded nodal displacement of one case, 3 per node (mm).

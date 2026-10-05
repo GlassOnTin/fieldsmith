@@ -40,6 +40,8 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array },
     surfaceFacets: out.surfaceFacets().slice(),
     surfaceOwner: out.surfaceOwner().slice(),
     surfaceRegion: out.surfaceRegion().slice(),
+    regionFacetSets: out.regionFacetSets().slice(),
+    regionFacetOffsets: out.regionFacetOffsets().slice(),
     u,
     vmElem,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
@@ -51,7 +53,7 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array },
 
 /** The message carries the buffers by transfer, so nothing is copied across the boundary. */
 function transfersOf(r: LevelResult): ArrayBuffer[] {
-  return [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.vmElemEnvelope, ...r.u, ...r.vmElem]
+  return [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem]
     .map((a) => a.buffer as ArrayBuffer);
 }
 
