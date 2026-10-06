@@ -97,20 +97,25 @@ export async function makeTest(browser, url, { screens, docsDir }) {
       meta.delta_pct.toFixed(3)
     } % ± ${meta.field_err.toFixed(1)}`,
   );
-  // The export path is adaptive dual contouring by default. Its defect classes on this
-  // fill are measured and classified (docs/verification/V8.md, adaptive section): tile
-  // overlaps inside multi-sheet wall cells, slits along wall-collapse lines and fan-corner
-  // fusions. Orientation stays a hard zero; the other three are bounded above the measured
-  // counts so a sharp regression trips while a classified structural count does not.
-  // Measured at h 0.25: open 997, non-manifold 269, degenerate 343, self 34414.
+  // The export path is adaptive dual contouring. Since the per-sheet vertex separation and
+  // the head-of-weld chord registry, the fan classes (open, degenerate) measure 0 at h 0.25
+  // and the residuals are classified structural counts (docs/verification/V8.md, adaptive
+  // section): short non-manifold spokes at lattice-aligned sheet-meeting vertices, and
+  // overlapping wall tiles between neighbouring sheets. Orientation stays a hard zero; the
+  // rest are bounded above the next-finer CLI spacing's scale (the classes still carry
+  // 8 / 229 / 4 / 7320 at h 0.1), so a pre-registry-scale regression trips. Measured in the
+  // browser at h 0.25, matching the native census byte for byte: open 0, non-manifold 10,
+  // degenerate 0, self 4959.
   check(
     'defect classes within the classified adaptive bounds (V8)',
-    meta.open_edges <= 1500 &&
+    meta.open_edges <= 100 &&
+      meta.non_manifold_edges <= 200 &&
       meta.orientation_defects === 0 &&
-      meta.degenerate_triangles <= 500 &&
-      meta.self_intersections <= 50000,
+      meta.degenerate_triangles <= 50 &&
+      meta.self_intersections <= 20000,
     JSON.stringify({
       open: meta.open_edges,
+      nm: meta.non_manifold_edges,
       orient: meta.orientation_defects,
       degen: meta.degenerate_triangles,
       selfx: meta.self_intersections,
@@ -228,7 +233,7 @@ export async function makeTest(browser, url, { screens, docsDir }) {
     '',
     '## Limits',
     '',
-    '- The export is adaptive dual contouring; its classified defect classes on the graded fill are bounded (orientation gated to exactly 0, the tile-overlap and slit classes to above their measured counts) rather than zero — classification in `crates/fieldsmith-verify/tests/v8_export.rs`.',
+    '- The export is adaptive dual contouring: orientation is gated to exactly 0; the residual classified classes (short fan spokes at lattice-aligned sheet-meeting vertices, overlapping wall-tile pairs between neighbouring sheets) are bounded above the h 0.1 CLI scale since at h 0.25 they measure open 0 / non-manifold 10 / degenerate 0 / self 4959 in this very run. Classification and the per-sheet + chord-registry stitch fix are in `crates/fieldsmith-verify/tests/v8_export.rs`.',
     '- The GPU contours themselves (LineSegments pairs) are built mechanically from the reported segments; the screenshot is the visual evidence, the data assertions are the automated ones.',
     '',
     '---',
