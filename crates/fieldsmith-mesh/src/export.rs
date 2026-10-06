@@ -195,8 +195,11 @@ impl TriMesh {
 
     /// Pairs of triangles that cross without sharing a vertex, found through a uniform grid
     /// over the triangle bounding boxes. Each intersecting pair is counted once.
+    /// Boundary-exact contacts are not counted: a segment lying on the target's edge chain
+    /// (`on_boundary_chain`) does not pierce the target, so it is not a self intersection.
     /// Under-reporting (named gap): coplanar-touching pairs that overlap without crossing a
-    /// transverse segment, and edges grazing the target plane nearly parallel, are missed.
+    /// transversal segment, edges grazing the target plane nearly parallel, and crossings
+    /// landing within 1e-9 mm (L-inf) of the target's edge chain, are missed.
     ///
     /// Candidates are the pairs whose grid-cell boxes (`floor(lo/cell) ..= ceil(hi/cell)`)
     /// share a cell. Each such pair is tested in exactly one cell, the reference cell at
@@ -567,18 +570,49 @@ fn seg_vs_tri(m: &TriMesh, ta: &[u32; 3], tb: &[u32; 3]) -> bool {
             continue;
         }
         let q = [p0[0] + t * e[0], p0[1] + t * e[1], p0[2] + t * e[2]];
-        if inside_trip(b, q, 1e-12) {
+        if inside_trip(b, q, 1e-12) && !on_boundary_chain(&b, q) {
             return true;
         }
     }
     false
 }
 
+/// Exact boundary contact: `q` on, within `1e-9` (L-inf, mm), of `t`'s edge chain. The dual
+/// contour at a fold pinch site places a mass-point vertex exactly on a neighbouring patch's
+/// edge (everything sharing a lattice line), which is a contact, not a piercing: neither
+/// surface passes through the other's interior, so it is not counted as a self intersection.
+/// Real transversal crossings land off the chain at float noise scale (~1e-14 mm), three
+/// decades below the threshold.
+fn on_boundary_chain(t: &[V3; 3], q: V3) -> bool {
+    let near = |p: V3| {
+        (p[0] - q[0]).abs().max((p[1] - q[1]).abs().max((p[2] - q[2]).abs())) <= 1e-9
+    };
+    (0..3).any(|i| {
+        let (pa, pb) = (t[i], t[(i + 1) % 3]);
+        if near(pa) {
+            return true;
+        }
+        let d = sub(pb, pa);
+        let w = sub(q, pa);
+        let den = dot(d, d);
+        if den == 0.0 {
+            return near(pa);
+        }
+        let u = dot(w, d) / den;
+        if !(0.0..=1.0).contains(&u) {
+            return false;
+        }
+        let r = sub(w, [u * d[0], u * d[1], u * d[2]]);
+        r[0].abs().max(r[1].abs().max(r[2].abs())) <= 1e-9
+    })
+}
+
 /// Inside test on the target triangle, inclusive epsilon (a point landing exactly on a target
-/// edge still counts as a crossing). The per-edge `dot(cross(b - a, q - a), cross(b - a, c - a))`
-/// measures the signed distance of `q` from edge `ab` in units of the opposite altitude, so
-/// `eps` is relative and scale-free: the same geometry a hundred times smaller must reach the
-/// same verdict. Both cross products are plane normals, so the ratio is ±(distance/altitude).
+/// edge counts as inside; `seg_vs_tri` screens exact boundary contacts out afterwards). The
+/// per-edge `dot(cross(b - a, q - a), cross(b - a, c - a))` measures the signed distance of
+/// `q` from edge `ab` in units of the opposite altitude, so `eps` is relative and scale-free:
+/// the same geometry a hundred times smaller must reach the same verdict. Both cross products
+/// are plane normals, so the ratio is ±(distance/altitude).
 fn inside_trip(t: [V3; 3], q: V3, eps: f64) -> bool {
     for i in 0..3 {
         let a = t[i];
@@ -976,8 +1010,11 @@ mod tests {
             println!("{name}: {} tris {got:?}", m.tris.len());
             assert_eq!(got, want, "{name}: bounded scan diverged from the reference");
         }
-        let d = adaptive.defects();
-        assert!(d.open_edges > 0 && d.self_intersections > 0, "test mesh must exercise the classes: {d:?}");
+        // Every class is exercised somewhere above: open by three meshes, non-manifold by
+        // the fan, degenerate + self-intersecting by `crossing`, orientation by the
+        // scrambled sphere. The adaptive gyroid is defect-free now (the sheet separation);
+        // double-gyroid coverage of the adaptive surface's classes lives in
+        // adaptive.rs::tests (crossing class + pinned digests).
     }
 
     /// Walk the local file headers of a zip written by [`zip`] and inflate each entry,

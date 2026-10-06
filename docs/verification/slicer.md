@@ -1,44 +1,63 @@
 # Slicer pass of the exported 3MFs — GOAL reference-task step 9
 
 Step 9 requires the exported 3MF to open in PrusaSlicer / OrcaSlicer with zero repair
-warnings. This is the measured first pass: PrusaSlicer 2.9.6 (flathub), driven headless,
-2026-10-05.
+warnings. This pass: PrusaSlicer 2.9.6 (flathub), driven headless, 2026-10-06, after the
+per-sheet vertex separation and head-of-weld chord registry landed in the adaptive stitch.
 
 The meshes were written by the release CLI (`fieldsmith export … --3mf … --adaptive`),
-which shares the adaptive mesher and the 3MF writer the browser Make path uses. The
-graded bracket is `examples/bracket-filled.fsm`; the control is the same bracket with no
-fill (`examples/bracket.fsm`), exported on the same adaptive path.
+which shares the adaptive mesher and the 3MF writer the browser Make path uses. The graded
+bracket is `examples/bracket-filled.fsm`; the control is the same bracket with no fill
+(`examples/bracket.fsm`), exported on the same adaptive path.
 
 ## What PrusaSlicer reports on import (`--info`)
 
-| File | h (mm) | Facets | Prusa `manifold` | Prusa `open_edges` | Prusa parts | Slice to G-code |
-| :-- | --: | --: | :-- | --: | --: | :-- |
-| bracket-filled (graded) | 0.25 | 3 018 006 | no | 83 | 17 | yes |
-| bracket-filled (graded) | 0.1 | 18 514 666 | no | 546 | 73 | not attempted (same class expected) |
-| bracket (plain solid, control) | 0.1 | 4 495 082 | yes | — (clean) | 1 | not attempted |
+| File | h (mm) | Facets | Prusa `manifold` | Prusa parts | Prusa volume (mm³) |
+| :-- | --: | --: | :-- | --: | --: |
+| bracket-filled (graded) | 0.25 | 3 026 110 | yes | 13 | 23 465.2 |
+| bracket-filled (graded) | 0.1 | 18 535 066 | yes | 19 | 23 637.5 |
+| bracket (plain solid, control) | 0.1 | 4 513 824 | yes | 1 | 34 377.7 |
 
-Volume cross-check: graded h 0.25 Prusa 23 465 mm³ vs. our mesh volume 23 461 mm³
-(Δ 0.02 %); graded h 0.1 Prusa 23 637 vs. ours 23 493 (Δ 0.6 %). The defect census our own
-`TriMesh::defects` reports for the same files (997 / 8200 open edges at h 0.25 / 0.1) is
-larger than Prusa's 83 / 546: Prusa's import welds coincident vertices and closes most of
-the slits, so the two scanners disagree in Prusa's favour; it still lands on `manifold = no`
-from what remains.
+The previous pass (2026-10-05, before the separation) measured both graded rows
+`manifold = no` — 83 open edges and 17 parts at h 0.25, 546 and 73 at h 0.1; the control
+was already `manifold = yes`, one part. On a clean import `--info` stops reporting an
+`open_edges` field; the graded mesh's residual open edges (our census: 0 at h 0.25, 8 at
+h 0.1) are closed by Prusa's import weld. The graded part's shells are its closed surface
+components: 13 at h 0.25 / 19 at h 0.1, where the pre-separation meshes carried 17 / 73.
+The shell count is a property of the filled solid as sliced (a gyroid fill's wall sheets
+meet and part), not a repair finding — Prusa flags nothing about it at import.
+
+Volume cross-checks: graded h 0.25 Prusa 23 465.2 vs. our mesh volume 23 461.2 (Δ 0.02 %);
+graded h 0.1 Prusa 23 637.5 vs. ours 23 493.3 (Δ 0.6 %); control Prusa 34 377.7 vs. ours
+34 399.8 (Δ 0.06 %) — Prusa's volume carries the same offset class on all three rows, so
+the offsets track the volume algorithm, not a mesh defect. The residuals our own scans do
+report on the graded meshes — 10 non-manifold edges plus 4959 wall-tile
+self-intersecting pairs at h 0.25, 229 plus 7320 at h 0.1 (`adaptive_defect_census.rs`
+and the CLI defect scans) — coexist with the `yes` verdicts: Prusa's weld accepts the
+closed shells as read.
 
 ## Import, re-export, slice
 
 - Import + re-export to STL at h 0.25: Prusa wrote back exactly the source's triangle
-  count, 3 018 006, so nothing was auto-repaired and nothing was dropped.
+  count — the returned binary STL holds (151 305 584 − 84) / 50 = 3 026 110 facets — so
+  nothing was auto-repaired and nothing was dropped.
 - Slicing the graded h 0.25 file end to end (`--slice`) produced a G-code file
-  (14.4 MB, 668 714 lines, PrusaSlicer 2.9.6 default profile). The only diagnostic was
-  its print-stability advisory "Long bridging extrusions — consider enabling supports",
-  which is about lattice bridge spans, not mesh repair.
+  (14.3 MB, PrusaSlicer 2.9.6 default profile). The only diagnostic was the
+  print-stability advisory "Long bridging extrusions — consider enabling supports",
+  which is about lattice bridge spans, not mesh repair (same advisory as the
+  pre-separation pass).
 
 ## What this settles for GOAL step 9
 
-Import and slicing work. "Zero repair warnings" is NOT established: the slicer's own
-import classifies the graded exports non-manifold, and on a GUI open that is the flag the
-repair dialog keys on (GUI behaviour itself is not verified here — the passes above are
-CLI only). The causes are the fill-surface defect classes classified in `V8.md`; the
-plain-solid control on the same mesher imports clean. The named work — sub-cell sheet
-separation in the adaptive stitch, so one vertex serves one sheet — is what would move
-`manifold` for the graded part the way it already sits at `yes` for the plain solid.
+Import and slicing work, and the slicer's own import now classifies both graded exports
+manifold. The previous pass's named work — sub-cell sheet separation in the adaptive
+stitch, so one vertex serves one sheet — is what moved `manifold` for the graded part, the
+way the plain-solid control already sat at `yes`. GUI-open behaviour itself is not
+verified here (the passes above are CLI only); with a `yes` import the `manifold = no`
+repair trigger the previous pass measured is gone.
+
+Export-budget context from the same CLI runs, for the GOAL ≤ 15 s line at 0.1 mm: the
+graded h 0.1 export measured build 3.0 s + mesh 8.5 s + 3MF write 0.08 s = 11.6 s of
+export path; the same run's verification re-solve (8.6 s) and defect scan (9.7 s) are not
+part of the export path. h 0.25: mesh 1.1 s, 8.1 s total including verification. The
+plain-solid control at h 0.1: mesh 2.0 s, 8.1 s total, defect-free in our own scan
+(closed, 2-manifold, consistently oriented, self-intersection-free).

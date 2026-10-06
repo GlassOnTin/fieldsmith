@@ -8,12 +8,15 @@
 //! The browser export's default is adaptive dual contouring (finer only near the surface),
 //! measured in its own section here at the same spacing; it is the only route to the GOAL
 //! budget "graded bracket at 0.1 mm feature resolution in ≤ 15 s", which the uniform
-//! mesher misses at 411 s native (its 0.1 mm run is `adaptive_probe.rs`, ignored and
-//! heavy). Both meshers leave the classified non-manifold zipping class on the fill
-//! surface (docs/verification/V8.md, section "Non-manifold edges"); the plain solid is
-//! defect-free on the uniform path at every probed spacing (`v8_probe3.rs`) and carries
-//! only 51 residual self-intersecting pairs on the adaptive path
-//! (`adaptive_plain_probe.rs`).
+//! mesher misses at 411 s native. The uniform mesher keeps the fill surface's classified
+//! non-manifold zipping class (docs/verification/V8.md, section "Non-manifold edges"); the
+//! adaptive stitch separates surface sheets per leaf — one vertex per sheet, and a
+//! head-of-weld chord registry that draws each weld chord once — and PrusaSlicer 2.9.6
+//! imports its graded 3MF as `manifold = yes` at both probed spacings (measured in
+//! `slicer.md`). The plain solid is defect-free on the uniform path at every probed
+//! spacing (`v8_probe3.rs`); on the adaptive path the CLI scan reports the plain solid
+//! defect-free at h 0.1 after the separation (`adaptive_plain_probe.rs` measured 51
+//! crease-cell pairs before it).
 
 use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
@@ -202,10 +205,12 @@ fn v8_export_the_bracket() {
              offset-surface TPMS at printable wall thickness with cell-width zipping. The control (`v8_probe3.rs`) \
              meshes the plain solid bracket with the same mesher and reports ZERO defects of every class — \
              non-manifold included — at h 0.25/0.15/0.10 (4.7/21.0/70.4 M verts; volume +0.006 %/+0.003 %/+0.006 % \
-             off the field auto-integral). The defects are therefore owned by the fill surface, not the mesher. \
-             Named work: sub-cell sheet separation in the mesher, or a fill-side wall-crossing guard. Slicers take \
-             the solid as the union of the closed shell, which these crossings leave intact.",
-            d.non_manifold_edges, 43usize, 3403usize
+             off the field auto-integral). The defects are therefore owned by the fill surface, not the mesher. The \
+             classification is the uniform path's; the adaptive export path below implements that named work — \
+             per-sheet vertices plus a head-of-weld chord registry — and measures {} residual non-manifold edges on \
+             the same model at h = {MESH_H}. Slicers take the solid as the union of the closed shell, which these \
+             crossings leave intact.",
+            d.non_manifold_edges, 43usize, 3403usize, ad.non_manifold_edges
         ),
     );
     r.section(
@@ -213,22 +218,33 @@ fn v8_export_the_bracket() {
         format!(
             "{} verts, {} triangles at h = {MESH_H}, meshed in {:.2} s (uniform: {:.1} s; volume {:.1} mm³, \
              {:.3} % off the field reference). It refines to h only within the gradient certificate near the \
-             surface, which is what makes the GOAL 0.1 mm export budget reachable: the probe (`adaptive_probe.rs`) \
-             measured the budget line at 0.1 mm — mesh 7.0 s + 3MF 0.5 s = 7.5 s against ≤ 15 s, volume +0.038 %, \
-             versus the uniform mesher's 411 s native at the same spacing. Its defect classes on the graded fill \
-             are measured (`adaptive_defect_census.rs`): {} open edges, {} non-manifold edges, {} degenerate \
-             triangles, {} self-intersecting pairs at h = {MESH_H}, and 8200 / 1213 / 2810 / 383834 at h = 0.1. The \
-             uniform mesher on the same field reports none of those three classes, so they are adaptive-owned: \
-             17598 of 3075633 leaves carry two or more wall sheets in one cell (QEF residual > 0.3 cell) — the same \
-             two-sheets-in-a-cell structure V8 classifies for the uniform mesher above — and the adaptive fan, one \
-             vertex per leaf, overlaps the sheets' tiles instead of abutting them; the open edges are slits along \
-             the wall-collapse lines and cross-level T-junctions of the flat wall patches, the degenerate \
-             triangles are fan corners fused by the exact weld at lattice corners lying on the wall planes. \
-             Refinement cannot close them (wall planes on the fill lattice are self-similar at every level, \
-             17598 multi-sheet cells at h 0.25 → 233113 at h 0.1). Named work: sub-cell sheet separation in the \
-             adaptive stitch — per-sheet vertices — which is the same named work the uniform path's zipping class \
-             already carries. The plain solid control on this path reports zero edges and geometry classes, with \
-             51 residual self-intersecting pairs from crease cells (`adaptive_plain_probe.rs`).",
+             surface, which is what makes the GOAL 0.1 mm export budget reachable: the release CLI measured \
+             the 0.1 mm export — 9265984 verts, 18535066 triangles, mesh 8.5 s + 3MF write 0.08 s of export \
+             path (the same run's verification re-solve and defect scan add ~18 s) — against ≤ 15 s, versus \
+             the uniform mesher's 411 s native at the same spacing (probe 1). Its defect classes on the \
+             graded fill are measured (`adaptive_defect_census.rs`): {} open edges, {} non-manifold edges, \
+             {} degenerate triangles, {} self-intersecting pairs at h = {MESH_H}; the pre-separation census \
+             at the same spacing measured 997 / 269 / 343 / 34414, and at h = 0.1 the CLI now measures \
+             8 / 229 / 4 / 7320 (pre-separation 8200 / 1213 / 2810 / 383834). The two former fan classes \
+             are closed by the stitches' one-vertex-per-sheet separation and chord registry: every \
+             multi-sheet leaf carries one vertex per surface sheet, so a leaf's fan pairs sheet-to-sheet \
+             instead of straddling a neighbouring sheet's tiles, and the weld registry — fan vertices \
+             sorted by (position hash, index), one head kept per distinct bitwise position, chords keyed \
+             by head pair — draws each chord between welded vertices exactly once, demoting any second \
+             quad on the same chord to triangulate along its own crossings chord. The structure the fix \
+             addresses is unchanged: 17598 of 3075633 leaves at h 0.25 carry two or more wall sheets in \
+             one cell (QEF residual > 0.3 cell), 233113 at h 0.1. What remains at h = {MESH_H}: the {} \
+             non-manifold edges are short spokes (10–220 µm) at lattice-aligned sheet-meeting vertices — \
+             the same welded lattice-corner class the double-gyroid fixture counts at 6 — with the fans' \
+             third corners ≤ 80 µm off the spoke axis; the {} self-intersecting pairs are interpenetrating \
+             wall tiles between neighbouring sheets' contours (normal-angle bins perp/mid/coplanar \
+             [166, 4778, 15]; the census's printed sample pairs sit 0.3–3.5 mm from the nearest residual \
+             edge endpoint). The uniform mesher on the same field reports 2277 non-manifold edges and none \
+             of the other classes. Refinement narrows these counts but does not erase them (the wall \
+             planes are self-similar at every level). The plain solid control on this path reports zero \
+             edges and geometry classes — the h 0.1 CLI scan measures it defect-free including \
+             self-intersections; `adaptive_plain_probe.rs` measured 51 crease-cell pairs before the \
+             separation.",
             amesh.verts.len(),
             amesh.tris.len(),
             amesh_ms / 1000.0,
@@ -238,6 +254,25 @@ fn v8_export_the_bracket() {
             ad.open_edges,
             ad.non_manifold_edges,
             ad.degenerate_triangles,
+            ad.self_intersections,
+            ad.non_manifold_edges,
+            ad.self_intersections,
+        ),
+    );
+    r.section(
+        "Slicer import (PrusaSlicer 2.9.6)",
+        format!(
+            "PrusaSlicer 2.9.6 (flathub) `--info` on the graded exports this test measures, CLI-driven \
+             (measurement log in `slicer.md`): the h {MESH_H} package reads `manifold = yes` — 3026110 facets, \
+             13 shells, Prusa volume 23465.2 mm³ (0.02 % off this mesh's {:.1}); the h 0.1 export reads \
+             `manifold = yes` — 18535066 facets, 19 shells, 23637.5 mm³ (0.6 %, the same Prusa-volume offset \
+             class as the pre-separation meshes). Both measured `manifold = no` before the separation (83 \
+             and 546 open edges, 17 and 73 shells), so the repair-dialog trigger on open clears on the \
+             graded part, not only the plain-solid control; on a clean import PrusaSlicer reports no \
+             `open_edges` field. The {} non-manifold spokes and {} wall-tile pairs this mesh carries \
+             coexist with that clean import — the slicer's weld accepts the closed shells as read.",
+            av_mesh,
+            ad.non_manifold_edges,
             ad.self_intersections,
         ),
     );

@@ -1,10 +1,11 @@
-//! Where do the adaptive dual-contouring surface's defect classes come from on the graded
-//! fill? The uniform mesher exports this model with zero open / orientation / degenerate /
-//! self-intersection defects; the adaptive surface carries ~1k open edges, ~270 non-manifold
-//! edges, ~350 degenerate triangles and ~34k self intersections at h = 0.25. This census
-//! dumps samples of each class with coordinates and cross-correlates the classes, to decide
-//! whether they are one mechanism (zero-width strip pinches) or several. Ignored: heavy
-//! (release). Run with
+//! Where do the adaptive dual-contouring surface's residual defect classes come from on the
+//! graded fill? With the per-sheet vertex separation and head-of-weld chord registry, the
+//! adaptive surface measures 0 open edges, 10 non-manifold edges, 0 degenerate triangles and
+//! 4959 self-intersecting pairs at h = 0.25 (the uniform mesher on the same field reports
+//! 2277 non-manifold, none of the others). This census dumps samples of each residual class
+//! with coordinates and cross-correlates them (open endpoints vs non-manifold endpoints vs
+//! crossing points), and compares the adaptive and uniform meshes over one defect region with
+//! the field value at every corner. Ignored: heavy (release). Run with
 //!   cargo test -p fieldsmith-verify --release --test adaptive_defect_census -- --ignored --nocapture
 
 use fieldsmith_core::Resolution;
@@ -65,7 +66,8 @@ fn inside_trip(t: [V3; 3], q: V3, eps: f64) -> bool {
     true
 }
 
-/// Segment against target triangle; returns the crossing point when it crosses.
+/// Segment against target triangle; returns the crossing point when it crosses. Boundary-exact
+/// contacts (q on the target's edge chain) do not count: matches TriMesh::self_intersections.
 fn seg_tri(m: &TriMesh, ta: &[u32; 3], tb: &[u32; 3], i: usize) -> Option<V3> {
     let b = tb.map(|v| m.verts[v as usize]);
     let n = unit(cross(sub(b[1], b[0]), sub(b[2], b[0])));
@@ -85,11 +87,37 @@ fn seg_tri(m: &TriMesh, ta: &[u32; 3], tb: &[u32; 3], i: usize) -> Option<V3> {
         return None;
     }
     let q = [p0[0] + t * e[0], p0[1] + t * e[1], p0[2] + t * e[2]];
-    if inside_trip(b, q, 1e-12) {
+    if inside_trip(b, q, 1e-12) && !on_boundary_chain(&b, q) {
         Some(q)
     } else {
         None
     }
+}
+
+/// Mirror of export.rs `on_boundary_chain`: exact contact (within 1e-9, L-inf, mm) with `t`'s
+/// edge chain.
+fn on_boundary_chain(t: &[V3; 3], q: V3) -> bool {
+    let near = |p: V3| {
+        (p[0] - q[0]).abs().max((p[1] - q[1]).abs().max((p[2] - q[2]).abs())) <= 1e-9
+    };
+    (0..3).any(|i| {
+        let (pa, pb) = (t[i], t[(i + 1) % 3]);
+        if near(pa) {
+            return true;
+        }
+        let d = sub(pb, pa);
+        let w = sub(q, pa);
+        let den = dot(d, d);
+        if den == 0.0 {
+            return near(pa);
+        }
+        let u = dot(w, d) / den;
+        if !(0.0..=1.0).contains(&u) {
+            return false;
+        }
+        let r = sub(w, [u * d[0], u * d[1], u * d[2]]);
+        r[0].abs().max(r[1].abs().max(r[2].abs())) <= 1e-9
+    })
 }
 
 #[test]
