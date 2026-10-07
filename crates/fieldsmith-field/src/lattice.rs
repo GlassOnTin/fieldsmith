@@ -221,6 +221,53 @@ impl Grid3 {
         let c1 = c01 * (1.0 - frac[1]) + c11 * frac[1];
         c0 * (1.0 - frac[2]) + c1 * frac[2]
     }
+
+    /// Trilinear sample plus its analytic gradient, from the same eight texels. The partial
+    /// on an axis with a single node is zero (differences of identical texels vanish), as in
+    /// [`Self::sample`]. Outside the grid the coordinate clamps but the partial keeps the
+    /// would-be slope of the last texel pair. GLSL twin: the `fs_mesh{N}` emitter in
+    /// [`crate::glsl`] (identical texel selection and slope formulas).
+    #[inline]
+    pub fn sample_grad(&self, p: V3) -> D {
+        let mut idx = [0usize; 3];
+        let mut frac = [0.0f64; 3];
+        for a in 0..3 {
+            let n = self.dims[a];
+            if n == 1 {
+                continue;
+            }
+            let u = ((p[a] - self.origin[a]) / self.spacing).clamp(0.0, (n - 1) as f64);
+            let i0 = (u.floor() as usize).min(n - 2);
+            idx[a] = i0;
+            frac[a] = u - i0 as f64;
+        }
+        let step = |a: usize| if self.dims[a] == 1 { 0 } else { 1 };
+        let (i, j, k) = (idx[0], idx[1], idx[2]);
+        let (di, dj, dk) = (step(0), step(1), step(2));
+        let (fx, fy, fz) = (frac[0], frac[1], frac[2]);
+        let c = |a, b, c| self.at(a, b, c) as f64;
+        let c000 = c(i, j, k);
+        let c100 = c(i + di, j, k);
+        let c010 = c(i, j + dj, k);
+        let c110 = c(i + di, j + dj, k);
+        let c001 = c(i, j, k + dk);
+        let c101 = c(i + di, j, k + dk);
+        let c011 = c(i, j + dj, k + dk);
+        let c111 = c(i + di, j + dj, k + dk);
+        let c00 = c000 * (1.0 - fx) + c100 * fx;
+        let c10 = c010 * (1.0 - fx) + c110 * fx;
+        let c01 = c001 * (1.0 - fx) + c101 * fx;
+        let c11 = c011 * (1.0 - fx) + c111 * fx;
+        let c0 = c00 * (1.0 - fy) + c10 * fy;
+        let c1 = c01 * (1.0 - fy) + c11 * fy;
+        let v = c0 * (1.0 - fz) + c1 * fz;
+        let gx = ((c100 - c000) * (1.0 - fy) + (c110 - c010) * fy) * (1.0 - fz)
+            + ((c101 - c001) * (1.0 - fy) + (c111 - c011) * fy) * fz;
+        let gy = ((c010 - c000) * (1.0 - fx) + (c110 - c100) * fx) * (1.0 - fz)
+            + ((c011 - c001) * (1.0 - fx) + (c111 - c101) * fx) * fz;
+        let s = self.spacing;
+        D::new(v, [gx / s, gy / s, (c1 - c0) / s])
+    }
 }
 
 /// The filled part: `max(body, min(−(body + skin), lattice(param(p)), keep))`.

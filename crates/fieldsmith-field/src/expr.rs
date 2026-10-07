@@ -30,6 +30,13 @@ impl Rigid {
     pub fn grad_to_world(&self, g: V3) -> V3 {
         mat_vec(&self.r, g)
     }
+    /// Direction (not position) mapped from world into the node's local frame — the inverse
+    /// of [`Rigid::grad_to_world`]. A rotation's transpose is its own inverse, so this is the
+    /// plain transpose apply; the translation never touches directions.
+    #[inline]
+    pub fn to_local_dir(&self, g: V3) -> V3 {
+        mat_t_vec(&self.r, g)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +79,15 @@ pub enum Expr {
     },
     /// Lattice-filled part: `max(body, min(−(body + skin), lattice, keep))`.
     Filled(Box<crate::lattice::FillExpr>),
+    /// Baked voxel field from an imported mesh (`fieldsmith-field::meshfield`). `key` names
+    /// the session registry entry; unhydrated keys evaluate as vacuum. `bbox` is the baked
+    /// world bounds (bounds() needs no registry) and `spec` the grid placement taken at
+    /// compile time for shader generation.
+    Mesh {
+        key: u64,
+        bbox: crate::expr::Aabb,
+        spec: Option<crate::meshfield::GridSpec>,
+    },
 }
 
 pub fn circular_step(count: u32, angle: f64) -> f64 {
@@ -84,8 +100,10 @@ pub fn circular_step(count: u32, angle: f64) -> f64 {
     }
 }
 
-/// Compile one node (with its own transform) to an expression.
-pub fn compile_node(node: &Node) -> Expr {
+/// Compile one node (with its own transform) to an expression. The document threads through
+/// so region-driven extensions can resolve their named region's patch selectors; every leaf
+/// else compiles from its node alone.
+pub fn compile_node(doc: &Document, node: &Node) -> Expr {
     let local = match &node.kind {
         NodeKind::Box { size, round } => {
             let half = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
@@ -139,12 +157,24 @@ pub fn compile_node(node: &Node) -> Expr {
             children,
             modifiers,
         } => {
-            let mut e = compile_list(children);
+            let mut e = compile_list(doc, children);
             for m in modifiers {
                 e = apply_modifier(e, m);
             }
             e
         }
+        NodeKind::Mesh { hash, bbox, .. } => {
+            let key = crate::meshfield::key_from_hex(hash);
+            Expr::Mesh {
+                key,
+                bbox: Aabb {
+                    lo: [bbox[0], bbox[1], bbox[2]],
+                    hi: [bbox[3], bbox[4], bbox[5]],
+                },
+                spec: crate::meshfield::lookup(key).map(|f| f.spec()),
+            }
+        }
+        NodeKind::Extend { region, dir, len } => compile_extend(doc, region, *dir, *len),
     };
     if matches!(local, Expr::Empty) || node.transform.is_identity() {
         local
@@ -152,6 +182,214 @@ pub fn compile_node(node: &Node) -> Expr {
         Expr::Xform {
             m: Rigid::from_doc(&node.transform),
             e: Box::new(local),
+        }
+    }
+}
+
+/// Compile a region-driven extension into synthetic mesh fields, one per distinct parent
+/// mesh the region's patch selectors name, unioned. Extends degrade gracefully rather than
+/// erroring compile-side: a region that names no mesh patch, an unhydrated parent (vacuum
+/// placeholder over the swept hull of the node's bounds, the same grace an unhydrated mesh
+/// gets) or a sweep that claims no cells all compile to `Empty` / a vacuum `Expr::Mesh`,
+/// with `validate` naming the real conditions before anything solves.
+/// One parent mesh node feeding an extension: (hash, patch-id set, doc bbox, node id,
+/// node placement).
+/// What a swept parent's selectors name: a set of patch ids, or a face direction. The face
+/// axis is held in the node's LOCAL frame — the frame the hydrated grid (and its SDF
+/// gradient) lives in — mapped from the document frame at selector-collection time.
+#[derive(Debug)]
+enum SweptFrom {
+    Patches(Vec<u16>),
+    /// Unit face-direction axis, node-local.
+    Face([f64; 3]),
+}
+
+type SweptParent<'a> = (
+    &'a str,
+    SweptFrom,
+    [f64; 6],
+    &'a str,
+    &'a fieldsmith_doc::Transform,
+);
+
+fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr {
+    let Some(r) = doc.regions.iter().find(|r| r.id == region) else {
+        return Expr::Empty;
+    };
+    // Distinct (parent node, swept source) pairs in selector order, grouped per mesh NODE
+    // rather than per hash (two nodes sharing a hash sit at different placements, and each
+    // keeps its own swept arm). Patch selectors on one node union their ids; face selectors
+    // group by axis. A selector contributes only when it names a mesh NODE directly —
+    // modifiers' copies of a mesh do not carry their own patch grid.
+    let mut parents: Vec<SweptParent> = Vec::new();
+    for s in &r.selectors {
+        let Some(node) = doc.find(&s.shape) else {
+            continue;
+        };
+        let NodeKind::Mesh { hash, bbox, .. } = &node.kind else {
+            continue;
+        };
+        if let Some(p) = s.patch {
+            if p == 0 || p >= u16::MAX as u32 {
+                continue;
+            }
+            match parents
+                .iter_mut()
+                .find(|(_, from, _, id, _)| *id == node.id.as_str() && matches!(from, SweptFrom::Patches(_)))
+            {
+                Some((_, SweptFrom::Patches(ids), _, _, _)) => {
+                    if !ids.contains(&(p as u16)) {
+                        ids.push(p as u16);
+                    }
+                }
+                _ => parents.push((
+                    hash.as_str(),
+                    SweptFrom::Patches(vec![p as u16]),
+                    *bbox,
+                    &node.id,
+                    &node.transform,
+                )),
+            }
+        } else if let Some(ax) = s.face.axis() {
+            // Face-direction rule: normals within a 45° cone of the face axis. Mapped into
+            // the node's local frame so the sweep and the gradient cone read the same grid.
+            let ax_leaf = Rigid::from_doc(&node.transform).to_local_dir(ax);
+            let duplicate = parents.iter().any(|(_, from, _, id, _)| {
+                *id == node.id.as_str()
+                    && match from {
+                        SweptFrom::Face(a2) => a2 == &ax_leaf,
+                        SweptFrom::Patches(_) => false,
+                    }
+            });
+            if !duplicate {
+                parents.push((
+                    hash.as_str(),
+                    SweptFrom::Face(ax_leaf),
+                    *bbox,
+                    &node.id,
+                    &node.transform,
+                ))
+            }
+        }
+    }
+    if parents.is_empty() {
+        return Expr::Empty;
+    }
+
+    let mut acc = Expr::Empty;
+    for (hash, from, bbox, _node_id, xform) in parents {
+        // The doc-frame dir (and face axis) live in a different frame than the hydrated
+        // grid: map them through the node transform. Identity transforms are exact no-ops.
+        let rig = Rigid::from_doc(xform);
+        let dir_leaf = rig.to_local_dir(dir);
+        let e = match crate::meshfield::lookup(crate::meshfield::key_from_hex(hash)) {
+            // Hydrated parent: derive the swept field, register it under its input hash and
+            // compile exactly like a Mesh (same slots, meshing, picking, persistence).
+            Some(f) => match &from {
+                SweptFrom::Patches(ids) => {
+                    match crate::meshfield::swept_patch_field(&f, dir_leaf, len, ids) {
+                        Ok(derived) => {
+                            let key = crate::meshfield::extend_key(
+                                hash,
+                                ids,
+                                dir_leaf,
+                                len,
+                                derived.dist.spacing,
+                            );
+                            if crate::meshfield::lookup(key).is_none() {
+                                crate::meshfield::hydrate(key, derived);
+                            }
+                            let f2 = crate::meshfield::lookup(key).expect("just hydrated");
+                            in_node_frame(
+                                Expr::Mesh {
+                                    key,
+                                    bbox: f2.meta.bbox,
+                                    spec: Some(f2.spec()),
+                                },
+                                xform,
+                            )
+                        }
+                        Err(_) => Expr::Empty,
+                    }
+                }
+                SweptFrom::Face(axis) => {
+                    match crate::meshfield::swept_face_field(&f, dir_leaf, len, *axis) {
+                        Ok(derived) => {
+                            let key = crate::meshfield::extend_key_face(
+                                hash,
+                                *axis,
+                                dir_leaf,
+                                len,
+                                derived.dist.spacing,
+                            );
+                            if crate::meshfield::lookup(key).is_none() {
+                                crate::meshfield::hydrate(key, derived);
+                            }
+                            let f2 = crate::meshfield::lookup(key).expect("just hydrated");
+                            in_node_frame(
+                                Expr::Mesh {
+                                    key,
+                                    bbox: f2.meta.bbox,
+                                    spec: Some(f2.spec()),
+                                },
+                                xform,
+                            )
+                        }
+                        Err(_) => Expr::Empty,
+                    }
+                }
+            },
+            // Unhydrated parent: vacuum over the swept hull of the node's bounds (no slots —
+            // `spec` stays None — and meshing finds nothing there). The hull displacement
+            // must be leaf-frame too: the placeholder box is, and the node frame wraps it.
+            None => in_node_frame(
+                Expr::Mesh {
+                    key: 0,
+                    bbox: swept_placeholder_bbox(bbox, dir_leaf, len),
+                    spec: None,
+                },
+                xform,
+            ),
+        };
+        if matches!(e, Expr::Empty) {
+            continue;
+        }
+        acc = if matches!(acc, Expr::Empty) {
+            e
+        } else {
+            Expr::Combine {
+                op: Op::Add,
+                blend: 0.0,
+                a: Box::new(acc),
+                b: Box::new(e),
+            }
+        };
+    }
+    acc
+}
+
+/// Conservative bounds of a sweep placeholder: the parent's box union its copy displaced by
+/// `len·dir`.
+fn swept_placeholder_bbox(bbox: [f64; 6], dir: [f64; 3], len: f64) -> Aabb {
+    let mut lo = [bbox[0], bbox[1], bbox[2]];
+    let mut hi = [bbox[3], bbox[4], bbox[5]];
+    for a in 0..3 {
+        lo[a] = lo[a].min(bbox[a] + dir[a] * len);
+        hi[a] = hi[a].max(hi[a] + dir[a] * len);
+    }
+    Aabb { lo, hi }
+}
+
+/// Place an arm derived from a mesh node's LOCAL frame (the hydrated grid the sweep reads,
+/// and the node bounds the placeholder inflates) into that node's placement, matching how
+/// the mesh leaf itself wraps in `compile_node`.
+fn in_node_frame(e: Expr, xform: &fieldsmith_doc::Transform) -> Expr {
+    if xform.is_identity() {
+        e
+    } else {
+        Expr::Xform {
+            m: Rigid::from_doc(xform),
+            e: Box::new(e),
         }
     }
 }
@@ -189,10 +427,10 @@ fn apply_modifier(e: Expr, m: &Modifier) -> Expr {
 }
 
 /// Fold an ordered list of nodes with their Add / Subtract / Intersect ops.
-pub fn compile_list(nodes: &[Node]) -> Expr {
+pub fn compile_list(doc: &Document, nodes: &[Node]) -> Expr {
     let mut acc = Expr::Empty;
     for n in nodes.iter().filter(|n| !n.suppressed) {
-        let e = compile_node(n);
+        let e = compile_node(doc, n);
         if matches!(e, Expr::Empty) {
             if n.op == Op::Intersect {
                 acc = Expr::Empty;
@@ -215,7 +453,7 @@ pub fn compile_list(nodes: &[Node]) -> Expr {
 
 /// The part's solid field.
 pub fn compile_body(doc: &Document) -> Expr {
-    compile_list(&doc.root)
+    compile_list(doc, &doc.root)
 }
 
 #[inline]
@@ -309,6 +547,10 @@ pub fn eval(e: &Expr, p: V3) -> D {
             best
         }
         Expr::Filled(f) => f.eval(p),
+        Expr::Mesh { key, .. } => match crate::meshfield::lookup(*key) {
+            Some(f) => f.sample(p),
+            None => D::EMPTY,
+        },
     }
 }
 
@@ -446,6 +688,7 @@ pub fn bounds(e: &Expr) -> Aabb {
             acc
         }
         Expr::Filled(f) => bounds(&f.body),
+        Expr::Mesh { bbox, .. } => *bbox,
     }
 }
 
@@ -455,20 +698,23 @@ pub fn bounds(e: &Expr) -> Aabb {
 /// Expression for one node *as placed in the world* — its own field wrapped in every ancestor's
 /// transform and replicating modifier (mirror / patterns), but not combined with siblings.
 pub fn placed_shape(doc: &Document, id: &str) -> Option<Expr> {
-    fn rec(nodes: &[Node], id: &str) -> Option<Expr> {
+    fn rec(doc: &Document, nodes: &[Node], id: &str) -> Option<Expr> {
         for n in nodes {
             if n.id == id {
-                return Some(compile_node(&Node {
-                    suppressed: false,
-                    ..n.clone()
-                }));
+                return Some(compile_node(
+                    doc,
+                    &Node {
+                        suppressed: false,
+                        ..n.clone()
+                    },
+                ));
             }
             if let NodeKind::Group {
                 children,
                 modifiers,
             } = &n.kind
             {
-                if let Some(mut inner) = rec(children, id) {
+                if let Some(mut inner) = rec(doc, children, id) {
                     for m in modifiers {
                         if matches!(
                             m,
@@ -491,7 +737,7 @@ pub fn placed_shape(doc: &Document, id: &str) -> Option<Expr> {
         }
         None
     }
-    rec(&doc.root, id)
+    rec(doc, &doc.root, id)
 }
 
 /// Evaluate a placed shape and report which of its primitive faces is nearest.
@@ -531,12 +777,66 @@ pub fn eval_face(e: &Expr, p: V3) -> (f64, Face) {
     }
 }
 
+/// Evaluate which surface patch of a placed shape's mesh covers `p` — the patch of whichever
+/// per-copy leaf surface [`eval_face`] would pick. `None` unless the nearest surface belongs
+/// to a mesh leaf's claimed patches (primitive faces carry no patches).
+pub fn eval_mesh_patch(e: &Expr, p: V3) -> Option<u16> {
+    match e {
+        Expr::Mesh { key, .. } => crate::meshfield::lookup(*key).and_then(|f| f.patch_at(p)),
+        Expr::Xform { m, e } => eval_mesh_patch(e, m.to_local(p)),
+        Expr::Mirror { axis, e } => {
+            let (da, _) = eval_face(e, p);
+            let (db, _) = eval_face(e, reflect(p, *axis));
+            if da.abs() <= db.abs() {
+                eval_mesh_patch(e, p)
+            } else {
+                eval_mesh_patch(e, reflect(p, *axis))
+            }
+        }
+        Expr::Linear { count, step, e } => {
+            let pick = (0..*count)
+                .map(|i| {
+                    let q = sub(p, scale(*step, i as f64));
+                    (i, eval_face(e, q).0.abs())
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+            pick.and_then(|i| eval_mesh_patch(e, sub(p, scale(*step, i as f64))))
+        }
+        Expr::Circular {
+            count,
+            axis,
+            step_deg,
+            e,
+        } => {
+            let pick = (0..*count)
+                .map(|i| {
+                    let q = mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p);
+                    (i, eval_face(e, q).0.abs())
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+            pick.and_then(|i| {
+                eval_mesh_patch(
+                    e,
+                    mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p),
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The local primitive of a leaf node (for listing selectable faces).
 pub fn node_prim(node: &Node) -> Option<Prim> {
-    match compile_node(&Node {
-        transform: Default::default(),
-        ..node.clone()
-    }) {
+    let doc = Document::default();
+    match compile_node(
+        &doc,
+        &Node {
+            transform: Default::default(),
+            ..node.clone()
+        },
+    ) {
         Expr::Prim(p) => Some(p),
         _ => None,
     }

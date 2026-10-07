@@ -152,22 +152,58 @@ pub struct Generated {
     pub source: String,
     /// Density / parameter grid to upload as `u_param` (R32F 3D texture), if the field has a fill.
     pub grid: Option<crate::lattice::Grid3>,
+    /// Mesh textures (`u_mesh{slot}`), in slot order. Data is fetched from the meshfield
+    /// registry by `key` at the bind site.
+    pub meshes: Vec<MeshTex>,
 }
+
+/// One baked mesh field referenced by a generated program.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct MeshTex {
+    /// Slot number: uniform `u_mesh{slot}` (distance) / `u_mesh{slot}p` (patch).
+    pub slot: usize,
+    /// Registry key (content hash), also the sidecar entry name.
+    pub key: u64,
+    pub dims: [usize; 3],
+    pub origin: crate::dual::V3,
+    pub spacing: f64,
+    /// A patch grid accompanies the distance grid (`u_mesh{slot}p`, UI16 texture).
+    pub patch: bool,
+}
+
+/// Per-slot specs a Gen may emit; index = slot.
+type MeshSlots = std::collections::BTreeMap<u64, usize>;
 
 struct Gen {
     out: String,
     next: usize,
     prefix: String,
     grid: Option<crate::lattice::Grid3>,
+    /// Slot map for mesh keys (see `crate::expr::mesh_keys`).
+    slots: MeshSlots,
+    /// Emitted mesh state, indexed by slot.
+    meshes: Vec<Option<crate::meshfield::GridSpec>>,
+    /// Whether mesh samples may read textures (the field programs); false makes mesh leaves
+    /// emit vacuum so overlay programs never reference an unbound sampler.
+    sample_mesh: bool,
+    /// Whether `face_fn`'s mesh branch may emit an ident referencing the field program's
+    /// `fs_mesh{slot}` and `u_mesh{slot}p` — the ident pass is glued into the same fragment
+    /// program after the body's declarations, so it references but never re-emits them.
+    /// Only `ident()` sets this; overlay (a standalone program) keeps mesh leaves on vacuum.
+    mesh_idents: bool,
 }
 
 impl Gen {
-    fn new(prefix: &str) -> Self {
+    fn new(prefix: &str, slots: &MeshSlots, sample_mesh: bool, mesh_idents: bool) -> Self {
         Gen {
             out: String::new(),
             next: 0,
             prefix: prefix.into(),
             grid: None,
+            slots: slots.clone(),
+            meshes: vec![None; slots.len()],
+            sample_mesh,
+            mesh_idents,
         }
     }
 
@@ -181,6 +217,60 @@ impl Gen {
         let name = self.fresh();
         let _ = writeln!(self.out, "vec4 {name}(vec3 p) {{\n{body}}}");
         name
+    }
+
+    /// Slot for a hydrated mesh key, emitting `fs_mesh{slot}` (distance + analytic trilinear
+    /// gradient) on first use. Only reachable when `sample_mesh` is set.
+    fn mesh_slot(&mut self, key: u64, spec: &crate::meshfield::GridSpec) -> usize {
+        let slot = self.slots[&key];
+        if self.meshes[slot].is_none() {
+            self.meshes[slot] = Some(spec.clone());
+            self.emit_mesh_fn(slot, spec);
+        }
+        slot
+    }
+
+    /// `u_mesh{slot}` is an R32F sampler3D with the grid's node-centred samples. Texel
+    /// selection and slope formulas mirror [`crate::lattice::Grid3::sample_grad`] — the
+    /// grid never has a 1-node axis (voxeliser guarantee), so `i0 + 1` stays in bounds.
+    /// A patch grid travelling with the mesh declares `u_mesh{slot}p` (usampler3D, UI16)
+    /// next to the distance sampler so the ident pass, which is glued into the same
+    /// fragment program after these declarations, can fetch it without redeclaring.
+    fn emit_mesh_fn(&mut self, slot: usize, s: &crate::meshfield::GridSpec) {
+        let patch_decl = if s.patch {
+            format!("uniform highp usampler3D u_mesh{slot}p;\n")
+        } else {
+            String::new()
+        };
+        let _ = writeln!(
+            self.out,
+            "{patch_decl}uniform highp sampler3D u_mesh{slot};\n\
+vec4 fs_mesh{slot}(vec3 p) {{\n  \
+vec3 n = vec3({}, {}, {});\n  \
+vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  \
+ivec3 i0 = ivec3(min(floor(u), n - 2.0));\n  \
+vec3 f = u - vec3(i0);\n  \
+float c000 = texelFetch(u_mesh{slot}, i0, 0).r; float c100 = texelFetch(u_mesh{slot}, i0 + ivec3(1, 0, 0), 0).r;\n  \
+float c010 = texelFetch(u_mesh{slot}, i0 + ivec3(0, 1, 0), 0).r; float c110 = texelFetch(u_mesh{slot}, i0 + ivec3(1, 1, 0), 0).r;\n  \
+float c001 = texelFetch(u_mesh{slot}, i0 + ivec3(0, 0, 1), 0).r; float c101 = texelFetch(u_mesh{slot}, i0 + ivec3(1, 0, 1), 0).r;\n  \
+float c011 = texelFetch(u_mesh{slot}, i0 + ivec3(0, 1, 1), 0).r; float c111 = texelFetch(u_mesh{slot}, i0 + ivec3(1, 1, 1), 0).r;\n  \
+float c00 = c000 * (1.0 - f.x) + c100 * f.x; float c10 = c010 * (1.0 - f.x) + c110 * f.x;\n  \
+float c01 = c001 * (1.0 - f.x) + c101 * f.x; float c11 = c011 * (1.0 - f.x) + c111 * f.x;\n  \
+float c0 = c00 * (1.0 - f.y) + c10 * f.y; float c1 = c01 * (1.0 - f.y) + c11 * f.y;\n  \
+float v = c0 * (1.0 - f.z) + c1 * f.z;\n  \
+float gx = ((c100 - c000) * (1.0 - f.y) + (c110 - c010) * f.y) * (1.0 - f.z) + ((c101 - c001) * (1.0 - f.y) + (c111 - c011) * f.y) * f.z;\n  \
+float gy = ((c010 - c000) * (1.0 - f.x) + (c110 - c100) * f.x) * (1.0 - f.z) + ((c011 - c001) * (1.0 - f.x) + (c111 - c101) * f.x) * f.z;\n  \
+float gz = c1 - c0;\n  \
+return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
+            lit(s.dims[0] as f64),
+            lit(s.dims[1] as f64),
+            lit(s.dims[2] as f64),
+            v3(s.origin),
+            lit(s.spacing),
+            lit(s.spacing),
+            lit(s.spacing),
+            lit(s.spacing)
+        );
     }
 
     /// Emit `vec3 name(vec2 q)` returning (signed 2D distance, gradient) for a profile.
@@ -341,6 +431,13 @@ impl Gen {
                 ))
             }
             Expr::Filled(fx) => self.filled(fx),
+            Expr::Mesh { key, spec, .. } => match (self.sample_mesh, spec) {
+                (_, None) | (false, _) => self.func("  return vec4(1e9, 0.0, 0.0, 0.0);\n".into()),
+                (true, Some(spec)) => {
+                    let slot = self.mesh_slot(*key, spec);
+                    self.func(format!("  return fs_mesh{slot}(p);\n"))
+                }
+            },
         }
     }
 
@@ -391,16 +488,44 @@ impl Gen {
     }
 }
 
+/// Mesh keys referenced by the given expressions, ranked into slots (deterministic within
+/// a program regardless of traversal order).
+fn mesh_slots<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> MeshSlots {
+    let mut keys = std::collections::BTreeSet::new();
+    for e in exprs {
+        crate::meshfield::mesh_keys(e, &mut keys);
+    }
+    keys.into_iter().enumerate().map(|(i, k)| (k, i)).collect()
+}
+
 /// Generate the GLSL for `e`: prelude, node functions and `vec4 fs_field(vec3 p)`.
 pub fn generate(e: &Expr) -> Generated {
-    let mut g = Gen::new("fs_n");
+    let slots = mesh_slots(std::iter::once(e));
+    let keys: Vec<u64> = slots.keys().copied().collect();
+    let mut g = Gen::new("fs_n", &slots, true, false);
     let root = g.expr(e);
     let mut source = String::from(PRELUDE);
     source.push_str(&g.out);
     let _ = writeln!(source, "vec4 fs_field(vec3 p) {{ return {root}(p); }}");
+    let meshes = g
+        .meshes
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, spec)| {
+            spec.as_ref().map(|s| MeshTex {
+                slot,
+                key: keys[slot],
+                dims: s.dims,
+                origin: s.origin,
+                spacing: s.spacing,
+                patch: s.patch,
+            })
+        })
+        .collect();
     Generated {
         source,
         grid: g.grid,
+        meshes,
     }
 }
 
@@ -453,6 +578,39 @@ impl Gen {
                 let c = self.face_fn(e);
                 format!("  return {c}({} * (p - {}));\n", mat_t(&m.r), v3(m.t))
             }
+            // Mesh leaves mirror `eval_face` (expr.rs): the distance comes from the field
+            // program's `fs_mesh{slot}`, referenced here but never re-emitted — the ident
+            // source is glued into the same fragment program after the body (viewport.ts
+            // fragSource), with the slot map derived from the same `compile_body` (ident).
+            // The face code: 0 (Face::All) for an unpatched mesh; otherwise `PATCH_CODE0`
+            // plus the patch id of the nearest grid cell, the cell math being exactly
+            // `MeshField::cell_of` (node-centred coordinate clamped to the last node, then
+            // floored — always in bounds, so texelFetch never leaves the patch grid). A
+            // cell without a claim stores NO_PATCH (65535), reporting code 10 + 65535,
+            // which no selector can name (ids cap at 65524), so unclaimed surface simply
+            // never highlights. CPU picking keeps reporting face "all" for mesh hits and
+            // carries the patch itself (`pick.patch`); the numeric GPU↔CPU agreement (a
+            // clicked patch highlights exactly its cells) is measured in step 9's Playwright
+            // e2e — cargo cannot execute WebGL.
+            Expr::Mesh { key, spec, .. } => match (self.mesh_idents, spec) {
+                (false, _) | (true, None) => "  return vec2(1e9, 0.0);\n".into(),
+                (true, Some(s)) if !s.patch => {
+                    let slot = self.slots[key];
+                    format!("  return vec2(fs_mesh{slot}(p).x, 0.0);\n")
+                }
+                (true, Some(s)) => {
+                    let slot = self.slots[key];
+                    format!(
+"  vec3 n = vec3({}, {}, {});\n  vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  return vec2(fs_mesh{slot}(p).x, {} + float(texelFetch(u_mesh{slot}p, ivec3(floor(u)), 0).r));\n",
+                        lit(s.dims[0] as f64),
+                        lit(s.dims[1] as f64),
+                        lit(s.dims[2] as f64),
+                        v3(s.origin),
+                        lit(s.spacing),
+                        lit(crate::meshfield::PATCH_CODE0 as f64),
+                    )
+                }
+            },
             Expr::Mirror { axis, e } => {
                 let c = self.face_fn(e);
                 let m = [
@@ -502,7 +660,16 @@ pub struct OverlayItem {
 /// Emit `vec4 fs_overlay(vec3 p, float eps)` returning `(rgb, alpha)` for the first-listed-last-wins
 /// overlay whose surface lies within `eps` of `p`. Missing shapes are skipped.
 pub fn overlay(doc: &Document, items: &[OverlayItem]) -> String {
-    let mut g = Gen::new("fs_o");
+    // Slot map over every placed shape the program touches. Overlay stays a standalone
+    // program: mesh leaves degrade to vacuum here (patch-aware overlays would need their
+    // own texture uploads, deferred until a use asks for them).
+    let shapes: Vec<Expr> = items
+        .iter()
+        .flat_map(|item| item.selectors.iter())
+        .filter_map(|sel| placed_shape(doc, &sel.shape))
+        .collect();
+    let slots = mesh_slots(shapes.iter());
+    let mut g = Gen::new("fs_o", &slots, false, false);
     let mut checks = String::new();
     for item in items {
         for sel in &item.selectors {
@@ -533,21 +700,32 @@ pub fn overlay(doc: &Document, items: &[OverlayItem]) -> String {
 /// is nearest to `p`, mirroring [`crate::expr::identify_surface`]. Returns the GLSL and the leaf
 /// ids in index order. Used for selection and hover highlighting driven by uniforms.
 pub fn ident(doc: &Document) -> (String, Vec<String>) {
-    let mut g = Gen::new("fs_i");
-    let leaves = crate::expr::active_leaves(doc);
+    // The slot map must come from the same body expression the `generate` call used, not
+    // from the active-leaf pairs below: slots are the sorted-position of their key over the
+    // whole set, and active leaves are a subset of the body — deriving slots from the subset
+    // could number a key differently in `fs_ident` than in the body's `fs_mesh{slot}`, and
+    // the glued program would reference an unemitted function. Compiling the body again is
+    // cheap next to the GLSL compile on the GPU.
+    let body = crate::expr::compile_body(doc);
+    let slots = mesh_slots(std::iter::once(&body));
+    let pairs: Vec<(String, Expr)> = crate::expr::active_leaves(doc)
+        .into_iter()
+        .filter_map(|id| {
+            let e = placed_shape(doc, &id)?;
+            Some((id, e))
+        })
+        .collect();
+    let mut g = Gen::new("fs_i", &slots, false, true);
     let mut body = String::from("  vec2 best = vec2(1e9, 0.0); float idx = -1.0; vec2 r;\n");
     let mut ids = Vec::new();
-    for id in leaves {
-        let Some(e) = placed_shape(doc, &id) else {
-            continue;
-        };
-        let f = g.face_fn(&e);
+    for (id, e) in &pairs {
+        let f = g.face_fn(e);
         let _ = writeln!(
             body,
             "  r = {f}(p); if (abs(r.x) < abs(best.x)) {{ best = r; idx = {}.0; }}",
             ids.len()
         );
-        ids.push(id);
+        ids.push(id.clone());
     }
     body.push_str("  return vec2(idx, best.y);\n");
     let mut s = g.out;
@@ -556,9 +734,11 @@ pub fn ident(doc: &Document) -> (String, Vec<String>) {
 }
 
 /// Emit `vec4 <name>(vec3 p)` for an arbitrary expression without the prelude (for extra fields
-/// in a shader that already contains [`PRELUDE`]).
+/// in a shader that already contains [`PRELUDE`]). Mesh-containing fields must go through
+/// [`generate`] — the caller here would not bind the mesh textures.
 pub fn generate_named(e: &Expr, prefix: &str, name: &str) -> String {
-    let mut g = Gen::new(prefix);
+    let slots = mesh_slots(std::iter::once(e));
+    let mut g = Gen::new(prefix, &slots, true, false);
     let root = g.expr(e);
     let mut s = g.out;
     let _ = writeln!(s, "vec4 {name}(vec3 p) {{ return {root}(p); }}");

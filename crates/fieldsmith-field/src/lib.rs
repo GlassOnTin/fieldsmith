@@ -8,6 +8,7 @@ pub mod dual;
 pub mod expr;
 pub mod glsl;
 pub mod lattice;
+pub mod meshfield;
 pub mod prim;
 pub mod volume;
 
