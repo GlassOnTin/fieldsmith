@@ -10,14 +10,16 @@
 //! fieldsmith export FILE.fsm --stl X [--3mf Y] [--h MM] [--solid] [--adaptive]
 //! ```
 
-use fieldsmith_core::fill::graded;
-use fieldsmith_core::{analyse, CaseResult, Resolution};
-use fieldsmith_doc::{fsm, Document};
+use fieldsmith_core::import::{import_mesh, ImportOpts};
+use fieldsmith_core::{analyse, fill::graded, fsmz, CaseResult, Resolution};
+use fieldsmith_doc::{fsm, Document, NodeKind};
+use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
 use fieldsmith_mesh::export::surface;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl|solve|export> FILE.fsm [options]
+const USAGE: &str =
+    "usage: fieldsmith <import|check|print|json|volume|glsl|solve|export> FILE [options]
 
   check   parse and validate a document
   print   print the canonical .fsm form
@@ -32,11 +34,54 @@ const USAGE: &str = "usage: fieldsmith <check|print|json|volume|glsl|solve|expor
           and report its volume against the field volume.
           [--adaptive] meshes with adaptive dual contouring (finer only
           near the surface; needed for the 0.1 mm budget, carries the
-          defect classes measured in V8)";
+          defect classes measured in V8)
+  import  mesh an external part         [--out OUT.fsm] [--units m|mm|cm|in]
+                                        [--up y|z] [--voxel MM]
+          SRC is a .glb, .stl or .obj file. Writes OUT.fsm (default: the
+          source stem in the working directory) plus the .fsmz sidecar
+          that stores its grids; volume/solve/export of the written
+          document need that sidecar beside the .fsm.";
 
+/// Load a document for the headless verbs. A `.fsmz` is read whole (grids included); a
+/// plain `.fsm` hydrates its mesh grids from a same-stem `.fsmz` sibling when one sits
+/// next to it — the text format carries no grids. A mesh document without its sidecar is
+/// fine to inspect (`check`/`print`/`json`); the geometry verbs refuse it.
 fn load(path: &str) -> Result<Document, String> {
+    if path.ends_with(".fsmz") {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        return fsmz::load(&bytes)
+            .map(|l| l.doc)
+            .map_err(|e| format!("{path}: {e}"));
+    }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    fsm::parse(&text).map_err(|e| format!("{path}:{}: {}", e.line, e.message))
+    let doc = fsm::parse(&text).map_err(|e| format!("{path}:{}: {}", e.line, e.message))?;
+    if doc.root.iter().any(|n| matches!(n.kind, NodeKind::Mesh { .. })) {
+        let sidecar = std::path::Path::new(path).with_extension("fsmz");
+        match std::fs::read(&sidecar) {
+            Ok(bytes) => {
+                fsmz::load(&bytes).map_err(|e| format!("{}: {e}", sidecar.display()))?;
+            }
+            Err(_) => eprintln!(
+                "warning: {} holds mesh nodes but its .fsmz sidecar is missing; \
+                 geometry verbs will refuse it",
+                path
+            ),
+        }
+    }
+    Ok(doc)
+}
+
+/// Hashes of the document's mesh nodes whose registry grids are not present (an extend's
+/// swept grid hydrates at compile time, so only the parent meshes can be checked here).
+fn missing_grids(doc: &Document) -> Vec<String> {
+    doc.root
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::Mesh { hash, .. } => Some(hash.clone()),
+            _ => None,
+        })
+        .filter(|h| lookup(key_from_hex(h)).is_none())
+        .collect()
 }
 
 fn opt(args: &[String], name: &str) -> Option<String> {
@@ -56,7 +101,27 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some(c), Some(p)) => (c.as_str(), p.as_str()),
         _ => return Err(USAGE.into()),
     };
+    if cmd == "import" {
+        return import_cmd(path, args);
+    }
     let doc = load(path)?;
+    // Only the inspection verbs work without the grid registry: everything that evaluates
+    // the body would silently see an all-outside field.
+    match cmd {
+        "check" | "print" | "json" => {}
+        _ => {
+            let missing = missing_grids(&doc);
+            if !missing.is_empty() {
+                return Err(format!(
+                    "mesh grid{} {} {} not loaded — the .fsmz sidecar must sit beside the \
+                     .fsm (import the source again, or ship the sidecar)",
+                    if missing.len() == 1 { "" } else { "s" },
+                    missing.join(", "),
+                    if missing.len() == 1 { "is" } else { "are" }
+                ));
+            }
+        }
+    }
     match cmd {
         "check" => {
             let problems = doc.validate();
@@ -69,6 +134,18 @@ fn run(args: &[String]) -> Result<(), String> {
                 doc.loads.len(),
                 doc.material
             );
+            for n in &doc.root {
+                if let NodeKind::Mesh { open_edges, .. } = &n.kind {
+                    if *open_edges > 0 {
+                        eprintln!(
+                            "warning: mesh {} has {open_edges} open edge{} — the voxel \
+                             sign flood is less reliable",
+                            n.id,
+                            if *open_edges == 1 { "" } else { "s" }
+                        );
+                    }
+                }
+            }
             if problems.is_empty() {
                 println!("ok");
                 Ok(())
@@ -114,9 +191,15 @@ fn run(args: &[String]) -> Result<(), String> {
         "export" => export_cmd(&doc, args),
         "solve" => {
             let res = if let Some(s) = opt(args, "--dofs") {
-                Resolution::Dofs(s.parse::<usize>().map_err(|_| format!("bad --dofs value: {s}"))?)
+                Resolution::Dofs(
+                    s.parse::<usize>()
+                        .map_err(|_| format!("bad --dofs value: {s}"))?,
+                )
             } else if let Some(s) = opt(args, "--h") {
-                Resolution::Size(s.parse::<f64>().map_err(|_| format!("bad --h value: {s}"))?)
+                Resolution::Size(
+                    s.parse::<f64>()
+                        .map_err(|_| format!("bad --h value: {s}"))?,
+                )
             } else {
                 Resolution::Dofs(150_000)
             };
@@ -138,7 +221,10 @@ fn run(args: &[String]) -> Result<(), String> {
                      | :-- | --: | --: |"
                 );
                 for c in &a.cases {
-                    println!("| {} | {:.2} | {:.4} |", c.name, c.max_vm_elem, c.max_displacement);
+                    println!(
+                        "| {} | {:.2} | {:.4} |",
+                        c.name, c.max_vm_elem, c.max_displacement
+                    );
                 }
             } else {
                 println!(
@@ -162,6 +248,99 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// `import`: read a GLB / STL / OBJ, voxelise it into the mesh registry, and write a fresh
+/// document (one mesh node per scene part) plus its `.fsmz` sidecar. The document is the
+/// bare import — regions, selectors and extends are authored in the `.fsm` by hand or in
+/// the app.
+fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
+    let path = std::path::Path::new(src);
+    let kind = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !matches!(kind.as_str(), "glb" | "stl" | "obj") {
+        return Err(format!(
+            "import: source must be .glb, .stl or .obj, got .{kind}"
+        ));
+    }
+    let units = opt(args, "--units");
+    let up = opt(args, "--up");
+    let voxel = match opt(args, "--voxel") {
+        Some(s) => Some(
+            s.parse::<f64>()
+                .map_err(|_| format!("bad --voxel value: {s}"))?,
+        ),
+        None => None,
+    };
+    if let Some(s) = &units {
+        if !matches!(s.as_str(), "mm" | "cm" | "m" | "in") {
+            return Err(format!("bad --units value: {s} (mm | cm | m | in)"));
+        }
+    }
+    if let Some(s) = &up {
+        if !matches!(s.as_str(), "y" | "z") {
+            return Err(format!("bad --up value: {s} (y | z)"));
+        }
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("import: {src} has no file name"))?
+        .to_string();
+    let file_name = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(src)
+        .to_string();
+
+    let bytes = std::fs::read(src).map_err(|e| format!("{src}: {e}"))?;
+    let opts = ImportOpts {
+        units: units.as_deref(),
+        up: up.as_deref(),
+        voxel,
+        src: &file_name,
+        taken: &[],
+    };
+    let out = import_mesh(&kind, &bytes, &opts)?;
+
+    let doc = Document {
+        name: stem,
+        root: out.nodes,
+        ..Default::default()
+    };
+
+    let out_path = opt(args, "--out").unwrap_or_else(|| {
+        format!("{name}.fsm", name = doc.name)
+    });
+    let zip_path = std::path::Path::new(&out_path).with_extension("fsmz");
+    std::fs::write(&out_path, fsm::print(&doc)).map_err(|e| format!("{out_path}: {e}"))?;
+    let zip = fsmz::save(&doc)?;
+    std::fs::write(&zip_path, &zip).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+
+    println!("imported {src}: {} part(s) in {} ms", out.parts.len(), out.ms);
+    for p in &out.parts {
+        println!(
+            "  {}: {} triangles, {} welded verts, {} patches, {} open edges",
+            p.id, p.tris, p.verts, p.patches, p.open_edges
+        );
+        println!(
+            "    bbox {} mm, voxel {} mm, grid {} cells, {} ms, hash {}",
+            p.bbox.map(|v| v.to_string()).join(" "),
+            p.voxel,
+            p.cells,
+            p.ms,
+            p.hash
+        );
+    }
+    println!(
+        "wrote {out_path} and {} ({:.1} MiB of grids) — geometry verbs need the sidecar beside the .fsm",
+        zip_path.display(),
+        zip.len() as f64 / (1 << 20) as f64
+    );
+    Ok(())
+}
+
 /// `export`: the part as a triangle mesh for printing. Fill documents export the graded
 /// part (the fill is part of the design); `--solid` exports the body alone. The reported
 /// volume comes from the same field the mesh was extracted from, so Δ is the mesher's
@@ -173,7 +352,9 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         return Err("export: give --stl PATH and/or --3mf PATH".into());
     }
     let h = match opt(args, "--h") {
-        Some(s) => s.parse::<f64>().map_err(|_| format!("bad --h value: {s}"))?,
+        Some(s) => s
+            .parse::<f64>()
+            .map_err(|_| format!("bad --h value: {s}"))?,
         None => 0.25,
     };
     if !h.is_finite() || h <= 0.0 {
@@ -238,7 +419,11 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
     let v = volume::volume(field_ref, h);
     let ref_s = (clock() - t0) / 1000.0;
     let v_mesh = tri.volume();
-    let delta = if v.volume > 0.0 { (v_mesh - v.volume) / v.volume * 100.0 } else { f64::NAN };
+    let delta = if v.volume > 0.0 {
+        (v_mesh - v.volume) / v.volume * 100.0
+    } else {
+        f64::NAN
+    };
 
     let t0 = clock();
     let d = tri.defects();
@@ -248,7 +433,11 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         "mesh {} verts, {} tris at h={h} mm ({}, mesh {:.2} s, defect scan {:.2} s)",
         tri.verts.len(),
         tri.tris.len(),
-        if adaptive { "adaptive dc" } else { "uniform dc" },
+        if adaptive {
+            "adaptive dc"
+        } else {
+            "uniform dc"
+        },
         mesh_s,
         scan_s
     );
@@ -257,7 +446,9 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         v.volume, v.error, v_mesh, delta, ref_s
     );
     if d.none() {
-        println!("defects: none (closed, 2-manifold, consistently oriented, self-intersection-free)");
+        println!(
+            "defects: none (closed, 2-manifold, consistently oriented, self-intersection-free)"
+        );
     } else {
         println!(
             "defects: {} open edges, {} non-manifold, {} orientation, {} degenerate, {} self-intersections",
@@ -269,9 +460,13 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         );
     }
     let stl_bytes = stl.as_ref().map(|_| tri.write_stl());
-    let mf_bytes = threemf.as_ref().map(|_| tri.write_3mf(&doc.name, &doc.material));
+    let mf_bytes = threemf
+        .as_ref()
+        .map(|_| tri.write_3mf(&doc.name, &doc.material));
     for (path, bytes, what) in [
-        stl.as_deref().zip(stl_bytes).map(|(p, b)| (p, b, "binary STL")),
+        stl.as_deref()
+            .zip(stl_bytes)
+            .map(|(p, b)| (p, b, "binary STL")),
         threemf.as_deref().zip(mf_bytes).map(|(p, b)| (p, b, "3MF")),
     ]
     .into_iter()
@@ -285,7 +480,10 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
             (clock() - t0) / 1000.0
         );
     }
-    println!("export total {:.2} s (h {h:.3} mm)", (clock() - t_all) / 1000.0);
+    println!(
+        "export total {:.2} s (h {h:.3} mm)",
+        (clock() - t_all) / 1000.0
+    );
     Ok(())
 }
 
@@ -303,7 +501,10 @@ fn print_case_table(cases: &[CaseResult], caption: &str) {
     println!("| {caption} case | peak von Mises (MPa) | max deflection (mm) |");
     println!("| :-- | --: | --: |");
     for c in cases {
-        println!("| {} | {:.2} | {:.4} |", c.name, c.max_vm_elem, c.max_displacement);
+        println!(
+            "| {} | {:.2} | {:.4} |",
+            c.name, c.max_vm_elem, c.max_displacement
+        );
     }
 }
 
@@ -324,7 +525,11 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
     let fill = &g.spec;
     let (counts, rho) = graded_shape(&g);
     let n = (counts[0] + counts[1] + counts[2]) as f64;
-    let lighter = if g.solid_mass_g > 0.0 { (1.0 - g.mass_g / g.solid_mass_g) * 100.0 } else { 0.0 };
+    let lighter = if g.solid_mass_g > 0.0 {
+        (1.0 - g.mass_g / g.solid_mass_g) * 100.0
+    } else {
+        0.0
+    };
     if report {
         println!("## solve report — {} (solid reference)\n", doc.name);
         println!(
@@ -353,7 +558,10 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
                 rho.0, rho.1, g.sigma_ref
             );
         }
-        println!("grade {:.0} ms, graded re-solve {:.0} ms", g.fill_ms, g.solve_ms);
+        println!(
+            "grade {:.0} ms, graded re-solve {:.0} ms",
+            g.fill_ms, g.solve_ms
+        );
         println!();
         print_case_table(&g.cases, "graded");
     } else {
@@ -368,13 +576,24 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
         print_case_lines(&a.cases, "solid");
         println!(
             "fill {:?} {:?} cell {} mm: mass {:.2} g (solid {:.2} g), lattice {:.0}% of elements",
-            fill.family, fill.mode, fill.cell, g.mass_g, g.solid_mass_g, 100.0 * counts[1] as f64 / n
+            fill.family,
+            fill.mode,
+            fill.cell,
+            g.mass_g,
+            g.solid_mass_g,
+            100.0 * counts[1] as f64 / n
         );
         if counts[1] > 0 {
-            println!("achieved design lattice ρ {:.2}..{:.2}, σ_ref {:.2} MPa", rho.0, rho.1, g.sigma_ref);
+            println!(
+                "achieved design lattice ρ {:.2}..{:.2}, σ_ref {:.2} MPa",
+                rho.0, rho.1, g.sigma_ref
+            );
         }
         print_case_lines(&g.cases, "graded");
-        println!("grade {:.0} ms, graded re-solve {:.0} ms", g.fill_ms, g.solve_ms);
+        println!(
+            "grade {:.0} ms, graded re-solve {:.0} ms",
+            g.fill_ms, g.solve_ms
+        );
     }
     Ok(())
 }
