@@ -16,12 +16,25 @@
 
 pub mod adaptive;
 pub mod export;
+pub mod gltf;
+pub mod obj;
 pub mod quality;
+pub mod weld;
+pub mod zip;
 pub use quality::{quality, Quality};
 
 use std::collections::HashMap;
 
 pub type V3 = [f64; 3];
+
+/// One named mesh read from a scene file (GLB, OBJ): all of that mesh's triangle
+/// primitives, with every node instance's transform baked into the vertices. The empty
+/// name means the file did not name the object; the import layer names it then.
+#[derive(Clone, Debug)]
+pub struct NamedPart {
+    pub name: String,
+    pub mesh: export::TriMesh,
+}
 
 /// A linear tetrahedral mesh. Tetrahedra are positively oriented.
 #[derive(Clone, Debug, Default)]
@@ -196,7 +209,11 @@ impl Lattice {
 
 #[inline]
 fn lerp(a: V3, b: V3, t: f64) -> V3 {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
 }
 
 /// Zero crossing of `f` on the segment `a`–`b` (with `fa < 0 < fb` or the reverse), as a
@@ -319,8 +336,10 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
         if nneg == 0 {
             if npos == 0 {
                 // All four vertices on the surface: keep if the tet lies inside.
-                let c = [0, 1, 2]
-                    .map(|a| (warp_pos(t[0])[a] + warp_pos(t[1])[a] + warp_pos(t[2])[a] + warp_pos(t[3])[a]) * 0.25);
+                let c = [0, 1, 2].map(|a| {
+                    (warp_pos(t[0])[a] + warp_pos(t[1])[a] + warp_pos(t[2])[a] + warp_pos(t[3])[a])
+                        * 0.25
+                });
                 if f(c) < 0.0 {
                     let v = t.map(|x| lattice_vertex(x, &mut out, &mut gid));
                     emit(&mut out, v);
@@ -336,7 +355,11 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             }
         });
         let mut cut = |a: usize, b: usize, out: &mut TetMesh, gid: &mut Vec<usize>| -> u32 {
-            let key = if t[a] < t[b] { (t[a], t[b]) } else { (t[b], t[a]) };
+            let key = if t[a] < t[b] {
+                (t[a], t[b])
+            } else {
+                (t[b], t[a])
+            };
             *cuts.entry(key).or_insert_with(|| {
                 let (p, q) = (warp_pos(key.0), warp_pos(key.1));
                 let u = crossing(&f, p, q, val[key.0], val[key.1]);
@@ -365,8 +388,16 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             (2, 0, 2) => {
                 // Prism: (a, ac, ad) – (b, bc, bd).
                 let (a, b, c, d) = (negs[0], negs[1], poss[0], poss[1]);
-                let p = [vids[a], cut(a, c, &mut out, &mut gid), cut(a, d, &mut out, &mut gid)];
-                let q = [vids[b], cut(b, c, &mut out, &mut gid), cut(b, d, &mut out, &mut gid)];
+                let p = [
+                    vids[a],
+                    cut(a, c, &mut out, &mut gid),
+                    cut(a, d, &mut out, &mut gid),
+                ];
+                let q = [
+                    vids[b],
+                    cut(b, c, &mut out, &mut gid),
+                    cut(b, d, &mut out, &mut gid),
+                ];
                 prism(&mut out, &gid, p, q);
             }
             (2, 1, 1) => {
@@ -398,7 +429,9 @@ fn signed_volume(m: &TetMesh, t: [u32; 4]) -> f64 {
     let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     let w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
-    (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0])) / 6.0
+    (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+        + u[2] * (v[0] * w[1] - v[1] * w[0]))
+        / 6.0
 }
 
 /// Append a tetrahedron, oriented positively. Degenerate (zero-volume) pieces are dropped: they
@@ -469,18 +502,31 @@ impl TetMesh {
         let mut uses: HashMap<[u32; 3], u16> = HashMap::new();
         for t in &self.tets {
             // Outward faces for a positively oriented tet (a, b, c, d).
-            let fs = [[t[1], t[2], t[3]], [t[0], t[3], t[2]], [t[0], t[1], t[3]], [t[0], t[2], t[1]]];
+            let fs = [
+                [t[1], t[2], t[3]],
+                [t[0], t[3], t[2]],
+                [t[0], t[1], t[3]],
+                [t[0], t[2], t[1]],
+            ];
             for f in fs {
                 let mut key = f;
                 key.sort_unstable();
-                uses.entry(key).and_modify(|c| *c = c.saturating_add(1)).or_insert(1);
+                uses.entry(key)
+                    .and_modify(|c| *c = c.saturating_add(1))
+                    .or_insert(1);
             }
         }
         // Boundary faces: collect their outward orientation (the single occurrence's winding)
         // and owning tet.
-        let mut faces: HashMap<[u32; 3], ([u32; 3], u32)> = HashMap::with_capacity(uses.len() / 16 + 1024);
+        let mut faces: HashMap<[u32; 3], ([u32; 3], u32)> =
+            HashMap::with_capacity(uses.len() / 16 + 1024);
         for (ti, t) in self.tets.iter().enumerate() {
-            let fs = [[t[1], t[2], t[3]], [t[0], t[3], t[2]], [t[0], t[1], t[3]], [t[0], t[2], t[1]]];
+            let fs = [
+                [t[1], t[2], t[3]],
+                [t[0], t[3], t[2]],
+                [t[0], t[1], t[3]],
+                [t[0], t[2], t[1]],
+            ];
             for f in fs {
                 let mut key = f;
                 key.sort_unstable();
@@ -527,14 +573,26 @@ mod tests {
         let v = m.volume();
         assert!((v - exact).abs() / exact < 0.01, "volume {v} vs {exact}");
         let q = quality(&m);
-        assert!(q.min_dihedral_deg > 8.0, "min dihedral {}", q.min_dihedral_deg);
-        assert!(q.max_dihedral_deg < 168.0, "max dihedral {}", q.max_dihedral_deg);
+        assert!(
+            q.min_dihedral_deg > 8.0,
+            "min dihedral {}",
+            q.min_dihedral_deg
+        );
+        assert!(
+            q.max_dihedral_deg < 168.0,
+            "max dihedral {}",
+            q.max_dihedral_deg
+        );
     }
 
     #[test]
     fn box_is_exact_and_watertight() {
         let f = |p: V3| {
-            let q = [p[0].abs() - 50.0, (p[1] - 5.0).abs() - 5.0, (p[2] - 5.0).abs() - 5.0];
+            let q = [
+                p[0].abs() - 50.0,
+                (p[1] - 5.0).abs() - 5.0,
+                (p[2] - 5.0).abs() - 5.0,
+            ];
             let o = [q[0].max(0.0), q[1].max(0.0), q[2].max(0.0)];
             (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt() + q[0].max(q[1]).max(q[2]).min(0.0)
         };
@@ -551,6 +609,9 @@ mod tests {
                 *edges.entry((c, a)).or_default() -= 1;
             }
         }
-        assert!(edges.values().all(|&c| c == 0), "boundary is not closed and consistently oriented");
+        assert!(
+            edges.values().all(|&c| c == 0),
+            "boundary is not closed and consistently oriented"
+        );
     }
 }

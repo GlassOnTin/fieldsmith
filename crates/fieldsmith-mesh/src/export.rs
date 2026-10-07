@@ -5,11 +5,8 @@
 //! ([`crate::stuff`]), so watertightness and consistent orientation come from the meshing
 //! rather than a repair pass; [`TriMesh::defects`] measures them anyway.
 
+use crate::zip::{deflate_segment, stream_entry, write_central, Segment, ZipStream};
 use crate::{stuff, V3};
-use miniz_oxide::deflate::core::{
-    compress as deflate_compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush,
-    TDEFLStatus,
-};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -56,7 +53,10 @@ pub fn surface(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> TriMesh {
     let (mut m, _) = stuff(f, lo, hi, h);
     m.compact();
     let tris = m.boundary().into_iter().map(|(t, _)| t).collect();
-    TriMesh { verts: m.verts, tris }
+    TriMesh {
+        verts: m.verts,
+        tris,
+    }
 }
 
 impl TriMesh {
@@ -131,7 +131,11 @@ impl TriMesh {
     /// held ~4 GB at the 0.1 mm bracket export).
     pub fn defects(&self) -> Defects {
         let mut d = Defects::default();
-        let degen: Vec<bool> = self.tris.par_iter().map(|&t| self.area(t) <= 1e-12).collect();
+        let degen: Vec<bool> = self
+            .tris
+            .par_iter()
+            .map(|&t| self.area(t) <= 1e-12)
+            .collect();
         d.degenerate_triangles = degen.iter().filter(|&&g| g).count();
         // Undirected key (min << 32 | max), in `fwd` when traversed min -> max, else `bwd`.
         let mut fwd: Vec<u64> = Vec::new();
@@ -146,7 +150,11 @@ impl TriMesh {
                     continue; // self-edge: not an edge of the surface
                 }
                 let key = ((u.min(v) as u64) << 32) | u.max(v) as u64;
-                if u < v { fwd.push(key) } else { bwd.push(key) }
+                if u < v {
+                    fwd.push(key)
+                } else {
+                    bwd.push(key)
+                }
             }
         }
         drop(degen);
@@ -263,7 +271,9 @@ impl TriMesh {
             // went to earlier slabs); once every triangle has started, it runs to the end.
             let x1 = if next < n {
                 let mut end = (next + SLAB_TRIS).min(n);
-                while end < n && cbox(order[end] as usize)[0][0] == cbox(order[end - 1] as usize)[0][0] {
+                while end < n
+                    && cbox(order[end] as usize)[0][0] == cbox(order[end - 1] as usize)[0][0]
+                {
                     end += 1;
                 }
                 let x1 = cbox(order[end - 1] as usize)[0][0];
@@ -343,7 +353,9 @@ impl TriMesh {
             .take(2048)
             .map(|t| {
                 let a = self.tri_aabb(t);
-                (a[1][0] - a[0][0]).max(a[1][1] - a[0][1]).max(a[1][2] - a[0][2])
+                (a[1][0] - a[0][0])
+                    .max(a[1][1] - a[0][1])
+                    .max(a[1][2] - a[0][2])
             })
             .collect();
         ds.sort_unstable_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
@@ -415,7 +427,11 @@ impl TriMesh {
                 esc(material)
             )
         };
-        let pid = if material.is_empty() { "" } else { " pid=\"1\" pindex=\"0\"" };
+        let pid = if material.is_empty() {
+            ""
+        } else {
+            " pid=\"1\" pindex=\"0\""
+        };
         let name_attr = if name.is_empty() {
             String::new()
         } else {
@@ -445,7 +461,8 @@ impl TriMesh {
              xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
              <resources>{mat}<object id=\"2\" type=\"model\"{name_attr}{pid}><mesh>"
         );
-        let tail = "</mesh></object></resources>\n<build><item objectid=\"2\"/></build>\n</model>\n";
+        let tail =
+            "</mesh></object></resources>\n<build><item objectid=\"2\"/></build>\n</model>\n";
 
         // One window of chunk texts (and their segments) in flight at a time; 16 chunks
         // (~55 MB of text) is the largest window the memory argument needs, whatever the
@@ -473,14 +490,23 @@ impl TriMesh {
             let b = (a + STREAM_CHUNK).min(self.tris.len());
             let mut s = String::with_capacity((b - a) * 52);
             for t in &self.tris[a..b] {
-                let _ = write!(s, "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]);
+                let _ = write!(
+                    s,
+                    "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+                    t[0], t[1], t[2]
+                );
             }
             s
         };
 
         let mut out = Vec::new();
         let mut records = Vec::new();
-        stream_entry(&mut out, "[Content_Types].xml", types.as_bytes(), &mut records);
+        stream_entry(
+            &mut out,
+            "[Content_Types].xml",
+            types.as_bytes(),
+            &mut records,
+        );
         stream_entry(&mut out, "_rels/.rels", rels.as_bytes(), &mut records);
         let mut z = ZipStream::start(&mut out, "3D/3dmodel.model");
         z.push(head.as_bytes());
@@ -509,7 +535,11 @@ fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 fn cross(u: V3, v: V3) -> V3 {
-    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+    [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ]
 }
 fn len(v: V3) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
@@ -585,7 +615,10 @@ fn seg_vs_tri(m: &TriMesh, ta: &[u32; 3], tb: &[u32; 3]) -> bool {
 /// decades below the threshold.
 fn on_boundary_chain(t: &[V3; 3], q: V3) -> bool {
     let near = |p: V3| {
-        (p[0] - q[0]).abs().max((p[1] - q[1]).abs().max((p[2] - q[2]).abs())) <= 1e-9
+        (p[0] - q[0])
+            .abs()
+            .max((p[1] - q[1]).abs().max((p[2] - q[2]).abs()))
+            <= 1e-9
     };
     (0..3).any(|i| {
         let (pa, pb) = (t[i], t[(i + 1) % 3]);
@@ -632,153 +665,17 @@ fn inside_trip(t: [V3; 3], q: V3, eps: f64) -> bool {
     true
 }
 
-// Streaming zip writer for the 3MF package. Each entry's payload is DEFLATE-compressed in
-// independent segments (pigz-style): every segment is a fresh level-1 compressor ending on a
-// sync flush, so it is a byte-aligned run of non-final blocks, and segments concatenate into
-// one valid raw stream that a final empty block closes. Segments of the model text are
-// formatted and compressed in parallel and appended in index order, so no payload is ever
-// held whole for [`TriMesh::write_3mf`] and the bytes do not depend on the thread count.
+// Streaming zip writer for the 3MF package: the machinery now lives in [`crate::zip`]
+// (shared with the `.fsmz` sidecar reader in fieldsmith-core). Each entry's payload is
+// DEFLATE-compressed in independent segments (pigz-style): a fresh level-1 compressor per
+// segment ending on a sync flush, byte-aligned non-final blocks that concatenate into one
+// valid raw stream a final empty block closes. Segments of the model text are formatted and
+// compressed in parallel and appended in index order, so no payload is ever held whole for
+// [`TriMesh::write_3mf`] and the bytes do not depend on the thread count.
 
-/// Compressed-space scratch for one `deflate` pass; any single emitted block fits well below.
-const DEFLATE_BUF: usize = 512 * 1024;
 /// Elements per streamed text chunk (one DEFLATE segment each). One window of chunks is
 /// formatted and compressed at a time. Tests run small chunks so packages carry many segments.
 const STREAM_CHUNK: usize = if cfg!(test) { 1024 } else { 65536 };
-
-fn push_u16(out: &mut Vec<u8>, v: u16) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-fn push_u32(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
-/// Central-directory record of one entry, built when it finishes.
-struct CentralEntry {
-    name: String,
-    offset: u32,
-    crc: u32,
-    comp: u32,
-    uncomp: u32,
-}
-
-/// One independently compressed piece of an entry's payload: raw DEFLATE blocks ending on a
-/// sync flush (byte-aligned, none final), plus the crc and length of the bytes it encodes.
-struct Segment {
-    z: Vec<u8>,
-    crc: crc32fast::Hasher,
-    len: usize,
-}
-
-fn level1() -> CompressorOxide {
-    CompressorOxide::new(create_comp_flags_from_zip_params(1, 0, 0))
-}
-
-/// Compress `data` as one [`Segment`] with a fresh level-1 compressor.
-fn deflate_segment(data: &[u8]) -> Segment {
-    let mut crc = crc32fast::Hasher::default();
-    crc.update(data);
-    let mut d = level1();
-    let mut buf = vec![0; DEFLATE_BUF];
-    let mut z = Vec::with_capacity(data.len() / 4 + 64);
-    let mut input = data;
-    loop {
-        let (status, used, made) = deflate_compress(&mut d, input, &mut buf, TDEFLFlush::Sync);
-        assert_eq!(status, TDEFLStatus::Okay, "deflate segment failed: {status:?}");
-        z.extend_from_slice(&buf[..made]);
-        input = &input[used..];
-        // Done once the input is consumed and the flush fitted the scratch buffer.
-        if input.is_empty() && made < buf.len() {
-            break;
-        }
-        if used == 0 && made == 0 {
-            panic!("deflate made no progress on {} bytes", input.len());
-        }
-    }
-    Segment { z, crc, len: data.len() }
-}
-
-/// One streamed zip entry. Segments append in order; [`ZipStream::finish`] closes the stream
-/// with a final empty block and patches the local header's crc and size fields, so the sizes
-/// never have to be known before the payload is written.
-struct ZipStream<'a> {
-    out: &'a mut Vec<u8>,
-    hdr_at: usize,
-    name: String,
-    crc: crc32fast::Hasher,
-    uncompressed: usize,
-    compressed: usize,
-}
-
-impl<'a> ZipStream<'a> {
-    fn start(out: &'a mut Vec<u8>, name: &str) -> Self {
-        let hdr_at = out.len();
-        push_u32(out, 0x04034b50);
-        push_u16(out, 20); // version needed
-        push_u16(out, 0); // flags
-        push_u16(out, 8); // method: deflate
-        push_u16(out, 0); // mod time
-        push_u16(out, 0); // mod date (1980-01-01, the epoch zip pickers accept)
-        push_u32(out, 0); // crc, patched in finish
-        push_u32(out, 0); // compressed size, patched in finish
-        push_u32(out, 0); // uncompressed size, patched in finish
-        push_u16(out, name.len() as u16);
-        push_u16(out, 0); // extra len
-        out.extend_from_slice(name.as_bytes());
-        Self {
-            hdr_at,
-            name: name.into(),
-            crc: crc32fast::Hasher::default(),
-            uncompressed: 0,
-            compressed: 0,
-            out,
-        }
-    }
-
-    /// Append an already compressed segment.
-    fn push_segment(&mut self, seg: Segment) {
-        self.out.extend_from_slice(&seg.z);
-        self.compressed += seg.z.len();
-        self.crc.combine(&seg.crc);
-        self.uncompressed += seg.len;
-    }
-
-    /// Compress and append a small payload piece as its own segment.
-    fn push(&mut self, data: &[u8]) {
-        if !data.is_empty() {
-            self.push_segment(deflate_segment(data));
-        }
-    }
-
-    /// End the payload: the final (empty) block, then patch the local header's crc and
-    /// sizes, and return the central-directory record.
-    fn finish(self) -> CentralEntry {
-        let mut d = level1();
-        let mut buf = vec![0; 64];
-        let (status, _, made) = deflate_compress(&mut d, &[], &mut buf, TDEFLFlush::Finish);
-        assert_eq!(status, TDEFLStatus::Done, "deflate stream did not end: {status:?}");
-        self.out.extend_from_slice(&buf[..made]);
-        let compressed = self.compressed + made;
-        let crc = self.crc.finalize();
-        let hdr = &mut self.out[self.hdr_at..];
-        hdr[14..18].copy_from_slice(&crc.to_le_bytes());
-        hdr[18..22].copy_from_slice(&(compressed as u32).to_le_bytes());
-        hdr[22..26].copy_from_slice(&(self.uncompressed as u32).to_le_bytes());
-        CentralEntry {
-            name: self.name,
-            offset: self.hdr_at as u32,
-            crc,
-            comp: compressed as u32,
-            uncomp: self.uncompressed as u32,
-        }
-    }
-}
-
-/// One in-memory payload through the streamed path (the two small package entries).
-fn stream_entry(out: &mut Vec<u8>, name: &str, data: &[u8], records: &mut Vec<CentralEntry>) {
-    let mut z = ZipStream::start(out, name);
-    z.push(data);
-    records.push(z.finish());
-}
 
 /// Feed `n` elements to `z`, formatted in [`STREAM_CHUNK`] chunks, `window` chunks at a time
 /// on the rayon pool — each chunk formatted and compressed into its own segment — and
@@ -794,48 +691,15 @@ fn feed_chunked(
     let mut at = 0;
     while at < chunks {
         let end = (at + window).min(chunks);
-        let segs: Vec<Segment> =
-            (at..end).into_par_iter().map(|ci| deflate_segment(fmt(ci).as_bytes())).collect();
+        let segs: Vec<Segment> = (at..end)
+            .into_par_iter()
+            .map(|ci| deflate_segment(fmt(ci).as_bytes()))
+            .collect();
         for seg in segs {
             z.push_segment(seg);
         }
         at = end;
     }
-}
-
-/// Central directory for the finished entries, then the package's end record; fields as the
-/// one-shot writer before it.
-fn write_central(out: &mut Vec<u8>, records: &[CentralEntry]) {
-    let cd_offset = out.len() as u32;
-    for e in records {
-        push_u32(out, 0x02014b50);
-        push_u16(out, 20); // version made by
-        push_u16(out, 20); // version needed
-        push_u16(out, 0); // flags
-        push_u16(out, 8); // method
-        push_u16(out, 0); // time
-        push_u16(out, 0); // date
-        push_u32(out, e.crc);
-        push_u32(out, e.comp);
-        push_u32(out, e.uncomp);
-        push_u16(out, e.name.len() as u16);
-        push_u16(out, 0); // extra
-        push_u16(out, 0); // comment
-        push_u16(out, 0); // disk start
-        push_u16(out, 0); // internal attrs
-        push_u32(out, 0); // external attrs
-        push_u32(out, e.offset);
-        out.extend_from_slice(e.name.as_bytes());
-    }
-    let cd_size = out.len() as u32 - cd_offset;
-    push_u32(out, 0x06054b50);
-    push_u16(out, 0);
-    push_u16(out, 0);
-    push_u16(out, records.len() as u16);
-    push_u16(out, records.len() as u16);
-    push_u32(out, cd_size);
-    push_u32(out, cd_offset);
-    push_u16(out, 0);
 }
 
 /// Parse a strict binary STL produced by [`TriMesh::write_stl`] or an equivalent writer that
@@ -873,6 +737,58 @@ pub fn read_stl(bytes: &[u8]) -> Option<TriMesh> {
         tris.push(tri);
     }
     Some(TriMesh { verts, tris })
+}
+
+/// Parse an ASCII STL: `vertex x y z` lines provide corners three at a time; everything else
+/// (`solid`, `facet`, `outer|end loop`, `endfacet`, `endsolid`, comments) is skipped. The
+/// weld is identical to [`read_stl`] (equal f32 bits, ±0.0 canonicalised), so a file read
+/// from either encoding yields the same mesh. Returns `None` for unparseable text or a file
+/// with no triangles.
+pub fn read_ascii_stl(text: &str) -> Option<TriMesh> {
+    let mut verts: Vec<V3> = Vec::new();
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    let mut index: HashMap<[u32; 3], u32> = HashMap::new();
+    let mut face: [u32; 3] = [0; 3];
+    let mut face_n = 0usize;
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        if it.next() != Some("vertex") {
+            continue;
+        }
+        let toks = [it.next()?, it.next()?, it.next()?];
+        let p: [f32; 3] = [
+            toks[0].parse::<f64>().ok()? as f32,
+            toks[1].parse::<f64>().ok()? as f32,
+            toks[2].parse::<f64>().ok()? as f32,
+        ];
+        // Canonicalise to bits (+0.0 == −0.0 as a vertex) so array keys hash, as in read_stl.
+        let p = p.map(|c| if c == 0.0 { 0.0 } else { c });
+        let next = verts.len() as u32;
+        let vi = *index
+            .entry([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
+            .or_insert_with(|| {
+                verts.push([p[0] as f64, p[1] as f64, p[2] as f64]);
+                next
+            });
+        face[face_n] = vi;
+        face_n += 1;
+        if face_n == 3 {
+            face_n = 0;
+            tris.push(face);
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    Some(TriMesh { verts, tris })
+}
+
+/// Read STL from either encoding: strict binary first, ASCII fallback otherwise.
+pub fn read_stl_any(bytes: &[u8]) -> Option<TriMesh> {
+    if let Some(m) = read_stl(bytes) {
+        return Some(m);
+    }
+    read_ascii_stl(std::str::from_utf8(bytes).ok()?)
 }
 
 #[cfg(test)]
@@ -962,10 +878,15 @@ mod tests {
             let sheet = (g.abs() - 0.35) / k;
             let b = p.iter().map(|c| c.abs() - 9.0).fold(f64::MIN, f64::max);
             if sheet >= b {
-                crate::adaptive::Sample { v: sheet, g: [s * dg[0], s * dg[1], s * dg[2]] }
+                crate::adaptive::Sample {
+                    v: sheet,
+                    g: [s * dg[0], s * dg[1], s * dg[2]],
+                }
             } else {
                 let mut g = [0.0; 3];
-                let a = (0..3).max_by(|&i, &j| p[i].abs().total_cmp(&p[j].abs())).unwrap();
+                let a = (0..3)
+                    .max_by(|&i, &j| p[i].abs().total_cmp(&p[j].abs()))
+                    .unwrap();
                 g[a] = p[a].signum();
                 crate::adaptive::Sample { v: b, g }
             }
@@ -996,7 +917,13 @@ mod tests {
             tris: vec![[0, 1, 2], [3, 4, 5], [0, 0, 1]],
         };
         let nm = TriMesh {
-            verts: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]],
+            verts: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
             tris: vec![[0, 1, 2], [0, 1, 3], [0, 1, 4], [1, 0, 2]],
         };
         for (name, m) in [
@@ -1008,7 +935,10 @@ mod tests {
             let want = defects_reference(m);
             let got = m.defects();
             println!("{name}: {} tris {got:?}", m.tris.len());
-            assert_eq!(got, want, "{name}: bounded scan diverged from the reference");
+            assert_eq!(
+                got, want,
+                "{name}: bounded scan diverged from the reference"
+            );
         }
         // Every class is exercised somewhere above: open by three meshes, non-manifold by
         // the fan, degenerate + self-intersecting by `crossing`, orientation by the
@@ -1017,8 +947,8 @@ mod tests {
         // adaptive.rs::tests (crossing class + pinned digests).
     }
 
-    /// Walk the local file headers of a zip written by [`zip`] and inflate each entry,
-    /// re-checking the CRCs on the way.
+    /// Walk the local file headers of a zip written by [`crate::zip::ZipWriter`] and inflate
+    /// each entry, re-checking the CRCs on the way.
     fn zip_entries(archive: &[u8]) -> Vec<(String, Vec<u8>)> {
         let u32at = |i: usize| u32::from_le_bytes(archive[i..i + 4].try_into().unwrap());
         let u16at = |i: usize| u16::from_le_bytes(archive[i..i + 2].try_into().unwrap());
@@ -1059,7 +989,11 @@ mod tests {
     fn sphere_surface_is_clean() {
         let m = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
         let exact = 4.0 / 3.0 * std::f64::consts::PI * 1000.0;
-        assert!((m.volume() - exact).abs() / exact < 0.01, "volume {}", m.volume());
+        assert!(
+            (m.volume() - exact).abs() / exact < 0.01,
+            "volume {}",
+            m.volume()
+        );
         let d = m.defects();
         assert!(d.none(), "defects {d:?}");
     }
@@ -1085,7 +1019,12 @@ mod tests {
 
         // Two triangles sharing edge (0,1) and winding the same way: that edge is flipped.
         let flip = TriMesh {
-            verts: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]],
+            verts: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 2.0, 0.0],
+            ],
             tris: vec![[0, 1, 2], [0, 1, 3]],
         };
         let d = flip.defects();
@@ -1147,14 +1086,21 @@ mod tests {
         // quads, so the cut arrives as many unit-length segments; what must hold is that
         // together they trace the full 80 mm square outline, inside the face bounds.
         let segs = m.slice_at(0.0);
-        assert!(segs.len() >= 16, "at least four segments, got {}", segs.len() / 4);
+        assert!(
+            segs.len() >= 16,
+            "at least four segments, got {}",
+            segs.len() / 4
+        );
         let mut total = 0.0;
         let mut i = 0;
         while i + 3 < segs.len() {
             total += (segs[i + 2] - segs[i]).hypot(segs[i + 3] - segs[i + 1]);
             i += 4;
         }
-        assert!((total - 80.0).abs() < 1e-6, "outline length {total}, want 80");
+        assert!(
+            (total - 80.0).abs() < 1e-6,
+            "outline length {total}, want 80"
+        );
         assert!(m.slice_at(10.5).is_empty(), "nothing above the solid");
         assert!(m.slice_at(-10.5).is_empty(), "nothing below the solid");
         assert!(m.slice_at(0.0).iter().all(|c| (-10.0..=10.0).contains(c)));
@@ -1173,7 +1119,15 @@ mod tests {
                 [1.0, 1.0, 0.0], // apex exactly on the plane z = 0
                 [0.0, 0.0, 3.0],
             ],
-            tris: vec![[0, 1, 3], [0, 3, 2], [1, 2, 3], [0, 2, 4], [0, 1, 4], [1, 3, 4], [2, 3, 4]],
+            tris: vec![
+                [0, 1, 3],
+                [0, 3, 2],
+                [1, 2, 3],
+                [0, 2, 4],
+                [0, 1, 4],
+                [1, 3, 4],
+                [2, 3, 4],
+            ],
         };
         let segs = m.slice_at(0.0);
         let mut any = false;
@@ -1193,15 +1147,27 @@ mod tests {
         let bytes = m.write_3mf("test \"bracket\"", "petg");
         let entries = zip_entries(&bytes);
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"]);
+        assert_eq!(
+            names,
+            ["[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"]
+        );
         let model = String::from_utf8(entries[2].1.clone()).unwrap();
         assert!(model.contains("unit=\"millimeter\""), "{model}");
-        assert!(model.contains("name=\"test &quot;bracket&quot;\""), "{model}");
+        assert!(
+            model.contains("name=\"test &quot;bracket&quot;\""),
+            "{model}"
+        );
         assert!(model.contains("base name=\"petg\""), "{model}");
         assert_eq!(model.matches("<vertex ").count(), m.verts.len());
         assert_eq!(model.matches("<triangle ").count(), m.tris.len());
-        assert!(!model.contains("x=\"-"), "coordinates must be in the positive octant");
-        assert!(model.contains("<build><item objectid=\"2\"/></build>"), "{model}");
+        assert!(
+            !model.contains("x=\"-"),
+            "coordinates must be in the positive octant"
+        );
+        assert!(
+            model.contains("<build><item objectid=\"2\"/></build>"),
+            "{model}"
+        );
         let types = String::from_utf8(entries[0].1.clone()).unwrap();
         assert!(types.contains("3dmanufacturing-3dmodel+xml"), "{types}");
     }
@@ -1209,11 +1175,20 @@ mod tests {
     #[test]
     fn three_mf_package_is_identical_across_thread_counts() {
         let m = surface(sphere, [-10.0; 3], [10.0; 3], 1.0);
-        let p1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-        let p4 = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let p1 = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let p4 = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
         let one = p1.install(|| m.write_3mf("stable", "petg"));
         let four = p4.install(|| m.write_3mf("stable", "petg"));
-        assert_eq!(one, four, "package bytes must not depend on the thread count");
+        assert_eq!(
+            one, four,
+            "package bytes must not depend on the thread count"
+        );
     }
 
     /// Golden digest of a whole package (compressed layout included). Re-pinned when the
@@ -1227,7 +1202,10 @@ mod tests {
         for &b in &bytes {
             h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
         }
-        assert_eq!((bytes.len(), format!("{h:016x}")), (578625, "98494099064e7b7c".to_string()));
+        assert_eq!(
+            (bytes.len(), format!("{h:016x}")),
+            (578625, "98494099064e7b7c".to_string())
+        );
     }
 
     /// Every entry of a package: (name, compressed stream, header crc, header length).
@@ -1242,7 +1220,12 @@ mod tests {
             let usize_ = u32at(i + 22) as usize;
             let nlen = u16at(i + 26) as usize;
             let name = String::from_utf8(bytes[i + 30..i + 30 + nlen].to_vec()).unwrap();
-            out.push((name, bytes[i + 30 + nlen..i + 30 + nlen + csize].to_vec(), crc, usize_));
+            out.push((
+                name,
+                bytes[i + 30 + nlen..i + 30 + nlen + csize].to_vec(),
+                crc,
+                usize_,
+            ));
             i += 30 + nlen + csize;
         }
         out
@@ -1265,7 +1248,10 @@ mod tests {
         let bytes = m.write_3mf("pinned", "petg");
         let e = zip_raw_entries(&bytes);
         let text = miniz_oxide::inflate::decompress_to_vec(&e[2].1).unwrap();
-        assert_eq!((text.len(), fnv(&text)), (4516761, "1304e423a349b9bc".to_string()));
+        assert_eq!(
+            (text.len(), fnv(&text)),
+            (4516761, "1304e423a349b9bc".to_string())
+        );
     }
 
     #[test]
@@ -1275,7 +1261,10 @@ mod tests {
         // size and inflates to the header's length and crc. The sphere at 0.5 with the test
         // chunk of 1024 elements carries several segments per section.
         let m = surface(sphere, [-10.0; 3], [10.0; 3], 0.5);
-        assert!(m.tris.len() > 4 * STREAM_CHUNK, "test mesh must span several segments");
+        assert!(
+            m.tris.len() > 4 * STREAM_CHUNK,
+            "test mesh must span several segments"
+        );
         let bytes = m.write_3mf("x", "petg");
         let entries = zip_raw_entries(&bytes);
         assert_eq!(entries.len(), 3, "walked every streamed entry");
@@ -1289,8 +1278,16 @@ mod tests {
                 &mut text,
                 miniz_oxide::MZFlush::Finish,
             );
-            assert_eq!(r.status, Ok(miniz_oxide::MZStatus::StreamEnd), "{name}: stream must end");
-            assert_eq!(r.bytes_consumed, raw.len(), "{name}: final block ends the entry");
+            assert_eq!(
+                r.status,
+                Ok(miniz_oxide::MZStatus::StreamEnd),
+                "{name}: stream must end"
+            );
+            assert_eq!(
+                r.bytes_consumed,
+                raw.len(),
+                "{name}: final block ends the entry"
+            );
             assert_eq!(r.bytes_written, *len, "{name}: inflated length");
             let mut h = crc32fast::Hasher::new();
             h.update(&text[..*len]);
