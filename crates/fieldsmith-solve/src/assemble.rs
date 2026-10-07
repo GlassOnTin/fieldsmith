@@ -18,7 +18,11 @@ impl RefData {
         let el = P2Tetrahedron;
         RefData {
             weights: rule.points.iter().map(|q| q.weight).collect(),
-            grads: rule.points.iter().map(|q| el.evaluate_gradients(&q.point)).collect(),
+            grads: rule
+                .points
+                .iter()
+                .map(|q| el.evaluate_gradients(&q.point))
+                .collect(),
         }
     }
 }
@@ -33,11 +37,18 @@ impl Default for RefData {
 pub fn element_map(mesh: &P2Mesh, e: usize) -> AffineSimplexMap<3> {
     let t = &mesh.tets[e];
     let v = [0, 1, 2, 3].map(|i| mesh.nodes[t[i] as usize]);
-    AffineSimplexMap::from_tetrahedron_vertices(&v).expect("degenerate tetrahedron in analysis mesh")
+    AffineSimplexMap::from_tetrahedron_vertices(&v)
+        .expect("degenerate tetrahedron in analysis mesh")
 }
 
 /// Element stiffness as 10×10 blocks of 3×3.
-pub fn element_stiffness(mesh: &P2Mesh, e: usize, young: f64, poisson: f64, rd: &RefData) -> Box<[[f64; 9]; 100]> {
+pub fn element_stiffness(
+    mesh: &P2Mesh,
+    e: usize,
+    young: f64,
+    poisson: f64,
+    rd: &RefData,
+) -> Box<[[f64; 9]; 100]> {
     let m = ElasticMaterial::new(young, poisson);
     let (lam, mu) = (m.lame_lambda(), m.lame_mu());
     let map = element_map(mesh, e);

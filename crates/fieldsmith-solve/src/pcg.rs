@@ -15,7 +15,10 @@ pub struct SolverOptions {
 
 impl Default for SolverOptions {
     fn default() -> Self {
-        SolverOptions { rtol: 1e-9, max_iter: 2000 }
+        SolverOptions {
+            rtol: 1e-9,
+            max_iter: 2000,
+        }
     }
 }
 
@@ -66,7 +69,9 @@ struct TwoLevel<'a> {
 
 impl<'a> TwoLevel<'a> {
     fn new(a: &'a Bsr, p: &'a Problem) -> Result<TwoLevel<'a>, String> {
-        let dinv = (0..a.n).map(|i| inv3(&a.vals[a.find(i, i as u32)])).collect();
+        let dinv = (0..a.n)
+            .map(|i| inv3(&a.vals[a.find(i, i as u32)]))
+            .collect();
         let nv = p.mesh.nverts;
         let fixed = &p.fixed[..];
         let mid_edge = &p.mesh.mid_edge[..];
@@ -137,9 +142,19 @@ impl<'a> TwoLevel<'a> {
                 trip.push((g, g, 1.0));
             }
         }
-        let m = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &trip).map_err(|e| format!("coarse matrix: {e:?}"))?;
-        let coarse = m.sp_cholesky(Side::Lower).map_err(|e| format!("coarse factorisation failed ({e:?}); the part may not be held by its supports"))?;
-        Ok(TwoLevel { a, dinv, fixed, nverts: nv, mid_edge, coarse })
+        let m = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &trip)
+            .map_err(|e| format!("coarse matrix: {e:?}"))?;
+        let coarse = m.sp_cholesky(Side::Lower).map_err(|e| {
+            format!("coarse factorisation failed ({e:?}); the part may not be held by its supports")
+        })?;
+        Ok(TwoLevel {
+            a,
+            dinv,
+            fixed,
+            nverts: nv,
+            mid_edge,
+            coarse,
+        })
     }
 
     fn gs_sweep(&self, r: &[f64], x: &mut [f64], forward: bool) {
@@ -233,9 +248,16 @@ pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport)
             }
         }
     }
-    let free = (0..p.mesh.nodes.len()).map(|i| 3 - p.fixed[i].count_ones() as usize).sum();
+    let free = (0..p.mesh.nodes.len())
+        .map(|i| 3 - p.fixed[i].count_ones() as usize)
+        .sum();
     let pre = TwoLevel::new(&a, p)?;
-    let mut report = SolveReport { dofs: n, free_dofs: free, coarse_dofs: p.mesh.nverts * 3, ..Default::default() };
+    let mut report = SolveReport {
+        dofs: n,
+        free_dofs: free,
+        coarse_dofs: p.mesh.nverts * 3,
+        ..Default::default()
+    };
 
     let bnorm = dot(&b, &b).sqrt();
     let mut x = vec![0.0; n];
@@ -254,7 +276,10 @@ pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport)
         a.mul(&d, &mut ad);
         let dad = dot(&d, &ad);
         if dad <= 0.0 {
-            return Err("stiffness matrix is not positive definite; check that supports hold the part".into());
+            return Err(
+                "stiffness matrix is not positive definite; check that supports hold the part"
+                    .into(),
+            );
         }
         let alpha = rz / dad;
         for k in 0..n {
@@ -277,7 +302,10 @@ pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport)
         }
     }
     if !report.converged {
-        return Err(format!("solver did not converge in {} iterations (residual {:.2e})", report.iterations, report.rel_residual));
+        return Err(format!(
+            "solver did not converge in {} iterations (residual {:.2e})",
+            report.iterations, report.rel_residual
+        ));
     }
     Ok((x, report))
 }

@@ -35,7 +35,11 @@ impl P2Mesh {
                 let id = *edge_id.entry(key).or_insert_with(|| {
                     let pa = verts[key.0 as usize];
                     let pb = verts[key.1 as usize];
-                    nodes.push([(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5, (pa[2] + pb[2]) * 0.5]);
+                    nodes.push([
+                        (pa[0] + pb[0]) * 0.5,
+                        (pa[1] + pb[1]) * 0.5,
+                        (pa[2] + pb[2]) * 0.5,
+                    ]);
                     mid_edge.push([key.0, key.1]);
                     (nodes.len() - 1) as u32
                 });
@@ -43,7 +47,12 @@ impl P2Mesh {
             }
             out.push(n);
         }
-        P2Mesh { nodes, nverts, tets: out, mid_edge }
+        P2Mesh {
+            nodes,
+            nverts,
+            tets: out,
+            mid_edge,
+        }
     }
 
     pub fn ndofs(&self) -> usize {
@@ -58,7 +67,9 @@ impl P2Mesh {
         let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
         let w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
-        (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0])) / 6.0
+        (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+            + u[2] * (v[0] * w[1] - v[1] * w[0]))
+            / 6.0
     }
 }
 
@@ -74,5 +85,12 @@ pub fn face_nodes(t: &[u32; 10], f: [usize; 3]) -> [u32; 6] {
         }
         unreachable!()
     };
-    [t[f[0]], t[f[1]], t[f[2]], mid(f[0], f[1]), mid(f[1], f[2]), mid(f[2], f[0])]
+    [
+        t[f[0]],
+        t[f[1]],
+        t[f[2]],
+        mid(f[0], f[1]),
+        mid(f[1], f[2]),
+        mid(f[2], f[0]),
+    ]
 }

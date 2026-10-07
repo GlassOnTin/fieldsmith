@@ -10,11 +10,20 @@ pub type Stress = [f64; 6];
 
 pub fn von_mises(s: &Stress) -> f64 {
     let [xx, yy, zz, xy, yz, zx] = *s;
-    (0.5 * ((xx - yy).powi(2) + (yy - zz).powi(2) + (zz - xx).powi(2)) + 3.0 * (xy * xy + yz * yz + zx * zx)).sqrt()
+    (0.5 * ((xx - yy).powi(2) + (yy - zz).powi(2) + (zz - xx).powi(2))
+        + 3.0 * (xy * xy + yz * yz + zx * zx))
+        .sqrt()
 }
 
 /// Stress in element `e` at reference point `xi`.
-pub fn element_stress(mesh: &P2Mesh, u: &[f64], e: usize, young: f64, poisson: f64, xi: [f64; 3]) -> Stress {
+pub fn element_stress(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    young: f64,
+    poisson: f64,
+    xi: [f64; 3],
+) -> Stress {
     let m = ElasticMaterial::new(young, poisson);
     let (lam, mu) = (m.lame_lambda(), m.lame_mu());
     let map = element_map(mesh, e);

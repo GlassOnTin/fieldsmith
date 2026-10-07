@@ -23,7 +23,12 @@ impl Bsr {
             row_ptr.push(cols.len() as u32);
         }
         let nnz = cols.len();
-        Bsr { n, row_ptr, cols, vals: vec![[0.0; 9]; nnz] }
+        Bsr {
+            n,
+            row_ptr,
+            cols,
+            vals: vec![[0.0; 9]; nnz],
+        }
     }
 
     /// Pattern of the node adjacency of a set of elements.
