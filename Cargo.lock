@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fieldsmith-core",
  "fieldsmith-doc",
@@ -307,19 +307,22 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fenics-element",
  "fieldsmith-doc",
  "fieldsmith-field",
  "fieldsmith-mesh",
  "fieldsmith-solve",
+ "js-sys",
+ "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "fieldsmith-doc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -327,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-field"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fieldsmith-doc",
  "serde",
@@ -335,17 +338,18 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-mesh"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "fieldsmith-solve"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "faer",
  "fenics-assembly",
@@ -355,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-verify"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fenics-element",
  "fieldsmith-core",
@@ -368,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "fieldsmith-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "fieldsmith-core",

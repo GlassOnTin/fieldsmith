@@ -5,14 +5,16 @@ Fieldsmith is an implicit-field CAD and analysis tool: a document is a small tex
 its geometry is an SDF-like field, and every measurement (volume, stress, printed mass) comes
 from integrating that field, not from a boundary representation.
 
-**Status:** pre-release. The model → solve → fill → export flow works locally and is verified
-by the cases listed in [docs/verification/](docs/verification/). The performance budgets in
-[GOAL.md](GOAL.md) are not all met yet; see [docs/verification/V8.md](docs/verification/V8.md)
-for the export budget's current numbers.
+**Status:** v0.2.0. The model → setup → solve → fill → export flow works locally and is
+verified by the cases in [docs/verification/](docs/verification/); imported meshes
+(GLB, OBJ, binary and ASCII STL) become field leaves with labelled faces and
+region-driven extension (V10). The GOAL.md performance budgets pass in the headed
+Chromium referee on a workstation — [budgets.md](docs/verification/budgets.md); the
+budgets' stated mid-range laptop and Firefox measurements have not been run.
 
 ## Building and running
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V9)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V10)
     npm --prefix web install                  # once
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
@@ -48,12 +50,12 @@ documents export the graded part, `--solid` the body alone.
 ## What is verified, and what is not
 
 `docs/verification/` carries a report per verification case: volumes against closed-form
-answers (V4), a plate-with-hole against theory (V3), the cantilever against theory (V2), and
-the graded lattice's stiffness against a resolved reference mesh (V7). Limits that are not
-covered get stated in those reports rather than glossed: the export mesh is uniform (there is
-no adaptive spacing yet) and the graded fill's surface carries measured non-manifold edges
-where TPMS sheets cross or pinch inside one cell (V8, "Non-manifold edges"); slicers take
-the solid as the union of the closed shell.
+answers (V4), a plate-with-hole against theory (V3), the cantilever against theory (V2), the
+graded lattice's stiffness against a resolved reference mesh (V7), and an imported mesh
+against its file's own header and the slicer that consumes it (V10). Limits that are not
+covered get stated in those reports rather than glossed: the graded fill's surface carries
+measured non-manifold edges where TPMS sheets cross or pinch inside one cell
+(V8, "Non-manifold edges"); slicers take the solid as the union of the closed shell.
 
 ## Limitations
 
