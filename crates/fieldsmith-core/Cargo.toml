@@ -11,3 +11,8 @@ fieldsmith-mesh = { workspace = true }
 fieldsmith-solve = { workspace = true }
 fenics-element = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }

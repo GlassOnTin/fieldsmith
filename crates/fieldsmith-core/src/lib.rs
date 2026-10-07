@@ -2,19 +2,41 @@
 //! nodal results. Runs identically natively (CLI, verification tests) and in a Web Worker.
 
 pub mod fill;
+pub mod fsmz;
+pub mod import;
 pub mod probe;
 pub mod regions;
+pub mod voxel;
 
 use fieldsmith_doc::{materials, Document, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
-use fieldsmith_solve::{element_stress, nodal_stress, solve, von_mises, Material, P2Mesh, Problem, SolveReport, SolverOptions, Stress};
+use fieldsmith_solve::{
+    element_stress, nodal_stress, solve, von_mises, Material, P2Mesh, Problem, SolveReport,
+    SolverOptions, Stress,
+};
 use serde::Serialize;
 
 pub use regions::{region_facets, Facet};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
 pub type Clock = fn() -> f64;
+
+/// Wall-clock milliseconds, for measuring durations. The `std` clock natively; the JS clock
+/// in the browser, because wasm32's std has no clock and panics at `Instant::now`.
+pub fn now_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        thread_local! {
+            static T0: std::time::Instant = std::time::Instant::now();
+        }
+        T0.with(|t| t.elapsed().as_secs_f64() * 1000.0)
+    }
+}
 
 /// How fine an analysis to run.
 #[derive(Clone, Copy, Debug)]
@@ -98,7 +120,8 @@ impl std::fmt::Display for SetupError {
 }
 
 pub fn material_of(doc: &Document) -> Result<materials::Material, SetupError> {
-    materials::find(doc, &doc.material).ok_or_else(|| SetupError(format!("unknown material '{}'", doc.material)))
+    materials::find(doc, &doc.material)
+        .ok_or_else(|| SetupError(format!("unknown material '{}'", doc.material)))
 }
 
 /// Load case names in document order (loads without a case name share "Load 1").
@@ -139,7 +162,10 @@ pub fn fixed_mask(
     for s in &doc.supports {
         let fs = region_facets(doc, &s.region, mesh, facets, h)?;
         if fs.is_empty() {
-            return Err(SetupError(format!("support '{}': region '{}' does not touch the part's surface", s.id, s.region)));
+            return Err(SetupError(format!(
+                "support '{}': region '{}' does not touch the part's surface",
+                s.id, s.region
+            )));
         }
         let mask = (s.fixed[0] as u8) | (s.fixed[1] as u8) << 1 | (s.fixed[2] as u8) << 2;
         for &fi in &fs {
@@ -165,7 +191,10 @@ pub fn case_force(
     for l in doc.loads.iter().filter(|l| l.case == name) {
         let fs = region_facets(doc, &l.region, mesh, facets, h)?;
         if fs.is_empty() {
-            return Err(SetupError(format!("load '{}': region '{}' does not touch the part's surface", l.id, l.region)));
+            return Err(SetupError(format!(
+                "load '{}': region '{}' does not touch the part's surface",
+                l.id, l.region
+            )));
         }
         let area: f64 = fs.iter().map(|&i| facets[i].area(mesh)).sum();
         for &fi in &fs {
@@ -199,7 +228,10 @@ pub fn run_case(
 ) -> Result<CaseResult, SetupError> {
     let problem = Problem {
         mesh: mesh.clone(),
-        material: Material { young: young.to_vec(), poisson },
+        material: Material {
+            young: young.to_vec(),
+            poisson,
+        },
         fixed: fixed.to_vec(),
         force,
     };
@@ -231,7 +263,9 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         return Err(SetupError("the model is empty".into()));
     }
     if doc.supports.is_empty() {
-        return Err(SetupError("add a support: the part needs something to hold it".into()));
+        return Err(SetupError(
+            "add a support: the part needs something to hold it".into(),
+        ));
     }
     if doc.loads.is_empty() {
         return Err(SetupError("add a load".into()));
@@ -240,7 +274,11 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     let h = match res {
         Resolution::Size(h) => h,
         Resolution::Dofs(n) => {
-            let v = fieldsmith_field::volume::integrate(&body, fieldsmith_field::volume::default_spacing(&b) * 2.0, None);
+            let v = fieldsmith_field::volume::integrate(
+                &body,
+                fieldsmith_field::volume::default_spacing(&b) * 2.0,
+                None,
+            );
             size_for_dofs(v.max(1e-9), n)
         }
     };
@@ -248,7 +286,9 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     let (mut lin, _) = stuff(f, b.lo, b.hi, h);
     lin.compact();
     if lin.tets.is_empty() {
-        return Err(SetupError("the part is too thin to mesh at this resolution".into()));
+        return Err(SetupError(
+            "the part is too thin to mesh at this resolution".into(),
+        ));
     }
     let quality = fieldsmith_mesh::quality(&lin);
     let mesh = P2Mesh::from_linear(&lin.verts, &lin.tets);
@@ -260,8 +300,15 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         .iter()
         .map(|(f, t)| {
             let tet = &mesh.tets[*t as usize];
-            let local = f.map(|v| tet[..4].iter().position(|&x| x == v).expect("face vertex in tet"));
-            Facet { nodes: fieldsmith_solve::p2::face_nodes(tet, local) }
+            let local = f.map(|v| {
+                tet[..4]
+                    .iter()
+                    .position(|&x| x == v)
+                    .expect("face vertex in tet")
+            });
+            Facet {
+                nodes: fieldsmith_solve::p2::face_nodes(tet, local),
+            }
         })
         .collect();
     let surface: Vec<[u32; 6]> = facets.iter().map(|f| f.nodes).collect();
@@ -290,8 +337,12 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         iterations += case.solve.iterations;
         cases.push(case);
     }
-    let envelope = (0..nn).map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max)).collect();
-    let envelope_elem = (0..mesh.tets.len()).map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max)).collect();
+    let envelope = (0..nn)
+        .map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max))
+        .collect();
+    let envelope_elem = (0..mesh.tets.len())
+        .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
+        .collect();
     let t_end = clock();
     let provenance = Provenance {
         elements: mesh.tets.len(),
@@ -366,7 +417,10 @@ load pull two force=(100, 0, 0)
         // The shared map's last claim wins, and every claimed surface facet is exactly one of
         // the two sets.
         for (fi, &ri) in a.surface_region.iter().enumerate() {
-            assert!(ri == 0 || ri == 1 || ri == u32::MAX, "facet {fi} mapped to region {ri}");
+            assert!(
+                ri == 0 || ri == 1 || ri == u32::MAX,
+                "facet {fi} mapped to region {ri}"
+            );
             if ri != u32::MAX {
                 assert!(
                     a.region_facet_sets[ri as usize].contains(&(fi as u32)),

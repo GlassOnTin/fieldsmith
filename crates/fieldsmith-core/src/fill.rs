@@ -43,8 +43,11 @@ use fieldsmith_field::volume;
 use fieldsmith_field::{Aabb, V3};
 use fieldsmith_solve::P2Mesh;
 
-use crate::{case_force, case_names, fixed_mask, material_of, run_case, Analysis, CaseResult, Clock, Resolution, SetupError};
 use crate::Facet;
+use crate::{
+    case_force, case_names, fixed_mask, material_of, run_case, Analysis, CaseResult, Clock,
+    Resolution, SetupError,
+};
 
 /// Fit band of the stiffness laws, densities in `[RHO_LO, RHO_HI]`.
 pub const RHO_LO: f64 = 0.18;
@@ -219,7 +222,11 @@ pub struct Graded {
 }
 
 /// Solid analysis, then grading and a graded re-solve of every case. One call, both solves.
-pub fn graded(doc: &fieldsmith_doc::Document, res: Resolution, clock: Clock) -> Result<(Analysis, Graded), SetupError> {
+pub fn graded(
+    doc: &fieldsmith_doc::Document,
+    res: Resolution,
+    clock: Clock,
+) -> Result<(Analysis, Graded), SetupError> {
     let base = crate::analyse(doc, res, clock)?;
     let g = graded_of(doc, &base, clock)?;
     Ok((base, g))
@@ -227,28 +234,37 @@ pub fn graded(doc: &fieldsmith_doc::Document, res: Resolution, clock: Clock) -> 
 
 /// Grade the fill from an existing solid analysis and re-solve. Mesh, supports and loads are the
 /// analysis's; only the per-element moduli change.
-pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) -> Result<Graded, SetupError> {
+pub fn graded_of(
+    doc: &fieldsmith_doc::Document,
+    base: &Analysis,
+    clock: Clock,
+) -> Result<Graded, SetupError> {
     let t0 = clock();
-    let spec = doc.fill.clone().ok_or_else(|| SetupError("this document has no fill".into()))?;
+    let spec = doc
+        .fill
+        .clone()
+        .ok_or_else(|| SetupError("this document has no fill".into()))?;
     if spec.cell <= 0.0 {
         return Err(SetupError("fill cell size must be positive".into()));
     }
     if spec.skin < 0.0 || spec.margin < 0.0 || spec.min_wall < 0.0 {
-        return Err(SetupError("fill skin, margin and min wall must be non-negative".into()));
+        return Err(SetupError(
+            "fill skin, margin and min wall must be non-negative".into(),
+        ));
     }
     if spec.curve <= 0.0 {
         return Err(SetupError("fill curve must be positive".into()));
     }
     if spec.rho_min <= 0.0 || spec.rho_min > spec.rho_max || spec.rho_max > 1.0 {
-        return Err(SetupError("fill densities must satisfy 0 < ρmin ≤ ρmax ≤ 1".into()));
+        return Err(SetupError(
+            "fill densities must satisfy 0 < ρmin ≤ ρmax ≤ 1".into(),
+        ));
     }
     let drive: &Vec<f64> = match &spec.case {
         Some(name) => {
-            let c = base
-                .cases
-                .iter()
-                .find(|c| c.name == *name)
-                .ok_or_else(|| SetupError(format!("fill case '{name}': no load case with that name")))?;
+            let c = base.cases.iter().find(|c| c.name == *name).ok_or_else(|| {
+                SetupError(format!("fill case '{name}': no load case with that name"))
+            })?;
             &c.vm_elem
         }
         None => &base.envelope_elem,
@@ -267,10 +283,18 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     for name in &spec.protect {
         let shape = expr::placed_shape(doc, name)
             .ok_or_else(|| SetupError(format!("fill protects missing shape '{name}'")))?;
-        let zone = Expr::Offset { d: spec.margin, e: Box::new(shape) };
+        let zone = Expr::Offset {
+            d: spec.margin,
+            e: Box::new(shape),
+        };
         keep = match keep {
             Expr::Empty => zone,
-            k => Expr::Combine { op: Op::Add, blend: 0.0, a: Box::new(k), b: Box::new(zone) },
+            k => Expr::Combine {
+                op: Op::Add,
+                blend: 0.0,
+                a: Box::new(k),
+                b: Box::new(zone),
+            },
         };
     }
 
@@ -296,7 +320,11 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     for k in 0..nz {
         for j in 0..ny {
             for i in 0..nx {
-                let p = [ox + i as f64 * spacing, oy + j as f64 * spacing, oz + k as f64 * spacing];
+                let p = [
+                    ox + i as f64 * spacing,
+                    oy + j as f64 * spacing,
+                    oz + k as f64 * spacing,
+                ];
                 core.data[(k * ny + j) * nx + i] = if probe.in_core(p) { 1.0 } else { 0.0 };
             }
         }
@@ -337,8 +365,13 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     for i in 0..n_nodes {
         if vsum[i] > 1e-9 {
             let sigma = (wsum[i] / vsum[i]) as f64;
-            let t = if sigma_ref > 0.0 { (sigma / sigma_ref).clamp(0.0, 1.0) } else { 0.0 };
-            rho.data[i] = (spec.rho_min + (spec.rho_max - spec.rho_min) * t.powf(spec.curve)) as f32;
+            let t = if sigma_ref > 0.0 {
+                (sigma / sigma_ref).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            rho.data[i] =
+                (spec.rho_min + (spec.rho_max - spec.rho_min) * t.powf(spec.curve)) as f32;
         }
     }
     // Smooth the grades over about a cell (one masked box blur, in-core samples weighted only)
@@ -400,7 +433,9 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
     // exceeds the body, so both integrals cover the same volume; the difference is the lattice.
     let t_fill = clock();
     let mass_h = (spec.cell / 4.0).min(volume::default_spacing(&b));
-    let mass_g = volume::integrate(&Expr::Filled(Box::new(fill.clone())), mass_h, None) * mat.density / 1000.0;
+    let mass_g = volume::integrate(&Expr::Filled(Box::new(fill.clone())), mass_h, None)
+        * mat.density
+        / 1000.0;
     let solid_mass_g = volume::integrate(&body, mass_h, None) * mat.density / 1000.0;
     let t_solved = clock();
 
@@ -415,10 +450,12 @@ pub fn graded_of(doc: &fieldsmith_doc::Document, base: &Analysis, clock: Clock) 
         cases.push(run_case(&base.mesh, &young, mat.nu, &fixed, force, name)?);
     }
     let nn = base.mesh.nodes.len();
-    let envelope =
-        (0..nn).map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max)).collect();
-    let envelope_elem =
-        (0..base.mesh.tets.len()).map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max)).collect();
+    let envelope = (0..nn)
+        .map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max))
+        .collect();
+    let envelope_elem = (0..base.mesh.tets.len())
+        .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
+        .collect();
 
     Ok(Graded {
         spec,
@@ -456,13 +493,23 @@ fn grid_over(b: &Aabb, spacing: f64, pad: f64) -> Result<Grid3, SetupError> {
                 dims[0], dims[1], dims[2]
             ))
         })?;
-    Ok(Grid3 { origin, spacing, dims, data: vec![0.0f32; n] })
+    Ok(Grid3 {
+        origin,
+        spacing,
+        dims,
+        data: vec![0.0f32; n],
+    })
 }
 
 /// Centroid of a tet's four CORNER nodes — tets carry 10 P2 nodes and iterating the array
 /// would pull the average towards the midside nodes.
 fn centroid(mesh: &fieldsmith_solve::P2Mesh, e: usize) -> V3 {
-    let corners = [mesh.tets[e][0], mesh.tets[e][1], mesh.tets[e][2], mesh.tets[e][3]];
+    let corners = [
+        mesh.tets[e][0],
+        mesh.tets[e][1],
+        mesh.tets[e][2],
+        mesh.tets[e][3],
+    ];
     let mut c = [0.0f64; 3];
     for n in corners.iter() {
         let p = mesh.nodes[*n as usize];
@@ -570,7 +617,11 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
         assert_eq!(g.cases.len(), base.cases.len());
         let solid = &base.cases[0];
         let graded_case = &g.cases[0];
-        assert!(graded_case.solve.converged, "re-solve did not converge: {:?}", graded_case.solve);
+        assert!(
+            graded_case.solve.converged,
+            "re-solve did not converge: {:?}",
+            graded_case.solve
+        );
 
         // The lattice is softer than the solid bar, so it deflects more.
         assert!(
@@ -589,7 +640,10 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
                 _ => n_void += 1,
             }
         }
-        assert!(n_solid > 0 && n_lat > 0 && n_void > 0, "solid={n_solid} lattice={n_lat} void={n_void}");
+        assert!(
+            n_solid > 0 && n_lat > 0 && n_void > 0,
+            "solid={n_solid} lattice={n_lat} void={n_void}"
+        );
 
         // Moduli: every element strictly positive and at most the solid modulus; the modulus is
         // exactly the mapped material fraction (self-consistency of `element_stiffness`);
@@ -602,12 +656,13 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             let phi = g.rho_elem[i];
             assert!((0.0..=1.0).contains(&phi), "rho_elem[{i}] = {phi}");
             assert!(y > 0.0 && y <= mat.e * (1.0 + 1e-9), "young[{i}] = {y}");
-            let mapped = mat.e * VOID_SCALE.max(element_stiffness(
-                g.spec.family,
-                g.spec.mode,
-                phi,
-                h_over_cell,
-            ));
+            let mapped = mat.e
+                * VOID_SCALE.max(element_stiffness(
+                    g.spec.family,
+                    g.spec.mode,
+                    phi,
+                    h_over_cell,
+                ));
             assert!(
                 (y - mapped).abs() < 1e-6 * mat.e,
                 "young[{i}] = {y} does not match the φ mapping ({mapped}) at φ = {phi}"
@@ -642,10 +697,19 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
         // Masses in grams, lattice below the solid part, and the field-level volume near the
         // solid one (the fill's skin keeps it above the lattice mass).
         assert!(g.solid_mass_g > 0.0, "solid mass {:.6}", g.solid_mass_g);
-        assert!(g.mass_g > 0.0 && g.mass_g < g.solid_mass_g, "masses {:.6} / {:.6}", g.mass_g, g.solid_mass_g);
+        assert!(
+            g.mass_g > 0.0 && g.mass_g < g.solid_mass_g,
+            "masses {:.6} / {:.6}",
+            g.mass_g,
+            g.solid_mass_g
+        );
         // Bar is 40×10×10 = 4000 mm³ of 7.85 g/cm³ steel ≈ 31.4 g; the solid integral should land
         // with a few percent of that (meshing trims nothing at this h).
-        assert!((g.solid_mass_g - 31.4).abs() < 1.0, "solid mass {:.3} g", g.solid_mass_g);
+        assert!(
+            (g.solid_mass_g - 31.4).abs() < 1.0,
+            "solid mass {:.3} g",
+            g.solid_mass_g
+        );
 
         assert!(g.sigma_ref > 0.0, "sigma_ref = {}", g.sigma_ref);
         assert!(g.fill_ms >= 0.0 && g.solve_ms >= 0.0);
@@ -673,7 +737,8 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 
     #[test]
     fn no_fill_error() {
-        let src = BAR.split("\n")
+        let src = BAR
+            .split("\n")
             .filter(|l| !l.starts_with("fill"))
             .collect::<Vec<_>>()
             .join("\n");
@@ -686,14 +751,15 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
     fn protected_neighbourhood_is_solid() {
         // A protected cylinder near the bar's tip: elements around it stay solid, and the
         // lattice lives on beyond the margin.
-        let src = BAR.replace(
-            "fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)",
-            "fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6) protect=stub margin=3",
-        )
-        .replace(
-            "region tip = bar.px",
-            "region tip = bar.px\ncylinder stub r=3 h=2 at=(30, 5, 5)",
-        );
+        let src = BAR
+            .replace(
+                "fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)",
+                "fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6) protect=stub margin=3",
+            )
+            .replace(
+                "region tip = bar.px",
+                "region tip = bar.px\ncylinder stub r=3 h=2 at=(30, 5, 5)",
+            );
         let d = parse(&src);
         let (base, g) = graded(&d, Resolution::Size(1.5), now).expect("graded analysis");
         let mat = material_of(&d).unwrap();
@@ -709,7 +775,10 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             let dz = (c[2] - 5.0).abs() - 1.0;
             let dist = (xy.max(0.0).powi(2) + dz.max(0.0).powi(2)).sqrt();
             if dist <= 1.0 {
-                assert_eq!(g.class[e], CLASS_SOLID, "non-solid class {dist:.2} mm inside the protected zone");
+                assert_eq!(
+                    g.class[e], CLASS_SOLID,
+                    "non-solid class {dist:.2} mm inside the protected zone"
+                );
                 near_solid += 1;
             } else if dist <= 2.0 {
                 assert!(
