@@ -270,6 +270,12 @@ impl Attrs {
             None => self.err(format!("missing '{key}='")),
         }
     }
+    fn req_string(&mut self, key: &str) -> Result<String, ParseError> {
+        match self.string(key)? {
+            Some(s) => Ok(s),
+            None => self.err(format!("missing '{key}='")),
+        }
+    }
     fn vec3(&mut self, key: &str) -> Result<Option<[f64; 3]>, ParseError> {
         match self.take(key) {
             None => Ok(None),
@@ -301,6 +307,23 @@ impl Attrs {
             None => Ok(None),
             Some(Some(Val::Str(s))) | Some(Some(Val::Ident(s))) => Ok(Some(s)),
             Some(_) => self.err(format!("'{key}' must be text")),
+        }
+    }
+    /// Six numbers, e.g. a mesh node's baked bounds `(xmin, ymin, zmin, xmax, ymax, zmax)`.
+    fn vec6(&mut self, key: &str) -> Result<Option<[f64; 6]>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::Tuple(t))) if t.len() == 6 => {
+                let mut o = [0.0; 6];
+                for (i, v) in t.iter().enumerate() {
+                    match v {
+                        Val::Num(x) => o[i] = *x,
+                        _ => return self.err(format!("'{key}' must be six numbers")),
+                    }
+                }
+                Ok(Some(o))
+            }
+            Some(_) => self.err(format!("'{key}' must be six numbers")),
         }
     }
     fn idents(&mut self, key: &str) -> Result<Vec<String>, ParseError> {
@@ -392,8 +415,15 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 _ => return Err(err("expected a quoted name".into())),
             },
             "material" => doc.material = c.ident("material id")?,
-            "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "group" => {
+            "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "mesh" | "group"
+            | "extend" => {
                 let id = c.ident("a shape name")?;
+                // `extend` takes a positional region name before its (required) dir/len.
+                let region = if kw == "extend" {
+                    Some(c.ident("a region name")?)
+                } else {
+                    None
+                };
                 let mut a = c.attrs()?;
                 let opens = c.is_sym('{');
                 let op = if a.flag("subtract") {
@@ -470,6 +500,30 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                         };
                         NodeKind::Extrude { profile, height }
                     }
+                    "mesh" => NodeKind::Mesh {
+                        src: a
+                            .string("src")?
+                            .ok_or_else(|| err("mesh needs src=\"…\"".into()))?,
+                        hash: a
+                            .string("hash")?
+                            .ok_or_else(|| err("mesh needs hash=<16 hex digits>".into()))?,
+                        units: a.req_string("units")?,
+                        up: a.req_string("up")?,
+                        voxel: a.req_num("vox")?,
+                        bbox: a.vec6("bbox")?.ok_or_else(|| {
+                            err("mesh needs bbox=(xmin, ymin, zmin, xmax, ymax, zmax)".into())
+                        })?,
+                        tris: a.req_num("tris")?.max(0.0) as u32,
+                        patches: a.req_num("patches")?.max(0.0) as u32,
+                        open_edges: a.req_num("open_edges")?.max(0.0) as u32,
+                    },
+                    "extend" => NodeKind::Extend {
+                        region: region.ok_or_else(|| err("extend needs a region name".into()))?,
+                        dir: a
+                            .vec3("dir")?
+                            .ok_or_else(|| err("extend needs dir=(x, y, z)".into()))?,
+                        len: a.req_num("len")?,
+                    },
                     _ => NodeKind::Group {
                         children: Vec::new(),
                         modifiers: Vec::new(),
@@ -513,14 +567,32 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let mut selectors = Vec::new();
                 loop {
                     let shape = c.ident("a shape name")?;
-                    let face = if c.is_sym('.') {
+                    // `.p3` selects a surface patch of a mesh node (`face` stays All and the
+                    // solver ignores it); other names after the dot must be face names.
+                    let sel = if c.is_sym('.') {
                         c.next();
                         let f = c.ident("a face name")?;
-                        Face::parse(&f).ok_or_else(|| err(format!("unknown face '{f}'")))?
+                        match f.strip_prefix('p').and_then(|r| r.parse::<u32>().ok()) {
+                            Some(p) => Selector {
+                                shape,
+                                face: Face::All,
+                                patch: Some(p),
+                            },
+                            None => Selector {
+                                shape,
+                                face: Face::parse(&f)
+                                    .ok_or_else(|| err(format!("unknown face '{f}'")))?,
+                                patch: None,
+                            },
+                        }
                     } else {
-                        Face::All
+                        Selector {
+                            shape,
+                            face: Face::All,
+                            patch: None,
+                        }
                     };
-                    selectors.push(Selector { shape, face });
+                    selectors.push(sel);
                     if c.is_sym('+') {
                         c.next();
                     } else {
@@ -760,9 +832,12 @@ pub fn print(doc: &Document) -> String {
         let sels: Vec<String> = r
             .selectors
             .iter()
-            .map(|s| match s.face {
-                Face::All => s.shape.clone(),
-                f => format!("{}.{}", s.shape, f.name()),
+            .map(|s| match s.patch {
+                Some(p) => format!("{}.p{}", s.shape, p),
+                None => match s.face {
+                    Face::All => s.shape.clone(),
+                    f => format!("{}.{}", s.shape, f.name()),
+                },
             })
             .collect();
         let _ = writeln!(o, "region {} = {}", r.id, sels.join(" + "));
@@ -883,6 +958,46 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
                 node.id,
                 n(*height),
                 pts.join(", ")
+            );
+        }
+        NodeKind::Mesh {
+            src,
+            hash,
+            units,
+            up,
+            voxel,
+            bbox,
+            tris,
+            patches,
+            open_edges,
+        } => {
+            let _ = write!(
+                line,
+                "mesh {} src={} units={} up={} vox={} hash={} bbox=({}) tris={} patches={} open_edges={}",
+                node.id,
+                q(src),
+                units,
+                up,
+                n(*voxel),
+                q(hash),
+                [bbox[0], bbox[1], bbox[2], bbox[3], bbox[4], bbox[5]]
+                    .iter()
+                    .map(|v| n(*v))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                tris,
+                patches,
+                open_edges
+            );
+        }
+        NodeKind::Extend { region, dir, len } => {
+            let _ = write!(
+                line,
+                "extend {} {} dir={} len={}",
+                node.id,
+                region,
+                v3(*dir),
+                n(*len)
             );
         }
         NodeKind::Group { .. } => {
@@ -1011,5 +1126,206 @@ solve size=2.5
         let j = serde_json::to_string(&d).unwrap();
         let d2: Document = serde_json::from_str(&j).unwrap();
         assert_eq!(d, d2);
+    }
+
+    const MESH_SAMPLE: &str = r#"fieldsmith 1
+name "Import"
+material petg
+
+mesh mesh1 src="/tmp/part.stl" units=m up=y vox=0.8 hash="0123456789abcdef" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=87286 patches=6 open_edges=0
+
+region bottom = mesh1.p3 + mesh1.px
+support hold bottom
+load press bottom pressure=0.5 case="Load 1"
+"#;
+
+    #[test]
+    fn mesh_node_and_patch_selector_round_trip() {
+        let d = parse(MESH_SAMPLE).unwrap();
+        assert_eq!(
+            print(&d),
+            MESH_SAMPLE,
+            "printer output differs:\n{}",
+            print(&d)
+        );
+        match &d.root[0].kind {
+            NodeKind::Mesh {
+                src,
+                hash,
+                units,
+                up,
+                voxel,
+                bbox,
+                tris,
+                patches,
+                open_edges,
+            } => {
+                assert_eq!(src, "/tmp/part.stl");
+                assert_eq!(hash, "0123456789abcdef");
+                assert_eq!((units.as_str(), up.as_str(), *voxel), ("m", "y", 0.8));
+                assert_eq!(*bbox, [0.0, 0.0, 0.0, 15.24, 17.25, 5.0]);
+                assert_eq!((*tris, *patches, *open_edges), (87286, 6, 0));
+            }
+            _ => panic!("expected a mesh node"),
+        }
+        // patch selectors keep face All and the id; face selectors stay untouched
+        assert_eq!(d.regions[0].selectors[0].patch, Some(3));
+        assert_eq!(d.regions[0].selectors[1].face, Face::Px);
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // JSON round trip keeps the patch (skip_serializing_if must not drop it)
+        let j = serde_json::to_string(&d).unwrap();
+        let d2: Document = serde_json::from_str(&j).unwrap();
+        assert_eq!(d, d2);
+    }
+
+    #[test]
+    fn mesh_validate_reports_bad_fields() {
+        let bad = |kw_line: &str| {
+            let d = parse(&format!(
+                "fieldsmith 1\nname \"n\"\nmaterial petg\n{kw_line}\n"
+            ));
+            d.map(|d| d.validate())
+        };
+        // non-hex hash
+        let errs = bad(
+            "mesh m1 src=\"s\" units=m up=y vox=0.8 hash=\"zzz\" bbox=(0, 0, 0, 1, 1, 1) tris=1 patches=0 open_edges=0",
+        ).unwrap();
+        assert!(
+            errs.iter().any(|e| e.contains("hex fingerprint")),
+            "{errs:?}"
+        );
+        // bad units and up-axis
+        let errs = bad(
+            "mesh m1 src=\"s\" units=km up=x vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 1, 1, 1) tris=1 patches=0 open_edges=0",
+        ).unwrap();
+        assert!(errs.iter().any(|e| e.contains("units")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("up-axis")), "{errs:?}");
+        // inverted bounds
+        let errs = bad(
+            "mesh m1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(2, 0, 0, 1, 1, 1) tris=1 patches=0 open_edges=0",
+        ).unwrap();
+        assert!(errs.iter().any(|e| e.contains("inverted")), "{errs:?}");
+        // patch selector on a non-mesh node, and patch 0
+        let errs = bad("box b size=(1, 2, 3)\nregion r = b.p1\n").unwrap();
+        assert!(
+            errs.iter().any(|e| e.contains("not a mesh node")),
+            "{errs:?}"
+        );
+        let errs = bad(
+            "mesh m1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 1, 1, 1) tris=1 patches=0 open_edges=0\nregion r = m1.p0\n",
+        ).unwrap();
+        assert!(
+            errs.iter().any(|e| e.contains("patches start at 1")),
+            "{errs:?}"
+        );
+        // selector typo reads as an unknown face at parse time
+        let e = parse("fieldsmith 1\nbox b size=(1, 2, 3)\nregion r = b.qx\n").unwrap_err();
+        assert!(e.message.contains("unknown face"));
+    }
+
+    const EXTEND_SAMPLE: &str = r#"fieldsmith 1
+name "Skirt"
+material petg
+
+mesh mesh1 src="/tmp/part.stl" units=m up=y vox=0.8 hash="0123456789abcdef" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=87286 patches=6 open_edges=0
+extend skirt bottom dir=(0, 0, -1) len=10
+
+region bottom = mesh1.p1
+"#;
+
+    #[test]
+    fn extend_node_round_trip() {
+        let d = parse(EXTEND_SAMPLE).unwrap();
+        assert_eq!(
+            print(&d),
+            EXTEND_SAMPLE,
+            "printer output differs:\n{}",
+            print(&d)
+        );
+        match &d.root[1].kind {
+            NodeKind::Extend { region, dir, len } => {
+                assert_eq!(region, "bottom");
+                assert_eq!(*dir, [0.0, 0.0, -1.0]);
+                assert_eq!(*len, 10.0);
+            }
+            _ => panic!("expected an extend node"),
+        }
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // JSON round trip keeps the sweep
+        let j = serde_json::to_string(&d).unwrap();
+        let d2: Document = serde_json::from_str(&j).unwrap();
+        assert_eq!(d, d2);
+    }
+
+    #[test]
+    fn extend_validate_reports_bad_fields_and_budget() {
+        let mesh_line = "mesh mesh1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=1 patches=2 open_edges=0";
+        let bad = |body: &str| {
+            let d = parse(&format!(
+                "fieldsmith 1\nname \"n\"\nmaterial petg\n{mesh_line}\n{body}\n"
+            ))
+            .unwrap();
+            d.validate()
+        };
+        // missing region, patchless region, zero dir, non-positive len
+        let errs = bad("extend e1 nope dir=(0, 0, -1) len=10\n");
+        assert!(
+            errs.iter().any(|e| e.contains("missing region")),
+            "{errs:?}"
+        );
+        let errs = bad(
+            "box b size=(1, 2, 3)\nregion plain = b.px\nextend e1 plain dir=(0, 0, -1) len=10\n",
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("names no mesh patch")),
+            "{errs:?}"
+        );
+        let errs = bad("region bottom = mesh1.p1\nextend e1 bottom dir=(0, 0, 0) len=10\n");
+        assert!(errs.iter().any(|e| e.contains("no direction")), "{errs:?}");
+        let errs = bad("region bottom = mesh1.p1\nextend e1 bottom dir=(0, 0, -1) len=0\n");
+        assert!(
+            errs.iter().any(|e| e.contains("must be positive")),
+            "{errs:?}"
+        );
+        // a fine parent voxel blows the sweep-grid budget
+        let errs = bad("region bottom = mesh1.p1\nextend e1 bottom dir=(0, 0, -1) len=10\n")
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert!(errs.is_empty(), "{errs:?}");
+        let voxel_line = "mesh mesh1 src=\"s\" units=m up=y vox=0.02 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15, 17, 5) tris=1 patches=2 open_edges=0";
+        let d = parse(&format!(
+            "fieldsmith 1\nname \"n\"\nmaterial petg\n{voxel_line}\nregion bottom = mesh1.p1\nextend e1 bottom dir=(0, 0, -1) len=10\n"
+        ))
+        .unwrap();
+        let errs = d.validate();
+        assert!(errs.iter().any(|e| e.contains("voxel cells")), "{errs:?}");
+    }
+
+    #[test]
+    fn extend_accepts_a_face_region_and_rejects_bare_all_and_side() {
+        let mesh_line = "mesh mesh1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=1 patches=0 open_edges=0";
+        // A geometric face of the mesh is a legal sweep source even with no patch grid.
+        let d = parse(&format!(
+            "fieldsmith 1\nname \"n\"\nmaterial petg\n{mesh_line}\nregion bottom = mesh1.bottom\nextend e1 bottom dir=(0, 0, -1) len=10\n"
+        ))
+        .unwrap();
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // `all` on a mesh is not a sweep target (every normal); extend refuses it.
+        let d = parse(&format!(
+            "fieldsmith 1\nname \"n\"\nmaterial petg\n{mesh_line}\nregion all = mesh1.all\nextend e1 all dir=(0, 0, -1) len=10\n"
+        ))
+        .unwrap();
+        let errs = d.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("names no mesh patch or face")),
+            "{errs:?}"
+        );
+        // `side` on a mesh is refused outright: a mesh has no side face.
+        let d = parse(&format!(
+            "fieldsmith 1\nname \"n\"\nmaterial petg\n{mesh_line}\nregion side = mesh1.side\n"
+        ))
+        .unwrap();
+        let errs = d.validate();
+        assert!(errs.iter().any(|e| e.contains("no side face")), "{errs:?}");
     }
 }
