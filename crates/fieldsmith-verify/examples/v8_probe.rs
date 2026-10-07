@@ -38,21 +38,32 @@ fn non_manifold_midpoints(m: &fieldsmith_mesh::export::TriMesh) -> Vec<V3> {
         if f + b_ >= 3 {
             let p = m.verts[lo as usize];
             let q = m.verts[hi as usize];
-            out.push([0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1]), 0.5 * (p[2] + q[2])]);
+            out.push([
+                0.5 * (p[0] + q[0]),
+                0.5 * (p[1] + q[1]),
+                0.5 * (p[2] + q[2]),
+            ]);
         }
     }
     out
 }
 
 fn main() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bracket-filled.fsm"))
-            .unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bracket-filled.fsm"
+    ))
+    .unwrap();
     let doc = fsm::parse(&text).unwrap();
     println!("graded…");
     let t0 = now();
     let (_, g) = graded(&doc, Resolution::Dofs(150_000), now).unwrap();
-    println!("  mass {:.2} g of {:.2} g solid, {:.1} s", g.mass_g, g.solid_mass_g, (now() - t0) / 1000.0);
+    println!(
+        "  mass {:.2} g of {:.2} g solid, {:.1} s",
+        g.mass_g,
+        g.solid_mass_g,
+        (now() - t0) / 1000.0
+    );
 
     let filled = expr::Expr::Filled(Box::new(g.fill));
     let body = expr::compile_body(&doc);
@@ -66,14 +77,20 @@ fn main() {
         let fine = volume::integrate(&filled, h, None);
         let coarse = volume::integrate(&filled, 2.0 * h, None);
         let err = (fine - coarse).abs() / 3.0;
-        println!("  h {h:.4}: {fine:.1} mm³  (coarse {coarse:.1}, err±{err:.1})  {:.1} s", (now() - t) / 1000.0);
+        println!(
+            "  h {h:.4}: {fine:.1} mm³  (coarse {coarse:.1}, err±{err:.1})  {:.1} s",
+            (now() - t) / 1000.0
+        );
     }
 
     // ---- 2) export mesh vs field, with h ----------------------------------------------------
     let h_ref = 0.094;
     let t = now();
     let v_ref_converged = volume::integrate(&filled, h_ref, None);
-    println!("\nreference at h={h_ref}: {v_ref_converged:.1} mm³ ({:.1} s)", (now() - t) / 1000.0);
+    println!(
+        "\nreference at h={h_ref}: {v_ref_converged:.1} mm³ ({:.1} s)",
+        (now() - t) / 1000.0
+    );
     for h in [0.25, 0.15, 0.1] {
         let t = now();
         let tri = surface(

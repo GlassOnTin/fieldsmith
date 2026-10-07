@@ -26,8 +26,8 @@
 //! Run: `cargo run -p fieldsmith-verify --release --example v7_mf_probe`
 
 use fieldsmith_core::fill::{graded, law_stiffness};
-use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_core::{case_force, fixed_mask, material_of, run_case, Resolution};
+use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_solve::P2Mesh;
 
@@ -47,9 +47,8 @@ fill gyroid sheet cell=5 skin=1 rho=(0.2, 0.4) curve=2 wall=0.3
 fn nearest(mesh: &P2Mesh, target: [f64; 3]) -> usize {
     let (mut best, mut bd) = (0usize, f64::MAX);
     for (i, p) in mesh.nodes.iter().enumerate() {
-        let d2 = (p[0] - target[0]).powi(2)
-            + (p[1] - target[1]).powi(2)
-            + (p[2] - target[2]).powi(2);
+        let d2 =
+            (p[0] - target[0]).powi(2) + (p[1] - target[1]).powi(2) + (p[2] - target[2]).powi(2);
         if d2 < bd {
             bd = d2;
             best = i;
@@ -71,7 +70,13 @@ impl Lcg {
 }
 
 /// Element material fraction φ by jittered sampling (Dirichlet(1) barycentric points).
-fn phi_of(base: &fieldsmith_core::Analysis, e: usize, filled: &Expr, samples: u32, rng: &mut Lcg) -> f64 {
+fn phi_of(
+    base: &fieldsmith_core::Analysis,
+    e: usize,
+    filled: &Expr,
+    samples: u32,
+    rng: &mut Lcg,
+) -> f64 {
     let tet = base.mesh.tets[e];
     let v = [tet[0], tet[1], tet[2], tet[3]].map(|n| base.mesh.nodes[n as usize]);
     let mut inside = 0u32;
@@ -96,7 +101,9 @@ fn phi_of(base: &fieldsmith_core::Analysis, e: usize, filled: &Expr, samples: u3
 /// young = E·(VOID_SCALE + φ·(1−VOID_SCALE)) — the Voigt-style candidate, with the engine's
 /// tiny void floor so the stiffness matrix stays connected.
 fn voigt_young(ph: &[f64], mat_e: f64) -> Vec<f64> {
-    ph.iter().map(|&p| mat_e * (1e-6 + p * (1.0 - 1e-6))).collect()
+    ph.iter()
+        .map(|&p| mat_e * (1e-6 + p * (1.0 - 1e-6)))
+        .collect()
 }
 
 /// young = E·law(φ) for φ ≤ 0.4, linear blend law(0.4)→1 over φ ∈ (0.4, 1].
@@ -140,7 +147,11 @@ fn main() {
             .map(|e| phi_of(&base, e, &filled, 32, &mut rng))
             .collect();
         let (n_void, n_solid, n_lat) = ph.iter().fold((0, 0, 0), |a, &p| {
-            (a.0 + (p < 0.02) as usize, a.1 + (p > 0.98) as usize, a.2 + (0.02..=0.98).contains(&p) as usize)
+            (
+                a.0 + (p < 0.02) as usize,
+                a.1 + (p > 0.98) as usize,
+                a.2 + (0.02..=0.98).contains(&p) as usize,
+            )
         });
         let t_ph = t0.elapsed().as_secs_f64();
 
@@ -150,11 +161,21 @@ fn main() {
             ("phi-voigt", voigt_young(&ph, mat.e)),
             ("phi-law-blend", law_blend_young(&ph, mat.e)),
         ] {
-            let case = run_case(&base.mesh, &young, mat.nu, &fixed, force.clone(), label.to_string())
-                .expect("phi solve");
+            let case = run_case(
+                &base.mesh,
+                &young,
+                mat.nu,
+                &fixed,
+                force.clone(),
+                label.to_string(),
+            )
+            .expect("phi solve");
             let uz = case.u[3 * nearest(&base.mesh, [80.0, 8.0, 8.0]) + 2];
             let err = 100.0 * (uz - resolved) / resolved;
-            out.push(format!("{label}: tip uz {uz:.5} ({err:+.1} % vs resolved), iters {}", case.solve.iterations));
+            out.push(format!(
+                "{label}: tip uz {uz:.5} ({err:+.1} % vs resolved), iters {}",
+                case.solve.iterations
+            ));
         }
         let law_err = 100.0 * (law_uz - resolved) / resolved;
         println!(

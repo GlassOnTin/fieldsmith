@@ -17,12 +17,18 @@ fn now() -> f64 {
 }
 
 fn main() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bracket.fsm")).unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bracket.fsm"
+    ))
+    .unwrap();
     let doc = fsm::parse(&text).unwrap();
     let body = expr::compile_body(&doc);
     let b = expr::bounds(&body);
-    println!("field volume (auto): {:.1} mm³", fieldsmith_field::volume::volume_auto(&body).volume);
+    println!(
+        "field volume (auto): {:.1} mm³",
+        fieldsmith_field::volume::volume_auto(&body).volume
+    );
 
     for h in [0.25_f64, 0.15, 0.1] {
         print!("mesh h={h}: ");

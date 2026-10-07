@@ -17,7 +17,10 @@ fn now() -> f64 {
 
 /// Bit-compare everything except timing provenance. Panics with the first mismatch.
 fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
-    assert_eq!(a.provenance.elements, b.provenance.elements, "{label}: elements");
+    assert_eq!(
+        a.provenance.elements, b.provenance.elements,
+        "{label}: elements"
+    );
     assert_eq!(a.provenance.dofs, b.provenance.dofs, "{label}: dofs");
     assert_eq!(
         a.provenance.element_size.to_bits(),
@@ -27,8 +30,18 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
     assert_eq!(a.cases.len(), b.cases.len(), "{label}: case count");
     for (ca, cb) in a.cases.iter().zip(b.cases.iter()) {
         assert_eq!(ca.name, cb.name, "{label}: case name");
-        assert_eq!(ca.max_von_mises.to_bits(), cb.max_von_mises.to_bits(), "{label}: {} nodal vm", ca.name);
-        assert_eq!(ca.max_vm_elem.to_bits(), cb.max_vm_elem.to_bits(), "{label}: {} elem vm", ca.name);
+        assert_eq!(
+            ca.max_von_mises.to_bits(),
+            cb.max_von_mises.to_bits(),
+            "{label}: {} nodal vm",
+            ca.name
+        );
+        assert_eq!(
+            ca.max_vm_elem.to_bits(),
+            cb.max_vm_elem.to_bits(),
+            "{label}: {} elem vm",
+            ca.name
+        );
         assert_eq!(
             ca.max_displacement.to_bits(),
             cb.max_displacement.to_bits(),
@@ -43,12 +56,24 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
 
 fn assert_same_graded(a: &Graded, b: &Graded, label: &str) {
     assert_eq!(a.mass_g.to_bits(), b.mass_g.to_bits(), "{label}: mass");
-    assert_eq!(a.solid_mass_g.to_bits(), b.solid_mass_g.to_bits(), "{label}: solid mass");
-    assert_eq!(a.sigma_ref.to_bits(), b.sigma_ref.to_bits(), "{label}: sigma_ref");
+    assert_eq!(
+        a.solid_mass_g.to_bits(),
+        b.solid_mass_g.to_bits(),
+        "{label}: solid mass"
+    );
+    assert_eq!(
+        a.sigma_ref.to_bits(),
+        b.sigma_ref.to_bits(),
+        "{label}: sigma_ref"
+    );
     assert_eq!(a.rho_design, b.rho_design, "{label}: rho_design");
     assert_eq!(a.class, b.class, "{label}: classes");
     for (ca, cb) in a.cases.iter().zip(b.cases.iter()) {
-        assert_eq!(ca.max_von_mises.to_bits(), cb.max_von_mises.to_bits(), "{label}: graded vm");
+        assert_eq!(
+            ca.max_von_mises.to_bits(),
+            cb.max_von_mises.to_bits(),
+            "{label}: graded vm"
+        );
         assert_eq!(
             ca.max_displacement.to_bits(),
             cb.max_displacement.to_bits(),
@@ -90,4 +115,30 @@ fn save_reload_graded_resolve_is_bit_identical() {
     let g1 = graded_of(&filled, &base1, now).expect("graded");
     let g2 = graded_of(&reloaded, &base2, now).expect("graded after reload");
     assert_same_graded(&g1, &g2, "graded bracket");
+}
+
+/// A document with a mesh node round-trips with every mesh field and the patch selector
+/// intact (M6 step 4). The node's provenance travels in the `.fsm` text, so equality of the
+/// documents — not of an analysis (mesh nodes are not field leaves in this version) — is
+/// what save/reload must guarantee here; the grids themselves are compared by hash in the
+/// V10 `.fsmz` tests.
+#[test]
+fn save_reload_mesh_document_reaches_the_same_document() {
+    let text = "fieldsmith 1\n\
+name \"Import\"\n\
+material petg\n\
+\n\
+mesh mesh1 src=\"/tmp/part.stl\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=87286 patches=6 open_edges=0\n\
+\n\
+region bottom = mesh1.p3\n\
+support hold bottom fixed=xyz\n\
+load press bottom pressure=0.5 case=\"Load 1\"\n";
+    let doc = fieldsmith_doc::fsm::parse(text).expect("mesh document parses");
+    assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+
+    let reloaded = round_trip(&doc);
+    assert_eq!(
+        reloaded, doc,
+        "the reloaded document must equal the saved one"
+    );
 }

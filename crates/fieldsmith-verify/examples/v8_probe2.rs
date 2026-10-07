@@ -75,9 +75,11 @@ fn dirs26() -> Vec<V3> {
 }
 
 fn main() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bracket-filled.fsm"))
-            .unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bracket-filled.fsm"
+    ))
+    .unwrap();
     let doc = fsm::parse(&text).unwrap();
     println!("graded…");
     let t0 = now();
@@ -95,7 +97,12 @@ fn main() {
         [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
         h,
     );
-    println!("  {} verts {} tris in {:.1} s", mesh.verts.len(), mesh.tris.len(), (now() - t) / 1000.0);
+    println!(
+        "  {} verts {} tris in {:.1} s",
+        mesh.verts.len(),
+        mesh.tris.len(),
+        (now() - t) / 1000.0
+    );
 
     let edges = non_manifold_edges(&mesh);
     println!("\n{} non-manifold edges", edges.len());
@@ -163,11 +170,11 @@ fn main() {
                 let mut t = 0.01_f64;
                 let mut span = 1.2;
                 while t <= 1.2 {
-                    let w = expr::eval(&filled, [
-                        p[0] + t * dir[0],
-                        p[1] + t * dir[1],
-                        p[2] + t * dir[2],
-                    ]).v;
+                    let w = expr::eval(
+                        &filled,
+                        [p[0] + t * dir[0], p[1] + t * dir[1], p[2] + t * dir[2]],
+                    )
+                    .v;
                     if w >= 0.0 {
                         span = t;
                         break;

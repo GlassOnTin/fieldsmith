@@ -35,9 +35,8 @@ fill gyroid sheet cell=5 skin=1 rho=(0.2, 0.4) curve=2 wall=0.3
 fn tip_uz(u: &[f64], mesh: &fieldsmith_solve::P2Mesh, target: [f64; 3]) -> f64 {
     let (mut best, mut bd) = (0usize, f64::MAX);
     for (i, p) in mesh.nodes.iter().enumerate() {
-        let d2 = (p[0] - target[0]).powi(2)
-            + (p[1] - target[1]).powi(2)
-            + (p[2] - target[2]).powi(2);
+        let d2 =
+            (p[0] - target[0]).powi(2) + (p[1] - target[1]).powi(2) + (p[2] - target[2]).powi(2);
         if d2 < bd {
             bd = d2;
             best = i;
@@ -56,7 +55,12 @@ fn main() {
         let c = g.cases.first().expect("case");
         let uz = tip_uz(&c.u, &base.mesh, [80.0, 8.0, 8.0]);
         let suz = tip_uz(&base.cases[0].u, &base.mesh, [80.0, 8.0, 8.0]);
-        let rho: Vec<f64> = g.rho_elem.iter().copied().filter(|&r| r > 0.0 && r < 1.0).collect();
+        let rho: Vec<f64> = g
+            .rho_elem
+            .iter()
+            .copied()
+            .filter(|&r| r > 0.0 && r < 1.0)
+            .collect();
         let (lo, mean, hi) = (
             rho.iter().cloned().fold(f64::INFINITY, f64::min),
             rho.iter().sum::<f64>() / rho.len() as f64,

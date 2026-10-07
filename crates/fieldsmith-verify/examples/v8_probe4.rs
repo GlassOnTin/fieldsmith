@@ -37,8 +37,11 @@ impl Drop for Rss {
 }
 
 fn main() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bracket.fsm")).unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bracket.fsm"
+    ))
+    .unwrap();
     let doc = fsm::parse(&text).unwrap();
     let body = expr::compile_body(&doc);
 
@@ -49,13 +52,13 @@ fn main() {
         let _lo = [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h];
         let _hi = [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h];
         let t = now();
-        let mesh = surface(
-            |p: V3| expr::eval(&body, p).v,
-            _lo,
-            _hi,
-            h,
+        let mesh = surface(|p: V3| expr::eval(&body, p).v, _lo, _hi, h);
+        println!(
+            "  mesh {} verts {} tris in {:.1} s",
+            mesh.verts.len(),
+            mesh.tris.len(),
+            (now() - t) / 1000.0
         );
-        println!("  mesh {} verts {} tris in {:.1} s", mesh.verts.len(), mesh.tris.len(), (now() - t) / 1000.0);
         let _v = mesh.volume();
         let d = mesh.defects();
         let _stl = mesh.write_stl();

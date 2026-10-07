@@ -29,8 +29,11 @@ fn now() -> f64 {
 }
 
 fn main() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bracket.fsm")).unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bracket.fsm"
+    ))
+    .unwrap();
     let doc = fsm::parse(&text).unwrap();
     let body = expr::compile_body(&doc);
     let h = 0.25_f64;
@@ -48,7 +51,13 @@ fn main() {
 
     let t = now();
     let mesh = surface(|p: V3| expr::eval(&body, p).v, lo, hi, h);
-    println!("mesh {} verts {} tris in {:.1} s, after mesh: {:.0} MiB", mesh.verts.len(), mesh.tris.len(), (now() - t) / 1000.0, rss_mib());
+    println!(
+        "mesh {} verts {} tris in {:.1} s, after mesh: {:.0} MiB",
+        mesh.verts.len(),
+        mesh.tris.len(),
+        (now() - t) / 1000.0,
+        rss_mib()
+    );
 
     let _v = mesh.volume();
     println!("after volume: {:.0} MiB", rss_mib());
@@ -57,7 +66,15 @@ fn main() {
     println!("after defects: {:.0} MiB", rss_mib());
 
     let bytes = mesh.write_3mf(&doc.name, &doc.material);
-    println!("after 3MF ({:.0} MiB): {:.0} MiB", bytes.len() as f64 / 1048576.0, rss_mib());
+    println!(
+        "after 3MF ({:.0} MiB): {:.0} MiB",
+        bytes.len() as f64 / 1048576.0,
+        rss_mib()
+    );
     let stl = mesh.write_stl();
-    println!("after STL ({:.1} MiB): {:.0} MiB", stl.len() as f64 / 1048576.0, rss_mib());
+    println!(
+        "after STL ({:.1} MiB): {:.0} MiB",
+        stl.len() as f64 / 1048576.0,
+        rss_mib()
+    );
 }

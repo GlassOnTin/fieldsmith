@@ -7,8 +7,8 @@
 //! visible. Ignored: heavy (release). Run with
 //!   cargo test -p fieldsmith-verify --release --test adaptive_mem_probe -- --ignored --nocapture
 
-use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
+use fieldsmith_core::Resolution;
 use fieldsmith_field::{expr, volume, V3};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_verify::example;
@@ -52,7 +52,10 @@ struct Stage {
 fn stage_open(mark: &str) -> Stage {
     let hwm = rss_hwm().1;
     println!("  {:<28} rss now {:.0} MiB", mark, rss_hwm().0 / 1048576.0);
-    Stage { hwm, mark: mark.to_string() }
+    Stage {
+        hwm,
+        mark: mark.to_string(),
+    }
 }
 
 impl Stage {
@@ -61,7 +64,9 @@ impl Stage {
         let d = (h - self.hwm) / 1048576.0;
         println!(
             "  {:<28} peak +{:0.0} MiB (hwm {:.0} MiB)",
-            self.mark, d, h / 1048576.0
+            self.mark,
+            d,
+            h / 1048576.0
         );
         d
     }
@@ -130,7 +135,11 @@ fn adaptive_bracket_export_memory() {
             write_s,
             bytes.len() as f64 / 1048576.0
         );
-        println!("  [{}] mesh digest {:016x} (fnv-1a over vertex f64 bits, then triangle ids)", tag, digest(&mesh));
+        println!(
+            "  [{}] mesh digest {:016x} (fnv-1a over vertex f64 bits, then triangle ids)",
+            tag,
+            digest(&mesh)
+        );
         println!(
             "  [{}] end of export path: rss {:.0} MiB (mesh+field resident), hwm {:.0} MiB; field ref {:.1} mm³ ({ref_s:.1} s, build {build_s:.1} s), defects {d:?}",
             tag, rss / 1048576.0, hwm / 1048576.0, v_field

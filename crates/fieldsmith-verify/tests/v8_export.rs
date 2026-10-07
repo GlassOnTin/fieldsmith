@@ -18,8 +18,8 @@
 //! defect-free at h 0.1 after the separation (`adaptive_plain_probe.rs` measured 51
 //! crease-cell pairs before it).
 
-use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
+use fieldsmith_core::Resolution;
 use fieldsmith_field::{expr, volume, V3};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_mesh::export::{read_stl, surface};
@@ -52,17 +52,30 @@ fn zip_entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
     assert!(i >= 4, "3MF zip has no end-of-central-directory record");
     let eocd = i - 4;
     let count = u16::from_le_bytes([bytes[eocd + 10], bytes[eocd + 11]]) as usize;
-    let cd_at = u32::from_le_bytes([bytes[eocd + 16], bytes[eocd + 17], bytes[eocd + 18], bytes[eocd + 19]]) as usize;
+    let cd_at = u32::from_le_bytes([
+        bytes[eocd + 16],
+        bytes[eocd + 17],
+        bytes[eocd + 18],
+        bytes[eocd + 19],
+    ]) as usize;
     let mut out = Vec::new();
     let mut p = cd_at;
     for _ in 0..count {
-        assert_eq!(&bytes[p..p + 4], b"PK\x01\x02", "central directory signature");
-        let csize = u32::from_le_bytes([bytes[p + 20], bytes[p + 21], bytes[p + 22], bytes[p + 23]]) as usize;
-        let usize_ = u32::from_le_bytes([bytes[p + 24], bytes[p + 25], bytes[p + 26], bytes[p + 27]]) as usize;
+        assert_eq!(
+            &bytes[p..p + 4],
+            b"PK\x01\x02",
+            "central directory signature"
+        );
+        let csize = u32::from_le_bytes([bytes[p + 20], bytes[p + 21], bytes[p + 22], bytes[p + 23]])
+            as usize;
+        let usize_ =
+            u32::from_le_bytes([bytes[p + 24], bytes[p + 25], bytes[p + 26], bytes[p + 27]])
+                as usize;
         let nlen = u16::from_le_bytes([bytes[p + 28], bytes[p + 29]]) as usize;
         let elen = u16::from_le_bytes([bytes[p + 30], bytes[p + 31]]) as usize;
         let clen = u16::from_le_bytes([bytes[p + 32], bytes[p + 33]]) as usize;
-        let lho = u32::from_le_bytes([bytes[p + 42], bytes[p + 43], bytes[p + 44], bytes[p + 45]]) as usize;
+        let lho = u32::from_le_bytes([bytes[p + 42], bytes[p + 43], bytes[p + 44], bytes[p + 45]])
+            as usize;
         let name = String::from_utf8(bytes[p + 46..p + 46 + nlen].to_vec()).unwrap();
         p += 46 + nlen + elen + clen;
         // Local header: skip its variable fields to the payload.
@@ -85,7 +98,11 @@ fn v8_export_the_bracket() {
     let build_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let filled = expr::Expr::Filled(Box::new(g.fill));
     let v_field = volume::integrate(&filled, FIELD_H, None);
-    println!("  field reference {:.1} mm³ (build {:.1} s)", v_field, build_ms / 1000.0);
+    println!(
+        "  field reference {:.1} mm³ (build {:.1} s)",
+        v_field,
+        build_ms / 1000.0
+    );
 
     let b = expr::bounds(&filled);
     let lo = [b.lo[0] - MESH_H, b.lo[1] - MESH_H, b.lo[2] - MESH_H];
@@ -93,7 +110,12 @@ fn v8_export_the_bracket() {
     let t = Instant::now();
     let mesh = surface(|p: V3| expr::eval(&filled, p).v, lo, hi, MESH_H);
     let mesh_ms = t.elapsed().as_secs_f64() * 1000.0;
-    println!("  mesh {} verts {} tris ({:.1} s)", mesh.verts.len(), mesh.tris.len(), mesh_ms / 1000.0);
+    println!(
+        "  mesh {} verts {} tris ({:.1} s)",
+        mesh.verts.len(),
+        mesh.tris.len(),
+        mesh_ms / 1000.0
+    );
 
     let v_mesh = mesh.volume();
     let d = mesh.defects();
@@ -110,24 +132,47 @@ fn v8_export_the_bracket() {
 
     let bytes = mesh.write_3mf(&doc.name, &doc.material);
     let entries = zip_entries(&bytes);
-    let model = entries.iter().find(|(n, _)| n.ends_with(".model")).expect("3MF carries a .model entry");
+    let model = entries
+        .iter()
+        .find(|(n, _)| n.ends_with(".model"))
+        .expect("3MF carries a .model entry");
     let model_text = String::from_utf8_lossy(&model.1).into_owned();
     assert!(model_text.contains("<mesh"), "3MF model carries the mesh");
-    assert!(model_text.contains(&doc.name), "3MF model carries the part name");
-    assert!(model_text.contains(&doc.material), "3MF model carries the material");
+    assert!(
+        model_text.contains(&doc.name),
+        "3MF model carries the part name"
+    );
+    assert!(
+        model_text.contains(&doc.material),
+        "3MF model carries the material"
+    );
     let vert_tag_count = model_text.matches("<vertex ").count();
     let tri_tag_count = model_text.matches("<triangle v").count();
     let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
     println!("  3MF entries {names:?}: {vert_tag_count} vertices, {tri_tag_count} triangles");
-    assert_eq!(vert_tag_count, mesh.verts.len(), "3MF vertex count matches the mesh");
-    assert_eq!(tri_tag_count, mesh.tris.len(), "3MF triangle count matches the mesh");
-    assert!(names.iter().any(|n| n.ends_with("[Content_Types].xml")), "3MF package typed");
+    assert_eq!(
+        vert_tag_count,
+        mesh.verts.len(),
+        "3MF vertex count matches the mesh"
+    );
+    assert_eq!(
+        tri_tag_count,
+        mesh.tris.len(),
+        "3MF triangle count matches the mesh"
+    );
+    assert!(
+        names.iter().any(|n| n.ends_with("[Content_Types].xml")),
+        "3MF package typed"
+    );
 
     // The slice plane must trace the exact export mesh: mid-height cut around each z cell
     // has the same total outline as the STL round-trip's own slice.
     let zmid = (b.lo[2] + b.hi[2]) / 2.0;
     let segs = mesh.slice_at(zmid);
-    assert!(!segs.is_empty(), "a mid-height slice of the bracket has sections");
+    assert!(
+        !segs.is_empty(),
+        "a mid-height slice of the bracket has sections"
+    );
     let outline = |segs: &[f64]| -> f64 {
         let mut sum = 0.0;
         for k in 0..segs.len() / 4 {
@@ -171,7 +216,10 @@ fn v8_export_the_bracket() {
         amesh_ms / 1000.0
     );
 
-    let mut r = Report::new("V8", "Export of the filled bracket: volume, defects, package integrity");
+    let mut r = Report::new(
+        "V8",
+        "Export of the filled bracket: volume, defects, package integrity",
+    );
     r.section(
         "Method",
         format!(
@@ -185,13 +233,55 @@ fn v8_export_the_bracket() {
             doc.name, doc.material
         ),
     );
-    r.check(Check::relative("mesh volume vs field volume", v_field, v_mesh, "mm³", VOL_TOL));
-    r.check(Check::absolute("open edges", 0.0, d.open_edges as f64, "", 0.0));
-    r.check(Check::absolute("orientation defects", 0.0, d.orientation_defects as f64, "", 0.0));
-    r.check(Check::absolute("degenerate triangles", 0.0, d.degenerate_triangles as f64, "", 0.0));
-    r.check(Check::absolute("self-intersections", 0.0, d.self_intersections as f64, "", 0.0));
-    r.check(Check::relative("STL round-trip volume", v_mesh, v_stl, "mm³", 0.002));
-    r.check(Check::relative("adaptive mesh volume vs field volume", v_field, av_mesh, "mm³", VOL_TOL));
+    r.check(Check::relative(
+        "mesh volume vs field volume",
+        v_field,
+        v_mesh,
+        "mm³",
+        VOL_TOL,
+    ));
+    r.check(Check::absolute(
+        "open edges",
+        0.0,
+        d.open_edges as f64,
+        "",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "orientation defects",
+        0.0,
+        d.orientation_defects as f64,
+        "",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "degenerate triangles",
+        0.0,
+        d.degenerate_triangles as f64,
+        "",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "self-intersections",
+        0.0,
+        d.self_intersections as f64,
+        "",
+        0.0,
+    ));
+    r.check(Check::relative(
+        "STL round-trip volume",
+        v_mesh,
+        v_stl,
+        "mm³",
+        0.002,
+    ));
+    r.check(Check::relative(
+        "adaptive mesh volume vs field volume",
+        v_field,
+        av_mesh,
+        "mm³",
+        VOL_TOL,
+    ));
 
     r.section(
         "Non-manifold edges of the graded fill",

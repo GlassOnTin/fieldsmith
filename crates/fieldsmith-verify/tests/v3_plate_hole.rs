@@ -8,10 +8,10 @@
 //! docs/verification/V3.md, section "Lattice class sensitivity". Runs five P2 solves, largest
 //! about 3 million elements; expect roughly six minutes.
 
+use fenics_element::{FiniteElement, P2Tetrahedron};
 use fieldsmith_core::{analyse, material_of, Resolution};
 use fieldsmith_solve::element_stress;
 use fieldsmith_verify::{doc, Check, Report};
-use fenics_element::{FiniteElement, P2Tetrahedron};
 use std::time::Instant;
 
 fn clock() -> f64 {
@@ -92,7 +92,10 @@ fn v3_plate_with_hole() {
                 }
                 (s[0], cen)
             })
-            .fold((f64::MIN, [0.0; 3]), |acc, x| if x.0 > acc.0 { x } else { acc });
+            .fold(
+                (f64::MIN, [0.0; 3]),
+                |acc, x| if x.0 > acc.0 { x } else { acc },
+            );
         let kt = smax / sigma_net;
         let p = &a.provenance;
         let graze = h == 0.14 || h == 0.07;
@@ -102,7 +105,13 @@ fn v3_plate_with_hole() {
         );
         let tol = if h == 0.07 { KT_TOL_GRAZE } else { KT_TOL };
         let label = if graze { " (graze)" } else { "" };
-        r.check(Check::relative(&format!("Kt, net section (h = {h}){label}"), kt_ref, kt, "", tol));
+        r.check(Check::relative(
+            &format!("Kt, net section (h = {h}){label}"),
+            kt_ref,
+            kt,
+            "",
+            tol,
+        ));
     }
 
     r.section(

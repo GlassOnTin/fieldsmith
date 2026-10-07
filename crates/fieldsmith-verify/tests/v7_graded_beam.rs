@@ -45,8 +45,8 @@
 //! Run (heavy, tens of minutes):
 //! `cargo test -p fieldsmith-verify --release --test v7_graded_beam -- --ignored --nocapture`
 
-use fieldsmith_core::regions::Facet;
 use fieldsmith_core::fill::graded;
+use fieldsmith_core::regions::Facet;
 use fieldsmith_core::{case_force, fixed_mask, material_of, run_case, Resolution};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{quality, stuff};
@@ -89,9 +89,8 @@ struct Resolved {
 fn nearest(mesh: &P2Mesh, target: [f64; 3]) -> usize {
     let (mut best, mut bd) = (0usize, f64::MAX);
     for (i, p) in mesh.nodes.iter().enumerate() {
-        let d2 = (p[0] - target[0]).powi(2)
-            + (p[1] - target[1]).powi(2)
-            + (p[2] - target[2]).powi(2);
+        let d2 =
+            (p[0] - target[0]).powi(2) + (p[1] - target[1]).powi(2) + (p[2] - target[2]).powi(2);
         if d2 < bd {
             bd = d2;
             best = i;
@@ -138,7 +137,10 @@ fn v7_graded_lattice_beam_deflection() {
             voi += 1;
         }
     }
-    assert!(lat > 0 && voi > 0, "lattice {lat}, void {voi}: the fill did not grade");
+    assert!(
+        lat > 0 && voi > 0,
+        "lattice {lat}, void {voi}: the fill did not grade"
+    );
     // The design must sit inside the law's measured band: the achieved design density range
     // (wall-thickening clamps included) is what the engine grades, and the laws were measured
     // on ρ ∈ [0.18, 0.40]. 0.42 leaves a small margin over the authored 0.40.
@@ -168,9 +170,15 @@ fn v7_graded_lattice_beam_deflection() {
             .iter()
             .map(|(fc, ti)| {
                 let tet = &mesh.tets[*ti as usize];
-                let local = fc
-                    .map(|v| tet[..4].iter().position(|&x| x == v).expect("face vertex in tet"));
-                Facet { nodes: face_nodes(tet, local) }
+                let local = fc.map(|v| {
+                    tet[..4]
+                        .iter()
+                        .position(|&x| x == v)
+                        .expect("face vertex in tet")
+                });
+                Facet {
+                    nodes: face_nodes(tet, local),
+                }
             })
             .collect();
         let fixed = fixed_mask(&d, &mesh, &facets, h).expect("support touches the resolved mesh");

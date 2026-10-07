@@ -6,8 +6,8 @@
 //! Ignored: heavy (release). Run with
 //!   cargo test -p fieldsmith-verify --release --test adaptive_probe -- --ignored --nocapture
 
-use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
+use fieldsmith_core::Resolution;
 use fieldsmith_field::{expr, volume, V3};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_verify::example;
@@ -44,7 +44,10 @@ fn adaptive_bracket_export_budget() {
     let t = Instant::now();
     let v_field = volume::integrate(&filled, FIELD_H, None);
     let i_s = t.elapsed().as_secs_f64();
-    println!("  field reference {:.1} mm³ at h {FIELD_H} ({i_s:.1} s)", v_field);
+    println!(
+        "  field reference {:.1} mm³ at h {FIELD_H} ({i_s:.1} s)",
+        v_field
+    );
 
     let field = |p: V3| -> Sample {
         let d = expr::eval(&filled, p);
@@ -81,7 +84,10 @@ fn adaptive_bracket_export_budget() {
             bytes.len() as f64 / (1024.0 * 1024.0),
             path.display()
         );
-        println!("  [{}] volume {:.1} mm³ ({pct:+.3} % vs field), defects {:?}", tag, v_mesh, d);
+        println!(
+            "  [{}] volume {:.1} mm³ ({pct:+.3} % vs field), defects {:?}",
+            tag, v_mesh, d
+        );
         if h == H_BUDGET {
             let total = mesh_s + write_s;
             println!(
@@ -90,7 +96,11 @@ fn adaptive_bracket_export_budget() {
                 total,
                 if total <= BUDGET_S { "PASS" } else { "FAIL" }
             );
-            assert!(total <= BUDGET_S, "0.1 mm budget: mesh+3MF {:.1} s > {BUDGET_S} s", total);
+            assert!(
+                total <= BUDGET_S,
+                "0.1 mm budget: mesh+3MF {:.1} s > {BUDGET_S} s",
+                total
+            );
         }
         assert!(
             pct.abs() <= 100.0 * VOL_TOL,

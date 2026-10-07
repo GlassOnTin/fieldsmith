@@ -23,18 +23,22 @@
 //!   connected component (face adjacency of the corner-vertex tets) is kept and the dropped
 //!   tets are reported.
 
+use fenics_element::{FiniteElement, P2Tetrahedron};
 use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_field::lattice::{calibration, lattice_field};
-use fieldsmith_mesh::{stuff, quality, TetMesh, V3};
+use fieldsmith_mesh::{quality, stuff, TetMesh, V3};
 use fieldsmith_solve::p2::face_nodes;
 use fieldsmith_solve::stress::element_stress;
 use fieldsmith_solve::{solve, Material, P2Mesh, Problem, SolverOptions};
-use fenics_element::{FiniteElement, P2Tetrahedron};
 use std::time::Instant;
 
 /// Exact signed distance of the axis-aligned box [0, L]³ (negative inside).
 pub fn box_sdf(p: V3, l: f64) -> f64 {
-    let q = [(-p[0]).max(p[0] - l), (-p[1]).max(p[1] - l), (-p[2]).max(p[2] - l)];
+    let q = [
+        (-p[0]).max(p[0] - l),
+        (-p[1]).max(p[1] - l),
+        (-p[2]).max(p[2] - l),
+    ];
     let o = q.map(|c| c.max(0.0));
     let outside = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
     let inside = q[0].max(q[1]).max(q[2]);
@@ -57,7 +61,11 @@ pub fn strut_min_radius(family: Family, cell: f64, param: f64) -> f64 {
     for i in 0..n {
         for j in 0..n {
             for k in 0..n {
-                let p = [(i as f64 + 0.5) * s, (j as f64 + 0.5) * s, (k as f64 + 0.5) * s];
+                let p = [
+                    (i as f64 + 0.5) * s,
+                    (j as f64 + 0.5) * s,
+                    (k as f64 + 0.5) * s,
+                ];
                 if lattice_field(family, FillMode::Network, cell, param, p).v > 0.0 {
                     d[(i * n + j) * n + k] = 0.0;
                 }
@@ -96,7 +104,11 @@ pub fn strut_min_radius(family: Family, cell: f64, param: f64) -> f64 {
                     let mut best = d[idx];
                     for &(di, dj, dk, w) in neigh {
                         let (ii, jj, kk) = (i as i32 + di, j as i32 + dj, k as i32 + dk);
-                        if ii < 0 || jj < 0 || kk < 0 || ii >= n as i32 || jj >= n as i32
+                        if ii < 0
+                            || jj < 0
+                            || kk < 0
+                            || ii >= n as i32
+                            || jj >= n as i32
                             || kk >= n as i32
                         {
                             continue;
@@ -307,12 +319,8 @@ fn nearest(mesh: &P2Mesh, target: V3, filter: &dyn Fn(V3) -> bool) -> Option<usi
             continue;
         }
         let d2 = dot(
-            [
-                p[0] - target[0], p[1] - target[1], p[2] - target[2],
-            ],
-            [
-                p[0] - target[0], p[1] - target[1], p[2] - target[2],
-            ],
+            [p[0] - target[0], p[1] - target[1], p[2] - target[2]],
+            [p[0] - target[0], p[1] - target[1], p[2] - target[2]],
         );
         if d2 < best.1 {
             best = (i, d2);
@@ -388,7 +396,14 @@ pub fn keep_largest_connected(lin: &mut TetMesh) -> (usize, usize) {
             .iter()
             .enumerate()
             .filter(|(e, _)| comp[*e] == keep)
-            .map(|(_, t)| [vmap[t[0] as usize], vmap[t[1] as usize], vmap[t[2] as usize], vmap[t[3] as usize]])
+            .map(|(_, t)| {
+                [
+                    vmap[t[0] as usize],
+                    vmap[t[1] as usize],
+                    vmap[t[2] as usize],
+                    vmap[t[3] as usize],
+                ]
+            })
             .collect();
         lin.verts = verts;
         lin.tets = tets;
@@ -486,8 +501,15 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         .iter()
         .map(|(fc, ti)| {
             let tet = &mesh.tets[*ti as usize];
-            let local = fc.map(|v| tet[..4].iter().position(|&x| x == v).expect("face vertex in tet"));
-            fieldsmith_core::regions::Facet { nodes: face_nodes(tet, local) }
+            let local = fc.map(|v| {
+                tet[..4]
+                    .iter()
+                    .position(|&x| x == v)
+                    .expect("face vertex in tet")
+            });
+            fieldsmith_core::regions::Facet {
+                nodes: face_nodes(tet, local),
+            }
         })
         .collect();
     let mut force = vec![0.0; nn * 3];
@@ -495,7 +517,10 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     let mut area_nodes = 0.0;
     for fct in &facets {
         let nrm = fct.normal(&mesh);
-        let at_x = fct.nodes.iter().all(|&n| mesh.nodes[n as usize][0] > l - 1e-6);
+        let at_x = fct
+            .nodes
+            .iter()
+            .all(|&n| mesh.nodes[n as usize][0] > l - 1e-6);
         let area = fct.area(&mesh);
         // +x face: load the exact-planar patches only (all six nodes at x = L, normal +1).
         // Tilted transition triangles at the wall-boundary curve are NOT at x = L; loading them
@@ -584,8 +609,16 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     // ux = 0 platen, and the point fixtures react only in y/z), FE equilibrium gives the
     // identity ∫_Ω σxx dV = Σ F_x·x, checked below against the element-stress integral.
     let sum_fxx: f64 = (0..nn).map(|i| force[3 * i] * mesh.nodes[i][0]).sum();
-    let mat = Material { young: vec![spec.young; mesh.tets.len()], poisson: spec.nu };
-    let problem = Problem { mesh: mesh.clone(), material: mat.clone(), fixed, force };
+    let mat = Material {
+        young: vec![spec.young; mesh.tets.len()],
+        poisson: spec.nu,
+    };
+    let problem = Problem {
+        mesh: mesh.clone(),
+        material: mat.clone(),
+        fixed,
+        force,
+    };
     let t0 = Instant::now();
     let (u, rep) = match solve(&problem, SolverOptions::default()) {
         Ok((u, rep)) => (u, rep),
@@ -645,8 +678,12 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
                 *cj += n[j] / 4.0;
             }
         }
-        let interior = c[0] >= cell && c[0] <= l - cell && c[1] >= cell && c[1] <= l - cell
-            && c[2] >= cell && c[2] <= l - cell;
+        let interior = c[0] >= cell
+            && c[0] <= l - cell
+            && c[1] >= cell
+            && c[1] <= l - cell
+            && c[2] >= cell
+            && c[2] <= l - cell;
         let s = element_stress(&mesh, &u, e, spec.young, spec.nu, rd_xi);
         let v = mesh.tet_volume(e).abs();
         if interior {
@@ -678,7 +715,9 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     ));
     log.push(format!(
         "strain: eps_int {} (band x = {band} ... {}), eps_full {:.5e}",
-        eps_int.map(|e| format!("{e:.5e}")).unwrap_or_else(|| "n/a (N=2)".into()),
+        eps_int
+            .map(|e| format!("{e:.5e}"))
+            .unwrap_or_else(|| "n/a (N=2)".into()),
         l - band,
         eps_full.unwrap_or(f64::NAN)
     ));
@@ -735,7 +774,12 @@ mod tests {
     use super::*;
 
     fn unit_tet_verts() -> Vec<V3> {
-        vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
     }
 
     /// Two P2 tets at distinct x (centroids 0.25 and 1.25), so the least-squares slope is
@@ -758,11 +802,19 @@ mod tests {
     fn strain_slope_is_exact_for_a_linear_field() {
         let mesh = two_tet_mesh();
         // u = 2·x everywhere (edge midsides included) → slope 2 exactly.
-        let u: Vec<f64> = mesh.nodes.iter().flat_map(|p| [2.0 * p[0], 0.0, 0.0]).collect();
+        let u: Vec<f64> = mesh
+            .nodes
+            .iter()
+            .flat_map(|p| [2.0 * p[0], 0.0, 0.0])
+            .collect();
         let s = strain_slope(&mesh, &u, 0.0, 2.0).expect("both tets in band");
         assert!((s - 2.0).abs() < 1e-6, "slope {s}");
         // Sign carries: u = −3·x → slope −3.
-        let u: Vec<f64> = mesh.nodes.iter().flat_map(|p| [-3.0 * p[0], 0.0, 0.0]).collect();
+        let u: Vec<f64> = mesh
+            .nodes
+            .iter()
+            .flat_map(|p| [-3.0 * p[0], 0.0, 0.0])
+            .collect();
         let s = strain_slope(&mesh, &u, 0.0, 2.0).expect("both tets in band");
         assert!((s + 3.0).abs() < 1e-6, "slope {s}");
         // A band with only one x-value (the first tet) is degenerate → None.
@@ -796,7 +848,10 @@ mod tests {
         assert_eq!(lin.tets.len(), 3);
         assert_eq!(lin.verts.len(), 6);
         // Single-component meshes are returned untouched.
-        let mut lin = TetMesh { verts: unit_tet_verts(), tets: vec![[0, 1, 2, 3]] };
+        let mut lin = TetMesh {
+            verts: unit_tet_verts(),
+            tets: vec![[0, 1, 2, 3]],
+        };
         assert_eq!(keep_largest_connected(&mut lin), (1, 0));
         assert_eq!(lin.tets, vec![[0, 1, 2, 3]]);
     }

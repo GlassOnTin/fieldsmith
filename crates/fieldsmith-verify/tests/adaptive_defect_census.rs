@@ -8,8 +8,8 @@
 //! the field value at every corner. Ignored: heavy (release). Run with
 //!   cargo test -p fieldsmith-verify --release --test adaptive_defect_census -- --ignored --nocapture
 
-use fieldsmith_core::Resolution;
 use fieldsmith_core::fill::graded;
+use fieldsmith_core::Resolution;
 use fieldsmith_field::{expr, V3};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_mesh::export::TriMesh;
@@ -27,7 +27,11 @@ fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 fn cross(u: V3, v: V3) -> V3 {
-    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+    [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ]
 }
 fn len(v: V3) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
@@ -44,7 +48,11 @@ fn unit(v: V3) -> V3 {
     }
 }
 fn area_of(m: &TriMesh, t: [u32; 3]) -> f64 {
-    let (a, b, c) = (m.verts[t[0] as usize], m.verts[t[1] as usize], m.verts[t[2] as usize]);
+    let (a, b, c) = (
+        m.verts[t[0] as usize],
+        m.verts[t[1] as usize],
+        m.verts[t[2] as usize],
+    );
     0.5 * len(cross(sub(b, a), sub(c, a)))
 }
 
@@ -98,7 +106,10 @@ fn seg_tri(m: &TriMesh, ta: &[u32; 3], tb: &[u32; 3], i: usize) -> Option<V3> {
 /// edge chain.
 fn on_boundary_chain(t: &[V3; 3], q: V3) -> bool {
     let near = |p: V3| {
-        (p[0] - q[0]).abs().max((p[1] - q[1]).abs().max((p[2] - q[2]).abs())) <= 1e-9
+        (p[0] - q[0])
+            .abs()
+            .max((p[1] - q[1]).abs().max((p[2] - q[2]).abs()))
+            <= 1e-9
     };
     (0..3).any(|i| {
         let (pa, pb) = (t[i], t[(i + 1) % 3]);
@@ -141,7 +152,12 @@ fn adaptive_defect_census() {
         h,
         &AdaptiveOpts::default(),
     );
-    println!("  built {} verts {} tris in {:.1} s", m.verts.len(), m.tris.len(), t0.elapsed().as_secs_f64());
+    println!(
+        "  built {} verts {} tris in {:.1} s",
+        m.verts.len(),
+        m.tris.len(),
+        t0.elapsed().as_secs_f64()
+    );
 
     // Edge census, minus the self-intersection scan (mirrors TriMesh::defects).
     let mut edges: HashMap<(u32, u32), i32> = HashMap::with_capacity(m.tris.len() * 3);
@@ -174,7 +190,12 @@ fn adaptive_defect_census() {
             nonman.push((a, b));
         }
     }
-    println!("  open {} non-manifold {} degenerate {}", open.len(), nonman.len(), degen.len());
+    println!(
+        "  open {} non-manifold {} degenerate {}",
+        open.len(),
+        nonman.len(),
+        degen.len()
+    );
 
     // First tri using each undirected edge (any one is enough for printing).
     let mut owner: HashMap<(u32, u32), usize> = HashMap::new();
@@ -187,7 +208,11 @@ fn adaptive_defect_census() {
     let print_edge = |tag: &str, e: (u32, u32)| {
         let i = owner[&e];
         let t = m.tris[i];
-        let third = t.iter().find(|&&c| c != e.0 && c != e.1).copied().unwrap_or(0);
+        let third = t
+            .iter()
+            .find(|&&c| c != e.0 && c != e.1)
+            .copied()
+            .unwrap_or(0);
         println!(
             "    {tag} ({},{}) p1 {:?} p2 {:?} tri {i} {:?} third ({third}) {:?}",
             e.0, e.1, m.verts[e.0 as usize], m.verts[e.1 as usize], t, m.verts[third as usize]

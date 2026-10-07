@@ -5,7 +5,11 @@
 //! pipeline the app uses (`fieldsmith_core::analyse`: field → isosurface-stuffed tets → P2 solve →
 //! nodal stress recovery) and results are read with the same probe the app uses.
 
-use fieldsmith_core::{analyse, probe::{probe, Locator}, Resolution};
+use fieldsmith_core::{
+    analyse,
+    probe::{probe, Locator},
+    Resolution,
+};
 use fieldsmith_verify::{doc, Check, Report};
 use std::time::Instant;
 
@@ -44,7 +48,8 @@ fn v1_v2_cantilever() {
         let a = analyse(&d, Resolution::Size(h), clock).expect("analysis");
         let loc = Locator::new(&a);
         let tip = probe(&a, &loc, Some(0), [100.0 - 1e-6, 5.0, 5.0]).expect("tip inside mesh");
-        let top = probe(&a, &loc, Some(0), [50.0, 5.0, 10.0 - 1e-6]).expect("top fibre inside mesh");
+        let top =
+            probe(&a, &loc, Some(0), [50.0, 5.0, 10.0 - 1e-6]).expect("top fibre inside mesh");
         let p = &a.provenance;
         rows += &format!(
             "| {h} mm | {} | {} | {} | {:.0} ms | {:.0} ms | {:.5} mm | {:.3} MPa |\n",
@@ -60,7 +65,13 @@ fn v1_v2_cantilever() {
     }
 
     let mut r1 = Report::new("V1", "Cantilever tip deflection");
-    r1.check(Check::relative("Tip deflection (finest mesh)", defl_ref, last.0, "mm", 0.02));
+    r1.check(Check::relative(
+        "Tip deflection (finest mesh)",
+        defl_ref,
+        last.0,
+        "mm",
+        0.02,
+    ));
     r1.section(
         "Reference",
         format!(
@@ -79,7 +90,13 @@ fn v1_v2_cantilever() {
     );
 
     let mut r2 = Report::new("V2", "Cantilever bending stress");
-    r2.check(Check::relative("σxx at x = 50, top fibre (finest mesh)", sigma_ref, last.1, "MPa", 0.03));
+    r2.check(Check::relative(
+        "σxx at x = 50, top fibre (finest mesh)",
+        sigma_ref,
+        last.1,
+        "MPa",
+        0.03,
+    ));
     r2.section(
         "Reference",
         format!(

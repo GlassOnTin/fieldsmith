@@ -54,7 +54,11 @@ fn v6_gyroid_sheet_law() {
     let mut n3_body = String::new();
     for &(rho, n, rho_fit, e_fit) in &fit_inputs {
         let row = coupon::run(&gyroid_sheet(rho, n));
-        assert!(row.converged, "{rho} N={n}: solve must converge, log:\n{}", row.log.join("\n"));
+        assert!(
+            row.converged,
+            "{rho} N={n}: solve must converge, log:\n{}",
+            row.log.join("\n")
+        );
         // Round-trip gate on the extraction and the identity machinery of the harness.
         r.check(Check::absolute(
             &format!("equilibrium ∫σxxdV vs ΣFx·x identity, ρ = {rho} N = {n}"),
@@ -108,7 +112,11 @@ fn v6_gyroid_sheet_law() {
     let mut n4_body = String::new();
     for &rho in &[0.2, 0.3, 0.4] {
         let row = coupon::run(&gyroid_sheet(rho, 4));
-        assert!(row.converged, "{rho} N=4: solve must converge, log:\n{}", row.log.join("\n"));
+        assert!(
+            row.converged,
+            "{rho} N=4: solve must converge, log:\n{}",
+            row.log.join("\n")
+        );
         r.check(Check::absolute(
             &format!("equilibrium ∫σxxdV vs ΣFx·x identity, ρ = {rho} N = 4"),
             0.0,

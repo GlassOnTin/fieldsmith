@@ -12,11 +12,11 @@
 //! - also elevated → the row/feature straddle alone breaks the field (watch σyy at the (±1,0)
 //!   crossings too: with h=0.14 the x-rows 0.90909 / 1.04895 straddle x=±1).
 
+use fenics_element::{FiniteElement, P2Tetrahedron};
 use fieldsmith_core::material_of;
 use fieldsmith_core::regions::{region_facets, Facet};
 use fieldsmith_doc::LoadKind;
 use fieldsmith_field::expr;
-use fenics_element::{FiniteElement, P2Tetrahedron};
 use fieldsmith_solve::p2::face_nodes;
 use fieldsmith_solve::stress::element_stress;
 use fieldsmith_solve::{nodal_stress, solve, Material, P2Mesh, Problem, SolverOptions};
@@ -47,8 +47,16 @@ fn document(t: f64) -> String {
 }
 
 fn main() {
-    let t: f64 = std::env::args().nth(1).unwrap_or_else(|| "0.14".into()).parse().unwrap();
-    let h: f64 = std::env::args().nth(2).unwrap_or_else(|| t.to_string()).parse().unwrap();
+    let t: f64 = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "0.14".into())
+        .parse()
+        .unwrap();
+    let h: f64 = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| t.to_string())
+        .parse()
+        .unwrap();
     println!("thickness t={t}, mesh h={h}");
     let d = doc(&document(t));
     let body = expr::compile_body(&d);
@@ -62,11 +70,23 @@ fn main() {
         .iter()
         .map(|(fc, t)| {
             let tet = &mesh.tets[*t as usize];
-            let local = fc.map(|v| tet[..4].iter().position(|&x| x == v).expect("face vertex in tet"));
-            Facet { nodes: face_nodes(tet, local) }
+            let local = fc.map(|v| {
+                tet[..4]
+                    .iter()
+                    .position(|&x| x == v)
+                    .expect("face vertex in tet")
+            });
+            Facet {
+                nodes: face_nodes(tet, local),
+            }
         })
         .collect();
-    println!("elements {}  nodes {}  nverts {}", mesh.tets.len(), mesh.nodes.len(), mesh.nverts);
+    println!(
+        "elements {}  nodes {}  nverts {}",
+        mesh.tets.len(),
+        mesh.nodes.len(),
+        mesh.nverts
+    );
 
     let nn = mesh.nodes.len();
     let mut fixed = vec![0u8; nn];
@@ -80,7 +100,10 @@ fn main() {
         }
     }
     let mat = material_of(&d).unwrap();
-    let material = Material { young: vec![mat.e; mesh.tets.len()], poisson: mat.nu };
+    let material = Material {
+        young: vec![mat.e; mesh.tets.len()],
+        poisson: mat.nu,
+    };
     let mut force = vec![0.0; nn * 3];
     for l in &d.loads {
         let fs = region_facets(&d, &l.region, &mesh, &facets, h).unwrap();
@@ -100,10 +123,20 @@ fn main() {
         }
     }
 
-    let problem = Problem { mesh: mesh.clone(), material: material.clone(), fixed, force };
+    let problem = Problem {
+        mesh: mesh.clone(),
+        material: material.clone(),
+        fixed,
+        force,
+    };
     let t0 = Instant::now();
     let (u, r) = solve(&problem, SolverOptions::default()).expect("P2 solve");
-    println!("solve: iters {} rel_residual {:.3e} ({:.1}s)", r.iterations, r.rel_residual, t0.elapsed().as_secs_f64());
+    println!(
+        "solve: iters {} rel_residual {:.3e} ({:.1}s)",
+        r.iterations,
+        r.rel_residual,
+        t0.elapsed().as_secs_f64()
+    );
 
     let nu = mat.nu;
     let pts = P2Tetrahedron.nodal_coordinates();
@@ -139,7 +172,13 @@ fn main() {
         let c = centroid(e);
         println!(
             "  e{:6} centroid=({:8.5},{:8.5},{:7.4}) vol={:.3e} sxx={:9.3} (Kt {:.2})",
-            e, c[0], c[1], c[2], mesh.tet_volume(e).abs(), sxx, sxx / 11.111
+            e,
+            c[0],
+            c[1],
+            c[2],
+            mesh.tet_volume(e).abs(),
+            sxx,
+            sxx / 11.111
         );
     }
     println!("== element σyy at centroid, top 5 (catches defects at the (±1,0) crossings) ==");
@@ -147,7 +186,12 @@ fn main() {
         let c = centroid(e);
         println!(
             "  e{:6} centroid=({:8.5},{:8.5},{:7.4}) vol={:.3e} syy={:9.3}",
-            e, c[0], c[1], c[2], mesh.tet_volume(e).abs(), syy
+            e,
+            c[0],
+            c[1],
+            c[2],
+            mesh.tet_volume(e).abs(),
+            syy
         );
     }
 
@@ -166,7 +210,9 @@ fn main() {
         let mut count = 0usize;
         for (e, sc) in st.iter().enumerate() {
             let tt = &mesh.tets[e];
-            let Some(a) = tt.iter().position(|&x| x as usize == i) else { continue };
+            let Some(a) = tt.iter().position(|&x| x as usize == i) else {
+                continue;
+            };
             count += 1;
             let sn = element_stress(&mesh, &u, e, material.young[e], nu, pts[a]);
             let c = centroid(e);
@@ -222,7 +268,13 @@ fn main() {
         let expected = 10.0 * (1.0 + 0.5 / (y * y) + 1.5 / (y * y * y * y));
         println!(
             "  y={:7.4} centroid=({:8.5},{:8.5},{:7.4}) d={:.4} sxx={:8.3} expected {:8.3}",
-            y, c[0], c[1], c[2], d2.sqrt(), st[e][0], expected
+            y,
+            c[0],
+            c[1],
+            c[2],
+            d2.sqrt(),
+            st[e][0],
+            expected
         );
     }
 }
