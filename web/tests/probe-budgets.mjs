@@ -10,6 +10,9 @@
 // The export budget (3MF of the graded bracket at 0.1 mm ≤ 15 s) is measured through the
 // Make lens in the last section of each pass: mesh time from the export meta, write time
 // from the download click. The native mesh+3MF cross-check comes from adaptive_probe.rs.
+// A mesh-doc section (M6) then imports the shipped GLB fixture through the real file
+// chooser and runs the same Make-lens export on the imported part, so the mesh-doc
+// pipeline has one timing row per pass too; budget-scale mesh numbers are in V10.md.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -290,6 +293,69 @@ for (const mode of modes) {
   } catch (e) {
     check('export 3MF at h 0.1: mesh + write ≤ 15 s', false, `probe error: ${e}`);
   }
+
+  // ---- Mesh-doc rows (M6): import pipeline, then the same Make-lens 3MF -----------------
+  // The import palette opens, the file chooser settles and the mesh node lands in the
+  // document — the wall carries read, weld, segment and the worker's voxelize. The new
+  // document clears the bracket export (a superseded version is nulled on sync), so the
+  // export wait sees only the fresh object.
+  const palette = async (text) => {
+    await page.keyboard.press('Control+k');
+    await page.locator('[data-testid="palette-input"]').fill(text);
+    await page.keyboard.press('Enter');
+  };
+  try {
+    await palette('New document');
+    await page.waitForFunction(() => window.fieldsmith.store.doc.root.length === 0, null, { timeout: 10000 });
+    await page.evaluate(() => window.fieldsmith.store.setLens('make'));
+    const fixture = readFileSync(new URL('./fixtures/box.glb', import.meta.url)); // Node Buffer
+    const tImport = Date.now();
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), palette('Import mesh')]);
+    await chooser.setFiles({ name: 'box.glb', mimeType: 'model/gltf-binary', buffer: fixture });
+    await page.waitForFunction(
+      () => window.fieldsmith.store.doc.root.some((n) => n.kind.type === 'mesh'),
+      null,
+      { timeout: 60000 },
+    );
+    const importMs = Date.now() - tImport;
+    await page.waitForTimeout(400);
+    check('mesh doc import (box.glb fixture) ≤ 1 s', importMs <= 1000,
+      `${importMs} ms (file chooser → node in the document; weld + segment + voxelize in the worker)`);
+
+    const tExport = Date.now();
+    await page.locator('[data-testid="make-h"] button[data-value="0.1"]').click();
+    await page.locator('[data-testid="make-export"]').click();
+    await page.waitForFunction(() => {
+      const s = window.fieldsmith.analysis.state;
+      return s.export instanceof Object || s.exportError !== null;
+    }, null, { timeout: 600000, polling: 250 });
+    const wallS = (Date.now() - tExport) / 1000;
+    const es = await page.evaluate(() => {
+      const s = window.fieldsmith.analysis.state;
+      return { export: s.export, exportError: s.exportError };
+    });
+    if (es.exportError) {
+      check('mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s', false, `export error: ${es.exportError}`);
+    } else {
+      const meta = es.export.meta;
+      const t0 = Date.now();
+      const [dl] = await Promise.all([
+        page.waitForEvent('download', { timeout: 120000 }),
+        page.locator('[data-testid="make-download-3mf"]').click(),
+      ]);
+      const bytes = readFileSync(await dl.path());
+      const writeS = (Date.now() - t0) / 1000;
+      const pkg = threeMfCheck(bytes);
+      const budgetS = (meta.mesh_ms + writeS * 1000) / 1000;
+      check('mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s',
+        budgetS <= 15 && pkg.tris === meta.tris,
+        `${budgetS.toFixed(1)} s (mesh ${(meta.mesh_ms / 1000).toFixed(1)}, write ${writeS.toFixed(1)}; ` +
+        `${(bytes.length / 1048576).toFixed(1)} MB, ${pkg.tris} tris vs ${meta.tris})`);
+    }
+  } catch (e) {
+    check('mesh doc import (box.glb fixture) ≤ 1 s', false, `probe error: ${String(e).split('\n')[0]}`);
+    check('mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s', false, 'probe error (see the import row)');
+  }
   const iso = await page.evaluate(() => ({ coi: crossOriginIsolated, hc: navigator.hardwareConcurrency }));
   notes.push(`${mode}: wasm ${iso.coi ? `threaded (cross-origin isolated, pool of ${iso.hc})` : 'single thread (page not cross-origin isolated)'}`);
   notes.push(`${mode}: setup solve ${setupSolveMs} ms; console errors ${consoleErrors.length}${consoleErrors.length ? `: ${consoleErrors.join(' | ')}` : ''}`);
@@ -336,6 +402,13 @@ md.push(exportRows.length && exportRows.every((r) => r.ok)
   : `This run: the row FAILS in ${exportRows.filter((r) => !r.ok).map((r) => r.mode).join(', ') || 'every pass (no row recorded)'}.`);
 md.push('Defect classes and their classification: `docs/verification/V8.md`, section');
 md.push('"Adaptive dual contouring (the browser export path)".');
+md.push('');
+md.push('Mesh-doc rows (M6): "mesh doc import" times the shipped 12-triangle GLB fixture');
+md.push('through the real file palette — chooser settle, weld, segment and the worker');
+md.push('voxelise, up to the mesh node landing in the document; "mesh doc export" runs the');
+md.push('same Make-lens 3MF measurement as the bracket row on that imported part. The');
+md.push('fixture is not budget-scale: the 87k-triangle Meshy STL the milestone names is');
+md.push('measured natively in `docs/verification/V10.md`.');
 md.push('');
 md.push(`Machine: ${machine}. Every timing above is this machine's; GOAL's mid-range laptop`);
 md.push('is not measured here.');
