@@ -68,6 +68,31 @@ function Dimensions({ node }: { node: Node }) {
           <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'extrude').height} set={(d, v) => (kindIn(d, id, 'extrude').height = v)} undoLabel={u} />
         </>
       );
+    case 'mesh':
+      return null;
+    case 'extend': {
+      const k = node.kind;
+      return (
+        <>
+          <label class="plain">Region</label>
+          <select
+            class="select"
+            data-testid="extend-region"
+            value={k.region}
+            onChange={(e) => store.transact(`Set ${id} region`, (d) => (kindIn(d, id, 'extend').region = (e.target as HTMLSelectElement).value))}
+          >
+            <option value="">—</option>
+            {store.doc.regions.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.id}
+              </option>
+            ))}
+          </select>
+          <VecRow label="Direction" step={0.5} get={(d) => kindIn(d, id, 'extend').dir} set={(d, v) => (kindIn(d, id, 'extend').dir = v)} undoLabel={u} testId="extend-dir" />
+          <NumRow label="Length" unit="mm" min={0.01} step={1} get={(d) => kindIn(d, id, 'extend').len} set={(d, v) => (kindIn(d, id, 'extend').len = v)} undoLabel={u} testId="extend-len" />
+        </>
+      );
+    }
     case 'group':
       return null;
   }
@@ -267,6 +292,43 @@ export function NameField({ id }: { id: string }) {
   );
 }
 
+/** Read-only facts about an imported mesh — nothing here is editable; resize means re-import.
+ * Counts are copied from the import report, not derived: a mesh whose solids disagree has
+ * nowhere in this panel to hide it. */
+function MeshPanel({ node }: { node: Node }) {
+  if (node.kind.type !== 'mesh') return null;
+  const k = node.kind;
+  const src = k.src.includes('/') || k.src.includes('\\') ? k.src.split(/[\\/]/).pop()! : k.src;
+  return (
+    <>
+      <div class="field-grid" style={{ fontSize: '12px' }}>
+        <label class="plain">Source</label>
+        <span style={{ color: 'var(--text-3)' }}>{k.src}</span>
+        <label class="plain">Units / up</label>
+        <span class="num">
+          {k.units} / {k.up}
+        </span>
+        <label class="plain">Voxel</label>
+        <span class="num">{k.voxel} mm</span>
+        <label class="plain">Triangles</label>
+        <span class="num">{k.tris.toLocaleString()}</span>
+        <label class="plain">Patches</label>
+        <span class="num">{k.patches.toLocaleString()}</span>
+        <label class="plain">Open edges</label>
+        <span class="num">{k.open_edges.toLocaleString()}</span>
+        <label class="plain">Grid key</label>
+        <span class="num">{k.hash}</span>
+      </div>
+      {k.open_edges > 0 && (
+        <div class="hint">
+          {k.open_edges} open edge{k.open_edges === 1 ? '' : 's'} in “{src}”: the surface has holes, so the
+          solid fill and any volume readout may be wrong — check before trusting a solve.
+        </div>
+      )}
+    </>
+  );
+}
+
 function NodeInspector({ node }: { node: Node }) {
   const id = node.id;
   const u = `Edit ${id}`;
@@ -308,6 +370,7 @@ function NodeInspector({ node }: { node: Node }) {
         <VecRow label="Rotation" unit="°" step={15} get={(d) => nodeIn(d, id).transform.rotate} set={(d, v) => (nodeIn(d, id).transform.rotate = v)} undoLabel={`Rotate ${id}`} testId="rotation" />
       </div>
       <ProfileEditor node={node} />
+      {node.kind.type === 'mesh' && <MeshPanel node={node} />}
       {node.kind.type === 'group' && (
         <>
           <div class="section-label">

@@ -2,7 +2,9 @@
 import type { Document, Modifier, Node, NodeKind, Op, Vec3 } from './types';
 import { allIds, containerOf, findNode, freshId, walk } from './types';
 
-export type ShapeType = Exclude<NodeKind['type'], 'group'> | 'group';
+/** Shape types the user creates from scratch; `mesh`/`extend` arrive via import and
+ *  sidecar load only, so they are not in the Add menu. */
+export type ShapeType = Exclude<NodeKind['type'], 'group' | 'mesh' | 'extend'> | 'group';
 
 export const SHAPE_TYPES: { type: ShapeType; label: string; key?: string }[] = [
   { type: 'box', label: 'Box', key: 'B' },

@@ -3,8 +3,9 @@
 // run; the worker dies so a long solve never wedges the session. The Make lens shares this
 // worker: export/slice/bytes round-trips go through it (the worker keeps the graded handle
 // and the export mesh), replies guard on the same generation counter as the ladder.
-import type { ExportMeta, LevelResult, WorkerOut } from '../doc/wasm';
+import type { ExportMeta, ImportOut, LevelResult, WorkerOut } from '../doc/wasm';
 import { store } from '../doc/store';
+import { meshcache } from '../doc/meshcache';
 import { ui } from './ui';
 import { download } from './commands';
 
@@ -122,7 +123,41 @@ export class AnalysisEngine {
       exportError: null,
       slice: null,
     });
-    this.ensureWorker().postMessage({ type: 'run', doc: store.doc });
+    const w = this.ensureWorker();
+    this.feed(w);
+    w.postMessage({ type: 'run', doc: store.doc });
+  }
+
+  /** Register the document's cached mesh grids in this worker (copy + transfer: the cache
+   * keeps its originals). Extend grids derive from the meshes in-process on the worker
+   * side, so parent meshes are all the feed carries. */
+  private feed(w: Worker) {
+    const entries = meshcache.entriesFor(store.doc);
+    if (!entries.length) return;
+    const copies = entries.map((e) => ({ ...e, dist: e.dist.slice(), patch: e.patch ? e.patch.slice() : null }));
+    w.postMessage(
+      { type: 'hydrate', entries: copies },
+      copies.flatMap((c) => [c.dist.buffer as ArrayBuffer, ...(c.patch ? [c.patch.buffer as ArrayBuffer] : [])]),
+    );
+  }
+
+  /** Import a model file in the worker (the voxeliser runs on its rayon pool). The grids
+   * arrive in `importDone` and go into the main-thread cache; the splice into the document
+   * is the caller's. Rejects with the failure message. */
+  importFile(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] } = {}): Promise<ImportOut> {
+    if (this.importWait) return Promise.reject('an import is already running');
+    return new Promise<ImportOut>((resolve, reject) => {
+      this.importWait = { resolve, reject };
+      this.ensureWorker().postMessage({ type: 'import', bytes, kind, src, opts }, [bytes]);
+    });
+  }
+
+  /** An import whose worker is gone mid-flight (edit cancel, poison, replace). */
+  private rejectImport(message: string) {
+    if (!this.importWait) return;
+    const w = this.importWait;
+    this.importWait = null;
+    w.reject(message);
   }
 
   /** A live worker: reuse it (its graded handle and export mesh still serve the Make
@@ -138,7 +173,14 @@ export class AnalysisEngine {
       this.set({ status: 'error', error: 'the analysis worker failed to start', resultsFor: store.docVersion });
     };
     w.onmessage = (e: MessageEvent<WorkerOut>) => {
-      if (gen !== this.gen) return;
+      if (gen !== this.gen) {
+        // A replaced worker's last import can no longer be applied to this document —
+        // answer the caller instead of leaving the promise hanging.
+        if (e.data.type === 'importDone' || e.data.type === 'importError') {
+          this.rejectImport('the worker was replaced during the import');
+        }
+        return;
+      }
       this.dispatch(e.data);
     };
     return w;
@@ -147,7 +189,20 @@ export class AnalysisEngine {
   /** docVersion the last ladder run was started for ('done'/'error' replies land on it). */
   private launchVersion = 0;
 
+  /** Import call in flight (one at a time; a replaced worker rejects it — the wasm
+   * instance it ran in died with the worker). */
+  private importWait: { resolve: (r: ImportOut) => void; reject: (e: string) => void } | null = null;
+
   private dispatch(m: WorkerOut) {
+    if (this.importWait && (m.type === 'importDone' || m.type === 'importError')) {
+      const wait = this.importWait;
+      this.importWait = null;
+      if (m.type === 'importDone') {
+        for (const g of m.grids) meshcache.put({ ...g, dist: g.dist.slice(), patch: g.patch ? g.patch.slice() : null });
+        return wait.resolve(m.result);
+      }
+      return wait.reject(m.message);
+    }
     if (m.type === 'level') this.set({ levelLabel: m.label });
     else if (m.type === 'levelDone') {
       const levels = [...this.state.levels, m.result];
@@ -179,7 +234,9 @@ export class AnalysisEngine {
     const version = store.docVersion;
     this.makeVersion = version;
     this.set({ export: 'running', exportError: null });
-    this.ensureWorker().postMessage({ type: 'export', doc: store.doc, h, solid });
+    const w = this.ensureWorker();
+    this.feed(w);
+    w.postMessage({ type: 'export', doc: store.doc, h, solid });
   }
 
   /** Make lens: slice the export mesh at z (latest request wins in the worker). */
@@ -194,9 +251,11 @@ export class AnalysisEngine {
     this.ensureWorker().postMessage({ type: 'bytes', what, name: store.doc.name });
   }
 
-  /** Kill the in-flight run (an edit cancels and restarts). */
+  /** Kill the in-flight run (an edit cancels and restarts); an import in flight dies with
+   * the worker, so reject its promise here. */
   private cancel() {
     clearTimeout(this.timer);
+    this.rejectImport('the import was cancelled');
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

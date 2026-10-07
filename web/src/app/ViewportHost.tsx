@@ -4,8 +4,9 @@ import { useEffect, useRef } from 'preact/hooks';
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Viewport } from '../view/viewport';
-import type { Highlight } from '../view/viewport';
+import type { Highlight, MeshSlotSpec } from '../view/viewport';
 import { store } from '../doc/store';
+import { meshcache } from '../doc/meshcache';
 import { bodyShader, shapeShader, pick, FACE_CODES } from '../doc/wasm';
 import type { ShaderInfo } from '../doc/wasm';
 import { findNode, walk } from '../doc/types';
@@ -53,6 +54,26 @@ export function ViewportHost() {
     const hook = (window as unknown as { fieldsmith?: Record<string, unknown> }).fieldsmith;
     if (hook) hook.viewport = vp;
     let shader: ShaderInfo | null = null;
+    /** Mesh hashes we already reported as not loaded — the hint repeats after the grid
+     * returns (e.g. its .fsmz sidecar is opened), not on every sync before that. */
+    const missingNotified = new Set<string>();
+    /** Resolve a shader's mesh slots against the hydrated grid registry. A slot whose grid
+     * is absent goes to `missing` rather than into the spec: an unbound sampler reads 0,
+     * which every ray hits, not a vacuum. */
+    const resolveMeshes = (sh: ShaderInfo): { slots: MeshSlotSpec[]; missing: string[] } => {
+      const slots: MeshSlotSpec[] = [];
+      const missing: string[] = [];
+      for (const m of sh.meshes) {
+        const g = meshcache.slotGrid(m.key_hex);
+        if (g && g.dims[0] === m.dims[0] && g.dims[1] === m.dims[1] && g.dims[2] === m.dims[2]) {
+          slots.push({ slot: m.slot, dist: g.dist, patch: g.patch, dims: m.dims });
+          missingNotified.delete(m.key_hex);
+        } else {
+          missing.push(m.key_hex);
+        }
+      }
+      return { slots, missing };
+    };
     let lastDoc: Document | null = null;
     let fittedLoad = -1;
     let lastSel = '';
@@ -154,7 +175,9 @@ export function ViewportHost() {
       const n = s && s.kind === 'node' && store.lens === 'shape' ? findNode(store.doc, s.id) : null;
       if (n && (n.op !== 'add' || n.suppressed)) {
         const g = shapeShader(store.doc, n.id);
-        vp.setGhost({ source: g.source, bounds: g.bounds });
+        const gm = resolveMeshes(g);
+        // A mesh ghost whose grids are missing reads as a vacuum field anyway; hide it.
+        vp.setGhost(gm.missing.length ? null : { source: g.source, bounds: g.bounds, meshes: gm.slots });
       } else vp.setGhost(null);
     };
 
@@ -168,7 +191,23 @@ export function ViewportHost() {
         shader = bodyShader(doc);
         const refit = store.loads !== fittedLoad || (wasEmpty && !!shader.bounds);
         fittedLoad = store.loads;
-        void vp.setField({ source: shader.source, bounds: shader.bounds, ident: shader.ident }).then(() => {
+        // Grid resolution per document change: mesh leaves without loaded grids leave the
+        // viewport empty and cannot be solved — the worker says the same at run time.
+        const { slots, missing } = resolveMeshes(shader);
+        for (const key of missing) {
+          if (!missingNotified.has(key)) {
+            missingNotified.add(key);
+            ui.notify(
+              `Mesh grid ${key} is not loaded — open the .fsmz sidecar (File → Open) to see and solve it`,
+              'info',
+              10000,
+            );
+          }
+        }
+        const spec = missing.length
+          ? { source: shader.source, bounds: null, ident: '' }
+          : { source: shader.source, bounds: shader.bounds, ident: shader.ident, meshes: slots };
+        void vp.setField(spec).then(() => {
           ui.compileMs = vp.lastCompileMs;
           updateHighlights();
           if (refit) vp.fit(shader?.bounds ?? EMPTY_VIEW);

@@ -68,6 +68,20 @@ export interface ShaderInfo {
   ident: string;
   /** Leaf ids in `fs_ident` index order. */
   leaves: string[];
+  /** Mesh texture specs to bind as `u_mesh{slot}` / `u_mesh{slot}p`. */
+  meshes: MeshTexInfo[];
+}
+
+/** One emitted mesh texture slot (matches `MeshTexOut` in Rust). */
+export interface MeshTexInfo {
+  slot: number;
+  /** Registry key as 16 hex digits (u64 values exceed JS number precision); the serde
+   * name `key_hex` crosses verbatim, as with `ImportReport.open_edges`. */
+  key_hex: string;
+  dims: [number, number, number];
+  origin: Vec3;
+  spacing: number;
+  patch: boolean;
 }
 
 /** Face encoding used by generated GLSL (matches `Face::ALL` in Rust). */
@@ -101,6 +115,8 @@ export interface PickHit {
   normal: Vec3;
   shape: string | null;
   face: Face | null;
+  /** Surface patch of the hit on a mesh leaf (`mesh1.p3` selectors); null for prim faces. */
+  patch: number | null;
 }
 
 export function pick(doc: Document, o: Vec3, d: Vec3): PickHit | null {
@@ -113,6 +129,157 @@ export function nodeFaces(doc: Document, id: string): Face[] {
 
 export function bodyBounds(doc: Document): [Vec3, Vec3] | null {
   return JSON.parse(w.body_bounds(JSON.stringify(doc)));
+}
+
+// ---- mesh import ---------------------------------------------------------------------
+
+/** One imported part's report (mirrored into its node; shown again after reload). */
+export interface ImportReport {
+  name: string;
+  /** Generated node id (unique against the document's ids). */
+  id: string;
+  tris: number;
+  /** Welded vertex count — what the voxeliser consumed. */
+  verts: number;
+  patches: number;
+  open_edges: number;
+  /** Baked world-space bounds (mm): [xmin, ymin, zmin, xmax, ymax, zmax]. */
+  bbox: [number, number, number, number, number, number];
+  /** 16 hex digits — the mesh node's `hash` field. */
+  hash: string;
+  /** Requested voxel spacing (mm); the baked grid spacing is `spacing`. */
+  voxel: number;
+  spacing: number;
+  cells: number;
+  ms: number;
+}
+
+/** Import result: nodes to splice into `doc.root` plus per-part reports. */
+export interface ImportOut {
+  nodes: Document['root'];
+  parts: ImportReport[];
+  ms: number;
+}
+
+/** Import GLB / STL / OBJ bytes (`kind`: 'glb' | 'stl' | 'obj') into mesh nodes. Units and
+ * up-axis default per kind (GLB: m + Y-up; STL/OBJ: mm + Z-up) and are baked into the grid. */
+export function importMesh(
+  bytes: Uint8Array,
+  kind: 'glb' | 'stl' | 'obj',
+  opts: { units?: string; up?: string; voxel?: number; src?: string; ids?: string[] } = {},
+): ImportOut {
+  return JSON.parse(w.importMesh(bytes, kind, JSON.stringify({
+    units: opts.units ?? null,
+    up: opts.up ?? null,
+    voxel: opts.voxel ?? null,
+    src: opts.src ?? '',
+    ids: opts.ids ?? [],
+  })));
+}
+
+/** One hydrated mesh grid, read back by key for Data3DTexture upload (wasm-bindgen handle:
+ * getters are methods; typed arrays are copies, not wasm-memory views). */
+export interface GridInfo {
+  keyHex(): string;
+  origin(): Float64Array;
+  spacing(): number;
+  dims(): Uint32Array;
+  patch(): boolean;
+  /** Signed distances (f32, row-major x fastest). */
+  dist(): Float32Array;
+  /** Patch ids (u16, same layout; 65535 = unclaimed), undefined when unpatched. */
+  patchData(): Uint16Array | undefined;
+}
+
+/** Read a hydrated mesh grid by its 16-hex key. Throws when unhydrated (open the .fsmz or
+ * re-import first). */
+export function meshGrid(keyHex: string): GridInfo {
+  return w.meshGrid(keyHex);
+}
+
+/** Grid spec for `hydrateGrid` (matches `HydrateMesh` in Rust). */
+export interface HydrateSpec {
+  /** 16 hex digits. */
+  key: string;
+  origin: Vec3;
+  spacing: number;
+  dims: [number, number, number];
+  bbox: [number, number, number, number, number, number];
+  tris: number;
+  patches: number;
+  open_edges: number;
+}
+
+/** Register a mesh grid in this context's registry (the worker and the main thread each
+ * keep their own). Returns the 16-hex key. Throws on a malformed key, a length/f64-count
+ * mismatch against `dims` or a non-finite distance. */
+export function hydrateGrid(spec: HydrateSpec, dist: Float32Array, patch?: Uint16Array): string {
+  return w.hydrateMesh(JSON.stringify(spec), dist, patch);
+}
+
+/** Whether the grid behind `keyHex` is in this context's registry. */
+export function meshHydrated(keyHex: string): boolean {
+  return w.meshHydrated(keyHex);
+}
+
+// ---- .fsmz sidecar --------------------------------------------------------------------
+
+/** One mesh-grid record in a sidecar manifest (matches `ManifestMesh` in Rust). */
+export interface ManifestMesh {
+  hash: string;
+  units: string;
+  up: string;
+  voxel: number;
+  origin: Vec3;
+  spacing: number;
+  dims: [number, number, number];
+  tris: number;
+  patches: number;
+  open_edges: number;
+  dist_crc32: number;
+  patch: boolean;
+  patch_crc32?: number;
+}
+
+/** One region-driven extend record (matches `ManifestExtend` in Rust): the derived sweep
+ * grid keyed by its recipe (parent mesh, patch ids, direction, length). */
+export interface ManifestExtend {
+  /** The extend node's id. */
+  id: string;
+  /** 16 hex digits — the derived grid's key; the data entry is `ext-<hash>.dist`. */
+  hash: string;
+  region: string;
+  /** Hash of the parent mesh node the sweep is derived from. */
+  parent_hash: string;
+  /** The region's patch ids naming the parent, sorted and deduped. */
+  patch_ids: number[];
+  dir: Vec3;
+  len: number;
+  origin: Vec3;
+  spacing: number;
+  dims: [number, number, number];
+  bbox: [number, number, number, number, number, number];
+  dist_crc32: number;
+}
+
+export interface SidecarManifest {
+  v: number;
+  meshes: ManifestMesh[];
+  /** Extends records: absent from writers predating them. */
+  extends?: ManifestExtend[];
+}
+
+/** Load a `.fsmz` sidecar: `{doc, manifest}`; the mesh-grid registry is hydrated as a
+ * side effect. Throws naming the reason — an unreadable archive or a doc/manifest
+ * disagreement — with the failing entry or hash named. */
+export function loadFsmz(bytes: Uint8Array): { doc: Document; manifest: SidecarManifest } {
+  return JSON.parse(w.loadFsmz(bytes));
+}
+
+/** Write the `.fsmz` sidecar for the document. Throws naming the hash when a mesh grid is
+ * not hydrated (re-import the source or load the sidecar first). */
+export function saveFsmz(doc: Document): Uint8Array {
+  return w.saveFsmz(JSON.stringify(doc));
 }
 
 // ---- analysis ----------------------------------------------------------------------
@@ -312,13 +479,35 @@ export interface LevelResult {
   class: Uint8Array | null;
 }
 
+/** One mesh grid handed to (or from) a worker: spec plus payloads. The typed arrays are
+ * plain standalone copies; transfer their buffers for the trip and cache both sides. */
+export interface HydrateEntry {
+  /** 16 hex digits. */
+  key: string;
+  origin: Vec3;
+  spacing: number;
+  dims: [number, number, number];
+  bbox: [number, number, number, number, number, number];
+  tris: number;
+  patches: number;
+  open_edges: number;
+  dist: Float32Array;
+  patch: Uint16Array | null;
+}
+
 export type WorkerIn =
   | { type: 'run'; doc: Document }
   | { type: 'export'; doc: Document; h: number; solid: boolean }
   /** Scrub request for the layer preview of the last export (no-op while none exists). */
   | { type: 'slice'; z: number }
   /** Fetch the last export's file bytes as a copy; name echoes back for the filename. */
-  | { type: 'bytes'; what: 'stl' | '3mf'; name: string };
+  | { type: 'bytes'; what: 'stl' | '3mf'; name: string }
+  /** Voxelise an imported model in the worker (rayon threads); the grids come back in
+   * `importDone` for the main-thread cache. */
+  | { type: 'import'; bytes: ArrayBuffer; kind: 'glb' | 'stl' | 'obj'; src: string; opts: { units?: string; up?: string; voxel?: number; ids?: string[] } }
+  /** Register mesh grids in the worker's registry (fresh copies — the main-thread cache
+   * keeps ownership of its own). Posted before `run`/`export` when the doc carries meshes. */
+  | { type: 'hydrate'; entries: HydrateEntry[] };
 
 export type ExportDone = { meta: ExportMeta };
 
@@ -326,6 +515,11 @@ export type WorkerOut =
   | { type: 'level'; label: string }
   | { type: 'levelDone'; result: LevelResult }
   | { type: 'done'; skippedFine: string | null }
+  /** Import finished: nodes/reports to splice into the document, grids to put in the
+   * main-thread cache (their buffers arrive transferred). The worker keeps its own copies
+   * hydrated for the next run. */
+  | { type: 'importDone'; result: ImportOut; grids: HydrateEntry[] }
+  | { type: 'importError'; message: string }
   /** kind 'setup': the study is not analysable yet (no support or no load) — not a failure. */
   | { type: 'error'; message: string; kind?: 'setup' }
   | { type: 'exportStart'; h: number; solid: boolean }

@@ -171,6 +171,16 @@ void main() {
 }`;
 }
 
+/** One mesh leaf's voxel grid, resolved by the host from the session grid registry. The
+ * generated shader bakes origin and spacing as literals, so only the texture payload travels. */
+export interface MeshSlotSpec {
+  /** Slot in the generated source: binds `u_mesh{slot}`, plus `u_mesh{slot}p` when `patch` is set. */
+  slot: number;
+  dist: Float32Array;
+  patch: Uint16Array | null;
+  dims: [number, number, number];
+}
+
 export interface FieldSpec {
   source: string;
   bounds: [Vec3, Vec3] | null;
@@ -178,6 +188,8 @@ export interface FieldSpec {
   ident?: string;
   /** Lattice parameter grid for filled parts. */
   grid?: { origin: Vec3; spacing: number; dims: [number, number, number]; data: Float32Array } | null;
+  /** Voxel grids for mesh leaves, in the slots the generated source names. */
+  meshes?: MeshSlotSpec[];
   stepScale?: number;
 }
 
@@ -214,7 +226,15 @@ export class Viewport {
   private interacting = false;
   private idleTimer = 0;
   private frameTimes: number[] = [];
-  private paramTexture: THREE.Data3DTexture | null = null;
+  /** Dispose the 3D textures a retired material owns (u_param, mesh voxel grids). Textures
+   * travel inside the uniforms, so drop these before replacing the material — disposing the
+   * material alone leaves the GPU resources alive until the next explicit drop. */
+  private dropFieldTextures(mat: THREE.RawShaderMaterial | null) {
+    if (!mat) return;
+    for (const u of Object.values(mat.uniforms)) {
+      if (u.value instanceof THREE.Data3DTexture) u.value.dispose();
+    }
+  }
   bounds: [Vec3, Vec3] | null = null;
   showField = true;
   onFrame: (() => void) | null = null;
@@ -368,7 +388,6 @@ export class Viewport {
       u_hlN: { value: 0 },
     };
     if (spec.grid && spec.source.includes('u_param')) {
-      this.paramTexture?.dispose();
       const g = spec.grid;
       const tex = new THREE.Data3DTexture(g.data, g.dims[0], g.dims[1], g.dims[2]);
       tex.format = THREE.RedFormat;
@@ -377,8 +396,30 @@ export class Viewport {
       tex.magFilter = THREE.NearestFilter;
       tex.unpackAlignment = 1;
       tex.needsUpdate = true;
-      this.paramTexture = tex;
       uniforms.u_param = { value: tex };
+    }
+    // Mesh leaves: the host resolved each slot's grid from the session registry. The patch
+    // sampler is u16 in the document so it rides an R16UI integer texture. Slots without a
+    // doc-side mesh bind nothing; an unbound usampler reads 0 in WebGL2, which no patch id.
+    for (const s of spec.meshes ?? []) {
+      const dist = new THREE.Data3DTexture(s.dist, s.dims[0], s.dims[1], s.dims[2]);
+      dist.format = THREE.RedFormat;
+      dist.type = THREE.FloatType;
+      dist.minFilter = THREE.NearestFilter;
+      dist.magFilter = THREE.NearestFilter;
+      dist.unpackAlignment = 1;
+      dist.needsUpdate = true;
+      uniforms[`u_mesh${s.slot}`] = { value: dist };
+      if (s.patch) {
+        const patch = new THREE.Data3DTexture(s.patch, s.dims[0], s.dims[1], s.dims[2]);
+        patch.format = THREE.RedIntegerFormat;
+        patch.type = THREE.UnsignedShortType;
+        patch.minFilter = THREE.NearestFilter;
+        patch.magFilter = THREE.NearestFilter;
+        patch.unpackAlignment = 1;
+        patch.needsUpdate = true;
+        uniforms[`u_mesh${s.slot}p`] = { value: patch };
+      }
     }
     return new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -404,6 +445,7 @@ export class Viewport {
     const gen = ++this.fieldGen;
     const t0 = performance.now();
     if (!spec.bounds) {
+      this.dropFieldTextures(this.material);
       this.material?.dispose();
       this.material = null;
       this.bounds = null;
@@ -420,9 +462,11 @@ export class Viewport {
       /* fall back to synchronous compile on first render */
     }
     if (gen !== this.fieldGen) {
+      this.dropFieldTextures(mat);
       mat.dispose();
       return;
     }
+    this.dropFieldTextures(this.material);
     this.material?.dispose();
     this.material = mat;
     this.bounds = spec.bounds;
@@ -461,6 +505,7 @@ export class Viewport {
 
   /** Translucent ghost of a shape (e.g. a selected cutter); `null` hides it. */
   setGhost(spec: FieldSpec | null) {
+    this.dropFieldTextures(this.ghostMaterial);
     this.ghostMaterial?.dispose();
     if (!spec || !spec.bounds) {
       this.ghostMaterial = null;

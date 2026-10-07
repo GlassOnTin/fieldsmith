@@ -5,8 +5,8 @@ import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
-import { FACE_LABEL, freshId } from '../doc/types';
-import type { Document, Face, Load, Region, Support } from '../doc/types';
+import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
+import type { Document, Face, Load, Node, Region, Support } from '../doc/types';
 import { FACE_CODES, evalBody } from '../doc/wasm';
 import type { LevelResult, PickHit } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
@@ -81,37 +81,59 @@ function regionHighlights(leafIndex: (id: string) => number): Highlight[] {
       if (out.length >= MAX_HIGHLIGHTS) return out;
       const li = leafIndex(sl.shape);
       if (li < 0) continue;
-      // 'all' is face code 0 in the generated GLSL; the shader treats key.y < 0 as any face.
-      const code = sl.face === 'all' ? -1 : FACE_CODES.indexOf(sl.face);
+      // Mesh patches surface as face codes PATCH_CODE0 + id (10 + n) in the generated
+      // GLSL's ident slot; 'all' is face code 0 and the shader treats key.y < 0 as any face.
+      const code = sl.patch != null ? 10 + sl.patch : sl.face === 'all' ? -1 : FACE_CODES.indexOf(sl.face);
       out.push({ leaf: li, face: code, color });
     }
   }
   return out;
 }
 
+/** Tree/inspector label for one selector: a mesh patch reads `patch 3`, prim faces keep
+ * their FACE_LABEL name. */
+function selectorLabel(sl: { face: Face; patch?: number }): string {
+  return sl.patch != null ? `patch ${sl.patch}` : FACE_LABEL[sl.face];
+}
+
+const sameSelector = (
+  a: { shape: string; face: Face; patch?: number },
+  b: { shape: string; face: Face; patch?: number },
+): boolean => a.shape === b.shape && a.face === b.face && a.patch === b.patch;
+
 function onClickRegion(hit: PickHit | null, e: PointerEvent): boolean {
   if (store.lens !== 'setup' || e.button !== 0) return false;
   if (!hit) return false;
-  if (!hit.shape || !hit.face) {
+  // An imported mesh carries its patch segmentation: a hit on a patch names `mesh1.p3`
+  // (face stays 'all'); prim faces keep the face selector.
+  const shape = hit.shape;
+  const sel: { shape: string; face: Face; patch?: number } | null =
+    shape && hit.patch != null
+      ? { shape, face: 'all', patch: hit.patch }
+      : shape && hit.face
+        ? { shape, face: hit.face }
+        : null;
+  if (!sel) {
     ui.notify('This surface is not a shape face and cannot join a region.', 'error');
     return true;
   }
+  const label = selectorLabel(sel);
   const target = store.selection?.kind === 'region' ? store.selection.id : null;
   if (target) {
     if (!store.doc.regions.some((x) => x.id === target)) return false;
-    if (!regionIn(store.doc, target).selectors.some((sl) => sl.shape === hit.shape && sl.face === hit.face)) {
+    if (!regionIn(store.doc, target).selectors.some((sl) => sameSelector(sl, sel))) {
       store.transact(`Add face to ${target}`, (d) => {
-        regionIn(d, target).selectors.push({ shape: hit.shape!, face: hit.face! as Face });
+        regionIn(d, target).selectors.push(sel);
       });
     }
   } else {
     let id = '';
     store.transact('Add region', (d) => {
       id = freshId(d, 'region');
-      d.regions.push({ id, selectors: [{ shape: hit.shape!, face: hit.face! as Face }] });
+      d.regions.push({ id, selectors: [sel] });
     });
     store.select({ kind: 'region', id });
-    ui.notify(`${id} — ${FACE_LABEL[hit.face as Face]} of ${hit.shape}. Click more surfaces to add faces.`, 'info', 4500);
+    ui.notify(`${id} — ${label} of ${hit.shape}. Click more surfaces to add faces.`, 'info', 4500);
   }
   return true;
 }
@@ -574,6 +596,88 @@ function removeFace(regionId: string, index: number) {
   });
 }
 
+/** Leaf shapes a region selector can name: the field's prims and meshes. Groups and extends
+ * are left out (an Extend exposes no face selector of its own — V10's stated gap). */
+function selectableShapes(doc: Document): Node[] {
+  const out: Node[] = [];
+  walk(doc.root, (n) => {
+    if (n.kind.type !== 'group' && n.kind.type !== 'extend') out.push(n);
+  });
+  return out;
+}
+
+/** The face options the .fsm actually accepts for one shape. A mesh lists its face names
+ * without `side` (validate refuses it: a mesh has no side face) plus one patch entry per
+ * segmented patch; prims keep the full face list — a prim without the named face simply
+ * claims nothing at the solve. */
+function faceOptions(node: Node | null): { value: string; label: string }[] {
+  if (!node) return [];
+  if (node.kind.type !== 'mesh') {
+    return FACE_CODES.map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
+  }
+  const opts = FACE_CODES.filter((f) => f !== 'side').map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
+  for (let p = 1; p <= node.kind.patches; p++) opts.push({ value: `p:${p}`, label: `Patch ${p}` });
+  return opts;
+}
+
+/** Hand-build a selector: shape and face chosen from menus instead of a surface click. */
+function AddFaceRow({ regionId }: { regionId: string }) {
+  const shapes = selectableShapes(store.doc);
+  const [shapeId, setShapeId] = useState('');
+  const sid = shapes.some((n) => n.id === shapeId) ? shapeId : shapes[0]?.id ?? '';
+  const opts = faceOptions(sid ? findNode(store.doc, sid) : null);
+  const [faceVal, setFaceVal] = useState('');
+  const fv = opts.some((o) => o.value === faceVal) ? faceVal : opts[0]?.value ?? '';
+  if (!shapes.length) return null;
+  const add = () => {
+    const [kind, id] = fv.split(':');
+    // A patch entry keeps `face` 'all' (validate: a patch selector on a mesh); a face entry
+    // names the face of the chosen shape. Both forms are exactly what the .fsm parser takes.
+    const sel =
+      kind === 'p'
+        ? { shape: sid, face: 'all' as Face, patch: Number(id) }
+        : { shape: sid, face: id as Face };
+    if (regionIn(store.doc, regionId).selectors.some((sl) => sameSelector(sl, sel))) {
+      ui.notify('That face is already in this region.', 'info');
+      return;
+    }
+    store.transact(`Add face to ${regionId}`, (d) => {
+      regionIn(d, regionId).selectors.push(sel);
+    });
+  };
+  return (
+    <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+      <select
+        class="select"
+        data-testid="add-face-shape"
+        value={sid}
+        onChange={(e) => setShapeId((e.target as HTMLSelectElement).value)}
+      >
+        {shapes.map((n) => (
+          <option key={n.id} value={n.id}>
+            {n.id}
+          </option>
+        ))}
+      </select>
+      <select
+        class="select"
+        data-testid="add-face-face"
+        value={fv}
+        onChange={(e) => setFaceVal((e.target as HTMLSelectElement).value)}
+      >
+        {opts.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <button class="btn ghost small" data-testid="add-face" onClick={add}>
+        Add
+      </button>
+    </div>
+  );
+}
+
 function RegionInspector({ id }: { id: string }) {
   useApp();
   const r = store.doc.regions.find((x) => x.id === id);
@@ -588,7 +692,7 @@ function RegionInspector({ id }: { id: string }) {
       <div class="field-grid">
         {r.selectors.map((sl, i) => (
           <Fragment key={i}>
-            <span class="plain">{FACE_LABEL[sl.face]}</span>
+            <span class="plain">{selectorLabel(sl)}</span>
             <span class="sel-face">
               <span>{sl.shape}</span>
               <button class="mini icon" title="Remove this face" onClick={() => removeFace(id, i)}>
@@ -598,10 +702,11 @@ function RegionInspector({ id }: { id: string }) {
           </Fragment>
         ))}
       </div>
+      <AddFaceRow regionId={id} />
       <div class="hint">
         {r.selectors.length === 1
-          ? 'Click surfaces to add faces. Removing the last face removes the region and its supports and loads.'
-          : 'Click surfaces in the model to add faces.'}
+          ? 'Click surfaces to add faces, or pick a shape and face above. Removing the last face removes the region and its supports and loads.'
+          : 'Click surfaces in the model, or pick a shape and face above.'}
       </div>
     </div>
   );

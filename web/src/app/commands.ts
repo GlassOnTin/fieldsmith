@@ -1,11 +1,13 @@
 // Every user action, in one registry: the command palette, keyboard shortcuts and menus all use it.
 import { store, LENSES } from '../doc/store';
 import type { Lens } from '../doc/store';
-import { findNode, emptyDocument } from '../doc/types';
+import { findNode, emptyDocument, allIds, walk } from '../doc/types';
 import type { Document, Vec3 } from '../doc/types';
-import { parseFsm, printFsm } from '../doc/wasm';
+import { parseFsm, printFsm, loadFsmz, saveFsmz, meshHydrated } from '../doc/wasm';
+import { meshcache, cacheSidecar, docMeshHashes } from '../doc/meshcache';
 import { SHAPE_TYPES, duplicateNode, groupNode, insertNode, newNode, nudgeNode, removeNode } from '../doc/ops';
 import type { ShapeType } from '../doc/ops';
+import { analysis } from './analysis';
 import { ui } from './ui';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
 import boxCylFsm from '../../../examples/box-minus-cylinder.fsm?raw';
@@ -85,23 +87,117 @@ export function openText(text: string, fileName?: string): boolean {
   }
   store.load(r.ok);
   ui.notify(`Opened ${fileName ?? r.ok.name}`);
+  // A text .fsm never carries grid data; say so when meshes are in it so the reader knows
+  // why they may appear hollow until the .fsmz sidecar is opened.
+  const missing = docMeshHashes(r.ok).filter((h) => !meshHydrated(h) && !meshcache.has(h));
+  if (missing.length) {
+    ui.notify(
+      `${missing.length} imported mesh${missing.length === 1 ? ' has' : 'es have'} no grid loaded — open its .fsmz sidecar (File → Open) to see and solve it`,
+      'info',
+      10000,
+    );
+  }
   return true;
+}
+
+/** Open a `.fsmz` sidecar: the document plus its hydrated grids. */
+export function openFsmz(bytes: Uint8Array, fileName?: string): boolean {
+  try {
+    const { doc, manifest } = loadFsmz(bytes);
+    store.load(doc);
+    const missing = cacheSidecar(store.doc, manifest);
+    if (missing.length) {
+      ui.notify(`${missing.length} grid${missing.length === 1 ? ' was' : 's were'} not hydrated (${missing.join(', ')})`, 'error', 8000);
+      return false;
+    }
+    ui.notify(
+      `Opened ${fileName ?? doc.name} — ${manifest.meshes.length} mesh grid${manifest.meshes.length === 1 ? '' : 's'}`,
+    );
+    return true;
+  } catch (e) {
+    ui.notify(`${fileName ?? 'File'}: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000);
+    return false;
+  }
 }
 
 export function openFile() {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.fsm,text/plain';
+  input.accept = '.fsm,.fsmz';
   input.onchange = async () => {
     const f = input.files?.[0];
-    if (f) openText(await f.text(), f.name);
+    if (!f) return;
+    if (f.name.toLowerCase().endsWith('.fsmz')) {
+      openFsmz(new Uint8Array(await f.arrayBuffer()), f.name);
+    } else {
+      openText(await f.text(), f.name);
+    }
   };
   input.click();
 }
 
+/** Import a GLB / STL / OBJ model into mesh nodes. Voxelisation runs in the analysis
+ * worker's rayon pool; the spliced nodes reference grids held by the main-thread cache. */
+export function importMeshCommand() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.stl,.obj,.glb';
+  input.onchange = async () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const kind: 'glb' | 'stl' | 'obj' = f.name.toLowerCase().endsWith('.stl')
+      ? 'stl'
+      : f.name.toLowerCase().endsWith('.obj')
+        ? 'obj'
+        : 'glb';
+    try {
+      const out = await analysis.importFile(bytes.buffer, kind, f.name, { ids: [...allIds(store.doc)] });
+      if (!out.parts.length) {
+        ui.notify('The file carries no visible solid part to import', 'error', 8000);
+        return;
+      }
+      let first = '';
+      store.transact('Import mesh', (d) => {
+        for (const n of out.nodes) {
+          d.root.push(n);
+          first = first || n.id;
+        }
+      });
+      if (first) store.select({ kind: 'node', id: first });
+      const p = out.parts[0];
+      ui.notify(
+        `Imported ${out.parts.length} part${out.parts.length === 1 ? '' : 's'} in ${Math.round(out.ms)} ms — ${fmtCount(p.tris)} triangles, ${p.patches} patch${p.patches === 1 ? '' : 'es'}, ${p.open_edges} open edge${p.open_edges === 1 ? '' : 's'}, grid ${p.spacing} mm`,
+        'info',
+        6000,
+      );
+      viewApi.fit(false);
+    } catch (e) {
+      ui.notify(e instanceof Error ? e.message : String(e), 'error', 10000);
+    }
+  };
+  input.click();
+}
+
+function fmtCount(n: number): string {
+  return n.toLocaleString('en-GB');
+}
+
+/** Whether the document carries any mesh or extend node (drives .fsmz saves). */
+export function hasMeshNodes(doc: Document): boolean {
+  let any = false;
+  walk(doc.root, (n) => {
+    if (n.kind.type === 'mesh' || n.kind.type === 'extend') any = true;
+  });
+  return any;
+}
+
+export function fileNameBase(doc: Document): string {
+  return doc.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'untitled';
+}
+
 export function fileName(doc: Document): string {
-  const base = doc.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'untitled';
-  return `${base}.fsm`;
+  return `${fileNameBase(doc)}.fsm`;
 }
 
 export function download(name: string, data: BlobPart, type: string) {
@@ -116,9 +212,29 @@ export function download(name: string, data: BlobPart, type: string) {
 }
 
 export function saveFile() {
-  const text = printFsm(store.doc);
-  download(fileName(store.doc), text, 'text/plain');
-  ui.notify(`Saved ${fileName(store.doc)}`);
+  const doc = store.doc;
+  const base = fileNameBase(doc);
+  if (hasMeshNodes(doc)) {
+    // The sidecar writer reads this context's registry, so hydrate the cache's grids in
+    // first; anything still missing means the mesh was never imported here.
+    for (const e of meshcache.entriesFor(doc)) meshcache.put(e);
+    const missing = [...new Set(docMeshHashes(doc).filter((h) => !meshHydrated(h)))];
+    if (missing.length) {
+      ui.notify(
+        `${missing.length} mesh grid${missing.length === 1 ? ' is' : 's are'} not loaded (${missing[0]}${missing.length > 1 ? ', …' : ''}) — re-import the mesh or open its .fsmz; saved as .fsm instead`,
+        'info',
+        10000,
+      );
+    } else {
+      const bytes = saveFsmz(doc);
+      download(`${base}.fsmz`, bytes.slice(), 'application/zip');
+      ui.notify(`Saved ${base}.fsmz`);
+      return;
+    }
+  }
+  const text = printFsm(doc);
+  download(`${base}.fsm`, text, 'text/plain');
+  ui.notify(`Saved ${base}.fsm`);
 }
 
 export function newDocument() {
@@ -157,8 +273,9 @@ const hasNode = () => selectedNodeId() !== null;
 export function commands(): Command[] {
   const list: Command[] = [
     { id: 'file.new', group: 'File', label: 'New document', run: newDocument },
-    { id: 'file.open', group: 'File', label: 'Open .fsm file…', keys: 'Ctrl O', run: openFile },
-    { id: 'file.save', group: 'File', label: 'Save as .fsm', keys: 'Ctrl S', run: saveFile },
+    { id: 'file.importMesh', group: 'File', label: 'Import mesh (.stl / .obj / .glb)…', run: importMeshCommand },
+    { id: 'file.open', group: 'File', label: 'Open .fsm / .fsmz…', keys: 'Ctrl O', run: openFile },
+    { id: 'file.save', group: 'File', label: 'Save as .fsm / .fsmz', keys: 'Ctrl S', run: saveFile },
     ...EXAMPLES.map((e) => ({ id: `file.example.${e.id}`, group: 'File', label: `Open example: ${e.label}`, run: () => openText(e.text, `${e.id}.fsm`) })),
     { id: 'edit.undo', group: 'Edit', label: 'Undo', keys: 'Ctrl Z', enabled: () => store.canUndo(), run: () => store.undo() },
     { id: 'edit.redo', group: 'Edit', label: 'Redo', keys: 'Ctrl Shift Z', enabled: () => store.canRedo(), run: () => store.redo() },

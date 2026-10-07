@@ -29,6 +29,19 @@ export type NodeKind =
   | { type: 'capsule'; radius: number; length: number }
   | { type: 'torus'; major: number; minor: number }
   | { type: 'extrude'; profile: ProfileVertex[]; height: number }
+  | {
+      type: 'mesh';
+      src: string;
+      hash: string;
+      units: string;
+      up: string;
+      voxel: number;
+      bbox: [number, number, number, number, number, number];
+      tris: number;
+      patches: number;
+      open_edges: number;
+    }
+  | { type: 'extend'; region: string; dir: Vec3; len: number }
   | { type: 'group'; children: Node[]; modifiers: Modifier[] };
 
 export interface Node {
@@ -45,6 +58,8 @@ export type Face = 'all' | 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz' | 'side' | 't
 export interface Selector {
   shape: string;
   face: Face;
+  /** Surface-patch id of a mesh node (segmentation ids start at 1). */
+  patch?: number;
 }
 
 export interface Region {
@@ -197,6 +212,10 @@ export function kindLabel(k: NodeKind): string {
       return 'Torus';
     case 'extrude':
       return 'Extrude';
+    case 'mesh':
+      return 'Mesh';
+    case 'extend':
+      return 'Extend';
     case 'group':
       return 'Group';
   }
