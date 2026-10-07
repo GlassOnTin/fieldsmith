@@ -7,7 +7,7 @@ use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
 use fieldsmith_mesh::export::TriMesh;
-use js_sys::{Float32Array, Float64Array, Uint32Array, Uint8Array};
+use js_sys::{Float32Array, Float64Array, Uint16Array, Uint32Array, Uint8Array};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -73,6 +73,32 @@ struct ShaderOut {
     ident: String,
     /// Leaf ids in `fs_ident` index order.
     leaves: Vec<String>,
+    /// Mesh texture specs to bind as `u_mesh{slot}` / `u_mesh{slot}p`.
+    meshes: Vec<MeshTexOut>,
+}
+
+/// One mesh texture spec for the JS side. The registry key travels as 16 hex digits
+/// because u64 numbers lose precision beyond 2^53 in JavaScript; `key_from_hex` reads
+/// them back.
+#[derive(Serialize)]
+struct MeshTexOut {
+    slot: usize,
+    key_hex: String,
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: f64,
+    patch: bool,
+}
+
+fn mesh_tex_out(t: &glsl::MeshTex) -> MeshTexOut {
+    MeshTexOut {
+        slot: t.slot,
+        key_hex: format!("{:016x}", t.key),
+        dims: t.dims,
+        origin: t.origin,
+        spacing: t.spacing,
+        patch: t.patch,
+    }
 }
 
 const NO_IDENT: &str = "vec2 fs_ident(vec3 p) { return vec2(-1.0, 0.0); }\n";
@@ -98,6 +124,7 @@ pub fn body_shader(doc_json: &str) -> Result<String, JsValue> {
         bounds: bounds_of(&e),
         ident,
         leaves,
+        meshes: g.meshes.iter().map(mesh_tex_out).collect(),
     })
 }
 
@@ -113,6 +140,7 @@ pub fn shape_shader(doc_json: &str, id: &str) -> Result<String, JsValue> {
         bounds: bounds_of(&e),
         ident: NO_IDENT.into(),
         leaves: vec![],
+        meshes: g.meshes.iter().map(mesh_tex_out).collect(),
     })
 }
 
@@ -145,6 +173,9 @@ struct Pick {
     normal: [f64; 3],
     shape: Option<String>,
     face: Option<String>,
+    /// Surface patch of the hit on a mesh leaf (`mesh1.p3` selectors), `None` for
+    /// primitive faces or when no leaf claims the point.
+    patch: Option<u32>,
 }
 
 /// Cast a ray against the body; returns the hit and the shape/face it lies on, or `null`.
@@ -167,13 +198,235 @@ pub fn pick(
     let point = fieldsmith_field::dual::add([ox, oy, oz], fieldsmith_field::dual::scale(dir, t));
     let d = expr::eval(&e, point);
     let surf = expr::identify_surface(&doc, point);
+    let patch = surf
+        .as_ref()
+        .and_then(|(id, _, _)| expr::placed_shape(&doc, id))
+        .and_then(|e| expr::eval_mesh_patch(&e, point))
+        .map(|p| p as u32);
     to_json(&Pick {
         t,
         point,
         normal: fieldsmith_field::dual::normalize(d.g),
         shape: surf.as_ref().map(|s| s.0.clone()),
         face: surf.as_ref().map(|s| s.1.name().to_string()),
+        patch,
     })
+}
+
+/// Import parameters from JS: units / up override the kind defaults, `voxel` requests a
+/// spacing (mm), `src` is provenance, `ids` are the document's existing node ids so the
+/// generated ids stay unique.
+#[derive(serde::Deserialize)]
+struct ImportOptions {
+    units: Option<String>,
+    up: Option<String>,
+    voxel: Option<f64>,
+    #[serde(default)]
+    src: String,
+    #[serde(default)]
+    ids: Vec<String>,
+}
+
+/// Import a GLB / STL / OBJ (`kind`: "glb" | "stl" | "obj") into documented mesh nodes,
+/// voxelising and hydrating the session registry. `opts_json`: `{units?, up?, voxel?,
+/// src?, ids?}`. Returns `ImportOut` JSON — the nodes to splice into `doc.root` plus an
+/// honest per-part report (tris, welded verts, patches, open edges, bounds, hash, cell
+/// budget and timings).
+#[wasm_bindgen(js_name = importMesh)]
+pub fn import_mesh(bytes: &[u8], kind: &str, opts_json: &str) -> Result<String, JsValue> {
+    let o: ImportOptions = serde_json::from_str(opts_json).map_err(js_err)?;
+    let opts = fieldsmith_core::import::ImportOpts {
+        units: o.units.as_deref(),
+        up: o.up.as_deref(),
+        voxel: o.voxel,
+        src: &o.src,
+        taken: &o.ids,
+    };
+    let out = fieldsmith_core::import::import_mesh(kind, bytes, &opts)?;
+    to_json(&out)
+}
+
+/// One hydrated mesh grid ready for `Data3DTexture` upload: the distance sampler and, when
+/// the import segmented patches, the parallel `u16` patch grid. Typed arrays are copies,
+/// not wasm-memory views.
+#[wasm_bindgen]
+pub struct GridOut {
+    key_hex: String,
+    origin: [f64; 3],
+    spacing: f64,
+    dims: [usize; 3],
+    patch: bool,
+    dist: Float32Array,
+    patch_data: Option<Uint16Array>,
+}
+
+#[wasm_bindgen]
+impl GridOut {
+    /// The registry key as 16 hex digits (`u_mesh{slot}` binding key).
+    #[wasm_bindgen(js_name = keyHex)]
+    pub fn key_hex(&self) -> String {
+        self.key_hex.clone()
+    }
+    /// Grid node at `[ox, oy, oz]` (mm).
+    #[wasm_bindgen(js_name = origin)]
+    pub fn origin(&self) -> Float64Array {
+        Float64Array::from(&self.origin[..])
+    }
+    /// Node spacing (mm).
+    #[wasm_bindgen(js_name = spacing)]
+    pub fn spacing(&self) -> f64 {
+        self.spacing
+    }
+    /// Grid dims `[nx, ny, nz]`.
+    #[wasm_bindgen(js_name = dims)]
+    pub fn dims(&self) -> Uint32Array {
+        Uint32Array::from(
+            self.dims
+                .iter()
+                .map(|&d| d as u32)
+                .collect::<Vec<u32>>()
+                .as_slice(),
+        )
+    }
+    /// Whether a parallel patch grid accompanies the distance grid.
+    #[wasm_bindgen(js_name = patch)]
+    pub fn patch(&self) -> bool {
+        self.patch
+    }
+    /// Signed distances (f32, row-major `x` fastest — matches `Grid3::at` layout).
+    #[wasm_bindgen(js_name = dist)]
+    pub fn dist(&self) -> Float32Array {
+        self.dist.clone()
+    }
+    /// Patch ids (u16, same layout; `u16::MAX` = unclaimed), `None` when unpatched.
+    #[wasm_bindgen(js_name = patchData)]
+    pub fn patch_data(&self) -> Option<Uint16Array> {
+        self.patch_data.clone()
+    }
+}
+
+/// Read a hydrated mesh grid by its 16-hex registry key (`keyHex` of a `MeshTexOut`,
+/// or a mesh node's `hash`). Errors naming the reason when the key is malformed or the
+/// registry has no entry — say, document loaded without its `.fsmz`.
+#[wasm_bindgen(js_name = meshGrid)]
+pub fn mesh_grid(key_hex: &str) -> Result<GridOut, JsValue> {
+    let key = fieldsmith_field::meshfield::key_from_hex(key_hex);
+    if key == 0 {
+        return Err(js_err(format!("'{key_hex}' is not a mesh grid key")));
+    }
+    let f = fieldsmith_field::meshfield::lookup(key).ok_or_else(|| {
+        js_err(format!(
+            "mesh grid {key_hex} is not hydrated — open the .fsmz sidecar or re-import first"
+        ))
+    })?;
+    Ok(GridOut {
+        key_hex: format!("{key:016x}"),
+        origin: f.dist.origin,
+        spacing: f.dist.spacing,
+        dims: f.dist.dims,
+        patch: f.patch.is_some(),
+        dist: Float32Array::from(f.dist.data.as_slice()),
+        patch_data: f.patch.as_ref().map(|p| Uint16Array::from(p.as_slice())),
+    })
+}
+
+/// Payload for `hydrate_mesh`: one mesh grid plus the import metadata that rides alongside
+/// it, in the exact shape `mesh_grid` hands out (dist row-major `x` fastest; patch cells
+/// `u16::MAX` where nothing is claimed).
+#[derive(serde::Deserialize)]
+struct HydrateMesh {
+    key: String,
+    origin: [f64; 3],
+    spacing: f64,
+    dims: [usize; 3],
+    bbox: [f64; 6],
+    tris: u32,
+    patches: u32,
+    open_edges: u32,
+}
+
+/// Hydrate the mesh-grid registry from arrays the JS side holds (a worker relaunching
+/// after an edit, or the main thread after an import whose voxelisation ran elsewhere).
+/// The arrays are the same encodings `mesh_grid` emits: dist little-endian f32, patch
+/// little-endian u16 (`u16::MAX` = unclaimed). Returns the hydrated key as 16 hex digits.
+#[wasm_bindgen(js_name = hydrateMesh)]
+pub fn hydrate_mesh(
+    spec_json: &str,
+    dist: &[f32],
+    patch: Option<Vec<u16>>,
+) -> Result<String, JsValue> {
+    let i: HydrateMesh = serde_json::from_str(spec_json).map_err(js_err)?;
+    let key = fieldsmith_field::meshfield::key_from_hex(&i.key);
+    if key == 0 {
+        return Err(js_err(format!("'{}' is not a mesh grid key", i.key)));
+    }
+    let cells: usize = i.dims.iter().product();
+    if dist.len() != cells {
+        return Err(js_err(format!(
+            "dist carries {} values, its dims [{}] expect {cells}",
+            dist.len(),
+            i.dims
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    if let Some(p) = &patch {
+        if p.len() != cells {
+            return Err(js_err(format!(
+                "patch grid carries {} ids, its dims expect {cells}",
+                p.len()
+            )));
+        }
+    }
+    let field = fieldsmith_field::meshfield::MeshField {
+        dist: std::sync::Arc::new(fieldsmith_field::lattice::Grid3 {
+            origin: i.origin,
+            spacing: i.spacing,
+            dims: i.dims,
+            data: dist.to_vec(),
+        }),
+        patch: patch.map(std::sync::Arc::new),
+        meta: fieldsmith_field::meshfield::MeshMeta {
+            bbox: fieldsmith_field::Aabb {
+                lo: [i.bbox[0], i.bbox[1], i.bbox[2]],
+                hi: [i.bbox[3], i.bbox[4], i.bbox[5]],
+            },
+            tris: i.tris,
+            patches: i.patches,
+            open_edges: i.open_edges,
+        },
+    };
+    if !field.dist.data.iter().all(|v| v.is_finite()) {
+        return Err(js_err("dist carries a non-finite value"));
+    }
+    fieldsmith_field::meshfield::hydrate(key, field);
+    Ok(format!("{key:016x}"))
+}
+
+/// Whether a mesh grid key is hydrated (`false` for a malformed key).
+#[wasm_bindgen(js_name = meshHydrated)]
+pub fn mesh_hydrated(key_hex: &str) -> bool {
+    let key = fieldsmith_field::meshfield::key_from_hex(key_hex);
+    key != 0 && fieldsmith_field::meshfield::lookup(key).is_some()
+}
+
+/// Open a `.fsmz` sidecar: inflate the entries, parse `doc.fsm`, cross-check against
+/// `manifest.json` and hydrate the mesh-grid registry. Returns `{doc, manifest}` JSON —
+/// the document plus the parsed manifest (grid placements and CRCs).
+#[wasm_bindgen(js_name = loadFsmz)]
+pub fn load_fsmz(bytes: &[u8]) -> Result<String, JsValue> {
+    to_json(&fieldsmith_core::fsmz::load(bytes)?)
+}
+
+/// Write the `.fsmz` sidecar for the document (`saveFsmz` takes the doc JSON exactly as
+/// the editor holds it). Errors naming the hash when a mesh grid is not hydrated —
+/// re-import the source or load its sidecar first.
+#[wasm_bindgen(js_name = saveFsmz)]
+pub fn save_fsmz(doc_json: &str) -> Result<Vec<u8>, JsValue> {
+    let doc = doc_from(doc_json)?;
+    fieldsmith_core::fsmz::save(&doc).map_err(js_err)
 }
 
 /// Faces a node exposes for region selection (JSON array of face names).
@@ -225,7 +478,11 @@ pub struct AnalysisOut {
 /// count; pass one, leave the other `None`. Errors are user-fixable setup issues ("add a
 /// support: …").
 #[wasm_bindgen(js_name = analyse)]
-pub fn analyse(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Result<AnalysisOut, JsValue> {
+pub fn analyse(
+    doc_json: &str,
+    h: Option<f64>,
+    dofs: Option<usize>,
+) -> Result<AnalysisOut, JsValue> {
     let doc = doc_from(doc_json)?;
     let res = match (h, dofs) {
         (Some(h), _) => Resolution::Size(h),
@@ -252,7 +509,14 @@ impl AnalysisOut {
 
     /// Nodal coordinates, 3 per node (mm).
     pub fn nodes(&self) -> Float64Array {
-        let flat = self.a.mesh.nodes.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        let flat = self
+            .a
+            .mesh
+            .nodes
+            .iter()
+            .flat_map(|p| p.iter())
+            .copied()
+            .collect::<Vec<f64>>();
         Float64Array::from(&flat[..])
     }
 
@@ -376,7 +640,11 @@ pub struct GradedOut {
 
 /// Run the solid analysis and the graded fill re-solve in one call. `h`/`dofs` as in `analyse`.
 #[wasm_bindgen(js_name = analyseGraded)]
-pub fn analyse_graded(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Result<GradedOut, JsValue> {
+pub fn analyse_graded(
+    doc_json: &str,
+    h: Option<f64>,
+    dofs: Option<usize>,
+) -> Result<GradedOut, JsValue> {
     let doc = doc_from(doc_json)?;
     let res = match (h, dofs) {
         (Some(h), _) => Resolution::Size(h),
@@ -384,7 +652,12 @@ pub fn analyse_graded(doc_json: &str, h: Option<f64>, dofs: Option<usize>) -> Re
         (None, None) => Resolution::Dofs(150_000),
     };
     let (a, g) = graded(&doc, res, clock).map_err(js_err)?;
-    Ok(GradedOut { base: a, g, name: doc.name, material: doc.material })
+    Ok(GradedOut {
+        base: a,
+        g,
+        name: doc.name,
+        material: doc.material,
+    })
 }
 
 #[wasm_bindgen]
@@ -400,7 +673,11 @@ impl GradedOut {
                 .base
                 .cases
                 .iter()
-                .map(|c| CaseSummary { name: c.name.clone(), max_vm_elem: c.max_vm_elem, max_displacement: c.max_displacement })
+                .map(|c| CaseSummary {
+                    name: c.name.clone(),
+                    max_vm_elem: c.max_vm_elem,
+                    max_displacement: c.max_displacement,
+                })
                 .collect(),
             fill: FillInfo {
                 family: format!("{:?}", self.g.spec.family),
@@ -425,7 +702,14 @@ impl GradedOut {
 
     /// Nodal coordinates of the solid mesh, 3 per node (mm).
     pub fn nodes(&self) -> Float64Array {
-        let flat = self.base.mesh.nodes.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        let flat = self
+            .base
+            .mesh
+            .nodes
+            .iter()
+            .flat_map(|p| p.iter())
+            .copied()
+            .collect::<Vec<f64>>();
         Float64Array::from(&flat[..])
     }
 
@@ -451,7 +735,13 @@ impl GradedOut {
     /// see `AnalysisOut::region_facet_sets`.
     #[wasm_bindgen(js_name = regionFacetSets)]
     pub fn region_facet_sets(&self) -> Uint32Array {
-        let flat: Vec<u32> = self.base.region_facet_sets.iter().flatten().copied().collect();
+        let flat: Vec<u32> = self
+            .base
+            .region_facet_sets
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         Uint32Array::from(&flat[..])
     }
 
@@ -579,13 +869,25 @@ impl MeshOut {
 
     /// Vertices, 3 per vertex (mm).
     pub fn verts(&self) -> Float64Array {
-        let flat = self.m.verts.iter().flat_map(|p| p.iter()).copied().collect::<Vec<f64>>();
+        let flat = self
+            .m
+            .verts
+            .iter()
+            .flat_map(|p| p.iter())
+            .copied()
+            .collect::<Vec<f64>>();
         Float64Array::from(&flat[..])
     }
 
     /// Triangles, 3 vertex ids each.
     pub fn tris(&self) -> Uint32Array {
-        let flat = self.m.tris.iter().flat_map(|t| t.iter()).copied().collect::<Vec<u32>>();
+        let flat = self
+            .m
+            .tris
+            .iter()
+            .flat_map(|t| t.iter())
+            .copied()
+            .collect::<Vec<u32>>();
         Uint32Array::from(&flat[..])
     }
 
@@ -652,8 +954,11 @@ fn export_field(
     let v_field = fieldsmith_field::volume::volume(field, h);
     let ref_ms = clock() - t0;
     let v_mesh = m.volume();
-    let delta =
-        if v_field.volume > 0.0 { (v_mesh - v_field.volume) / v_field.volume * 100.0 } else { f64::NAN };
+    let delta = if v_field.volume > 0.0 {
+        (v_mesh - v_field.volume) / v_field.volume * 100.0
+    } else {
+        f64::NAN
+    };
     let t0 = clock();
     let d = m.defects();
     let scan_ms = clock() - t0;
@@ -676,7 +981,12 @@ fn export_field(
         ref_ms,
         scan_ms,
     };
-    Ok(MeshOut { m, name: name.to_string(), material: material.to_string(), meta })
+    Ok(MeshOut {
+        m,
+        name: name.to_string(),
+        material: material.to_string(),
+        meta,
+    })
 }
 
 /// Export the solid body at mesh spacing `h` (mm). The reported field volume comes from the
@@ -704,5 +1014,12 @@ pub fn export_graded(doc_json: &str, h: f64) -> Result<MeshOut, JsValue> {
     let t0 = clock();
     let (_, g) = graded(&doc, Resolution::Dofs(150_000), clock).map_err(js_err)?;
     let field = expr::Expr::Filled(Box::new(g.fill));
-    export_field(&field, &doc.name, &doc.material, h, "graded fill", clock() - t0)
+    export_field(
+        &field,
+        &doc.name,
+        &doc.material,
+        h,
+        "graded fill",
+        clock() - t0,
+    )
 }
