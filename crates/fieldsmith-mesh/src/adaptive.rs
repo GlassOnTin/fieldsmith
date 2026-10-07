@@ -35,8 +35,8 @@
 //! of the plane, whose inner-side neighbour face then does not straddle, so exactly one
 //! surface is built.
 
-use crate::{V3};
 use crate::export::TriMesh;
+use crate::V3;
 use rayon::prelude::*;
 use std::collections::HashSet;
 
@@ -105,7 +105,11 @@ const FACE_CORNERS: [[u8; 4]; 6] = [
 #[inline]
 fn corner_key(cell: u64, step: u64, bit: u64) -> u64 {
     let (bx, by, bz) = (bit & 1, (bit >> 1) & 1, (bit >> 2) & 1);
-    fine_key(key_x(cell) + bx * step, key_y(cell) + by * step, key_z(cell) + bz * step)
+    fine_key(
+        key_x(cell) + bx * step,
+        key_y(cell) + by * step,
+        key_z(cell) + bz * step,
+    )
 }
 /// Fine-unit offset of face k's neighbouring cell.
 #[inline]
@@ -128,7 +132,11 @@ fn face_neighbour(cell: u64, step: u64, f: usize) -> (i64, i64, i64) {
 /// The edge key is the sorted pair of its endpoint corner keys.
 #[inline]
 fn edge_key(a: u64, b: u64) -> (u64, u64) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// Per-phase memory trace for the export-memory work, enabled by the environment variable
@@ -146,7 +154,9 @@ impl Trace {
         #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
         {
             let on = std::env::var_os("FIELDSMITH_ADAPTIVE_TRACE").is_some();
-            let t = Trace { t0: on.then(std::time::Instant::now) };
+            let t = Trace {
+                t0: on.then(std::time::Instant::now),
+            };
             t.reset_hwm();
             t
         }
@@ -245,9 +255,18 @@ struct MultiSheet {
 
 /// The cell's 12 edges as corner-bit pairs, lower-coordinate endpoint first.
 const EDGES: [(u8, u8); 12] = [
-    (0, 1), (2, 3), (4, 5), (6, 7), // along x
-    (0, 2), (1, 3), (4, 6), (5, 7), // along y
-    (0, 4), (1, 5), (2, 6), (3, 7), // along z
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7), // along x
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7), // along y
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7), // along z
 ];
 /// Edge index in `EDGES` of the corner pair (a, b), either order; 255 for non-edges.
 const EDGE_OF: [[u8; 8]; 8] = {
@@ -315,13 +334,21 @@ fn occupant(levels: &[Level], recs: &[LeafRec], depth: u32, from_level: u32, nk:
     for dd in (0..=from_level as u64).rev() {
         let step = 1u64 << (depth as u64 - dd);
         // Floor each axis to this level's grid: the cell containing the queried region.
-        let ak = fine_key((key_x(nk) / step) * step, (key_y(nk) / step) * step, (key_z(nk) / step) * step);
+        let ak = fine_key(
+            (key_x(nk) / step) * step,
+            (key_y(nk) / step) * step,
+            (key_z(nk) / step) * step,
+        );
         // Present (tested) at dd iff it is the root or its parent was refined.
         let present = if dd == 0 {
             ak == 0
         } else {
             let ps = 2 * step;
-            let pk = fine_key((key_x(ak) / ps) * ps, (key_y(ak) / ps) * ps, (key_z(ak) / ps) * ps);
+            let pk = fine_key(
+                (key_x(ak) / ps) * ps,
+                (key_y(ak) / ps) * ps,
+                (key_z(ak) / ps) * ps,
+            );
             levels[dd as usize - 1].refined.binary_search(&pk).is_ok()
         };
         if !present {
@@ -329,14 +356,21 @@ fn occupant(levels: &[Level], recs: &[LeafRec], depth: u32, from_level: u32, nk:
         }
         let lvl = &levels[dd as usize];
         if lvl.refined.binary_search(&ak).is_ok() {
-            debug_assert_eq!(dd as u32, from_level, "only the queried cell itself can be refined");
+            debug_assert_eq!(
+                dd as u32, from_level,
+                "only the queried cell itself can be refined"
+            );
             return Occupant::Refined;
         }
         let vert = match recs[lvl.recs.clone()].binary_search_by_key(&ak, |r| r.key) {
             Ok(i) => (lvl.recs.start + i) as u32,
             Err(_) => u32::MAX,
         };
-        return Occupant::Leaf { level: dd as u32, key: ak, vert };
+        return Occupant::Leaf {
+            level: dd as u32,
+            key: ak,
+            vert,
+        };
     }
     Occupant::None
 }
@@ -397,7 +431,11 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
         let rec_start = recs.len();
         let mut refined_keys: Vec<u64> = Vec::new();
         let (lv_cells, lv_corners) = {
-            let parents: &[u64] = if d == 0 { &[] } else { &levels[d as usize - 1].refined };
+            let parents: &[u64] = if d == 0 {
+                &[]
+            } else {
+                &levels[d as usize - 1].refined
+            };
             let mut lv_cells = 0usize;
             let mut lv_corners = 0usize;
             let mut pi = 0usize;
@@ -486,7 +524,8 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
                         // Refine when the surface may pass through the cell. At the finest
                         // level all candidates are leaves: the boundary then has h resolution.
                         d < depth
-                            && ((inside && outside) || vmin <= opts.lip * 0.5 * (step as f64 * h) * 3f64.sqrt() * gmax)
+                            && ((inside && outside)
+                                || vmin <= opts.lip * 0.5 * (step as f64 * h) * 3f64.sqrt() * gmax)
                     })
                     .collect();
                 for (ci, &ck) in cands.iter().enumerate() {
@@ -511,9 +550,10 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
                             if r {
                                 continue;
                             }
-                            if let Some(rec) =
-                                leaf_record(&ckeys, &cvals, d, key, depth, &origin, h, &mut xs, &mut ss, &mut ex)
-                            {
+                            if let Some(rec) = leaf_record(
+                                &ckeys, &cvals, d, key, depth, &origin, h, &mut xs, &mut ss,
+                                &mut ex,
+                            ) {
                                 out.push(rec);
                             }
                         }
@@ -532,9 +572,15 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
                     let mut it = s.into_iter();
                     for (k, rec) in r.iter().enumerate() {
                         if rec.nsheets > 1 {
-                            let ms = it.next().expect("leaf_record pushed a side entry for every multi-sheet leaf");
+                            let ms = it.next().expect(
+                                "leaf_record pushed a side entry for every multi-sheet leaf",
+                            );
                             debug_assert_eq!(ms.rec_ix, u32::MAX);
-                            side.push(MultiSheet { rec_ix: base + k as u32, comps: ms.comps, extra_base: eb });
+                            side.push(MultiSheet {
+                                rec_ix: base + k as u32,
+                                comps: ms.comps,
+                                extra_base: eb,
+                            });
                             eb += (rec.nsheets - 1) as u32;
                         }
                     }
@@ -549,7 +595,11 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
         n_cells += lv_cells;
         n_corners += lv_corners;
         let n_ref = refined_keys.len();
-        levels.push(Level { units, refined: refined_keys, recs: rec_start..recs.len() });
+        levels.push(Level {
+            units,
+            refined: refined_keys,
+            recs: rec_start..recs.len(),
+        });
         trace.mark(&format!("level {d}"), || {
             format!(
                 "cells {} refined {} corners {} mixed {} crossings {}",
@@ -603,8 +653,11 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
     // one is four triangles on one edge), so the stitch's chord registry keys chords by the
     // pair of weld heads and triangulates the second quad along its crossings instead. The
     // heads are computed here, ahead of the stitch, with the same sort weld_exact uses.
-    let mut hord: Vec<(u64, u32)> =
-        verts.iter().enumerate().map(|(i, v)| (pos_hash(v), i as u32)).collect();
+    let mut hord: Vec<(u64, u32)> = verts
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (pos_hash(v), i as u32))
+        .collect();
     hord.par_sort_unstable();
     let mut head_of: Vec<u32> = (0..verts.len() as u32).collect();
     {
@@ -667,7 +720,11 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
             }
             match occupant(&levels, &recs, depth, lvl_ix, fine_key(nx, ny, nz)) {
                 Occupant::None | Occupant::Refined => continue,
-                Occupant::Leaf { level: od, key: bkey, vert: vb } => {
+                Occupant::Leaf {
+                    level: od,
+                    key: bkey,
+                    vert: vb,
+                } => {
                     // Canonical owner: the finer leaf of the pair, the lower key at equal
                     // size. A coarser occupant sees me as the fine side and skips; refined
                     // neighbours' children emit their sub-faces.
@@ -678,7 +735,17 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
                         continue;
                     }
                     let same_size = od == lvl_ix;
-                    emit_face(&mut st, rec, a_ix, &recs[vb as usize], vb, f, ckey, step, same_size);
+                    emit_face(
+                        &mut st,
+                        rec,
+                        a_ix,
+                        &recs[vb as usize],
+                        vb,
+                        f,
+                        ckey,
+                        step,
+                        same_size,
+                    );
                 }
             }
         }
@@ -686,7 +753,12 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
 
     drop(st);
     trace.mark("stitch", || {
-        format!("verts {} tris {} crossing_vert {}", verts.len(), tris.len(), crossing_vert.len())
+        format!(
+            "verts {} tris {} crossing_vert {}",
+            verts.len(),
+            tris.len(),
+            crossing_vert.len()
+        )
     });
     drop(crossing_vert);
     drop(xtab);
@@ -711,7 +783,9 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
         }
     }
     compact(&mut verts, &mut tris);
-    trace.mark("compact", || format!("verts {} tris {}", verts.len(), tris.len()));
+    trace.mark("compact", || {
+        format!("verts {} tris {}", verts.len(), tris.len())
+    });
     TriMesh { verts, tris }
 }
 
@@ -759,7 +833,12 @@ fn sheet_vert(side: &[MultiSheet], ix: u32, rec: &LeafRec, slot: usize, n_recs: 
         if c == 0 {
             ix
         } else {
-            debug_assert!(c < rec.nsheets, "component {} of a {}-sheet leaf", c, rec.nsheets);
+            debug_assert!(
+                c < rec.nsheets,
+                "component {} of a {}-sheet leaf",
+                c,
+                rec.nsheets
+            );
             n_recs + ms.extra_base + c as u32 - 1
         }
     } else {
@@ -791,7 +870,12 @@ fn xbits(p: &V3, n: &V3) -> [u64; 6] {
 /// to the larger span of the pairs' crossings, itself symmetric under the reversal.
 /// Returns the pairs as indices into the inputs.
 fn saddle_pairs(p: &[V3; 4], n: &[V3; 4]) -> ([usize; 2], [usize; 2]) {
-    let k = [xbits(&p[0], &n[0]), xbits(&p[1], &n[1]), xbits(&p[2], &n[2]), xbits(&p[3], &n[3])];
+    let k = [
+        xbits(&p[0], &n[0]),
+        xbits(&p[1], &n[1]),
+        xbits(&p[2], &n[2]),
+        xbits(&p[3], &n[3]),
+    ];
     let (mut r, mut rk) = (0usize, k[0]);
     for i in 1..4 {
         if k[i] < rk {
@@ -803,7 +887,12 @@ fn saddle_pairs(p: &[V3; 4], n: &[V3; 4]) -> ([usize; 2], [usize; 2]) {
     if k[cs[1]] > k[cs[3]] {
         cs = [cs[0], cs[3], cs[2], cs[1]];
     }
-    let g = [gmag_at(n[cs[0]]), gmag_at(n[cs[1]]), gmag_at(n[cs[2]]), gmag_at(n[cs[3]])];
+    let g = [
+        gmag_at(n[cs[0]]),
+        gmag_at(n[cs[1]]),
+        gmag_at(n[cs[2]]),
+        gmag_at(n[cs[3]]),
+    ];
     let sim = |i: usize, j: usize| -> f64 {
         if g[i] > 1e-30 && g[j] > 1e-30 {
             gdot(n[cs[i]], n[cs[j]]) / (g[i] * g[j])
@@ -888,7 +977,11 @@ fn emit_face(
         xcyc[n_x] = e;
         n_x += 1;
     }
-    debug_assert!(n_x == 2 || n_x == 4, "straddling face with {} crossings", n_x);
+    debug_assert!(
+        n_x == 2 || n_x == 4,
+        "straddling face with {} crossings",
+        n_x
+    );
     if n_x != 2 && n_x != 4 {
         return;
     }
@@ -903,7 +996,9 @@ fn emit_face(
         if coincident(xc[0], xc[1]) {
             return;
         }
-        let (va, vb) = pair_fans(arec, aix, brec, bix, &bits, abit, 0, &xe, &xcyc, same_size, st);
+        let (va, vb) = pair_fans(
+            arec, aix, brec, bix, &bits, abit, 0, &xe, &xcyc, same_size, st,
+        );
         if near(&st.verts[va as usize], &st.verts[vb as usize]) {
             return;
         }
@@ -923,7 +1018,9 @@ fn emit_face(
             if coincident(xc[i], xc[j]) {
                 continue;
             }
-            let (va, vb) = pair_fans(arec, aix, brec, bix, &bits, abit, i, &xe, &xcyc, same_size, st);
+            let (va, vb) = pair_fans(
+                arec, aix, brec, bix, &bits, abit, i, &xe, &xcyc, same_size, st,
+            );
             if near(&st.verts[va as usize], &st.verts[vb as usize]) {
                 continue;
             }
@@ -964,7 +1061,13 @@ fn pair_fans(
         let c = xcyc[i];
         let b0 = bits[c] as u64 ^ abit;
         let b1 = bits[(c + 1) % 4] as u64 ^ abit;
-        sheet_vert(st.side, bix, brec, EDGE_OF[b0 as usize][b1 as usize] as usize, st.n_recs)
+        sheet_vert(
+            st.side,
+            bix,
+            brec,
+            EDGE_OF[b0 as usize][b1 as usize] as usize,
+            st.n_recs,
+        )
     } else {
         bix
     };
@@ -997,7 +1100,11 @@ fn pos_hash(v: &V3) -> u64 {
 #[inline]
 fn chord_reuse(st: &mut Stitch, va: u32, vb: u32) -> bool {
     let (ha, hb) = (st.head_of[va as usize], st.head_of[vb as usize]);
-    let key = if ha <= hb { (ha as u64, hb as u64) } else { (hb as u64, ha as u64) };
+    let key = if ha <= hb {
+        (ha as u64, hb as u64)
+    } else {
+        (hb as u64, ha as u64)
+    };
     !st.used_chords.insert(key)
 }
 
@@ -1041,25 +1148,31 @@ fn emit_quad(
     let (p0, q0, b) = (verts[va as usize], verts[x0 as usize], verts[vb as usize]);
     let u = [q0[0] - p0[0], q0[1] - p0[1], q0[2] - p0[2]];
     let v = [b[0] - p0[0], b[1] - p0[1], b[2] - p0[2]];
-    let nn = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let nn = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
     let aligned = nn[0] * m[0] + nn[1] * m[1] + nn[2] * m[2] >= 0.0;
     let (s, t) = if aligned { (x0, x1) } else { (x1, x0) };
     // 1e-12 matches the defect census's degenerate-triangle threshold.
-    let d_ab = (tri_area(verts[va as usize], verts[s as usize], verts[vb as usize]), tri_area(
-        verts[va as usize],
-        verts[vb as usize],
-        verts[t as usize],
-    ));
-    let d_xt = (tri_area(verts[s as usize], verts[t as usize], verts[va as usize]), tri_area(
-        verts[s as usize],
-        verts[vb as usize],
-        verts[t as usize],
-    ));
+    let d_ab = (
+        tri_area(verts[va as usize], verts[s as usize], verts[vb as usize]),
+        tri_area(verts[va as usize], verts[vb as usize], verts[t as usize]),
+    );
+    let d_xt = (
+        tri_area(verts[s as usize], verts[t as usize], verts[va as usize]),
+        tri_area(verts[s as usize], verts[vb as usize], verts[t as usize]),
+    );
     // Primary choice (the fan chord, or the crossings chord when a same-fan saddle forbids it);
     // when the primary is degenerate and the alternative is not, take the alternative — that is
     // the pinch case above. When both are degenerate the quad itself has no interior; emit the
     // primary anyway, whose degenerate triangles the defect census excludes.
-    let (degen, alt) = if cross_diag { (d_xt, d_ab) } else { (d_ab, d_xt) };
+    let (degen, alt) = if cross_diag {
+        (d_xt, d_ab)
+    } else {
+        (d_ab, d_xt)
+    };
     let primary = if cross_diag {
         ([s, t, va], [s, vb, t])
     } else {
@@ -1085,7 +1198,11 @@ fn emit_quad(
 fn tri_area(a: V3, b: V3, c: V3) -> f64 {
     let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
     0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
 }
 
@@ -1193,15 +1310,32 @@ fn leaf_record(
         plane_ix[e] = np as u8;
         np += 1;
         crossed |= 1 << e;
-        xtab.push(Xing { ekey: edge_key(corner_key(key, step, a as u64), corner_key(key, step, b as u64)), p, n });
+        xtab.push(Xing {
+            ekey: edge_key(
+                corner_key(key, step, a as u64),
+                corner_key(key, step, b as u64),
+            ),
+            p,
+            n,
+        });
     }
     // A crossed edge is on two faces and both straddle (its corners straddle), so each
     // face of it links it to a pair partner; every component holds at least two crossed
     // edges. Fewer than four crossed edges cannot hold two components — one sheet, one
     // vertex, the whole-cell QEF exactly as it was.
     if crossed.count_ones() < 4 {
-        let qpos = qef_snap(qef_vertex(&planes[..np], key, step, origin, h), &planes[..np]);
-        return Some(LeafRec { key, qpos, level: level as u8, mixed, crossed, nsheets: 1 });
+        let qpos = qef_snap(
+            qef_vertex(&planes[..np], key, step, origin, h),
+            &planes[..np],
+        );
+        return Some(LeafRec {
+            key,
+            qpos,
+            level: level as u8,
+            mixed,
+            crossed,
+            nsheets: 1,
+        });
     }
     // Sheet components in the cell: union-find over the crossed edge slots, linked by
     // every straddling face's boundary-crossing pairs (2 crossings link the two, a saddle
@@ -1227,7 +1361,11 @@ fn leaf_record(
             sn[n_s] = n;
             n_s += 1;
         }
-        debug_assert!(n_s == 2 || n_s == 4, "straddling face with {} crossings", n_s);
+        debug_assert!(
+            n_s == 2 || n_s == 4,
+            "straddling face with {} crossings",
+            n_s
+        );
         if n_s == 2 {
             dsu_union(&mut dsu, slots[0], slots[1]);
         } else if n_s == 4 {
@@ -1255,8 +1393,18 @@ fn leaf_record(
         comps |= (root_comp[r] as u64) << (3 * e);
     }
     if nsheets < 2 {
-        let qpos = qef_snap(qef_vertex(&planes[..np], key, step, origin, h), &planes[..np]);
-        return Some(LeafRec { key, qpos, level: level as u8, mixed, crossed, nsheets: 1 });
+        let qpos = qef_snap(
+            qef_vertex(&planes[..np], key, step, origin, h),
+            &planes[..np],
+        );
+        return Some(LeafRec {
+            key,
+            qpos,
+            level: level as u8,
+            mixed,
+            crossed,
+            nsheets: 1,
+        });
     }
     // Per-sheet vertices: component 0 keeps the record's slot; components 1.. append to
     // the extras, in component order (the side table maps a slot's component to its id).
@@ -1279,8 +1427,19 @@ fn leaf_record(
         }
         ex.push(qef_snap(qef_vertex(&cp, key, step, origin, h), &cp));
     }
-    ss.push(MultiSheet { rec_ix: u32::MAX, comps, extra_base: eb });
-    Some(LeafRec { key, qpos, level: level as u8, mixed, crossed, nsheets })
+    ss.push(MultiSheet {
+        rec_ix: u32::MAX,
+        comps,
+        extra_base: eb,
+    });
+    Some(LeafRec {
+        key,
+        qpos,
+        level: level as u8,
+        mixed,
+        crossed,
+        nsheets,
+    })
 }
 
 /// Union-find over the leaf's 12 crossed edge slots.
@@ -1398,12 +1557,14 @@ fn gmag_at(g: V3) -> f64 {
 
 #[inline]
 fn lookup(keys: &[u64], k: u64) -> usize {
-    keys.binary_search(&k).expect("generated corner key missing from its own table")
+    keys.binary_search(&k)
+        .expect("generated corner key missing from its own table")
 }
 
 #[inline]
 fn xings_find(xtab: &[Xing], ek: (u64, u64)) -> usize {
-    xtab.binary_search_by_key(&ek, |x| x.ekey).expect("perimeter crossing missing from the crossing table")
+    xtab.binary_search_by_key(&ek, |x| x.ekey)
+        .expect("perimeter crossing missing from the crossing table")
 }
 
 /// Weld exactly coincident vertices (bit-identical f64 positions). Positions are compared as
@@ -1425,7 +1586,10 @@ fn weld_exact(verts: &mut [V3], tris: &mut Vec<[u32; 3]>) {
         let v = verts[i as usize];
         [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]
     };
-    let mut ord: Vec<(u64, u32)> = (0..verts.len() as u32).into_par_iter().map(|i| (fx3(bits(i)), i)).collect();
+    let mut ord: Vec<(u64, u32)> = (0..verts.len() as u32)
+        .into_par_iter()
+        .map(|i| (fx3(bits(i)), i))
+        .collect();
     ord.par_sort_unstable();
     let mut new_ids: Vec<u32> = (0..verts.len() as u32).collect();
     let mut heads: Vec<u32> = Vec::new();
@@ -1501,7 +1665,9 @@ impl std::hash::Hasher for FxHasher {
     }
     #[inline]
     fn write_u64(&mut self, i: u64) {
-        self.0 = (self.0 ^ i).rotate_left(5).wrapping_mul(0x517c_c1b7_2722_0a95);
+        self.0 = (self.0 ^ i)
+            .rotate_left(5)
+            .wrapping_mul(0x517c_c1b7_2722_0a95);
     }
     #[inline]
     fn finish(&self) -> u64 {
@@ -1526,7 +1692,12 @@ fn orient(tris: &mut [[u32; 3]]) {
     // group ids held 24.
     let n_t = tris.len();
     let nh = 3 * n_t;
-    let n_v = tris.iter().flat_map(|t| t.iter()).map(|&v| v as usize + 1).max().unwrap_or(0);
+    let n_v = tris
+        .iter()
+        .flat_map(|t| t.iter())
+        .map(|&v| v as usize + 1)
+        .max()
+        .unwrap_or(0);
     let lo_hi = |h: usize| {
         let t = tris[h / 3];
         let (u, v) = (t[h % 3], t[(h % 3 + 1) % 3]);
@@ -1579,7 +1750,11 @@ fn orient(tris: &mut [[u32; 3]]) {
     // `flip` says so. A flip only permutes the corners, so the edge set never changes.
     let cur = |tris: &[[u32; 3]], flip: &[bool], i: usize| {
         let t = tris[i];
-        if flip[i] { [t[0], t[2], t[1]] } else { t }
+        if flip[i] {
+            [t[0], t[2], t[1]]
+        } else {
+            t
+        }
     };
     let mut flip = vec![false; n_t];
     let mut seen = vec![false; n_t];
@@ -1647,9 +1822,17 @@ fn orient(tris: &mut [[u32; 3]]) {
 fn signed_volume(verts: &[V3], tris: &[[u32; 3]]) -> f64 {
     let mut v = 0.0;
     for t in tris {
-        let (p, q, r) = (verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]);
-        let ux = q[0] - p[0]; let uy = q[1] - p[1]; let uz = q[2] - p[2];
-        let wx = r[0] - p[0]; let wy = r[1] - p[1]; let wz = r[2] - p[2];
+        let (p, q, r) = (
+            verts[t[0] as usize],
+            verts[t[1] as usize],
+            verts[t[2] as usize],
+        );
+        let ux = q[0] - p[0];
+        let uy = q[1] - p[1];
+        let uz = q[2] - p[2];
+        let wx = r[0] - p[0];
+        let wy = r[1] - p[1];
+        let wz = r[2] - p[2];
         let c0 = uy * wz - uz * wy;
         let c1 = uz * wx - ux * wz;
         let c2 = ux * wy - uy * wx;
@@ -1694,8 +1877,20 @@ mod tests {
         // 2-colouring is unique and the seeds come in the same index order, so the final
         // triangles have to be bit-identical, on a mesh scrambled by deterministic flips.
         for (name, f, lo, hi, h) in [
-            ("aligned box", box_c([0.0; 3], [5.0, 4.0, 3.0]), [-17.0; 3], [17.0; 3], 0.5),
-            ("thin slab", box_c([0.0; 3], [15.0, 15.0, 0.15]), [-17.0; 3], [17.0; 3], 0.5),
+            (
+                "aligned box",
+                box_c([0.0; 3], [5.0, 4.0, 3.0]),
+                [-17.0; 3],
+                [17.0; 3],
+                0.5,
+            ),
+            (
+                "thin slab",
+                box_c([0.0; 3], [15.0, 15.0, 0.15]),
+                [-17.0; 3],
+                [17.0; 3],
+                0.5,
+            ),
         ] {
             let m = surface_adaptive(&f, lo, hi, h, &AdaptiveOpts::default());
             let scrambled: Vec<[u32; 3]> = m
@@ -1707,7 +1902,11 @@ mod tests {
                     x ^= x << 13;
                     x ^= x >> 7;
                     x ^= x << 17;
-                    if x & 1 == 0 { *t } else { [t[0], t[2], t[1]] }
+                    if x & 1 == 0 {
+                        *t
+                    } else {
+                        [t[0], t[2], t[1]]
+                    }
                 })
                 .collect();
             let vol_ref = signed_volume(&m.verts, &m.tris).abs();
@@ -1715,9 +1914,16 @@ mod tests {
             orient(&mut a);
             let mut b = scrambled;
             orient_hm(&mut b);
-            assert_eq!(a, b, "{name}: CSR orient diverged from the hash-map reference");
+            assert_eq!(
+                a, b,
+                "{name}: CSR orient diverged from the hash-map reference"
+            );
             let vol1 = signed_volume(&m.verts, &a).abs();
-            let d = TriMesh { verts: m.verts.clone(), tris: a }.defects();
+            let d = TriMesh {
+                verts: m.verts.clone(),
+                tris: a,
+            }
+            .defects();
             assert_eq!(d.open_edges, 0, "{name}: {:?}", d);
             assert_eq!(d.orientation_defects, 0, "{name}: {:?}", d);
             assert!(
@@ -1765,7 +1971,11 @@ mod tests {
         let mut verts: Vec<V3> = (0..20_000)
             .map(|_| {
                 let r = next();
-                [(r % 7) as f64 * 0.5, ((r >> 8) % 5) as f64 * 0.25, ((r >> 16) % 3) as f64]
+                [
+                    (r % 7) as f64 * 0.5,
+                    ((r >> 8) % 5) as f64 * 0.25,
+                    ((r >> 16) % 3) as f64,
+                ]
             })
             .collect();
         verts.push([-0.0, 0.0, 0.0]);
@@ -1774,7 +1984,11 @@ mod tests {
             .map(|_| {
                 let r = next();
                 let n = verts.len() as u64;
-                [(r % n) as u32, ((r >> 20) % n) as u32, ((r >> 40) % n) as u32]
+                [
+                    (r % n) as u32,
+                    ((r >> 20) % n) as u32,
+                    ((r >> 40) % n) as u32,
+                ]
             })
             .collect();
         let (mut a, mut b) = (tris.clone(), tris);
@@ -1785,7 +1999,7 @@ mod tests {
     }
 
     /// The previous orient implementation (hash-map adjacency) for comparison.
-    fn orient_hm(tris: &mut [ [u32; 3] ]) {
+    fn orient_hm(tris: &mut [[u32; 3]]) {
         let mut adj: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
         for (ti, t) in tris.iter().enumerate() {
             for e in 0..3 {
@@ -1868,9 +2082,15 @@ mod tests {
             let d = [p[0] - orig[0], p[1] - orig[1], p[2] - orig[2]];
             let rho = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             if rho > 1e-9 {
-                Sample { v: rho - r, g: [d[0] / rho, d[1] / rho, d[2] / rho] }
+                Sample {
+                    v: rho - r,
+                    g: [d[0] / rho, d[1] / rho, d[2] / rho],
+                }
             } else {
-                Sample { v: -r, g: [0.0, 0.0, 1.0] }
+                Sample {
+                    v: -r,
+                    g: [0.0, 0.0, 1.0],
+                }
             }
         }
     }
@@ -1884,12 +2104,21 @@ mod tests {
             if fr >= fz {
                 if rho < 1e-9 {
                     // Radial gradient is undefined on the axis; the value is not.
-                    return Sample { v: fr, g: [0.0, 0.0, 0.0] };
+                    return Sample {
+                        v: fr,
+                        g: [0.0, 0.0, 0.0],
+                    };
                 }
                 let s = (rho - rmid).signum();
-                Sample { v: fr, g: [s * p[0] / rho, s * p[1] / rho, 0.0] }
+                Sample {
+                    v: fr,
+                    g: [s * p[0] / rho, s * p[1] / rho, 0.0],
+                }
             } else {
-                Sample { v: fz, g: [0.0, 0.0, p[2].signum()] }
+                Sample {
+                    v: fz,
+                    g: [0.0, 0.0, p[2].signum()],
+                }
             }
         }
     }
@@ -1917,12 +2146,26 @@ mod tests {
             d.total(),
         );
         assert!(d.none(), "{}: defects {:?}", name, d);
-        assert!((v - v_exact).abs() < tol * v_exact, "{}: volume {} vs {}", name, v, v_exact);
+        assert!(
+            (v - v_exact).abs() < tol * v_exact,
+            "{}: volume {} vs {}",
+            name,
+            v,
+            v_exact
+        );
     }
 
     #[test]
     fn lattice_aligned_box() {
-        check("box", box_c([0.0; 3], [5.0, 4.0, 3.0]), [-7.0; 3], [7.0; 3], 0.5, 480.0, 0.005);
+        check(
+            "box",
+            box_c([0.0; 3], [5.0, 4.0, 3.0]),
+            [-7.0; 3],
+            [7.0; 3],
+            0.5,
+            480.0,
+            0.005,
+        );
     }
 
     #[test]
@@ -1940,18 +2183,42 @@ mod tests {
 
     #[test]
     fn sphere_volume() {
-        check("sphere", sample_sphere([0.0; 3], 5.0), [-7.0; 3], [7.0; 3], 0.5, 523.5988, 0.02);
+        check(
+            "sphere",
+            sample_sphere([0.0; 3], 5.0),
+            [-7.0; 3],
+            [7.0; 3],
+            0.5,
+            523.5988,
+            0.02,
+        );
     }
 
     #[test]
     fn thin_slab_finer_than_leaf() {
         // Sheet thickness 0.3 mm against leaf 0.5 mm: crossings both inside one cell.
-        check("thin slab", box_c([0.0; 3], [15.0, 15.0, 0.15]), [-17.0; 3], [17.0; 3], 0.5, 270.0, 0.05);
+        check(
+            "thin slab",
+            box_c([0.0; 3], [15.0, 15.0, 0.15]),
+            [-17.0; 3],
+            [17.0; 3],
+            0.5,
+            270.0,
+            0.05,
+        );
     }
 
     #[test]
     fn tube_shell_two_surfaces() {
-        check("tube", tube_shell(2.0, 10.0, 6.0), [-14.0; 3], [14.0; 3], 1.0, 3015.93, 0.02);
+        check(
+            "tube",
+            tube_shell(2.0, 10.0, 6.0),
+            [-14.0; 3],
+            [14.0; 3],
+            1.0,
+            3015.93,
+            0.02,
+        );
     }
 
     #[test]
@@ -1976,9 +2243,16 @@ mod tests {
                 k * (-y.sin() * z.sin() + z.cos() * x.cos()),
             ];
             let s = g.signum();
-            let sheet = Sample { v: (g.abs() - t) / k, g: [s * dg[0] / k, s * dg[1] / k, s * dg[2] / k] };
+            let sheet = Sample {
+                v: (g.abs() - t) / k,
+                g: [s * dg[0] / k, s * dg[1] / k, s * dg[2] / k],
+            };
             let b = box_c([0.0; 3], [half; 3])(p);
-            if sheet.v >= b.v { sheet } else { b }
+            if sheet.v >= b.v {
+                sheet
+            } else {
+                b
+            }
         }
     }
 
@@ -2013,7 +2287,11 @@ mod tests {
         let f = gyroid_sheet(6.0, 0.35, 9.0);
         let m = surface_adaptive(&f, [-10.0; 3], [10.0; 3], 0.25, &AdaptiveOpts::default());
         let d = m.defects();
-        println!("gyroid sheet h0.25: {} verts {} tris defects {d:?}", m.verts.len(), m.tris.len());
+        println!(
+            "gyroid sheet h0.25: {} verts {} tris defects {d:?}",
+            m.verts.len(),
+            m.tris.len()
+        );
         assert!(d.none(), "gyroid sheet defects: {d:?}");
     }
 
@@ -2047,12 +2325,31 @@ mod tests {
         let f = double_gyroid(6.0, 0.35, 9.0);
         let m = surface_adaptive(&f, [-10.0; 3], [10.0; 3], 0.25, &AdaptiveOpts::default());
         let d = m.defects();
-        println!("double gyroid h0.25: {} verts {} tris defects {d:?}", m.verts.len(), m.tris.len());
-        assert_eq!(d.open_edges, 0, "open edges — stitch-owned, must be zero: {d:?}");
-        assert_eq!(d.orientation_defects, 0, "orientation — stitch-owned, must be zero: {d:?}");
-        assert_eq!(d.degenerate_triangles, 0, "degenerate tris — stitch-owned, must be zero: {d:?}");
-        assert_eq!(d.non_manifold_edges, 6, "spoke edges at welded crossings — measured class: {d:?}");
-        assert_eq!(d.self_intersections, 1680, "interpenetrating wall tiles — measured class: {d:?}");
+        println!(
+            "double gyroid h0.25: {} verts {} tris defects {d:?}",
+            m.verts.len(),
+            m.tris.len()
+        );
+        assert_eq!(
+            d.open_edges, 0,
+            "open edges — stitch-owned, must be zero: {d:?}"
+        );
+        assert_eq!(
+            d.orientation_defects, 0,
+            "orientation — stitch-owned, must be zero: {d:?}"
+        );
+        assert_eq!(
+            d.degenerate_triangles, 0,
+            "degenerate tris — stitch-owned, must be zero: {d:?}"
+        );
+        assert_eq!(
+            d.non_manifold_edges, 6,
+            "spoke edges at welded crossings — measured class: {d:?}"
+        );
+        assert_eq!(
+            d.self_intersections, 1680,
+            "interpenetrating wall tiles — measured class: {d:?}"
+        );
     }
 
     /// The pins, byte for byte, are the CURRENT mesher's output (per-sheet vertices +
@@ -2063,21 +2360,74 @@ mod tests {
     /// (measured digests, rerun once to confirm run-to-run stability).
     #[test]
     fn pinned_mesh_digests() {
-        type Case = (&'static str, Box<dyn Fn(V3) -> Sample + Sync>, V3, V3, f64, u64);
+        type Case = (
+            &'static str,
+            Box<dyn Fn(V3) -> Sample + Sync>,
+            V3,
+            V3,
+            f64,
+            u64,
+        );
         let cases: Vec<Case> = vec![
-            ("aligned box", Box::new(box_c([0.0; 3], [5.0, 4.0, 3.0])), [-7.0; 3], [7.0; 3], 0.5, 0xd05d6abea10f2119),
-            ("offset box", Box::new(box_c([0.0; 3], [5.05, 3.95, 2.95])), [-7.0; 3], [7.0; 3], 0.5, 0x9e94ae42050be8ed),
-            ("sphere", Box::new(sample_sphere([0.0; 3], 5.0)), [-7.0; 3], [7.0; 3], 0.5, 0x8ac7fad412ed5885),
-            ("thin slab", Box::new(box_c([0.0; 3], [15.0, 15.0, 0.15])), [-17.0; 3], [17.0; 3], 0.5, 0x624a0e9502a11252),
-            ("tube", Box::new(tube_shell(2.0, 10.0, 6.0)), [-14.0; 3], [14.0; 3], 1.0, 0x9338c2346b8819bd),
-            ("gyroid sheet", Box::new(gyroid_sheet(6.0, 0.35, 9.0)), [-10.0; 3], [10.0; 3], 0.25, 0x971051eb5f084573),
+            (
+                "aligned box",
+                Box::new(box_c([0.0; 3], [5.0, 4.0, 3.0])),
+                [-7.0; 3],
+                [7.0; 3],
+                0.5,
+                0xd05d6abea10f2119,
+            ),
+            (
+                "offset box",
+                Box::new(box_c([0.0; 3], [5.05, 3.95, 2.95])),
+                [-7.0; 3],
+                [7.0; 3],
+                0.5,
+                0x9e94ae42050be8ed,
+            ),
+            (
+                "sphere",
+                Box::new(sample_sphere([0.0; 3], 5.0)),
+                [-7.0; 3],
+                [7.0; 3],
+                0.5,
+                0x8ac7fad412ed5885,
+            ),
+            (
+                "thin slab",
+                Box::new(box_c([0.0; 3], [15.0, 15.0, 0.15])),
+                [-17.0; 3],
+                [17.0; 3],
+                0.5,
+                0x624a0e9502a11252,
+            ),
+            (
+                "tube",
+                Box::new(tube_shell(2.0, 10.0, 6.0)),
+                [-14.0; 3],
+                [14.0; 3],
+                1.0,
+                0x9338c2346b8819bd,
+            ),
+            (
+                "gyroid sheet",
+                Box::new(gyroid_sheet(6.0, 0.35, 9.0)),
+                [-10.0; 3],
+                [10.0; 3],
+                0.25,
+                0x971051eb5f084573,
+            ),
         ];
         let mut bad = Vec::new();
         for (name, f, lo, hi, h, want) in &cases {
             let m = surface_adaptive(f, *lo, *hi, *h, &AdaptiveOpts::default());
             let got = digest(&m);
             let d = m.defects();
-            println!("{name}: {} verts {} tris digest {got:#018x} defects {d:?}", m.verts.len(), m.tris.len());
+            println!(
+                "{name}: {} verts {} tris digest {got:#018x} defects {d:?}",
+                m.verts.len(),
+                m.tris.len()
+            );
             if got != *want {
                 bad.push(format!("{name}: {got:#018x} != pinned {want:#018x}"));
             }
@@ -2094,7 +2444,9 @@ mod tests {
                 .num_threads(n)
                 .build()
                 .expect("pool")
-                .install(|| surface_adaptive(&f, [-10.0; 3], [10.0; 3], 0.25, &AdaptiveOpts::default()))
+                .install(|| {
+                    surface_adaptive(&f, [-10.0; 3], [10.0; 3], 0.25, &AdaptiveOpts::default())
+                })
         };
         let a = run(1);
         let b = run(4);

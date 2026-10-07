@@ -16,7 +16,11 @@ fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 fn cross(a: V3, b: V3) -> V3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 fn dot(a: V3, b: V3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -44,7 +48,12 @@ pub fn dihedrals(p: [V3; 4]) -> [f64; 6] {
 }
 
 pub fn quality(m: &TetMesh) -> Quality {
-    let mut q = Quality { tets: m.tets.len(), min_dihedral_deg: 180.0, max_dihedral_deg: 0.0, min_volume_ratio: f64::INFINITY };
+    let mut q = Quality {
+        tets: m.tets.len(),
+        min_dihedral_deg: 180.0,
+        max_dihedral_deg: 0.0,
+        min_volume_ratio: f64::INFINITY,
+    };
     for t in &m.tets {
         let p = t.map(|i| m.verts[i as usize]);
         for d in dihedrals(p) {
@@ -69,7 +78,12 @@ mod tests {
     #[test]
     fn regular_tet_dihedral() {
         let s = 1.0 / 2f64.sqrt();
-        let p = [[1.0, 0.0, -s], [-1.0, 0.0, -s], [0.0, 1.0, s], [0.0, -1.0, s]];
+        let p = [
+            [1.0, 0.0, -s],
+            [-1.0, 0.0, -s],
+            [0.0, 1.0, s],
+            [0.0, -1.0, s],
+        ];
         for d in dihedrals(p) {
             assert!((d - 70.528779).abs() < 1e-5, "{d}");
         }
