@@ -80,6 +80,15 @@ without help, and the outputs satisfy the verification criteria below.
 - [ ] Empty states guide the next action; errors are specific and recoverable.
 - [ ] No emoji icons, no gradient text, no status-pill clutter. Zero console errors on the bracket test.
 
+### G. Import (M6 — user-set milestone, outside v0.1's definition of done)
+- [x] Import GLB, OBJ, binary and ASCII STL; units and up-axis baked at import with an explicit choice in the dialog.
+- [x] The imported mesh becomes a field leaf (voxelised signed distance + segmentation patches) that composes with primitives and modifiers.
+- [x] Faces label on imported meshes through the shared normal-cone rule; patch-click labelling works.
+- [x] Region-driven extension: `extend` sweeps a labelled band along a vector, e.g. the meshy bottom plate extended downward 10 mm.
+- [x] Sidecar `.fsmz` round-trips a mesh-heavy document bit-consistently (V9, V10).
+- [x] CLI `import` / `solve` / `export` run the mesh milestone end to end headless (V10).
+- [ ] 3MF import (our export format today); mesh-convergence verification case; multi-material labelling of volumes.
+
 ---
 
 ## Verification cases (must pass in CI)
@@ -98,6 +107,7 @@ error. Tolerances are on the **reported** value, as the user would see it.
 | V7 | Graded-lattice beam: fully resolved FE vs. homogenised re-solve, tip deflection | Resolved FE | ≤ 15 % |
 | V8 | Exported mesh of the bracket test | Mesh volume vs. field volume; manifold checks | ≤ 1 %, 0 defects |
 | V9 | Save → reload → re-solve of `bracket.fsm` | Previous run | Bit-identical |
+| V10 | Import a 87k-triangle meshy STL, label its faces, extend the bottom 10 mm, solve, export (M6) | Facet-histogram cone coverage; cross-section continuity; PrusaSlicer manifold | Cone ≥ 88 %; Δ ≤ 10 µm; slicer-clean |
 
 ---
 
@@ -113,6 +123,10 @@ Measured on a mid-range laptop (integrated GPU, 8 cores, 16 GB), Chrome and Fire
 | Export 3MF of graded bracket at 0.1 mm feature resolution | ≤ 15 s |
 | Cold load, compressed transfer size | ≤ 3 MB |
 | Main thread long tasks during solve | none > 50 ms |
+
+The probe that measures these rows also measures mesh-document rows — import of a GLB
+fixture through the file palette, and export of the imported part (see
+`docs/verification/budgets.md`); budget-scale mesh numbers are in V10.
 
 ---
 
@@ -140,6 +154,7 @@ Each milestone ends with something usable and demonstrable.
 | M3 | **Fill + Check** — TPMS grading, protected regions, homogenisation, re-solve, comparison | V6, V7 pass; mass in grams. |
 | M4 | **Make** — dual-contouring export, 3MF/STL, slice preview | V8 passes; file opens clean in a slicer. |
 | M5 | **Polish + proof** — command palette, themes, empty states, literate case reports, hallway test | The bracket test passes with 3 / 3 new users. Tag `v0.1.0`. |
+| M6 | **Import** — meshy-style GLB/OBJ/STL as field leaves, patch + face labelling, region-driven extension, `.fsmz` sidecar | V10 passes; the meshy bottom-extend test solves and slices clean. |
 
 ---
 
