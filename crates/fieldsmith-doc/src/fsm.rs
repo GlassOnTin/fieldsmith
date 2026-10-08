@@ -1317,7 +1317,8 @@ region bottom = mesh1.p1
         .unwrap();
         let errs = d.validate();
         assert!(
-            errs.iter().any(|e| e.contains("names no mesh patch or face")),
+            errs.iter()
+                .any(|e| e.contains("names no mesh patch or face")),
             "{errs:?}"
         );
         // `side` on a mesh is refused outright: a mesh has no side face.
@@ -1327,5 +1328,59 @@ region bottom = mesh1.p1
         .unwrap();
         let errs = d.validate();
         assert!(errs.iter().any(|e| e.contains("no side face")), "{errs:?}");
+    }
+
+    #[test]
+    fn mesh_modifier_validate_names_the_fallback_conditions() {
+        // One mesh node per document (ids are unique); the group wraps a single mesh
+        // child, so the modifier check sees exactly the group's contents.
+        let mesh_line = "mesh mesh1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=1 patches=2 open_edges=0";
+        let doc = |body: &str| {
+            parse(&format!(
+                "fieldsmith 1\nname \"n\"\nmaterial petg\n{body}\n"
+            ))
+            .unwrap()
+        };
+        // A single mesh under a shell bakes: no fallback named.
+        let d = doc(&format!(
+            "group g {{\n  {mesh_line}\n  shell 2 inside\n}}\n"
+        ));
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // A group of two (mesh + box) keeps the eval-time wrap — named.
+        let d = doc(&format!(
+            "group g {{\n  {mesh_line}\n  box b size=(1, 2, 3)\n  offset 1\n}}\n"
+        ));
+        let errs = d.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("keeps the eval-time form")),
+            "{errs:?}"
+        );
+        // Two meshes also keep the wrap.
+        let mesh2_line = "mesh mesh2 src=\"s\" units=m up=y vox=0.8 hash=\"fedcba9876543210\" bbox=(0, 0, 0, 1, 1, 1) tris=1 patches=0 open_edges=0";
+        let d = doc(&format!(
+            "group g {{\n  {mesh_line}\n  {mesh2_line}\n  shell 1 outside\n}}\n"
+        ));
+        let errs = d.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("keeps the eval-time form")),
+            "{errs:?}"
+        );
+        // A suppressed mesh is not live: the single live child is the box, so no mesh
+        // operand remains and nothing is named.
+        let d = doc(&format!(
+            "group g {{\n  {mesh_line} suppressed\n  box b size=(1, 2, 3)\n  shell 2 inside\n}}\n"
+        ));
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // A zero / non-finite parameter is not usable.
+        let d = doc(&format!("group g {{\n  {mesh_line}\n  offset 0\n}}\n"));
+        let errs = d.validate();
+        assert!(errs.iter().any(|e| e.contains("not usable")), "{errs:?}");
+        // A parameter far past the derived-grid budget is named with the mesh.
+        let d = doc(&format!("group g {{\n  {mesh_line}\n  offset 10000\n}}\n"));
+        let errs = d.validate();
+        assert!(errs.iter().any(|e| e.contains("grid cells")), "{errs:?}");
+        // A purely analytic group keeps the exact wrap — nothing named.
+        let d = doc("group g {\n  box b size=(1, 2, 3)\n  shell 2 inside\n}\n");
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
     }
 }

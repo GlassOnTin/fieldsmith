@@ -506,7 +506,11 @@ impl Document {
                         },
                     }
                 }
-                if s.face == Face::Side && self.find(&s.shape).is_some_and(|n| matches!(&n.kind, NodeKind::Mesh { .. })) {
+                if s.face == Face::Side
+                    && self
+                        .find(&s.shape)
+                        .is_some_and(|n| matches!(&n.kind, NodeKind::Mesh { .. }))
+                {
                     errs.push(format!(
                         "Region '{}' faces 'side' of mesh '{}' — a mesh has no side face; use its patch selector or another face",
                         r.id, s.shape
@@ -553,6 +557,11 @@ impl Document {
         // direction, length and the per-parent derived-grid budget are checked against the
         // regions and mesh nodes themselves.
         Self::check_extends(self, &mut errs);
+        // Shell/offset modifiers on mesh operands bake a derived grid when the operand is a
+        // single hydrated mesh (M7); the eval-time wrap they fall back to is only sound
+        // within the ±3·voxel band of the clamped voxel field. Name the fallback conditions
+        // so the user sees why a modifier is not exact before anything solves.
+        Self::check_mesh_modifiers(&self.root, &mut errs);
         let mut meshes = 0usize;
         Self::check_meshes(&self.root, &mut meshes, &mut errs);
         if meshes > 4 {
@@ -561,6 +570,111 @@ impl Document {
             ));
         }
         errs
+    }
+
+    /// Recursively validate shell/offset modifiers against their group's operands (M7,
+    /// step 2): a mesh operand bakes exactly only when the group holds a single
+    /// non-suppressed child and that child is a hydrated mesh; the parameter must be usable
+    /// and fit the derived-grid budget. Everything else keeps the eval-time wrap, whose
+    /// distance values are only exact within ±3·voxel of the surface.
+    fn check_mesh_modifiers(root: &[Node], errs: &mut Vec<String>) {
+        fn rec(nodes: &[Node], errs: &mut Vec<String>) {
+            for n in nodes {
+                if let NodeKind::Group {
+                    children,
+                    modifiers,
+                } = &n.kind
+                {
+                    let mesh_kids: Vec<&Node> = children
+                        .iter()
+                        .filter(|c| matches!(&c.kind, NodeKind::Mesh { .. }))
+                        .collect();
+                    let live = children.iter().filter(|c| !c.suppressed).count();
+                    for m in modifiers {
+                        match m {
+                            Modifier::Shell { thickness, .. } => {
+                                Document::check_mesh_modifier(
+                                    &n.id, "shell", *thickness, &mesh_kids, live, errs,
+                                );
+                            }
+                            Modifier::Offset { distance } => {
+                                Document::check_mesh_modifier(
+                                    &n.id, "offset", *distance, &mesh_kids, live, errs,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    rec(children, errs);
+                }
+            }
+        }
+        rec(root, errs);
+    }
+
+    /// One shell/offset modifier against its group's mesh operands. `param` is the shell
+    /// thickness or the offset distance; a mesh child bakes only when it is the group's
+    /// single live child, its grid is hydrated, and the parameter is usable and within the
+    /// derived-grid budget — anything else keeps the eval-time wrap, which is named here.
+    fn check_mesh_modifier(
+        group: &str,
+        what: &str,
+        param: f64,
+        mesh_kids: &[&Node],
+        live: usize,
+        errs: &mut Vec<String>,
+    ) {
+        if mesh_kids.is_empty() {
+            return; // a purely analytic group: the wrap is exact, nothing to name
+        }
+        if live > 1 {
+            errs.push(format!(
+                "Group '{group}' {what}s {live} shapes: a shell/offset over several operands keeps the eval-time form, whose distances are exact only within ±3·voxel of each surface"
+            ));
+            return;
+        }
+        let Some(mesh) = mesh_kids.first() else {
+            return;
+        };
+        let NodeKind::Mesh {
+            hash, voxel, bbox, ..
+        } = &mesh.kind
+        else {
+            return;
+        };
+        if !param.is_finite() || param == 0.0 {
+            errs.push(format!(
+                "Group '{group}' {what} parameter {param} is not usable (zero or not finite)"
+            ));
+            return;
+        }
+        if !voxel.is_finite() || *voxel <= 0.0 || bbox.iter().any(|v| !v.is_finite()) {
+            return; // the mesh's own field checks report these
+        }
+        // Mirror the field crate's budget estimate (same span math as the extend budget,
+        // with the modifier's extent in place of the sweep length): a bake whose expanded
+        // grid would exceed the cell budget is refused at compile and keeps the wrap.
+        const MAX_DERIVED_CELLS: f64 = 6_000_000.0;
+        const MAX_DERIVED_SPACING: f64 = 8.0;
+        let extent = param.abs();
+        let mut s = voxel.max(1e-9);
+        let cells = loop {
+            let margin = (extent / s).ceil() * s + 3.0 * s;
+            let c: f64 = (0..3)
+                .map(|a| ((bbox[a + 3] - bbox[a] + 2.0 * margin) / s).ceil() + 1.0)
+                .fold(1.0, |a: f64, b: f64| a * b);
+            if c <= MAX_DERIVED_CELLS || s >= MAX_DERIVED_SPACING {
+                break c;
+            }
+            s = (s * 2.0).min(MAX_DERIVED_SPACING);
+        };
+        if cells > MAX_DERIVED_CELLS {
+            errs.push(format!(
+                "Group '{group}' {what} of {param} mm on mesh '{hash}' would need about {:.0} grid cells (budget {}); raise the mesh's voxel spacing or lower the {what}",
+                cells,
+                MAX_DERIVED_CELLS as u64
+            ));
+        }
     }
 
     /// Recursively validate extend nodes: each names a region with at least one mesh-patch
@@ -590,9 +704,9 @@ impl Document {
                                     // the compile requires a hydrated grid to sweep from).
                                     s.patch.is_none()
                                         && s.face.axis().is_some()
-                                        && doc
-                                            .find(&s.shape)
-                                            .is_some_and(|n| matches!(&n.kind, NodeKind::Mesh { .. }))
+                                        && doc.find(&s.shape).is_some_and(|n| {
+                                            matches!(&n.kind, NodeKind::Mesh { .. })
+                                        })
                                 })
                                 .map(|s| s.shape.as_str())
                                 .collect();
