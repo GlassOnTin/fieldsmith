@@ -15,7 +15,8 @@ use fieldsmith_mesh::export::{read_stl_any, TriMesh};
 use fieldsmith_mesh::{gltf, obj, weld, NamedPart};
 
 /// Dihedral angle (radians, matching `weld::segment`'s inputs and its tests) below which
-/// neighbouring triangles join one patch.
+/// neighbouring triangles join one patch. Doubling when a mesh splits past the patch-grid
+/// cap (see the import loop).
 const SEGMENT_DEG: f64 = 30.0_f64.to_radians();
 
 /// Units the source coordinates are in, converted to millimetres at import.
@@ -206,7 +207,22 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
     for (i, part) in parts.iter().enumerate() {
         let baked = bake(&part.mesh, scale, up_y);
         let m = weld::weld_verts(&baked, weld_tol(&baked));
-        let segs = weld::segment(&m, &weld::edge_adjacency(&m), SEGMENT_DEG);
+        // Segment patches; a finely-detailed surface can split past the patch-grid cap
+        // (the moon-globe lithophane emits 228k patches at 30°), so coarsen the dihedral
+        // angle and re-segment until the ids fit. Every surface is still segmented —
+        // just at a coarser angle, with the report showing the resulting patch count.
+        let adj = weld::edge_adjacency(&m);
+        let mut deg = SEGMENT_DEG;
+        let mut segs = weld::segment(&m, &adj, deg);
+        while segs
+            .iter()
+            .max()
+            .is_some_and(|&mx| mx > crate::voxel::MAX_PATCH_ID)
+            && deg < std::f64::consts::PI
+        {
+            deg = (deg * 2.0).min(std::f64::consts::PI);
+            segs = weld::segment(&m, &adj, deg);
+        }
         let v = crate::voxel::voxelize(&m, Some(&segs), opts.voxel)
             .map_err(|e| format!("import of '{}': {e}", part.name))?;
         let meta = &v.field.meta;
