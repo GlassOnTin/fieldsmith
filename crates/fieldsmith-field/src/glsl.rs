@@ -639,6 +639,27 @@ impl Gen {
                     lit(*step_deg)
                 )
             }
+            // Composites mirror `eval_face`'s Combine arm (expr.rs): the nearer operand's
+            // face function wins — argmin |d|, ties to `a` — and a blend fillet band
+            // returns the composed distance with code 0 (the body's own fs program,
+            // referenced here; it re-emits its operands' subprograms, which the no-dedup
+            // emitter tolerates as separate names).
+            Expr::Combine { op: _, blend, a, b } => {
+                let ca = self.face_fn(a);
+                let cb = self.face_fn(b);
+                let band = if *blend > 0.0 {
+                    let v = self.expr(e);
+                    format!(
+                        "  if (abs(da.x) < {r} && abs(db.x) < {r}) return vec2({v}(p).x, 0.0);\n",
+                        r = lit(*blend)
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "  vec2 da = {ca}(p); vec2 db = {cb}(p);\n{band}  return abs(db.x) < abs(da.x) ? db : da;\n"
+                )
+            }
             other => {
                 let v = self.expr(other);
                 format!("  return vec2({v}(p).x, 0.0);\n")

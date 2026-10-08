@@ -159,7 +159,7 @@ pub fn compile_node(doc: &Document, node: &Node) -> Expr {
         } => {
             let mut e = compile_list(doc, children);
             for m in modifiers {
-                e = apply_modifier(e, m);
+                e = apply_modifier(e, m, &node.id);
             }
             e
         }
@@ -233,10 +233,9 @@ fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr
             if p == 0 || p >= u16::MAX as u32 {
                 continue;
             }
-            match parents
-                .iter_mut()
-                .find(|(_, from, _, id, _)| *id == node.id.as_str() && matches!(from, SweptFrom::Patches(_)))
-            {
+            match parents.iter_mut().find(|(_, from, _, id, _)| {
+                *id == node.id.as_str() && matches!(from, SweptFrom::Patches(_))
+            }) {
                 Some((_, SweptFrom::Patches(ids), _, _, _)) => {
                     if !ids.contains(&(p as u16)) {
                         ids.push(p as u16);
@@ -394,9 +393,88 @@ fn in_node_frame(e: Expr, xform: &fieldsmith_doc::Transform) -> Expr {
     }
 }
 
-fn apply_modifier(e: Expr, m: &Modifier) -> Expr {
+/// Shell-side ordinal for the mesh bakes, in [`ShellSide`]'s variant order.
+fn shell_ordinal(side: &ShellSide) -> u8 {
+    match side {
+        ShellSide::Inside => crate::meshfield::SHELL_INSIDE,
+        ShellSide::Outside => crate::meshfield::SHELL_OUTSIDE,
+        ShellSide::Centre => crate::meshfield::SHELL_CENTRE,
+    }
+}
+
+/// Mesh-operand shell/offset bakes a derived grid (goal M7, step 2): the eval-time wrap
+/// below is only sound within the ±3·spacing band, so a hydrated single-mesh operand
+/// compiles to a keyed derived `Expr::Mesh` leaf instead, and placement wrappers re-wrap
+/// the derived leaf unchanged (placement changes placement, not distance content).
+/// Groups of several operands, unhydrated meshes and refused bakes return `None` —
+/// the caller keeps today's eval-time wrap, which validate names conditions on.
+fn derive_modifier(e: &Expr, m: &Modifier, node: &str) -> Option<Expr> {
+    match e {
+        Expr::Mesh { key, .. } => {
+            let hash = format!("{key:016x}");
+            let f = crate::meshfield::lookup(*key)?;
+            let (new_key, derived) = match m {
+                Modifier::Offset { distance } => {
+                    let k = crate::meshfield::offset_key(&hash, *distance);
+                    match crate::meshfield::offset_field(&f, *distance, node) {
+                        Ok(g) => (k, g),
+                        Err(_) => return None,
+                    }
+                }
+                Modifier::Shell { thickness, side } => {
+                    let k = crate::meshfield::shell_key(&hash, shell_ordinal(side), *thickness);
+                    match crate::meshfield::shell_field(&f, shell_ordinal(side), *thickness, node) {
+                        Ok(g) => (k, g),
+                        Err(_) => return None,
+                    }
+                }
+                // Placement modifiers never bake; their call falls through to the wrap.
+                _ => return None,
+            };
+            if crate::meshfield::lookup(new_key).is_none() {
+                crate::meshfield::hydrate(new_key, derived);
+            }
+            let f2 = crate::meshfield::lookup(new_key).expect("just hydrated");
+            Some(Expr::Mesh {
+                key: new_key,
+                bbox: f2.meta.bbox,
+                spec: Some(f2.spec()),
+            })
+        }
+        Expr::Xform { m: rig, e } => derive_modifier(e, m, node).map(|inner| Expr::Xform {
+            m: *rig,
+            e: Box::new(inner),
+        }),
+        Expr::Mirror { axis, e } => derive_modifier(e, m, node).map(|inner| Expr::Mirror {
+            axis: *axis,
+            e: Box::new(inner),
+        }),
+        Expr::Linear { count, step, e } => derive_modifier(e, m, node).map(|inner| Expr::Linear {
+            count: *count,
+            step: *step,
+            e: Box::new(inner),
+        }),
+        Expr::Circular {
+            count,
+            axis,
+            step_deg,
+            e,
+        } => derive_modifier(e, m, node).map(|inner| Expr::Circular {
+            count: *count,
+            axis: *axis,
+            step_deg: *step_deg,
+            e: Box::new(inner),
+        }),
+        _ => None,
+    }
+}
+
+fn apply_modifier(e: Expr, m: &Modifier, node: &str) -> Expr {
     if matches!(e, Expr::Empty) {
         return e;
+    }
+    if let Some(derived) = derive_modifier(&e, m, node) {
+        return derived;
     }
     match m {
         Modifier::Shell { thickness, side } => Expr::Shell {
@@ -722,7 +800,7 @@ pub fn placed_shape(doc: &Document, id: &str) -> Option<Expr> {
                                 | Modifier::Linear { .. }
                                 | Modifier::Circular { .. }
                         ) {
-                            inner = apply_modifier(inner, m);
+                            inner = apply_modifier(inner, m, &n.id);
                         }
                     }
                     if !n.transform.is_identity() {
@@ -773,6 +851,24 @@ pub fn eval_face(e: &Expr, p: V3) -> (f64, Face) {
             })
             .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))
             .unwrap_or((1e9, Face::All)),
+        // Composite surfaces: the nearer operand's surface owns the face — argmin |d| with
+        // ties to `a`, the per-leaf rule [`identify_surface`] already uses. A blend fillet
+        // band (blend > 0 with both operands inside the radius) belongs to neither operand
+        // and labels `All`; label claims near fillets have no independent reference —
+        // `validate` caps blends against mesh operands instead (M7). The distance is the
+        // composite's own (the value the old fall-through arm reported).
+        Expr::Combine { op: _, blend, a, b } => {
+            let da = eval_face(a, p);
+            let db = eval_face(b, p);
+            let f = if *blend > 0.0 && da.0.abs() < *blend && db.0.abs() < *blend {
+                Face::All
+            } else if da.0.abs() <= db.0.abs() {
+                da.1
+            } else {
+                db.1
+            };
+            (eval(e, p).v, f)
+        }
         other => (eval(other, p).v, Face::All),
     }
 }
@@ -822,6 +918,20 @@ pub fn eval_mesh_patch(e: &Expr, p: V3) -> Option<u16> {
                     mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p),
                 )
             })
+        }
+        // Composites: the same winner rule `eval_face` uses (argmin |d| through the same
+        // face evaluations, ties to `a`, blend band → no patch), so a face claim and its
+        // patch claim always agree on which operand's surface they sit on.
+        Expr::Combine { op: _, blend, a, b } => {
+            let (da, _) = eval_face(a, p);
+            let (db, _) = eval_face(b, p);
+            if *blend > 0.0 && da.abs() < *blend && db.abs() < *blend {
+                None
+            } else if db.abs() < da.abs() {
+                eval_mesh_patch(b, p)
+            } else {
+                eval_mesh_patch(a, p)
+            }
         }
         _ => None,
     }
