@@ -12,8 +12,8 @@ use fieldsmith_field::dual::D;
 use fieldsmith_field::expr::Expr;
 use fieldsmith_field::lattice::Grid3;
 use fieldsmith_field::meshfield::{
-    extend_key, extend_key_face, hydrate, key_from_hex, lookup, patch_index, swept_face_field,
-    swept_patch_field, MeshField, MeshMeta, MAX_EXTEND_CELLS, NO_PATCH,
+    extend_key, extend_key_face, hash_mesh_input, hydrate, key_from_hex, lookup, patch_index,
+    swept_face_field, swept_patch_field, MeshField, MeshMeta, MAX_EXTEND_CELLS, NO_PATCH,
 };
 use fieldsmith_field::volume::integrate_with;
 use fieldsmith_field::{bounds, Aabb};
@@ -225,10 +225,22 @@ fn derived_leaf(key: u64, f: &MeshField) -> Expr {
     }
 }
 
+/// Per-test mesh input key. `hydrate` replaces the registry entry under a key, so parallel
+/// test threads must not hydrate differently-authored grids under one shared hash — these
+/// tests once shared a fixed `0123456789abcdef` hash and the weaker grid (patched vs
+/// patch-stripped, different sweep lengths) won nondeterministically, depending on which
+/// test's bake the compiler saw. Each test derives its own key from a tag; the doc node
+/// carries `format!("{key:016x}")` and the compiler parses it back with `key_from_hex`,
+/// which round-trips exactly.
+fn test_key(tag: &str) -> u64 {
+    hash_mesh_input(format!("extend_field:{tag}").as_bytes(), b"")
+}
+
 #[test]
 fn swept_cube_patch_volume_and_shape() {
     let half = [5.0; 3];
     let parent = bake_box(half, 1.0, None);
+    let hash = format!("{:016x}", test_key("swept-cube"));
     let a = swept_patch_field(&parent, [0.0, 0.0, -1.0], 10.0, &[1]).expect("sweep succeeds");
     // Determinism: a second derivation is bit-identical (the EDT is a pure function of the
     // mask; no hashing, threading or float-order variation is allowed through).
@@ -249,10 +261,7 @@ fn swept_cube_patch_volume_and_shape() {
     );
 
     // Sign checks against the node hull: material under the swept face, vacuum outside.
-    let e = derived_leaf(
-        extend_key("0123456789abcdef", &[1], [0.0, 0.0, -1.0], 10.0, 1.0),
-        &a,
-    );
+    let e = derived_leaf(extend_key(&hash, &[1], [0.0, 0.0, -1.0], 10.0, 1.0), &a);
     assert!(eval(&e, [0.0, 0.0, -6.0]).v < 0.0, "mid-skirt solid");
     assert!(eval(&e, [0.0, 0.0, -15.0]).v < 0.0, "skirt tip solid");
     assert!(
@@ -277,14 +286,8 @@ fn swept_cube_patch_volume_and_shape() {
         assert_eq!(eb.hi[ax], expected, "hi axis {ax}");
     }
     // The derivation's meta bbox agrees with what a hydrated parent compiles to.
-    let f2 = lookup(extend_key(
-        "0123456789abcdef",
-        &[1],
-        [0.0, 0.0, -1.0],
-        10.0,
-        1.0,
-    ))
-    .expect("derived leaf hydrated");
+    let f2 = lookup(extend_key(&hash, &[1], [0.0, 0.0, -1.0], 10.0, 1.0))
+        .expect("derived leaf hydrated");
     for ax in 0..3 {
         assert_eq!(eb.lo[ax], f2.meta.bbox.lo[ax]);
         assert_eq!(eb.hi[ax], f2.meta.bbox.hi[ax]);
@@ -311,6 +314,7 @@ fn perforated_patch_leaves_holes_open() {
     // the strip open — material only under the claimed columns.
     let half = [5.0; 3];
     let parent = bake_box(half, 1.0, Some(1.5));
+    let hash = format!("{:016x}", test_key("perforated"));
     let a = swept_patch_field(&parent, [0.0, 0.0, -1.0], 5.0, &[1]).expect("sweep succeeds");
     // Two strips: x from the hull edge crossing (−5.5) to the hole crossing (−1.5), so each
     // is 4 wide × (11 + 1) deep × (5 + 1) tall → 2·4·11·6 = 528 mm³ nominally. The zero
@@ -321,10 +325,7 @@ fn perforated_patch_leaves_holes_open() {
         (v - 528.0).abs() < 528.0 * 0.05,
         "perforated sweep volume {v} vs strips 2·(4·11·6) = 528"
     );
-    let e = derived_leaf(
-        extend_key("0123456789abcdef", &[1], [0.0, 0.0, -1.0], 5.0, 1.0),
-        &a,
-    );
+    let e = derived_leaf(extend_key(&hash, &[1], [0.0, 0.0, -1.0], 5.0, 1.0), &a);
     assert!(eval(&e, [0.0, 0.0, -6.0]).v > 0.0, "under the hole: vacuum");
     assert!(eval(&e, [0.0, 0.0, -4.0]).v > 0.0, "above the hole: vacuum");
     assert!(eval(&e, [-3.5, 0.0, -6.0]).v < 0.0, "strip interior solid");
@@ -338,9 +339,11 @@ fn perforated_patch_leaves_holes_open() {
 fn union_with_parent_leaves_body_untouched_above_the_patch() {
     let half = [5.0; 3];
     let parent = bake_box(half, 1.0, None);
-    hydrate(key_from_hex("0123456789abcdef"), parent.clone());
+    let key = test_key("union-parent");
+    let hash = format!("{key:016x}");
+    hydrate(key, parent.clone());
     let doc = extend_doc(
-        "0123456789abcdef",
+        &hash,
         [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
         "bottom",
         [0.0, 0.0, -1.0],
@@ -411,11 +414,13 @@ fn extend_follows_the_parent_mesh_transform() {
     // the origin while the body moves.
     let half = [5.0; 3];
     let parent = bake_box(half, 1.0, None);
-    hydrate(key_from_hex("0123456789abcdef"), parent.clone());
+    let key = test_key("transform-parent");
+    let hash = format!("{key:016x}");
+    hydrate(key, parent.clone());
 
     // Translated parent: the skirt hangs below the shifted body, not below the origin.
     let mut moved = extend_doc(
-        "0123456789abcdef",
+        &hash,
         [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
         "bottom",
         [0.0, 0.0, -1.0],
@@ -453,7 +458,7 @@ fn extend_follows_the_parent_mesh_transform() {
     // square skirt footprint maps onto itself — so the rotation must turn the leaf sweep
     // into a horizontal world axis.
     let mut spun = extend_doc(
-        "0123456789abcdef",
+        &hash,
         [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
         "bottom",
         [-1.0, 0.0, 0.0],
@@ -676,11 +681,12 @@ fn swept_face_rule_sweeps_only_the_cone_facing_cells() {
     // the threshold (the corner cell at (±5, ±5, −5) tilts 45° the other way, cos
     // −0.707 < 0.7), 13 rows tall for the 3-row band swept 10 mm.
     let parent = bake_unpatched([5.0; 3], 1.0);
-    let a =
-        swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0]).expect("sweep succeeds");
+    let hash = format!("{:016x}", test_key("face-cone"));
+    let a = swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0])
+        .expect("sweep succeeds");
     // Determinism: a second derivation is bit-identical.
-    let b =
-        swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0]).expect("sweep succeeds");
+    let b = swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0])
+        .expect("sweep succeeds");
     assert_eq!(a.dist.dims, b.dist.dims);
     assert_eq!(a.dist.origin, b.dist.origin);
     assert_eq!(a.dist.data, b.dist.data);
@@ -706,7 +712,7 @@ fn swept_face_rule_sweeps_only_the_cone_facing_cells() {
     // Sign checks: solid from the (invisible, parent-overlapped) top of the skirt to the
     // tip, vacuum past the tip and beyond the footprint's half-spacing margin.
     let e = derived_leaf(
-        extend_key_face("0123456789abcdef", [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], 10.0, 1.0),
+        extend_key_face(&hash, [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], 10.0, 1.0),
         &a,
     );
     assert!(eval(&e, [0.0, 0.0, -6.0]).v < 0.0, "mid-skirt solid");
@@ -715,10 +721,7 @@ fn swept_face_rule_sweeps_only_the_cone_facing_cells() {
         eval(&e, [0.0, 0.0, -17.0]).v > 0.0,
         "just past the tip: vacuum"
     );
-    assert!(
-        eval(&e, [0.0, 0.0, -18.0]).v > 0.0,
-        "far below: vacuum"
-    );
+    assert!(eval(&e, [0.0, 0.0, -18.0]).v > 0.0, "far below: vacuum");
     assert!(
         eval(&e, [6.0, 0.0, -10.0]).v > 0.0,
         "beside the skirt: vacuum"
@@ -732,8 +735,8 @@ fn face_sweep_margin_shrinks_with_spacing() {
     // nodes; the 23-row swept hull spans 11.5 mm deep, 10.5 wide. The EDT margin shrinks
     // to a quarter spacing, so the prism converges toward the nominal face·len = 1000.
     let parent = bake_unpatched([5.0; 3], 0.5);
-    let a =
-        swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0]).expect("sweep succeeds");
+    let a = swept_face_field(&parent, [0.0, 0.0, -1.0], 10.0, [0.0, 0.0, -1.0])
+        .expect("sweep succeeds");
     assert_eq!(a.dist.dims, [27, 27, 29]);
     // 10.5 × 10.5 × 11.5 = 1267.9 mm³; measured 1253.5, 1.1 % under (corner rounding) —
     // window 2 %, matching the coarse-spacing patch test.
@@ -760,7 +763,13 @@ fn face_and_patch_recipes_key_apart() {
         extend_key_face(HASH, [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], 10.0, 1.0),
         extend_key_face(HASH, [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], 12.0, 1.0),
         extend_key_face(HASH, [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], 10.0, 0.5),
-        extend_key_face("fedcba9876543210", [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], 10.0, 1.0),
+        extend_key_face(
+            "fedcba9876543210",
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            10.0,
+            1.0,
+        ),
         extend_key(HASH, &[1], [0.0, 0.0, -1.0], 10.0, 1.0),
     ] {
         different.insert(k);
@@ -774,11 +783,9 @@ fn face_and_patch_recipes_key_apart() {
 fn swept_face_field_rejects_unusable_inputs() {
     let parent = bake_unpatched([5.0; 3], 1.0);
     let axis = [0.0, 0.0, -1.0];
-    assert!(
-        swept_face_field(&parent, [0.0, 0.0, 0.0], 10.0, axis)
-            .expect_err("zero direction is refused")
-            .contains("zero")
-    );
+    assert!(swept_face_field(&parent, [0.0, 0.0, 0.0], 10.0, axis)
+        .expect_err("zero direction is refused")
+        .contains("zero"));
     assert!(swept_face_field(&parent, [0.0, 0.0, -1.0], 0.0, axis).is_err());
     assert!(swept_face_field(&parent, [0.0, 0.0, -1.0], -5.0, axis).is_err());
     assert!(swept_face_field(&parent, [0.0, 0.0, -1.0], f64::NAN, axis).is_err());
@@ -790,26 +797,25 @@ fn swept_face_field_rejects_unusable_inputs() {
     // A grid too thin for the ±1-cell gradient stencil is refused before it is read.
     let mut thin = bake_unpatched([5.0; 3], 1.0);
     Arc::make_mut(&mut thin.dist).dims = [3, 3, 2];
-    let e = swept_face_field(&thin, [0.0, 0.0, -1.0], 10.0, axis)
-        .expect_err("thin grid is refused");
+    let e =
+        swept_face_field(&thin, [0.0, 0.0, -1.0], 10.0, axis).expect_err("thin grid is refused");
     assert!(e.contains("too thin"), "got: {e}");
     // A field with no near-surface cells (all air at +2) selects nothing.
     let mut far = bake_unpatched([5.0; 3], 1.0);
     Arc::make_mut(&mut far.dist).data.fill(2.0);
     let e = swept_face_field(&far, [0.0, 0.0, -1.0], 10.0, axis)
         .expect_err("a face with no near-surface cells is refused");
-    assert!(
-        e.contains("no near-surface cell"),
-        "got: {e}"
-    );
+    assert!(e.contains("no near-surface cell"), "got: {e}");
 }
 
 #[test]
 fn face_region_compiles_and_unions_with_the_parent() {
     let parent = bake_unpatched([5.0; 3], 1.0);
-    hydrate(key_from_hex("0123456789abcdef"), parent.clone());
+    let key = test_key("face-region");
+    let hash = format!("{key:016x}");
+    hydrate(key, parent.clone());
     let doc = extend_doc_face(
-        "0123456789abcdef",
+        &hash,
         [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
         "bottom",
         [0.0, 0.0, -1.0],
@@ -839,7 +845,7 @@ fn face_region_compiles_and_unions_with_the_parent() {
     // identity leaf frame here).
     assert!(
         lookup(extend_key_face(
-            "0123456789abcdef",
+            &hash,
             [0.0, 0.0, -1.0],
             [0.0, 0.0, -1.0],
             10.0,
@@ -860,7 +866,10 @@ fn face_region_compiles_and_unions_with_the_parent() {
     // Below the face the skirt is solid where the parent was air.
     assert!(eval(&body, [0.0, 0.0, -6.0]).v < 0.0, "skirt solid");
     assert!(eval(&body, [0.0, 0.0, -16.0]).v < 0.0, "skirt tip solid");
-    assert!(eval(&body, [0.0, 0.0, -18.0]).v > 0.0, "past the skirt: vacuum");
+    assert!(
+        eval(&body, [0.0, 0.0, -18.0]).v > 0.0,
+        "past the skirt: vacuum"
+    );
 
     // Bounds: the parent box union the swept hull's padded bbox (the skirt reaches wider
     // and deeper than the parent, the box's top stays the parent's).
@@ -906,9 +915,11 @@ fn face_region_follows_the_parent_transform() {
     // after rotation. A leaf-frame reader would sweep leaf −z and land the skirt at world
     // −x instead.
     let parent = bake_unpatched([5.0; 3], 1.0);
-    hydrate(key_from_hex("0123456789abcdef"), parent.clone());
+    let key = test_key("face-transform");
+    let hash = format!("{key:016x}");
+    hydrate(key, parent.clone());
     let mut spun = extend_doc_face(
-        "0123456789abcdef",
+        &hash,
         [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
         "bottom",
         [0.0, 0.0, -1.0],
@@ -927,10 +938,7 @@ fn face_region_follows_the_parent_transform() {
         eval(&body, [0.0, 0.0, -10.0]).v < 0.0,
         "skirt hangs below the world-down-facing wall"
     );
-    assert!(
-        eval(&body, [0.0, 0.0, -16.0]).v < 0.0,
-        "skirt tip solid"
-    );
+    assert!(eval(&body, [0.0, 0.0, -16.0]).v < 0.0, "skirt tip solid");
     assert!(
         eval(&body, [0.0, 0.0, -18.0]).v > 0.0,
         "past the skirt: vacuum"
@@ -950,14 +958,7 @@ fn face_region_follows_the_parent_transform() {
         "the document-down axis maps to the leaf +x face: {leaf:?}"
     );
     assert!(
-        lookup(extend_key_face(
-            "0123456789abcdef",
-            leaf,
-            leaf,
-            10.0,
-            1.0
-        ))
-        .is_some(),
+        lookup(extend_key_face(&hash, leaf, leaf, 10.0, 1.0)).is_some(),
         "rotated face-derived leaf hydrated under its leaf-frame key"
     );
 
