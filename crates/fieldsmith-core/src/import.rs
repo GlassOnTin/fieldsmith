@@ -8,9 +8,9 @@
 //! size), so a re-import with different parameters keys a fresh registry entry instead of
 //! silently reusing stale grids.
 
+use crate::now_ms;
 use fieldsmith_doc::{Node, NodeKind, Op, Transform};
 use fieldsmith_field::meshfield::{hash_mesh_input, hydrate};
-use crate::now_ms;
 use fieldsmith_mesh::export::{read_stl_any, TriMesh};
 use fieldsmith_mesh::{gltf, obj, weld, NamedPart};
 
