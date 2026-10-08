@@ -240,6 +240,39 @@ fn extend_salt_tail(mut salt: Vec<u8>, dir: [f64; 3], len: f64, spacing: f64) ->
 /// see the same face.
 pub const FACE_CONE_COS: f64 = 0.7;
 
+/// Shell-side ordinals for [`shell_field`], in `fieldsmith_doc::ShellSide`'s variant
+/// order. The raw byte rides [`shell_key`]; expression compile maps the enum.
+pub const SHELL_INSIDE: u8 = 0;
+pub const SHELL_OUTSIDE: u8 = 1;
+pub const SHELL_CENTRE: u8 = 2;
+
+/// Coarsest spacing a derived offset/shell bake may coarsen its expanded grid to before it
+/// refuses: the printable ceiling, matching the voxeliser's own clamp. A grid that still
+/// exceeds the cell budget at this spacing gets no bake.
+pub const MAX_DERIVED_SPACING: f64 = 8.0;
+
+/// Input hash of a mesh-operand offset bake: salt `b"offset-mesh"` over the parent hash and
+/// the distance, FNV-folded like the extend recipes. Distinct salt prefix, so an offset of
+/// the same parent cannot share a registry entry with any import, extend or shell.
+pub fn offset_key(parent_hash: &str, d: f64) -> u64 {
+    let mut salt = Vec::new();
+    salt.extend_from_slice(b"offset-mesh");
+    salt.extend_from_slice(parent_hash.as_bytes());
+    salt.extend_from_slice(&d.to_le_bytes());
+    fnv1a64_update(0xcbf2_9ce4_8422_2325, salt.as_slice())
+}
+
+/// Input hash of a mesh-operand shell bake: `side` is one of the [`SHELL_INSIDE`] /
+/// [`SHELL_OUTSIDE`] / [`SHELL_CENTRE`] ordinals.
+pub fn shell_key(parent_hash: &str, side: u8, t: f64) -> u64 {
+    let mut salt = Vec::new();
+    salt.extend_from_slice(b"shell-mesh");
+    salt.extend_from_slice(parent_hash.as_bytes());
+    salt.push(side);
+    salt.extend_from_slice(&t.to_le_bytes());
+    fnv1a64_update(0xcbf2_9ce4_8422_2325, salt.as_slice())
+}
+
 /// Build the swept solid of a face: every near-surface cell of the parent whose SDF
 /// gradient lies within the 45° face cone (normals pointing along the face direction) is
 /// swept along the normalised `dir` for `len`, identically to [`swept_patch_field`]. No
@@ -307,7 +340,9 @@ fn swept_field(
         SweepSrc::Face(axis) => {
             // Central differences need a neighbour on both sides of every axis.
             if [nx, ny, nz].iter().any(|&d| d < 3) {
-                return Err("the parent mesh's distance grid is too thin for a face sweep".to_string());
+                return Err(
+                    "the parent mesh's distance grid is too thin for a face sweep".to_string(),
+                );
             }
             let s = 2.0 * g.spacing;
             for k in 1..nz - 1 {
@@ -317,11 +352,9 @@ fn swept_field(
                         if (g.data[idx] as f64).abs() > g.spacing {
                             continue;
                         }
-                        let gx =
-                            (g.data[idx + 1] as f64 - g.data[idx - 1] as f64) / s;
+                        let gx = (g.data[idx + 1] as f64 - g.data[idx - 1] as f64) / s;
                         let gy = (g.data[idx + nx] as f64 - g.data[idx - nx] as f64) / s;
-                        let gz =
-                            (g.data[idx + nx * ny] as f64 - g.data[idx - nx * ny] as f64) / s;
+                        let gz = (g.data[idx + nx * ny] as f64 - g.data[idx - nx * ny] as f64) / s;
                         let gl = (gx * gx + gy * gy + gz * gz).sqrt();
                         if gl < 1e-9 {
                             continue;
@@ -408,44 +441,9 @@ fn swept_field(
         }
     }
 
-    // Signed EDM: distance to the nearest occupied cell outside the mask, to the nearest
-    // empty cell inside it; sign per mask; clamp to the band. Cell units in, mm out.
-    let d_out = chamfer_distance_cells(&mask, dims, false);
-    let d_in = chamfer_distance_cells(&mask, dims, true);
-    let mut data = vec![0f32; dims[0] * dims[1] * dims[2]];
-    let clamp = (BAND_CELLS * spacing) as f32;
-    for (i, v) in data.iter_mut().enumerate() {
-        let x = if mask[i] { -d_in[i] } else { d_out[i] } * spacing as f32;
-        *v = x.clamp(-clamp, clamp);
-    }
-
-    let meta = MeshMeta {
-        bbox: Aabb {
-            lo: [
-                hull_lo[0] - 0.5 * spacing,
-                hull_lo[1] - 0.5 * spacing,
-                hull_lo[2] - 0.5 * spacing,
-            ],
-            hi: [
-                hull_hi[0] + 0.5 * spacing,
-                hull_hi[1] + 0.5 * spacing,
-                hull_hi[2] + 0.5 * spacing,
-            ],
-        },
-        tris: 0,
-        patches: 0,
-        open_edges: 0,
-    };
-    Ok(MeshField {
-        dist: Arc::new(Grid3 {
-            origin,
-            spacing,
-            dims,
-            data,
-        }),
-        patch: None,
-        meta,
-    })
+    Ok(bake_from_mask(
+        &mask, dims, origin, spacing, hull_lo, hull_hi,
+    ))
 }
 
 /// Build the swept solid of a patch: every patch-grid cell claiming one of `patch_ids` and
@@ -481,7 +479,13 @@ pub fn swept_patch_field(
     let empty = format!(
         "no patch-grid cell claims patches {ids:?} within the baked band — the patch segmented but holds no swept material"
     );
-    swept_field(parent, dir, len, SweepSrc::Patches(ids.into_iter().collect()), empty)
+    swept_field(
+        parent,
+        dir,
+        len,
+        SweepSrc::Patches(ids.into_iter().collect()),
+        empty,
+    )
 }
 
 /// Grid cell `[i, j, k]` of a flattened index (x fastest, the `Grid3` layout).
@@ -575,6 +579,326 @@ fn chamfer_distance_cells(mask: &[bool], dims: [usize; 3], reverse: bool) -> Vec
     relax(&mut d, &earlier, false);
     relax(&mut d, &later, true);
     d
+}
+
+/// Signed-distance bake from a solid-cell mask over the given grid geometry, grown half a
+/// spacing past `hull_lo`/`hull_hi` like every sweep. Shared tail of the extend sweeps and
+/// of the derived offset/shell bakes (goal M7, step 2).
+///
+/// Signed EDM: distance to the nearest occupied cell outside the mask, to the nearest
+/// empty cell inside it; sign per mask; clamp to the band. Cell units in, mm out.
+fn bake_from_mask(
+    mask: &[bool],
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: f64,
+    hull_lo: [f64; 3],
+    hull_hi: [f64; 3],
+) -> MeshField {
+    let d_out = chamfer_distance_cells(mask, dims, false);
+    let d_in = chamfer_distance_cells(mask, dims, true);
+    let mut data = vec![0f32; dims[0] * dims[1] * dims[2]];
+    let clamp = (BAND_CELLS * spacing) as f32;
+    for (i, v) in data.iter_mut().enumerate() {
+        let x = if mask[i] { -d_in[i] } else { d_out[i] } * spacing as f32;
+        *v = x.clamp(-clamp, clamp);
+    }
+
+    let meta = MeshMeta {
+        bbox: Aabb {
+            lo: [
+                hull_lo[0] - 0.5 * spacing,
+                hull_lo[1] - 0.5 * spacing,
+                hull_lo[2] - 0.5 * spacing,
+            ],
+            hi: [
+                hull_hi[0] + 0.5 * spacing,
+                hull_hi[1] + 0.5 * spacing,
+                hull_hi[2] + 0.5 * spacing,
+            ],
+        },
+        tris: 0,
+        patches: 0,
+        open_edges: 0,
+    };
+    MeshField {
+        dist: Arc::new(Grid3 {
+            origin,
+            spacing,
+            dims,
+            data,
+        }),
+        patch: None,
+        meta,
+    }
+}
+
+/// Aabb of a mask's solid cells as cell centres, grown half a spacing — `None` when the
+/// mask is empty (an emptied solid; callers fall back to the parent's bounds).
+fn mask_hull(mask: &[bool], dims: [usize; 3], origin: [f64; 3], spacing: f64) -> Option<(V3, V3)> {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for (idx, s) in mask.iter().enumerate() {
+        if !*s {
+            continue;
+        }
+        let c = decompose_index(idx, dims);
+        for a in 0..3 {
+            let p = origin[a] + spacing * c[a] as f64;
+            lo[a] = lo[a].min(p);
+            hi[a] = hi[a].max(p);
+        }
+    }
+    if !lo[0].is_finite() {
+        return None;
+    }
+    Some((lo, hi))
+}
+
+/// A derived field sharing the parent's grid geometry (origin, spacing, dims) with a
+/// pointwise-transformed distance array — the fast route of [`offset_field`]/[`shell_field`].
+/// The stored distances are exact inside the band, so the derived zero set is exact; bounds
+/// re-scan from the transformed solid and grow by `pad` mm past the half-spacing the hull
+/// convention adds — the transformed zero set can sit up to `pad` past the last solid cell
+/// (half a spacing is the parent's own interp distance, the rest is the transform's shift)
+/// and derived leaves report their bbox with no margin, so the shift must be inside it.
+/// Bounds fall back to the parent's for an emptied solid.
+fn pointwise_field(parent: &MeshField, pad: f64, f: impl Fn(f32) -> f32) -> MeshField {
+    let g = &*parent.dist;
+    let data: Vec<f32> = g.data.iter().map(|v| f(*v)).collect();
+    let solid: Vec<bool> = data.iter().map(|v| *v <= 0.0).collect();
+    let bbox = match mask_hull(&solid, g.dims, g.origin, g.spacing) {
+        Some((lo, hi)) => Aabb {
+            lo: lo.map(|v| v - 0.5 * g.spacing - pad),
+            hi: hi.map(|v| v + 0.5 * g.spacing + pad),
+        },
+        None => parent.meta.bbox,
+    };
+    MeshField {
+        dist: Arc::new(Grid3 {
+            origin: g.origin,
+            spacing: g.spacing,
+            dims: g.dims,
+            data,
+        }),
+        patch: None,
+        meta: MeshMeta {
+            bbox,
+            tris: 0,
+            patches: 0,
+            open_edges: 0,
+        },
+    }
+}
+
+/// The parent's solid sign field (`stored ≤ 0`) resampled onto an expanded grid by nearest
+/// cell, clamped at the parent's border. Cells beyond the parent span read its border,
+/// which holds positive padding (the parent's solid always lies a band inside its grid),
+/// so nothing leaks outward.
+fn sampled_mask(parent: &MeshField, dims: [usize; 3], origin: [f64; 3], s: f64) -> Vec<bool> {
+    let g = &*parent.dist;
+    let [nx, ny, nz] = g.dims;
+    let edge = [nx - 1, ny - 1, nz - 1];
+    let mut mask = vec![false; dims[0] * dims[1] * dims[2]];
+    for k in 0..dims[2] {
+        for j in 0..dims[1] {
+            for i in 0..dims[0] {
+                let idx = (k * dims[1] + j) * dims[0] + i;
+                let p = [
+                    origin[0] + s * i as f64,
+                    origin[1] + s * j as f64,
+                    origin[2] + s * k as f64,
+                ];
+                let mut c = [0usize; 3];
+                for a in 0..3 {
+                    c[a] = ((p[a] - g.origin[a]) / g.spacing)
+                        .round()
+                        .clamp(0.0, edge[a] as f64) as usize;
+                }
+                mask[idx] = g.data[(c[2] * ny + c[1]) * nx + c[0]] <= 0.0;
+            }
+        }
+    }
+    mask
+}
+
+/// Geometry of an expanded mask-bake grid: the parent's span grown by `extent` and a fresh
+/// band on every side, spacing doubled from the parent's until the cell budget fits — never
+/// past [`MAX_DERIVED_SPACING`], where refusal names the node as the extend budget does.
+///
+/// The margin is snapped up to a whole-cell multiple of `s`, so the expanded samples share
+/// the parent's own sample planes whatever the extent's remainder: the nearest-resampled
+/// sign field is then the parent's mask unchanged, and the bake's landing stays phase-free.
+/// Without the snap a fractional extent interleaves the fresh planes between the parent's,
+/// the sign boundary rounds to a neighbour sample, and an isosurface can land past or short
+/// of the requested offset by up to half a spacing in either direction.
+fn expanded_grid(
+    parent: &MeshField,
+    extent: f64,
+    node: &str,
+    what: &str,
+) -> Result<([usize; 3], [f64; 3], f64), String> {
+    let g = &*parent.dist;
+    let span = [
+        (g.dims[0] - 1) as f64 * g.spacing,
+        (g.dims[1] - 1) as f64 * g.spacing,
+        (g.dims[2] - 1) as f64 * g.spacing,
+    ];
+    let mut s = g.spacing;
+    loop {
+        let margin = (extent / s).ceil() * s + BAND_CELLS * s;
+        let mut dims = [1usize; 3];
+        for a in 0..3 {
+            dims[a] = ((span[a] + 2.0 * margin) / s).ceil() as usize + 1;
+        }
+        let cells = dims[0] as u64 * dims[1] as u64 * dims[2] as u64;
+        if cells <= MAX_EXTEND_CELLS as u64 {
+            let origin = [
+                g.origin[0] - margin,
+                g.origin[1] - margin,
+                g.origin[2] - margin,
+            ];
+            return Ok((dims, origin, s));
+        }
+        if s >= MAX_DERIVED_SPACING {
+            return Err(format!(
+                "the {what} grid of {node} would hold {cells} cells (budget {MAX_EXTEND_CELLS}); raise the mesh's voxel spacing or lower the thickness"
+            ));
+        }
+        s = (s * 2.0).min(MAX_DERIVED_SPACING);
+    }
+}
+
+/// Offset a hydrated mesh field by `d` mm (positive grows, negative shrinks) into a derived
+/// grid — the mesh-operand branch of `Shell` / `Offset` modifiers compiled from documents
+/// (goal M7, step 2).
+///
+/// Within one band (`|d| < [`BAND_CELLS`]·spacing) the bake transforms the parent's stored
+/// distances pointwise: the stored values are exact there, so the derived surface is exact
+/// and nothing is re-budgeted. From one band out the stored values saturate, so the solid
+/// mask (the sign field alone, still right) rebuilds on an expanded grid and redistances
+/// through the chamfer pair. The mask bake's isosurface sits half a spacing past the
+/// outermost kept cell centre (the convention every extend sweep shares): keeping the ring
+/// round half-up lands the surface at least `d` out of the parent's sign boundary and at
+/// most one spacing past it, phase-free — the expanded margin is snapped to whole cells,
+/// so the landing does not depend on whether `d` divides the parent's spacing.
+pub fn offset_field(parent: &MeshField, d: f64, node: &str) -> Result<MeshField, String> {
+    if !d.is_finite() || d == 0.0 {
+        return Err(format!(
+            "the offset distance on {node} is not usable (zero or not finite)"
+        ));
+    }
+    let s = parent.dist.spacing;
+    if d.abs() < BAND_CELLS * s {
+        let band = (BAND_CELLS * s) as f32;
+        let o = d as f32;
+        return Ok(pointwise_field(parent, d.abs(), |v| {
+            (v - o).clamp(-band, band)
+        }));
+    }
+    let (dims, origin, s_new) = expanded_grid(parent, d.abs(), node, "offset")?;
+    let mask = sampled_mask(parent, dims, origin, s_new);
+    let d_out = chamfer_distance_cells(&mask, dims, false);
+    let d_in = chamfer_distance_cells(&mask, dims, true);
+    // The +0.5 rounds the kept ring half-up (outward): the bake surface then sits at
+    // outermost-kept + 0.5·s_new — never short of the param, at most one spacing past it.
+    // Integer-ratio offsets land half a cell out; non-integer ones round outward first.
+    let th = d.abs() / s_new + 0.5;
+    let kept: Vec<bool> = if d > 0.0 {
+        mask.iter()
+            .zip(&d_out)
+            .map(|(m, dv)| *m || *dv <= th as f32)
+            .collect()
+    } else {
+        mask.iter()
+            .zip(&d_in)
+            .map(|(m, dv)| *m && *dv >= th as f32)
+            .collect()
+    };
+    let (hull_lo, hull_hi) = match mask_hull(&kept, dims, origin, s_new) {
+        Some(h) => h,
+        // An emptied solid is a legitimate result (a shrink that removed everything): the
+        // field evaluates as vacuum inside the parent's former bounds.
+        None => (parent.meta.bbox.lo, parent.meta.bbox.hi),
+    };
+    Ok(bake_from_mask(&kept, dims, origin, s_new, hull_lo, hull_hi))
+}
+
+/// Shell a hydrated mesh field: a wall of thickness `t` mm hugging the surface
+/// — [`SHELL_INSIDE`] eats into the parent, [`SHELL_OUTSIDE`] grows off it,
+/// [`SHELL_CENTRE`] straddles it — into a derived grid, matching the eval-time
+/// `Expr::Shell` algebra (goal M7, step 2).
+///
+/// Same two routes as [`offset_field`]: pointwise (exact, `t` within one band) or a mask
+/// bake beyond it, whose wall thresholds quantise to whole grid cells the same way.
+pub fn shell_field(parent: &MeshField, side: u8, t: f64, node: &str) -> Result<MeshField, String> {
+    if !t.is_finite() || t <= 0.0 {
+        return Err(format!(
+            "the shell thickness on {node} is not usable (zero, negative or not finite)"
+        ));
+    }
+    let s = parent.dist.spacing;
+    if t < BAND_CELLS * s {
+        let band = (BAND_CELLS * s) as f32;
+        let tv = t as f32;
+        let derived = match side {
+            SHELL_INSIDE => {
+                pointwise_field(parent, t, move |v: f32| v.max(-(v + tv)).clamp(-band, band))
+            }
+            SHELL_OUTSIDE => {
+                pointwise_field(parent, t, move |v: f32| (v - tv).max(-v).clamp(-band, band))
+            }
+            SHELL_CENTRE => pointwise_field(parent, t, move |v: f32| {
+                (v.abs() - 0.5 * tv).clamp(-band, band)
+            }),
+            _ => {
+                return Err(format!(
+                    "the shell on {node} names an unknown side ({side})"
+                ))
+            }
+        };
+        return Ok(derived);
+    }
+    let (dims, origin, s_new) = expanded_grid(parent, t, node, "shell")?;
+    let mask = sampled_mask(parent, dims, origin, s_new);
+    let d_out = chamfer_distance_cells(&mask, dims, false);
+    let d_in = chamfer_distance_cells(&mask, dims, true);
+    // Wall thresholds, depth in whole cells from the surface (zero stored values count as
+    // surface cells of the inside parent mask). The +0.5 rounds the kept ring half-up, the
+    // same convention as offsets: the measured thickness is the floor of `t/s + 0.5` whole
+    // cells, within half a spacing of `t`, and phase-free (the expanded margin is snapped,
+    // so a remainder thickness cannot shift either face).
+    let th = t / s_new + 0.5;
+    let wall: Vec<bool> = match side {
+        // The rim of solid within reach of an empty cell — the outer face sits on the
+        // parent's surface, so the wall's outer surface stays put.
+        SHELL_INSIDE => mask
+            .iter()
+            .zip(&d_in)
+            .map(|(m, dv)| *m && *dv <= th as f32)
+            .collect(),
+        SHELL_OUTSIDE => mask
+            .iter()
+            .zip(&d_out)
+            .map(|(m, dv)| !*m && *dv <= th as f32)
+            .collect(),
+        SHELL_CENTRE => mask
+            .iter()
+            .zip(&d_in)
+            .zip(&d_out)
+            .map(|((m, dv), ov)| (*m && *dv <= 0.5 * th as f32) || (!*m && *ov <= 0.5 * th as f32))
+            .collect(),
+        _ => {
+            return Err(format!(
+                "the shell on {node} names an unknown side ({side})"
+            ))
+        }
+    };
+    let (hull_lo, hull_hi) = match mask_hull(&wall, dims, origin, s_new) {
+        Some(h) => h,
+        None => (parent.meta.bbox.lo, parent.meta.bbox.hi),
+    };
+    Ok(bake_from_mask(&wall, dims, origin, s_new, hull_lo, hull_hi))
 }
 
 static REGISTRY: OnceLock<RwLock<BTreeMap<u64, Arc<MeshField>>>> = OnceLock::new();
