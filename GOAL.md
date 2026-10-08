@@ -90,10 +90,10 @@ without help, and the outputs satisfy the verification criteria below.
 - [ ] 3MF import (our export format today); mesh-convergence verification case; multi-material labelling of volumes.
 
 ### H. Editing (M7 — user-set milestone, outside v0.1's definition of done)
-- [ ] Booleans on imported meshes are verified compositions, not presumed: mesh×primitive and mesh×mesh union/cut volumes against closed form on the voxel test harness, and patch labels surviving each composition.
+- [ ] Booleans on imported meshes are verified compositions, not presumed: mesh×primitive and mesh×mesh union/cut volumes against closed form on the voxel test harness, and patch labels surviving each composition. (Label claims through composites — union/subtract/intersect attribute the surface to the nearest operand, blend bands to neither, GLSL twin included — are landed; the volume verification itself is not.)
 - [ ] The mesh-convergence verification case deferred in G: patch-labelled boundary loads on an imported body, convergence against a resolved reference.
 - [ ] `Filled` (graded lattice) on a mesh document measured — declared untested in V10.
-- [ ] Modifiers on mesh leaves: offset and shell with thickness in mm; `.fsm` text and validate rules ride along.
+- [x] Modifiers on mesh leaves: offset and shell with thickness in mm; `.fsm` text and validate rules ride along. (Landed: a hydrated single-mesh operand bakes a keyed derived grid — pointwise within one band, mask bake beyond it; groups of several operands, unhydrated meshes and refused bakes keep the eval-time wrap, which validate now names.)
 - [ ] Face selectors on derived solids: extend nodes and boolean results expose labelled faces, closing V10's gap — the skirt wall is clampable.
 - [ ] 3MF import rides along if cheap; multi-material labelling stays out (its own milestone).
 
