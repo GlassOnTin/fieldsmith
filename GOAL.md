@@ -89,6 +89,14 @@ without help, and the outputs satisfy the verification criteria below.
 - [x] CLI `import` / `solve` / `export` run the mesh milestone end to end headless (V10).
 - [ ] 3MF import (our export format today); mesh-convergence verification case; multi-material labelling of volumes.
 
+### H. Editing (M7 — user-set milestone, outside v0.1's definition of done)
+- [ ] Booleans on imported meshes are verified compositions, not presumed: mesh×primitive and mesh×mesh union/cut volumes against closed form on the voxel test harness, and patch labels surviving each composition.
+- [ ] The mesh-convergence verification case deferred in G: patch-labelled boundary loads on an imported body, convergence against a resolved reference.
+- [ ] `Filled` (graded lattice) on a mesh document measured — declared untested in V10.
+- [ ] Modifiers on mesh leaves: offset and shell with thickness in mm; `.fsm` text and validate rules ride along.
+- [ ] Face selectors on derived solids: extend nodes and boolean results expose labelled faces, closing V10's gap — the skirt wall is clampable.
+- [ ] 3MF import rides along if cheap; multi-material labelling stays out (its own milestone).
+
 ---
 
 ## Verification cases (must pass in CI)
@@ -155,6 +163,7 @@ Each milestone ends with something usable and demonstrable.
 | M4 | **Make** — dual-contouring export, 3MF/STL, slice preview | V8 passes; file opens clean in a slicer. |
 | M5 | **Polish + proof** — command palette, themes, empty states, literate case reports, hallway test | The bracket test passes with 3 / 3 new users. Tag `v0.1.0`. |
 | M6 | **Import** — meshy-style GLB/OBJ/STL as field leaves, patch + face labelling, region-driven extension, `.fsmz` sidecar | V10 passes; the meshy bottom-extend test solves and slices clean. |
+| M7 | **Editing** — booleans on imported meshes (verified, not presumed), offset/shell modifiers, face selectors on derived solids | Boolean volumes verify against closed form; the mesh-convergence case passes; the skirt wall clamps. |
 
 ---
 
