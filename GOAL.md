@@ -72,7 +72,27 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
       that carry `tessellated_lods`, named as such in the case report — and if that is still
       undoable, this file is changed in a reviewed commit, not quietly skipped.
 
-### D. Carried engineering criteria (already shipped, audited in git at `9606890`)
+### D. Distributed loading (M11 — user-set, 2026-10-09)
+- [ ] Face-local coordinates for a labelled region: its facets fit a least-squares plane;
+      local frame (x, y, n) with a deterministic rule for which in-plane direction is x
+      (documented in the load module's header). The fit residual is reported with the
+      load's provenance, and a region whose residual exceeds a stated bound is refused
+      by name rather than silently flattened.
+- [ ] A distributed load compiles: chained band terms (`lo < x < hi -> value`) plus an
+      arithmetic expression body over {x, y} (sin, cos, exp, polynomials), compiled once
+      in the doc layer and evaluated at facet centroids; `.fsm` text round-trips losslessly.
+- [ ] Semantics: the function returns force per unit area (N/mm²) applied in a stated
+      direction (global vector or components in {x, y, n}); the applied resultant (N) and
+      moment (N·mm about the document origin) are computed and shown with the load's
+      provenance; `total=` optionally rescales the function to a stated resultant.
+- [ ] The solver consumes it as consistent nodal loads through the same area-weighted
+      path `press` already uses; no per-node special cases.
+- [ ] The Setup lens gains a distribution editor: the text body with a parsed preview of
+      F(x) over the band extent and the integrated total; `validate()` errors surface
+      specifically (unknown variable, non-finite value, overlapping bands).
+- [ ] V15 passes (below).
+
+### E. Carried engineering criteria (already shipped, audited in git at `9606890`)
 - [x] Cargo workspace + TypeScript web app, Vite, static hosting; `fenics-rs` as a dependency;
       everything headless via the CLI; small wasm surface; workers with transferables; CI runs
       the whole ladder. For v0.3 the CI row widens to V1–V14 and gains the modal and STEP stages.
@@ -92,6 +112,7 @@ and tolerances are in git history at `9606890`). The new cases:
 | V12 | Import a 3MF written by another tool (provenance ladder: a 3MF Consortium public sample; else an export from desktop CAD available here; else the gap is stated, not faked), compose it, solve on labelled faces, re-export | The file's own geometry; PrusaSlicer `manifold` | Volume ≤ 2 % of the slicer's measurement; slicer-clean |
 | V13 | Modal on a cantilever 100 × 10 × 10 mm, steel: first three modes vs Euler-Bernoulli `ωn = (βnL)² √(EI/(ρAL⁴))`, βnL = 1.8751, 4.6941, 7.8548 | Closed form | ≤ 10 % (f1), ≤ 15 % (f2, f3); ≤ 10 % change between the two finest refinement rungs; the measured shear/rotary gap is documented in the report |
 | V14 | Import a mainstream-CAD STEP (fixture ladder: NIST CTC test files, else any local desktop-CAD export, else state the gap), voxelize, label faces, re-export | The B-rep's analytic volume; PrusaSlicer `manifold` | Analytic-surface fixtures: volume ≤ 1 %, 0 open edges, slicer-clean; name the tessellation chord tolerance used; cone coverage of three named faces ≥ 85 % |
+| V15 | Distributed load on the cantilever: triangle profile q(x) = q₀·x/L on the top face (zero at the clamp, peak at the tip) and a two-band piecewise profile | Euler-Bernoulli δ_tip = 11 q₀ L⁴/(120 EI); analytic resultant and moment of the applied profile | Deflection ≤ 15 %; resultant force and moment ≤ 2 %; the fitted plane's residual and the integrated total appear in the report |
 
 ---
 
@@ -121,6 +142,7 @@ after first measurement:
 | M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; first three modes visible headless and in the Results lens. |
 | M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. |
 | M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. |
+| M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
 
 ---
 
@@ -135,7 +157,7 @@ classes · collaboration, accounts or cloud storage · G-code generation · mobi
 
 ## Definition of done
 
-v0.3 is done when every box above is ticked, V1–V14 pass in CI, the budgets are met on the
+v0.3 is done when every box above is ticked, V1–V15 pass in CI, the budgets are met on the
 referee, the two provisional budgets are confirmed or honestly revised by measurement, and
 the reference task is run once end to end on a foreign fixture with its report filed next to
 `docs/verification/` — and not before. If a criterion turns out to be wrong, change this
