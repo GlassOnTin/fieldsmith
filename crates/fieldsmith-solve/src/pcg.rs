@@ -38,7 +38,7 @@ fn is_fixed(fixed: &[u8], node: usize, c: usize) -> bool {
 }
 
 /// Zero fixed rows/columns and put 1 on their diagonal, so fixed DOFs decouple with value 0.
-fn apply_dirichlet(a: &mut Bsr, fixed: &[u8]) {
+pub(crate) fn apply_dirichlet(a: &mut Bsr, fixed: &[u8]) {
     for i in 0..a.n {
         let (s, e) = (a.row_ptr[i] as usize, a.row_ptr[i + 1] as usize);
         for k in s..e {
@@ -58,7 +58,7 @@ fn apply_dirichlet(a: &mut Bsr, fixed: &[u8]) {
     }
 }
 
-struct TwoLevel<'a> {
+pub(crate) struct TwoLevel<'a> {
     a: &'a Bsr,
     dinv: Vec<[f64; 9]>,
     fixed: &'a [u8],
@@ -68,15 +68,22 @@ struct TwoLevel<'a> {
 }
 
 impl<'a> TwoLevel<'a> {
-    fn new(a: &'a Bsr, p: &'a Problem) -> Result<TwoLevel<'a>, String> {
+    /// Coarse operator Ac = Pᵀ M A M P on the P1 (vertex) pattern plus the block-SGS
+    /// smoothing, built once and reused by every PCG iteration (and by the modal route's
+    /// inner solves, which run many of them against one stiffened system).
+    pub(crate) fn new(
+        a: &'a Bsr,
+        fixed: &'a [u8],
+        nverts: usize,
+        tets: &[[u32; 10]],
+        mid_edge: &'a [[u32; 2]],
+    ) -> Result<TwoLevel<'a>, String> {
         let dinv = (0..a.n)
             .map(|i| inv3(&a.vals[a.find(i, i as u32)]))
             .collect();
-        let nv = p.mesh.nverts;
-        let fixed = &p.fixed[..];
-        let mid_edge = &p.mesh.mid_edge[..];
+        let nv = nverts;
         // Coarse operator Ac = Pᵀ M A M P on the P1 (vertex) pattern.
-        let mut ac = Bsr::from_elements(nv, p.mesh.tets.iter().map(|t| [t[0], t[1], t[2], t[3]]));
+        let mut ac = Bsr::from_elements(nv, tets.iter().map(|t| [t[0], t[1], t[2], t[3]]));
         let pmap = |i: usize| -> [(u32, f64); 2] {
             if i < nv {
                 [(i as u32, 1.0), (u32::MAX, 0.0)]
@@ -184,7 +191,7 @@ impl<'a> TwoLevel<'a> {
     }
 
     /// z = M⁻¹ r (symmetric V-cycle: forward GS, coarse correction, backward GS).
-    fn apply(&self, r: &[f64], z: &mut [f64], tmp: &mut [f64]) {
+    pub(crate) fn apply(&self, r: &[f64], z: &mut [f64], tmp: &mut [f64]) {
         z.iter_mut().for_each(|v| *v = 0.0);
         self.gs_sweep(r, z, true);
         // Residual.
@@ -234,38 +241,31 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Solve the problem. Returns nodal displacements (3 per node, mm).
-pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport), String> {
-    faer::set_global_parallelism(faer::Parallelism::None);
-    let n = p.mesh.ndofs();
-    let mut a = assemble(&p.mesh, &p.material);
-    apply_dirichlet(&mut a, &p.fixed);
-    let mut b = p.force.clone();
-    for i in 0..p.mesh.nodes.len() {
-        for c in 0..3 {
-            if is_fixed(&p.fixed, i, c) {
-                b[3 * i + c] = 0.0;
-            }
-        }
-    }
-    let free = (0..p.mesh.nodes.len())
-        .map(|i| 3 - p.fixed[i].count_ones() as usize)
-        .sum();
-    let pre = TwoLevel::new(&a, p)?;
-    let mut report = SolveReport {
-        dofs: n,
-        free_dofs: free,
-        coarse_dofs: p.mesh.nverts * 3,
-        ..Default::default()
-    };
+/// The PCG loop against an already built two-level preconditioner. `b` and `x0` must already
+/// be zero on the fixed rows (the fixed entries of `x0` never move); the report's `dofs`
+/// fields stay zero — the caller fills what it reports. `faer::set_global_parallelism` is the
+/// caller's concern.
+pub(crate) fn pcg_solve(
+    a: &Bsr,
+    pre: &TwoLevel,
+    b: &[f64],
+    x0: &[f64],
+    opts: SolverOptions,
+) -> Result<(Vec<f64>, SolveReport), String> {
+    let n = 3 * a.n; // Bsr rows are node blocks; the PCG runs on the 3N DOF vectors.
+    debug_assert_eq!(b.len(), n);
+    debug_assert_eq!(x0.len(), n);
+    let mut x = x0.to_vec();
+    let mut report = SolveReport::default();
 
-    let bnorm = dot(&b, &b).sqrt();
-    let mut x = vec![0.0; n];
+    let bnorm = dot(b, b).sqrt();
     if bnorm == 0.0 {
         report.converged = true;
         return Ok((x, report));
     }
-    let mut r = b.clone();
+    let mut ax = vec![0.0; n];
+    a.mul(&x, &mut ax);
+    let mut r: Vec<f64> = b.iter().zip(&ax).map(|(&bi, &ai)| bi - ai).collect();
     let mut z = vec![0.0; n];
     let mut tmp = vec![0.0; n];
     pre.apply(&r, &mut z, &mut tmp);
@@ -307,5 +307,36 @@ pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport)
             report.iterations, report.rel_residual
         ));
     }
+    Ok((x, report))
+}
+
+/// Solve the problem. Returns nodal displacements (3 per node, mm).
+pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport), String> {
+    faer::set_global_parallelism(faer::Parallelism::None);
+    let n = p.mesh.ndofs();
+    let mut a = assemble(&p.mesh, &p.material);
+    apply_dirichlet(&mut a, &p.fixed);
+    let mut b = p.force.clone();
+    for i in 0..p.mesh.nodes.len() {
+        for c in 0..3 {
+            if is_fixed(&p.fixed, i, c) {
+                b[3 * i + c] = 0.0;
+            }
+        }
+    }
+    let free = (0..p.mesh.nodes.len())
+        .map(|i| 3 - p.fixed[i].count_ones() as usize)
+        .sum();
+    let pre = TwoLevel::new(&a, &p.fixed, p.mesh.nverts, &p.mesh.tets, &p.mesh.mid_edge)?;
+    let mut report = SolveReport {
+        dofs: n,
+        free_dofs: free,
+        coarse_dofs: p.mesh.nverts * 3,
+        ..Default::default()
+    };
+    let (x, run) = pcg_solve(&a, &pre, &b, &vec![0.0; n], opts)?;
+    report.iterations = run.iterations;
+    report.rel_residual = run.rel_residual;
+    report.converged = run.converged;
     Ok((x, report))
 }

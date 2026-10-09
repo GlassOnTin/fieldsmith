@@ -11,7 +11,7 @@
 //! ```
 
 use fieldsmith_core::import::{import_mesh, ImportOpts};
-use fieldsmith_core::{analyse, fill::graded, fsmz, CaseResult, Resolution};
+use fieldsmith_core::{analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution};
 use fieldsmith_doc::{fsm, Document, NodeKind};
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
@@ -27,6 +27,9 @@ const USAGE: &str =
   volume  integrate the field volume   [--h <spacing mm>]
   glsl    print the generated preview shader
   solve   mesh and solve               [--h <mm> | --dofs <n>] [--report]
+          [--modes <n>] first n natural frequencies instead of the
+          static cases: loads are ignored (supports still apply) and
+          the solve is modal-only; fill documents are excluded
           (documents with a fill statement also get the graded re-solve)
   export  write a printable mesh       [--stl PATH] [--3mf PATH]
           [--h <mesh spacing mm>] (default 0.25); [--solid] exports the
@@ -204,6 +207,18 @@ fn run(args: &[String]) -> Result<(), String> {
                 Resolution::Dofs(150_000)
             };
             let report = args.iter().any(|a| a == "--report");
+            if let Some(s) = opt(args, "--modes") {
+                let count = s
+                    .parse::<usize>()
+                    .map_err(|_| format!("bad --modes value: {s}"))?;
+                if doc.fill.is_some() {
+                    return Err(
+                        "modal runs the solid path — remove the fill statement to use --modes"
+                            .into(),
+                    );
+                }
+                return modal_cmd(&doc, &res, count, report);
+            }
             if doc.fill.is_some() {
                 return solve_graded(&doc, &res, report);
             }
@@ -226,6 +241,15 @@ fn run(args: &[String]) -> Result<(), String> {
                         c.name, c.max_vm_elem, c.max_displacement
                     );
                 }
+                if let Some(m) = &a.modes {
+                    println!(
+                        "\n## modes (solve modes={})\n", m.frequencies.len()
+                    );
+                    println!("| mode | frequency (Hz) |\n| :-- | --: |");
+                    for (mi, &f) in m.frequencies.iter().enumerate() {
+                        println!("| {} | {:.2} |", mi + 1, f);
+                    }
+                }
                 print_load_table(&a.cases);
             } else {
                 println!(
@@ -241,6 +265,11 @@ fn run(args: &[String]) -> Result<(), String> {
                         "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm",
                         c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement
                     );
+                }
+                if let Some(m) = &a.modes {
+                    for (mi, &f) in m.frequencies.iter().enumerate() {
+                        println!("mode {}: {:.2} Hz", mi + 1, f);
+                    }
                 }
             }
             Ok(())
@@ -546,6 +575,65 @@ fn print_load_table(cases: &[CaseResult]) {
             );
         }
     }
+}
+
+/// `solve --modes <n>`: the first n natural frequencies (M8), modal-only — loads are
+/// ignored (frequencies need the part held, not pushed; the supports still apply), and a
+/// fill document is refused (the modal path meshes the solid reference at one modulus).
+/// Two rungs, the requested resolution and one coarser, so the change column shows how
+/// far each frequency has settled with refinement.
+fn modal_cmd(
+    doc: &Document,
+    res: &Resolution,
+    count: usize,
+    report: bool,
+) -> Result<(), String> {
+    let coarse = match *res {
+        Resolution::Size(h) => Resolution::Size(h * 2.0),
+        Resolution::Dofs(n) => Resolution::Dofs((n / 2).max(1)),
+    };
+    if !doc.loads.is_empty() {
+        println!("loads ignored: a modal run needs the part held, not pushed");
+    }
+    let mut runs: Vec<ModalRun> = Vec::new();
+    for r in [coarse, *res] {
+        runs.push(analyse_modes(doc, r, clock, count).map_err(|e| e.0)?);
+    }
+    for (i, run) in runs.iter().enumerate() {
+        let p = &run.provenance;
+        let label = if i == 0 { "coarse rung" } else { "requested rung" };
+        if report {
+            println!("## mode report — {} ({label})\n", doc.name);
+            println!(
+                "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, \
+                 eigen solve {:.0} ms.",
+                p.element_size, p.elements, p.dofs, p.mesh_ms, run.modal.solve_ms
+            );
+            println!("| mode | frequency (Hz) |");
+            println!("| :-- | --: |");
+        } else {
+            println!(
+                "{label}: element size {:.2} mm ({:.0} elements, {} DOF; mesh {:.0} ms, eigen {:.0} ms)",
+                p.element_size, p.elements, p.dofs, p.mesh_ms, run.modal.solve_ms
+            );
+        }
+        for (m, &f) in run.modal.frequencies.iter().enumerate() {
+            let change = if i > 0 {
+                let prev = &runs[i - 1].modal.frequencies;
+                prev.get(m).map(|p0| 100.0 * (f - p0) / p0)
+            } else {
+                None
+            };
+            match (report, change) {
+                (true, _) => println!("| {} | {:.2} |", m + 1, f),
+                (false, Some(c)) => {
+                    println!("mode {}: {:.2} Hz ({:+.1} % from the coarser mesh)", m + 1, f, c)
+                }
+                (false, None) => println!("mode {}: {:.2} Hz", m + 1, f),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `solve` on a document with a fill statement: the solid reference solve first, then the

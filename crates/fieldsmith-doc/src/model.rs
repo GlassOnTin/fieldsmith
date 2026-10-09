@@ -420,6 +420,10 @@ impl Default for Fill {
 pub struct SolveSettings {
     /// Target element size for the finest analysis level (mm). `None` = automatic.
     pub size: Option<f64>,
+    /// When set, an analysis also solves for this many modal (natural-frequency) modes.
+    /// `None` = static solves only. The frequencies run on the same mesh as the statics
+    /// (M8): one meshing serves both.
+    pub modes: Option<usize>,
 }
 
 impl Document {

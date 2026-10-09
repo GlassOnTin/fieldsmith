@@ -699,6 +699,12 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     Some(Some(Val::Num(v))) => Some(v),
                     Some(_) => return Err(err("size must be a number or 'auto'".into())),
                 };
+                doc.solve.modes = match a.take("modes") {
+                    None => None,
+                    Some(None) => return Err(err("modes wants a count, e.g. modes=3".into())),
+                    Some(Some(Val::Num(v))) => Some(v.round().max(1.0) as usize),
+                    Some(Some(_)) => return Err(err("modes must be a count, e.g. modes=3".into())),
+                };
                 a.finish()?;
             }
             "custommaterial" => {
@@ -919,8 +925,15 @@ pub fn print(doc: &Document) -> String {
         }
         let _ = writeln!(o, "{line}");
     }
+    let mut solve_line = String::from("solve");
     if let Some(s) = doc.solve.size {
-        let _ = writeln!(o, "solve size={}", n(s));
+        solve_line += &format!(" size={}", n(s));
+    }
+    if let Some(m) = doc.solve.modes {
+        solve_line += &format!(" modes={m}");
+    }
+    if solve_line.len() > "solve".len() {
+        let _ = writeln!(o, "{solve_line}");
     }
     o
 }
@@ -1127,7 +1140,7 @@ load tip all force=(0, -103.5, -386.4) case="Load 1"
 load sweep top fn="0 < x < 25 -> 0.02*x/25; 25 < x < 60 -> 0.02" dir=(0, 0, -1) total=400 case="Load 1"
 
 fill gyroid sheet cell=6 skin=1.2 rho=(0.2, 0.8) curve=1 wall=0.8 protect=(hole1, base) margin=2 case="Load 1"
-solve size=2.5
+solve size=2.5 modes=3
 "#;
 
     #[test]

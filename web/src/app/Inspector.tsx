@@ -482,6 +482,33 @@ function DocumentInspector() {
             title="Target element size for the refined pass"
           />
         )}
+        <label class="plain">Modes</label>
+        <Seg<'off' | 'on'>
+          value={doc.solve.modes != null ? 'on' : 'off'}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'on', label: 'On', title: 'Also solve the first mode frequencies on the same mesh' },
+          ]}
+          onChange={(v) =>
+            store.transact('Set modes', (d) => {
+              d.solve.modes = v === 'on' ? 3 : null;
+            })
+          }
+          testId="solve-modes"
+        />
+        {doc.solve.modes != null && (
+          <NumRow
+            label="Count"
+            min={1}
+            step={1}
+            integer
+            get={(d) => d.solve.modes ?? 3}
+            set={(d, v) => (d.solve.modes = Math.max(1, Math.round(v)))}
+            undoLabel="Set modes count"
+            testId="solve-modes-count"
+            title="First n natural frequencies; the Seg above skips the modal run"
+          />
+        )}
       </div>
       <div class="hint" style={{ marginTop: '8px' }}>
         Select a shape in the tree or the viewport to edit it.

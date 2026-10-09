@@ -295,6 +295,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fenics-solver"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "fenics-assembly",
+ "fenics-element",
+ "fenics-mesh",
+ "nalgebra",
+]
+
+[[package]]
 name = "fieldsmith-cli"
 version = "0.2.0"
 dependencies = [
@@ -354,6 +365,7 @@ dependencies = [
  "faer",
  "fenics-assembly",
  "fenics-element",
+ "fenics-solver",
  "serde",
 ]
 
@@ -379,6 +391,7 @@ dependencies = [
  "fieldsmith-doc",
  "fieldsmith-field",
  "fieldsmith-mesh",
+ "fieldsmith-solve",
  "js-sys",
  "serde",
  "serde_json",

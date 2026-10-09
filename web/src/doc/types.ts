@@ -126,7 +126,7 @@ export interface Document {
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
-  solve: { size: number | null };
+  solve: { size: number | null; modes: number | null };
 }
 
 export const FACE_LABEL: Record<Face, string> = {
@@ -152,7 +152,7 @@ export function emptyDocument(): Document {
     material: 'petg',
     custom_materials: [],
     fill: null,
-    solve: { size: null },
+    solve: { size: null, modes: null },
   };
 }
 

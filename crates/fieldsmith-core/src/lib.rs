@@ -112,6 +112,10 @@ pub struct Analysis {
     /// the facets their constraints actually act on.
     pub region_facet_sets: Vec<Vec<u32>>,
     pub provenance: Provenance,
+    /// First mode frequencies when a modal run was requested (`analyse_full(…, Some(n))`).
+    /// The mesh is shared, so the frequencies come free of extra meshing; the modal
+    /// solve's own time is in `ModalResult.solve_ms`, which `provenance` does not include.
+    pub modes: Option<fieldsmith_solve::modal::ModalResult>,
 }
 
 /// Problems the user can fix, reported in their words.
@@ -453,7 +457,31 @@ pub fn run_case(
     })
 }
 
-pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis, SetupError> {
+/// The meshing and constraint stage of the pipeline, shared by the static (`analyse_full`)
+/// and modal (`analyse_modes`) paths: field → resolution size → voxel mesh → P2 mesh +
+/// boundary facets → region maps → support mask. `need_loads` selects the static path's
+/// "add a load" rule; the modal path needs supports only.
+struct Prepared {
+    mesh: P2Mesh,
+    facets: Vec<Facet>,
+    surface: Vec<[u32; 6]>,
+    surface_owner: Vec<u32>,
+    surface_region: Vec<u32>,
+    region_facet_sets: Vec<Vec<u32>>,
+    fixed: Vec<u8>,
+    mat: materials::Material,
+    young: Vec<f64>,
+    h: f64,
+    quality: Quality,
+    mesh_ms: f64,
+}
+
+fn prepare(
+    doc: &Document,
+    res: Resolution,
+    clock: Clock,
+    need_loads: bool,
+) -> Result<Prepared, SetupError> {
     let t0 = clock();
     let body = expr::compile_body(doc);
     let b = expr::bounds(&body);
@@ -465,7 +493,7 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
             "add a support: the part needs something to hold it".into(),
         ));
     }
-    if doc.loads.is_empty() {
+    if need_loads && doc.loads.is_empty() {
         return Err(SetupError("add a load".into()));
     }
     let mat = material_of(doc)?;
@@ -523,10 +551,112 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     }
 
     // Supports.
-    let nn = mesh.nodes.len();
     let fixed = fixed_mask(doc, &mesh, &facets, h)?;
-
     let young = vec![mat.e; mesh.tets.len()];
+    Ok(Prepared {
+        mesh,
+        facets,
+        surface,
+        surface_owner,
+        surface_region,
+        region_facet_sets,
+        fixed,
+        mat,
+        young,
+        h,
+        quality,
+        mesh_ms: t_mesh - t0,
+    })
+}
+
+/// Modal analysis (M8): the same meshing, material and region-based supports as `analyse`,
+/// without loads — mode frequencies need the part held, not pushed. Solves the first
+/// `count` modes on the document resolution's mesh. Modal-only callers (CLI `--modes`,
+/// V13) get this; `analyse_full(…, Some(count))` appends the same run to the static
+/// analysis on the shared mesh.
+#[derive(Clone, Debug, Serialize)]
+pub struct ModalRun {
+    /// The mesh's provenance (elements, DOFs, quality, mesh time). `iterations` stays 0:
+    /// the eigen route reports no iteration counts.
+    pub provenance: Provenance,
+    pub modal: fieldsmith_solve::modal::ModalResult,
+}
+
+pub fn analyse_modes(
+    doc: &Document,
+    res: Resolution,
+    clock: Clock,
+    count: usize,
+) -> Result<ModalRun, SetupError> {
+    let Prepared {
+        mesh,
+        fixed,
+        mat,
+        young,
+        h,
+        quality,
+        mesh_ms,
+        ..
+    } = prepare(doc, res, clock, false)?;
+    // Density g/cm³ → N·s²/mm⁴ (the modal solve's units, mm-N-s).
+    let t_modal = clock();
+    let mut modal = fieldsmith_solve::solve_modes(
+        &mesh,
+        &young,
+        mat.nu,
+        mat.density * 1e-9,
+        &fixed,
+        &fieldsmith_solve::ModeOptions {
+            count,
+            ..Default::default()
+        },
+    )
+    .map_err(SetupError)?;
+    // The solver runs clock-free (std clocks panic on wasm32); the caller times it.
+    modal.solve_ms = clock() - t_modal;
+    Ok(ModalRun {
+        provenance: Provenance {
+            elements: mesh.tets.len(),
+            order: 2,
+            nodes: mesh.nodes.len(),
+            dofs: mesh.nodes.len() * 3,
+            element_size: h,
+            mesh_ms,
+            solve_ms: modal.solve_ms,
+            total_ms: mesh_ms + modal.solve_ms,
+            quality,
+            iterations: 0,
+        },
+        modal,
+    })
+}
+
+/// Full analysis: static cases, plus — when `modes` is set — the first mode frequencies
+/// solved on the same mesh (one meshing serves both). `analyse` is the static-only case.
+pub fn analyse_full(
+    doc: &Document,
+    res: Resolution,
+    clock: Clock,
+    modes: Option<usize>,
+) -> Result<Analysis, SetupError> {
+    let Prepared {
+        mesh,
+        facets,
+        surface,
+        surface_owner,
+        surface_region,
+        region_facet_sets,
+        fixed,
+        mat,
+        young,
+        h,
+        quality,
+        mesh_ms,
+    } = prepare(doc, res, clock, true)?;
+    // `prepare` has just returned, so `clock` is its meshing end; its t0 is mesh_ms back.
+    let t_mesh = clock();
+    let t0 = t_mesh - mesh_ms;
+    let nn = mesh.nodes.len();
     let mut cases = Vec::new();
     let mut iterations = 0;
     for name in case_names(doc) {
@@ -542,16 +672,38 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     let envelope_elem = (0..mesh.tets.len())
         .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
         .collect();
-    let t_end = clock();
+    let t_static_end = clock();
+    // Density g/cm³ → N·s²/mm⁴ (the modal solve's units, mm-N-s).
+    let modal = match modes {
+        None => None,
+        Some(count) => {
+            // The solver runs clock-free (std clocks panic on wasm32); the caller times it.
+            let t_modal = clock();
+            let mut m = fieldsmith_solve::solve_modes(
+                &mesh,
+                &young,
+                mat.nu,
+                mat.density * 1e-9,
+                &fixed,
+                &fieldsmith_solve::ModeOptions {
+                    count,
+                    ..Default::default()
+                },
+            )
+            .map_err(SetupError)?;
+            m.solve_ms = clock() - t_modal;
+            Some(m)
+        }
+    };
     let provenance = Provenance {
         elements: mesh.tets.len(),
         order: 2,
         nodes: nn,
         dofs: nn * 3,
         element_size: h,
-        mesh_ms: t_mesh - t0,
-        solve_ms: t_end - t_mesh,
-        total_ms: t_end - t0,
+        mesh_ms,
+        solve_ms: t_static_end - t_mesh,
+        total_ms: t_static_end - t0,
         quality,
         iterations,
     };
@@ -568,7 +720,15 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
         surface_region,
         region_facet_sets,
         provenance,
+        modes: modal,
     })
+}
+
+/// The document-driven entry: static cases, plus the first `doc.solve.modes` mode
+/// frequencies when the document asks for a modal run. (Explicit callers use
+/// [`analyse_full`].)
+pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis, SetupError> {
+    analyse_full(doc, res, clock, doc.solve.modes)
 }
 
 /// The compiled body field (for callers that need to evaluate it alongside an analysis).
@@ -627,5 +787,46 @@ load pull two force=(100, 0, 0)
                 );
             }
         }
+    }
+
+    /// Modal on an unloaded cantilever (M8): supports alone define the constraints, so a
+    /// document without loads still produces frequencies, ascending.
+    const FREE: &str = "\
+name \"Modal bar\"
+custommaterial steel e=200000 nu=0.3 yield=250 density=7.85
+material steel
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region root = bar.px
+support clamp root fixed=xyz
+";
+
+    #[test]
+    fn modal_runs_without_loads_and_frequencies_ascend() {
+        let d = parse(FREE);
+        let run = analyse_modes(&d, Resolution::Size(1.5), now, 4).expect("modal run");
+        let fs = &run.modal.frequencies;
+        assert_eq!(fs.len(), 4);
+        assert!(fs.iter().all(|f| *f > 0.0 && f.is_finite()));
+        assert!(
+            fs.windows(2).all(|w| w[0] <= w[1]),
+            "frequencies descending: {fs:?}"
+        );
+        // The static path through the same document still wants a load.
+        let err = analyse_full(&d, Resolution::Size(1.5), now, None).expect_err("no loads");
+        assert_eq!(err.0, "add a load");
+        // And with a load, the same document carries the modes on the shared mesh.
+        let doc = parse(OVERLAP);
+        let a = analyse_full(&doc, Resolution::Size(3.0), now, Some(2)).expect("analyse");
+        let modes = a.modes.as_ref().expect("modes");
+        assert_eq!(modes.frequencies.len(), 2);
+        assert!(modes.frequencies.iter().all(|f| *f > 0.0));
+        // provenance stays the static pipeline's: mesh + static solves (no modal time).
+        assert!(
+            (a.provenance.total_ms - a.provenance.mesh_ms - a.provenance.solve_ms).abs() < 50.0,
+            "total {} ≠ mesh {} + solve {}",
+            a.provenance.total_ms,
+            a.provenance.mesh_ms,
+            a.provenance.solve_ms
+        );
     }
 }

@@ -62,9 +62,14 @@ measured non-manifold edges where TPMS sheets cross or pinch inside one cell
 Linear-elastic, small strain, isotropic material only; homogenisation of the fill is
 isotropic (the actual TPMS sheets are not, and the error against a resolved reference is
 measured, not assumed, in V7). One material per part. No STEP or B-rep import, no topology
-optimisation, no modal, thermal or CFD analysis, no multi-material assembly (3MF import
+optimisation, no thermal or CFD analysis, no multi-material assembly (3MF import
 reads single-object files; multi-material labelling is not built), no g-code
-generation, no mobile layout. One load case at a time in the setup lens; envelopes exist in
+generation, no mobile layout. Modal analysis reports the first natural frequencies of
+the same linear small-strain model; it takes the same supports and ignores loads. The
+shapes are computed but not visualised; the in-browser eigensolve completed without a
+memory error at a 190 k-DOF rung, and larger meshes may fail at the wasm memory limit
+with a named error. One load
+case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 
 Successor to the MorphoForge experiment. Built on [`fenics-rs`](../fenics-rs).

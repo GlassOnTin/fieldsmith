@@ -7,5 +7,6 @@ license.workspace = true
 [dependencies]
 fenics-element = { workspace = true }
 fenics-assembly = { workspace = true }
+fenics-solver = { workspace = true }
 faer = { workspace = true }
 serde = { workspace = true }

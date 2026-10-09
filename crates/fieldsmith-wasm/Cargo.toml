@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 fieldsmith-core = { workspace = true }
 fieldsmith-doc = { workspace = true }
+fieldsmith-solve = { workspace = true }
 fieldsmith-field = { workspace = true }
 fieldsmith-mesh = { workspace = true }
 serde = { workspace = true }

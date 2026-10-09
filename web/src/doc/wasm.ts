@@ -357,6 +357,14 @@ export interface LoadReport {
   fit_extent: number | null;
 }
 
+/** The natural frequencies `solve modes=<n>` adds to an analysis (M8): Hz, ascending. The
+ * eigenvalues are ω² (rad/s)² in the same order. */
+export interface ModalInfo {
+  frequencies: number[];
+  eigenvalues: number[];
+  solve_ms: number;
+}
+
 export interface AnalysisMeta {
   provenance: Provenance;
   cases: CaseSummary[];
@@ -366,6 +374,8 @@ export interface AnalysisMeta {
   solid_cases?: CaseMax[];
   /** Fill levels only: the fill spec, masses and the achieved density window. */
   fill?: FillInfo;
+  /** When the document's `solve modes` asks for it: the first modes of the static mesh. */
+  modes?: ModalInfo;
 }
 
 /** The wasm `AnalysisOut` handle. Typed arrays are views into wasm memory — copy before

@@ -12,12 +12,14 @@
 
 pub mod assemble;
 pub mod bsr;
+pub mod modal;
 pub mod p2;
 pub mod pcg;
 pub mod stress;
 
 pub use assemble::assemble;
 pub use bsr::Bsr;
+pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
 pub use stress::{element_stress, nodal_stress, von_mises, Stress};

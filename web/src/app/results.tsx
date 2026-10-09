@@ -450,6 +450,21 @@ function ResultsPanel() {
               )}
             </div>
           )}
+          {lvl.meta.modes && (
+            <div class="field-grid" data-testid="modes-summary">
+              <span class="plain">Modes</span>
+              <span class="num">
+                {lvl.meta.modes.frequencies.length} natural frequencies · eigen{' '}
+                {fmt(lvl.meta.modes.solve_ms, 0)} ms
+              </span>
+              {lvl.meta.modes.frequencies.slice(0, 6).map((f, i) => (
+                <Fragment key={i}>
+                  <span class="plain">Mode {i + 1}</span>
+                  <span class="num">{fmt(f, 2)} Hz</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
           {lvl.meta.fill && (
             <div class="field-grid" data-testid="fill-summary">
               <span class="plain">Fill</span>

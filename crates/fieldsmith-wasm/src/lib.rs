@@ -2,7 +2,7 @@
 //! [`fieldsmith_doc::Document`]); bulk numeric data crosses as typed arrays.
 
 use fieldsmith_core::fill::{graded, Graded};
-use fieldsmith_core::{analyse as core_analyse, Analysis, Provenance, Resolution};
+use fieldsmith_core::{analyse_full as core_analyse_full, Analysis, Provenance, Resolution};
 use fieldsmith_doc::{fsm, materials, Document};
 use fieldsmith_field::{expr, glsl, Expr};
 use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
@@ -510,6 +510,8 @@ struct AnalysisMeta {
     cases: Vec<fieldsmith_core::CaseResult>,
     yield_strength: f64,
     poisson: f64,
+    /// First mode frequencies when the caller asked for a modal run alongside the statics.
+    modes: Option<fieldsmith_solve::ModalResult>,
 }
 
 /// One analysis, kept in wasm and queried through typed-array getters.
@@ -519,8 +521,9 @@ pub struct AnalysisOut {
 }
 
 /// Run the analysis pipeline. `h` targets an element size (mm), `dofs` a degree-of-freedom
-/// count; pass one, leave the other `None`. Errors are user-fixable setup issues ("add a
-/// support: …").
+/// count; pass one, leave the other `None`. A `solve modes=<n>` on the document adds the
+/// first mode frequencies (`metaJson.modes`, in Hz, ascending), solved on the same mesh as
+/// the static cases. Errors are user-fixable setup issues ("add a support: …").
 #[wasm_bindgen(js_name = analyse)]
 pub fn analyse(
     doc_json: &str,
@@ -533,7 +536,8 @@ pub fn analyse(
         (_, Some(n)) => Resolution::Dofs(n),
         (None, None) => Resolution::Dofs(150_000),
     };
-    let a = core_analyse(&doc, res, clock).map_err(js_err)?;
+    let modes = doc.solve.modes;
+    let a = core_analyse_full(&doc, res, clock, modes).map_err(js_err)?;
     Ok(AnalysisOut { a })
 }
 
@@ -548,6 +552,7 @@ impl AnalysisOut {
             cases: self.a.cases.clone(),
             yield_strength: self.a.yield_strength,
             poisson: self.a.poisson,
+            modes: self.a.modes.clone(),
         })
     }
 

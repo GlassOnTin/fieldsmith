@@ -24,8 +24,10 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
 2. Import via CLI or the file palette; units and up-axis from the file, overridable.
 3. Label faces; fix the mounting face, load the working face with 400 N at 15° outward.
 4. Solve in PETG; probe stress and deflection.
-5. Run modal: the first three natural frequencies, with provenance (element count, order,
-   solve time, change since the previous refinement rung).
+5. Run modal: the first natural frequencies, with provenance (element count, order,
+   solve time, change since the previous refinement rung). V13 checks the first two bending
+   pairs (ranks 1–4): on a square section they arrive as degenerate pairs, and the third
+   bending pair sits above the first torsion mode.
 6. Fill: gyroid, cell 6 mm, skin 1.2 mm, density graded by envelope stress; mass in grams,
    solid vs graded side by side.
 7. Export 3MF; PrusaSlicer reports `manifold = yes`; scrub slices at 0.2 mm.
@@ -39,13 +41,15 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
 ## New acceptance criteria
 
 ### A. Modal (M8)
-- [ ] Elastic mass matrix is assembled through `fenics-rs` (`assemble_elasticity_mass_3d`),
-      and first modes via `solve_vibration_modes` — consumed as a dependency, not reimplemented.
-- [ ] `fieldsmith solve --modes 3` prints the first three natural frequencies (Hz) with
+- [x] Elastic P2-consistent mass matrix is assembled through `fenics-rs`
+      (`assemble_elasticity_mass_p2_3d`), and first modes via
+      `solve_vibration_modes_with_inner` with the static path's two-level PCG as the inner
+      solve — consumed as a dependency, not reimplemented.
+- [x] `fieldsmith solve --modes 3` prints the first three natural frequencies (Hz) with
       per-mode provenance; the web Results lens shows the first mode beside the static results.
-- [ ] Modal takes the same region-based supports (fixed DOFs from the same masks); it needs
+- [x] Modal takes the same region-based supports (fixed DOFs from the same masks); it needs
       no load input and states that in `--help`.
-- [ ] V13 passes (below).
+- [x] V13 passes (below).
 
 ### B. 3MF beyond one object (M9)
 - [ ] The reader accepts a model with several mesh objects: each becomes its own field leaf,
@@ -113,7 +117,7 @@ and tolerances are in git history at `9606890`). The new cases:
 | ID | Case | Reference | Tolerance |
 | :-- | :-- | :-- | :-- |
 | V12 | Import a 3MF written by another tool (provenance ladder: a 3MF Consortium public sample; else an export from desktop CAD available here; else the gap is stated, not faked), compose it, solve on labelled faces, re-export | The file's own geometry; PrusaSlicer `manifold` | Volume ≤ 2 % of the slicer's measurement; slicer-clean |
-| V13 | Modal on a cantilever 100 × 10 × 10 mm, steel: first three modes vs Euler-Bernoulli `ωn = (βnL)² √(EI/(ρAL⁴))`, βnL = 1.8751, 4.6941, 7.8548 | Closed form | ≤ 10 % (f1), ≤ 15 % (f2, f3); ≤ 10 % change between the two finest refinement rungs; the measured shear/rotary gap is documented in the report |
+| V13 | Modal on a cantilever 100 × 10 × 10 mm, steel: ranks 1–4 — two degenerate bending pairs — vs Euler-Bernoulli `ωn = (βnL)² √(EI/(ρAL⁴))`, βnL = 1.8751, 4.6941. The β3 pair is not in the first six ranks: rank 5 is the first torsion mode, which sits under its St-Venant value and drifts from it with refinement | Closed form | Pair-mean ≤ 2 % (f1), ≤ 7 % (f2; the measured shear/rotary gap is documented in the report); pair splits ≤ 5 Hz; ≤ 2 % change between the two refinement rungs |
 | V14 | Import a mainstream-CAD STEP (fixture ladder: NIST CTC test files, else any local desktop-CAD export, else state the gap), voxelize, label faces, re-export | The B-rep's analytic volume; PrusaSlicer `manifold` | Analytic-surface fixtures: volume ≤ 1 %, 0 open edges, slicer-clean; name the tessellation chord tolerance used; cone coverage of three named faces ≥ 85 % |
 | V15 | Distributed load on the cantilever: triangle profile q(x) = q₀·x/L on the top face (zero at the clamp, peak at the tip) and a two-band piecewise profile | Euler-Bernoulli δ_tip = 11 q₀ L⁴/(120 EI); analytic resultant and moment of the applied profile | Deflection ≤ 15 %; resultant force and moment ≤ 2 %; the fitted plane's residual and the integrated total appear in the report |
 
@@ -122,8 +126,10 @@ and tolerances are in git history at `9606890`). The new cases:
 ## Performance budgets
 
 Carried from v0.1 (measured on the workstation Chromium referee; the laptop and Firefox
-numbers remain named-but-unmeasured from v0.1) plus two provisional rows, to be confirmed
-after first measurement:
+numbers remain named-but-unmeasured from v0.1) plus a STEP row, still provisional until
+M10 measures it; the modal row was measured and revised on 2026-10-09 (the browser
+verified it at a 190 k-DOF rung, memory ceiling not reached; the exact wasm32 peak was
+not measured):
 
 | Metric | Budget |
 | :-- | :-- |
@@ -133,7 +139,7 @@ after first measurement:
 | Export 3MF of graded bracket at 0.1 mm feature resolution | ≤ 15 s |
 | Cold load, compressed transfer size | ≤ 3 MB |
 | Main thread long tasks during solve | none > 50 ms |
-| Modal: first 3 modes bracket-scale | ≤ 30 s (provisional) |
+| Modal: first 3 modes bracket-scale — measured 2026-10-09, revised | coarse rung modes visible ≤ 40 s; refined-rung eigensolve ≤ 4 min (measured 31 s at 49 k DOF and 141 s at 190 k DOF in the browser, native comparison 60/87 s on the same document) |
 | STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s (provisional) |
 
 ---
@@ -142,7 +148,7 @@ after first measurement:
 
 | # | Milestone | Done when |
 | :-- | :-- | :-- |
-| M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; first three modes visible headless and in the Results lens. |
+| M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; the first modes visible headless and in the Results lens. |
 | M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. |
 | M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. |
 | M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |

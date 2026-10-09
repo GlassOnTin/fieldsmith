@@ -38,6 +38,7 @@ fieldsmith-core = { path = "crates/fieldsmith-core" }
 fenics-element = { path = "../fenics-rs/crates/fenics-element" }
 fenics-mesh = { path = "../fenics-rs/crates/fenics-mesh" }
 fenics-assembly = { path = "../fenics-rs/crates/fenics-assembly" }
+fenics-solver = { path = "../fenics-rs/crates/fenics-solver" }
 
 # Numerical code is unusable at opt-level 0; keep debug builds fast enough for tests.
 [profile.dev]
