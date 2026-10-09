@@ -81,9 +81,15 @@ pub fn region_facets(
         .map(|s| {
             // An axis face on a mesh node selects by outward-normal cone (the geometric face
             // rule); on primitives and for `all`/`side` the exact face test stays in charge.
+            // An axis face on an extend node also selects by cone: the extend's derived
+            // leaf carries a face hint (the swept surface's axis), so `region_facets`
+            // matches the facet's outward normal against it — the same rule as a mesh,
+            // closing V10's gap that a Face on an Extend node fell through to the
+            // primitive branch.
             let axis = s.face.axis().and_then(|a| {
                 doc.find(&s.shape).and_then(|n| match &n.kind {
                     NodeKind::Mesh { .. } => Some(Rigid::from_doc(&n.transform).grad_to_world(a)),
+                    NodeKind::Extend { .. } => Some(a),
                     _ => None,
                 })
             });
