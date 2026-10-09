@@ -4,26 +4,26 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.64 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 1.05 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.44 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 2.23 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 2.65 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.92 s | bracket-06.png |
-| Setup lens | 0.70 s | bracket-07.png |
-| Region: base-hole walls | 1.25 s | bracket-08.png |
-| Region: upright-hole wall | 0.72 s | bracket-09.png |
-| Support on the base_holes | 1.00 s | bracket-10.png |
-| Load on the upright_hole | 1.79 s | bracket-11.png |
-| Coarse result streamed | 0.87 s | bracket-12.png |
-| Refined solve finished | 2.25 s | bracket-13.png |
+| Empty document | 0.61 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 0.99 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.46 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 2.03 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 2.23 s | bracket-05.png |
+| Upright hole ⌀8.5 | 3.03 s | bracket-06.png |
+| Setup lens | 0.81 s | bracket-07.png |
+| Region: base-hole walls | 1.33 s | bracket-08.png |
+| Region: upright-hole wall | 1.30 s | bracket-09.png |
+| Support on the base_holes | 0.49 s | bracket-10.png |
+| Load on the upright_hole | 1.34 s | bracket-11.png |
+| Coarse result streamed | 1.05 s | bracket-12.png |
+| Refined solve finished | 2.21 s | bracket-13.png |
 | Results lens: stress field | 0.22 s | bracket-14.png |
-| Probe the base plate | 0.21 s | bracket-15.png |
-| Fill lens: add lattice fill | 6.78 s | bracket-16.png |
-| Fill lens: badge and results rows | 0.18 s | bracket-17.png |
-| Fill lens: ρ band cross-clamp and undo/redo | 1.32 s | bracket-18.png |
+| Probe the base plate | 0.20 s | bracket-15.png |
+| Fill lens: add lattice fill | 6.54 s | bracket-16.png |
+| Fill lens: badge and results rows | 0.19 s | bracket-17.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 0.93 s | bracket-18.png |
 
-Total scripted time: 28.5 s.
+Total scripted time: 27.1 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
@@ -42,8 +42,8 @@ Total scripted time: 28.5 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 699 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 2946 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 1049 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 3107 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | results panel, badge and legend render | pass |  |
@@ -66,11 +66,11 @@ Total scripted time: 28.5 s.
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 350 | 377 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 49 | 2196 | 2245 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 25 | 342 | 367 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 46 | 2114 | 2160 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 699 ms of the 1500 ms budget; launch fired 156 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 2946 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 1049 ms of the 1500 ms budget; launch fired 158 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 3107 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 
