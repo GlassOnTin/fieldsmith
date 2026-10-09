@@ -12,7 +12,7 @@ use crate::now_ms;
 use fieldsmith_doc::{Node, NodeKind, Op, Transform};
 use fieldsmith_field::meshfield::{hash_mesh_input, hydrate};
 use fieldsmith_mesh::export::{read_stl_any, TriMesh};
-use fieldsmith_mesh::{gltf, obj, weld, NamedPart};
+use fieldsmith_mesh::{gltf, obj, threemf, weld, NamedPart};
 
 /// Dihedral angle (radians, matching `weld::segment`'s inputs and its tests) below which
 /// neighbouring triangles join one patch. Doubling when a mesh splits past the patch-grid
@@ -177,28 +177,43 @@ fn read_any(kind: &str, bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
                 .map_err(|_| "OBJ source is not valid UTF-8 text".to_string())?;
             obj::read_obj(text)
         }
-        _ => Err(format!("kind '{kind}' is not one of glb, stl, obj")),
+        "3mf" => threemf::read_3mf(bytes),
+        _ => Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf")),
     }
 }
 
-/// Import `bytes` as the mesh kind (`"glb"`, `"stl"` or `"obj"`) and hydrate the registry.
+/// Import `bytes` as the mesh kind (`"glb"`, `"stl"`, `"obj"` or `"3mf"`) and hydrate the
+/// registry. A 3MF file's units come from its `<model unit="…">` attribute (the reader
+/// scales to millimetres); the `units` override still applies on top.
 pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<ImportOut, String> {
     let t0 = now_ms();
-    if !matches!(kind, "glb" | "stl" | "obj") {
-        return Err(format!("kind '{kind}' is not one of glb, stl, obj"));
+    if !matches!(kind, "glb" | "stl" | "obj" | "3mf") {
+        return Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf"));
     }
     let parts = read_any(kind, bytes).map_err(|e| format!("{kind} import failed: {e}"))?;
     if parts.is_empty() {
         return Err("the file contains no geometry".into());
     }
 
+    // A 3MF file's units come from its model attribute and are already scaled to
+    // millimetres by the reader; the `units` override applies on top of the file's own
+    // scale only when the caller names one (the default is mm, i.e. no extra scale).
     let (def_units, def_up) = match kind {
         "glb" => ("m", "y"),
         _ => ("mm", "z"),
     };
     let units = opts.units.unwrap_or(def_units);
     let up = opts.up.unwrap_or(def_up);
-    let scale = unit_scale(units)?;
+    let scale = if kind == "3mf" {
+        // The reader already applied the file's unit scale; the override, when given,
+        // treats the file's coordinates as being in that unit (an explicit re-interpret).
+        match opts.units {
+            Some(_) => unit_scale(units)?,
+            None => 1.0,
+        }
+    } else {
+        unit_scale(units)?
+    };
     let up_y = up_correction(up)?;
 
     let mut taken = opts.taken.to_vec();
@@ -504,7 +519,7 @@ f 4 5 8
         assert!(bad.is_err(), "empty file refuses");
         assert_eq!(
             import_mesh("step", b"", &opts(None, None, None, "", &[])).unwrap_err(),
-            "kind 'step' is not one of glb, stl, obj"
+            "kind 'step' is not one of glb, stl, obj, 3mf"
         );
     }
 }
