@@ -146,7 +146,7 @@ fixture through the file palette, and export of the imported part (see
 - [x] Every Rust stage runs headless via `fieldsmith-cli` (`fieldsmith solve bracket.fsm --report`). (Verbs: `check`, `print`, `json`, `volume`, `glsl`, `solve`, `export`, `import` — all headless; V10 runs import → solve → export end to end.)
 - [x] WASM surface is a handful of functions taking serialised documents, not positional argument lists. (`fieldsmith-wasm`: ~21 `#[wasm_bindgen]` functions, each taking `doc_json: &str` / `bytes: &[u8]` / typed arrays, not positional argument lists.)
 - [x] All compute in Web Workers; buffers passed as transferables. (`analysis.worker.ts` runs mesh/solve/export/import in a module worker; `transfersOf` moves typed-array buffers by transfer, never copy.)
-- [x] CI: `cargo test`, `cargo clippy -D warnings`, TypeScript typecheck, verification cases V1–V11, a headless browser run of the bracket test script. (`scripts/ci.sh`: clippy `-D warnings`, `tsc --noEmit`, workspace tests (V1–V4, V9, V10, V11), wasm build, headless browser suite (V5 + bracket + shape + make + mesh), V6/V7 heavy last in release. NOTE: clippy `-D warnings` currently fails on 7 pre-existing `fieldsmith-mesh/src/adaptive.rs` warnings — a pre-existing condition this audit did not introduce; see Known issues.)
+- [x] CI: `cargo test`, `cargo clippy -D warnings`, TypeScript typecheck, verification cases V1–V11, a headless browser run of the bracket test script. (`scripts/ci.sh`: clippy `-D warnings`, `tsc --noEmit`, workspace tests (V1–V4, V9, V10, V11), wasm build, headless browser suite (V5 + bracket + shape + make + mesh), V6/V7 heavy last in release. The 7 pre-existing `adaptive.rs` clippy warnings that failed `-D warnings` are cleared — factored type alias, iter-enumerate rewrites, `&mut [V3]` slice parameter, and `#[allow]`s where the arity is the point. The workspace is clippy-clean under `-D warnings`.)
 - [x] README states limitations plainly: linear elastic, small strain, isotropic homogenisation. (README "Limitations": linear-elastic, small strain, isotropic material only; homogenisation isotropic with the error measured in V7.)
 
 ---
@@ -181,11 +181,12 @@ v0.1 is done when **every box above is ticked, V1–V11 pass in CI, the performa
 and the bracket test passes with three new users** — and not before. If a criterion turns out
 to be wrong, change this file in a reviewed commit; do not quietly skip it.
 
-**Audit status (M7 close-out):** every box in sections A–F and H is ticked against the code as
-of the M7 landing. V1–V5, V8–V11 pass in CI; V6/V7 are `#[ignore]`d heavy cases that run in
-release (`cargo test -p fieldsmith-verify --release --test v6_tpms_law -- --ignored`, same for
-v7). The remaining v0.1 blockers are the ones a machine cannot clear: the hallway test (3 new
-users, bracket ≤ 5 min) and the laptop/Firefox budget measurements. Known issue carried
-forward: `cargo clippy -D warnings` fails on 7 pre-existing `fieldsmith-mesh/src/adaptive.rs`
-warnings (loop-index patterns, a too-many-arguments function, a complex type) — none introduced
-by the M7 work; they predate it.
+**Audit status (M7 close-out, updated after the audit):** every box in sections A–F and H is
+ticked against the code. V1–V5 and V8–V11 pass in CI; V6/V7 are `#[ignore]`d heavy cases that
+run in release — **both re-run green in this session** (V6 in 129 s, V7 in 3763 s). The full
+`scripts/ci.sh` run passes every stage except none — clippy `-D warnings` is now clean (the
+7 pre-existing `adaptive.rs` warnings are fixed), the TypeScript typecheck passes, the
+workspace tests pass (V1–V4, V9–V11), the wasm build passes, the headless browser suite
+passes (V5 + bracket + shape + make + mesh), and V6/V7 pass in release. **The remaining v0.1
+blockers are the ones a machine cannot clear: the hallway test (3 new users, bracket ≤ 5 min)
+and the laptop/Firefox budget measurements.**
