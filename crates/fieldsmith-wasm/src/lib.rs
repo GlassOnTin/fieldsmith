@@ -227,7 +227,8 @@ struct ImportOptions {
     ids: Vec<String>,
 }
 
-/// Import a GLB / STL / OBJ (`kind`: "glb" | "stl" | "obj") into documented mesh nodes,
+/// Import a GLB / STL / OBJ / 3MF (`kind`: "glb" | "stl" | "obj" | "3mf") into documented
+/// mesh nodes,
 /// voxelising and hydrating the session registry. `opts_json`: `{units?, up?, voxel?,
 /// src?, ids?}`. Returns `ImportOut` JSON — the nodes to splice into `doc.root` plus an
 /// honest per-part report (tris, welded verts, patches, open edges, bounds, hash, cell

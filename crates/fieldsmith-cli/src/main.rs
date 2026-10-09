@@ -37,7 +37,7 @@ const USAGE: &str =
           defect classes measured in V8)
   import  mesh an external part         [--out OUT.fsm] [--units m|mm|cm|in]
                                         [--up y|z] [--voxel MM]
-          SRC is a .glb, .stl or .obj file. Writes OUT.fsm (default: the
+          SRC is a .glb, .stl, .obj or .3mf file. Writes OUT.fsm (default: the
           source stem in the working directory) plus the .fsmz sidecar
           that stores its grids; volume/solve/export of the written
           document need that sidecar beside the .fsm.";
@@ -259,9 +259,9 @@ fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !matches!(kind.as_str(), "glb" | "stl" | "obj") {
+    if !matches!(kind.as_str(), "glb" | "stl" | "obj" | "3mf") {
         return Err(format!(
-            "import: source must be .glb, .stl or .obj, got .{kind}"
+            "import: source must be .glb, .stl, .obj or .3mf, got .{kind}"
         ));
     }
     let units = opt(args, "--units");
