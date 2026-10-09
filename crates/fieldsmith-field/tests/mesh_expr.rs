@@ -122,6 +122,7 @@ fn mesh_leaf(key: u64) -> Expr {
         key,
         bbox: f.meta.bbox,
         spec: Some(f.spec()),
+        face_hint: None,
     }
 }
 
@@ -172,6 +173,7 @@ fn unhydrated_key_is_vacuum_and_neutral_in_a_document() {
             hi: [3.0; 3],
         },
         spec: None,
+        face_hint: None,
     };
     assert_eq!(eval(&leaf, [0.0, 0.0, 0.0]), D::EMPTY);
     let mut doc = mesh_doc(key, bbox6([8.0; 3]), Transform::default());
@@ -326,6 +328,7 @@ fn registry_replace_reflects_the_new_field() {
         key,
         bbox,
         spec: None,
+        face_hint: None,
     };
     let p = [1.5, 0.0, 0.0];
     assert!(eval(&e, p).v < 0.0, "first bake is solid at (1.5, 0, 0)");

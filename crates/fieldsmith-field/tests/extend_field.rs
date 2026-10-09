@@ -222,6 +222,7 @@ fn derived_leaf(key: u64, f: &MeshField) -> Expr {
         key,
         bbox: f.meta.bbox,
         spec: Some(f.spec()),
+        face_hint: None,
     }
 }
 
@@ -546,11 +547,13 @@ fn unhydrated_parent_compiles_to_vacuum_over_swept_bounds() {
                 key,
                 bbox: mb,
                 spec,
+                ..
             },
             Expr::Mesh {
                 key: 0,
                 bbox: _eb,
                 spec: espec,
+                ..
             },
         ) => {
             assert_eq!(*key, parent_hash_key, "the parent leaf keeps its own key");
@@ -993,5 +996,98 @@ fn face_region_follows_the_parent_transform() {
         (b.hi[2] - 5.0).abs() < eps,
         "rotated union hi z: {:?}",
         b.hi
+    );
+}
+
+#[test]
+fn face_hint_labels_the_swept_surface_and_booleans_inherit_it() {
+    // M7: face selectors on derived solids. A face-rule extend's derived leaf carries a
+    // face hint (the swept surface's axis, in the leaf frame); eval_face reads the hint
+    // and signs it by the SDF gradient, so the skirt wall labels Nz (its outward normal
+    // points −z). A region selecting `ext1.nz` matches through the same outward-normal
+    // cone rule region_facets applies to imported meshes — closing V10's gap that a Face
+    // on an Extend node fell through to the primitive branch. Boolean results inherit the
+    // hint through the step-1 composite rule (the nearer operand owns the face).
+    let parent = bake_unpatched([5.0; 3], 1.0);
+    let key = test_key("face-hint");
+    let hash = format!("{key:016x}");
+    hydrate(key, parent.clone());
+    let doc = extend_doc_face(
+        &hash,
+        [-5.0, -5.0, -5.0, 5.0, 5.0, 5.0],
+        "bottom",
+        [0.0, 0.0, -1.0],
+        10.0,
+    );
+    let body = compile_body(&doc);
+    let Expr::Combine { a, b, .. } = &body else {
+        panic!("expected a two-leaf Add body, got {body:?}");
+    };
+    // The extend leaf (b) carries the face hint for the z axis; the parent (a) does not.
+    let Expr::Mesh {
+        face_hint: parent_hint,
+        ..
+    } = &**a
+    else {
+        panic!("parent is a mesh leaf");
+    };
+    assert_eq!(*parent_hint, None, "the parent leaf carries no face hint");
+    let Expr::Mesh {
+        face_hint: extend_hint,
+        ..
+    } = &**b
+    else {
+        panic!("extend leaf is a mesh leaf");
+    };
+    assert_eq!(*extend_hint, Some(2), "the extend leaf hints the z axis");
+
+    // eval_face on the extend leaf alone: the skirt's bottom tip labels Nz (the outward
+    // normal points −z, the gradient opposes the +z hint axis). The EDT convention puts
+    // the tip face at the outermost kept cell centre − ½·spacing = −16 − 0.5 = −16.5
+    // (the chamfer's diagonal steps double the gradient there, so the crossing is exact
+    // at the half-cell); the probe sits at the crossing.
+    let (d, f) = fieldsmith_field::expr::eval_face(b, [0.0, 0.0, -16.5]);
+    assert!(d.abs() < 1e-6, "skirt tip surface distance {d}");
+    assert_eq!(f, Face::Nz, "the skirt's tip face labels Nz, got {f:?}");
+
+    // On the composite body, the same point: the skirt is the nearer operand there (the
+    // parent is air below z = −5), so the composite face is the skirt's Nz.
+    let (d, f) = fieldsmith_field::expr::eval_face(&body, [0.0, 0.0, -16.5]);
+    assert!(d.abs() < 1e-6, "composite tip surface distance {d}");
+    assert_eq!(
+        f,
+        Face::Nz,
+        "the composite inherits the skirt's Nz face, got {f:?}"
+    );
+
+    // A point on the parent's top face (away from the skirt): the parent is the nearer
+    // operand and labels All (a mesh leaf without a hint), not Nz.
+    let (d, f) = fieldsmith_field::expr::eval_face(&body, [0.0, 0.0, 5.0]);
+    assert!(d.abs() < 1e-6, "parent top surface distance {d}");
+    assert_eq!(f, Face::All, "the parent's top labels All, got {f:?}");
+
+    // Without the hint the same leaf would label All — the hint is what makes the
+    // skirt wall clampable. Check by stripping it.
+    let Expr::Mesh {
+        key: k2,
+        bbox: bb2,
+        spec: s2,
+        ..
+    } = &**b
+    else {
+        panic!("extend leaf is a mesh leaf");
+    };
+    let stripped = Expr::Mesh {
+        key: *k2,
+        bbox: *bb2,
+        spec: s2.clone(),
+        face_hint: None,
+    };
+    let (d, f) = fieldsmith_field::expr::eval_face(&stripped, [0.0, 0.0, -16.5]);
+    assert!(d.abs() < 1e-6, "stripped tip surface distance {d}");
+    assert_eq!(
+        f,
+        Face::All,
+        "without the hint the skirt labels All, got {f:?}"
     );
 }

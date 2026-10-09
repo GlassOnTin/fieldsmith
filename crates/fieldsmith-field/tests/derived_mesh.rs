@@ -496,6 +496,7 @@ fn pointwise_bake_agrees_with_the_eval_wrap() {
                     hi: [5.0; 3],
                 },
                 spec: None,
+                face_hint: None,
             }),
         };
         // Exact at the parent's sample planes — integer positions across the +x wall.
@@ -571,6 +572,7 @@ fn mask_route_diverges_from_the_wrap_beyond_the_band() {
                 hi: [5.0; 3],
             },
             spec: None,
+            face_hint: None,
         }),
     };
     let derived = eval(&e, [0.0; 3]).v;

@@ -82,11 +82,15 @@ pub enum Expr {
     /// Baked voxel field from an imported mesh (`fieldsmith-field::meshfield`). `key` names
     /// the session registry entry; unhydrated keys evaluate as vacuum. `bbox` is the baked
     /// world bounds (bounds() needs no registry) and `spec` the grid placement taken at
-    /// compile time for shader generation.
+    /// compile time for shader generation. `face_hint` carries the axis of a geometric
+    /// face selector naming this leaf (`Face::axis`, mapped into the leaf's own frame) so
+    /// `eval_face` can label the derived surface; `None` for an import, an extend or any
+    /// other leaf whose surface carries no face claim.
     Mesh {
         key: u64,
         bbox: crate::expr::Aabb,
         spec: Option<crate::meshfield::GridSpec>,
+        face_hint: Option<usize>,
     },
 }
 
@@ -172,6 +176,7 @@ pub fn compile_node(doc: &Document, node: &Node) -> Expr {
                     hi: [bbox[3], bbox[4], bbox[5]],
                 },
                 spec: crate::meshfield::lookup(key).map(|f| f.spec()),
+                face_hint: None,
             }
         }
         NodeKind::Extend { region, dir, len } => compile_extend(doc, region, *dir, *len),
@@ -281,6 +286,20 @@ fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr
         // grid: map them through the node transform. Identity transforms are exact no-ops.
         let rig = Rigid::from_doc(xform);
         let dir_leaf = rig.to_local_dir(dir);
+        // A face-direction selector names the swept surface by its face: the derived
+        // leaf carries the axis as a face hint (in the leaf's own frame) so a region
+        // selecting `ext1.px` labels the skirt wall — closing V10's gap that a Face on
+        // an Extend node fell through to the primitive branch. The hint rides on the
+        // leaf only; the node-frame wrapper maps it back to world with the surface.
+        let face_hint = match &from {
+            SweptFrom::Face(axis) => {
+                let ax = [axis[0].abs(), axis[1].abs(), axis[2].abs()];
+                let i = if ax[1] > ax[0] { 1 } else { 0 };
+                let i = if ax[2] > ax[i] { 2 } else { i };
+                Some(i)
+            }
+            SweptFrom::Patches(_) => None,
+        };
         let e = match crate::meshfield::lookup(crate::meshfield::key_from_hex(hash)) {
             // Hydrated parent: derive the swept field, register it under its input hash and
             // compile exactly like a Mesh (same slots, meshing, picking, persistence).
@@ -304,6 +323,7 @@ fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr
                                     key,
                                     bbox: f2.meta.bbox,
                                     spec: Some(f2.spec()),
+                                    face_hint: None,
                                 },
                                 xform,
                             )
@@ -330,6 +350,7 @@ fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr
                                     key,
                                     bbox: f2.meta.bbox,
                                     spec: Some(f2.spec()),
+                                    face_hint,
                                 },
                                 xform,
                             )
@@ -346,6 +367,7 @@ fn compile_extend(doc: &Document, region: &str, dir: [f64; 3], len: f64) -> Expr
                     key: 0,
                     bbox: swept_placeholder_bbox(bbox, dir_leaf, len),
                     spec: None,
+                    face_hint,
                 },
                 xform,
             ),
@@ -439,6 +461,7 @@ fn derive_modifier(e: &Expr, m: &Modifier, node: &str) -> Option<Expr> {
                 key: new_key,
                 bbox: f2.meta.bbox,
                 spec: Some(f2.spec()),
+                face_hint: None,
             })
         }
         Expr::Xform { m: rig, e } => derive_modifier(e, m, node).map(|inner| Expr::Xform {
@@ -823,6 +846,29 @@ pub fn placed_shape(doc: &Document, id: &str) -> Option<Expr> {
 pub fn eval_face(e: &Expr, p: V3) -> (f64, Face) {
     match e {
         Expr::Prim(prim) => (eval_prim(prim, p).v, classify_face(prim, p)),
+        // A baked mesh leaf with a face hint (a face-rule extend's swept surface, goal
+        // M7): the derived surface's own face is the hint's axis, signed by the SDF
+        // gradient — the outward normal at `p` points along +axis for a +axis face, so
+        // the face is Px/Py/Pz when the gradient agrees with the axis and Nx/Ny/Nz when
+        // it opposes it. This is the same outward-normal rule `region_facets` applies to
+        // imported meshes (the 45° cone there is a facet-matching tolerance; here the
+        // hint is exact, so the sign of the gradient decides). Without a hint the leaf
+        // labels `All`, as before.
+        Expr::Mesh {
+            face_hint: Some(axis),
+            ..
+        } => {
+            let d = eval(e, p);
+            let f = match (*axis, d.g[*axis] >= 0.0) {
+                (0, true) => Face::Px,
+                (0, false) => Face::Nx,
+                (1, true) => Face::Py,
+                (1, false) => Face::Ny,
+                (2, true) => Face::Pz,
+                _ => Face::Nz,
+            };
+            (d.v, f)
+        }
         Expr::Xform { m, e } => eval_face(e, m.to_local(p)),
         Expr::Mirror { axis, e } => {
             let a = eval_face(e, p);
