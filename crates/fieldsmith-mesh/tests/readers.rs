@@ -591,3 +591,221 @@ fn meshy_stl_smoke() {
     let id30 = fieldsmith_mesh::weld::segment(&m, &adj, 30.0_f64.to_radians());
     assert_eq!(id30, id);
 }
+
+// ---------------------------------------------------------------------------------------------
+// 3MF reader (goal M7, step 6)
+
+use fieldsmith_mesh::export::surface;
+use fieldsmith_mesh::threemf::read_3mf;
+
+/// A cube as an SDF (half 10, centred at the origin) for the round-trip fixture.
+fn cube_sdf(p: [f64; 3]) -> f64 {
+    let t = [p[0].abs() - 10.0, p[1].abs() - 10.0, p[2].abs() - 10.0];
+    let o = [t[0].max(0.0), t[1].max(0.0), t[2].max(0.0)];
+    (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt() + t[0].max(t[1]).max(t[2]).min(0.0)
+}
+
+#[test]
+fn threemf_round_trip_through_our_own_writer() {
+    // Mesh a cube, write it as 3MF with our own writer, read it back: the mesh must be
+    // bit-identical (our writer emits 6-decimal coordinates in the positive octant, so the
+    // round trip is exact to the printed precision).
+    let m = surface(cube_sdf, [-10.0; 3], [10.0; 3], 1.0);
+    let bytes = m.write_3mf("bracket", "petg");
+    let parts = read_3mf(&bytes).expect("our own 3MF reads back");
+    assert_eq!(parts.len(), 1, "one object in our writer's file");
+    let back = &parts[0];
+    assert_eq!(back.name, "bracket", "the object's name attribute survives");
+    assert_eq!(back.mesh.tris.len(), m.tris.len(), "triangle count");
+    assert_eq!(back.mesh.verts.len(), m.verts.len(), "vertex count");
+    // Our writer shifts vertices into the positive octant by the mesh's min corner, so
+    // the read-back vertices are offset. The SHAPE (differences) is identical.
+    let shift = [
+        back.mesh.verts[0][0] - m.verts[0][0],
+        back.mesh.verts[0][1] - m.verts[0][1],
+        back.mesh.verts[0][2] - m.verts[0][2],
+    ];
+    for (a, b) in back.mesh.verts.iter().zip(&m.verts) {
+        for k in 0..3 {
+            assert!(
+                (a[k] - shift[k] - b[k]).abs() < 1e-5,
+                "vertex {a:?} vs {b:?} (shift {shift:?})"
+            );
+        }
+    }
+    assert_eq!(back.mesh.tris, m.tris, "triangle indices identical");
+    // The volume survives the round trip.
+    let v0 = m.volume();
+    let v1 = back.mesh.volume();
+    assert!(
+        (v1 - v0).abs() / v0 < 1e-4,
+        "volume {v1} vs {v0} after the round trip"
+    );
+}
+
+#[test]
+fn threemf_units_scale_to_millimetres() {
+    // The same cube written in metres must read back 1000× larger.
+    let m = surface(cube_sdf, [-10.0; 3], [10.0; 3], 1.0);
+    let bytes = m.write_3mf("m", "petg");
+    // Rewrite the model entry with unit="meter" by patching the model text inside the
+    // zip: simplest is to rebuild the model text from the read-back parts and re-zip with
+    // our own writer's layout. Instead, parse the model text, swap the unit, and re-zip.
+    let entries = fieldsmith_mesh::zip::read_zip(&bytes).unwrap();
+    let model = String::from_utf8(
+        entries
+            .iter()
+            .find(|e| e.name == "3D/3dmodel.model")
+            .unwrap()
+            .data
+            .clone(),
+    )
+    .unwrap();
+    let model_m = model.replace("unit=\"millimeter\"", "unit=\"meter\"");
+    assert_ne!(model, model_m, "the unit attribute is present");
+    // Re-zip with the same layout (stored entries are fine for the reader).
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    for e in &entries {
+        let data = if e.name == "3D/3dmodel.model" {
+            model_m.as_bytes()
+        } else {
+            &e.data
+        };
+        fieldsmith_mesh::zip::stream_entry(&mut out, &e.name, data, &mut records);
+    }
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let parts = read_3mf(&out).expect("metre-unit 3MF reads");
+    let v = parts[0].mesh.volume();
+    let v0 = m.volume();
+    // metre → mm is ×1000 per axis, so the volume is ×1000³.
+    assert!(
+        (v - v0 * 1e9).abs() / (v0 * 1e9) < 1e-4,
+        "metre-unit volume {v} vs {v0}×10⁹ = {}",
+        v0 * 1e9
+    );
+}
+
+#[test]
+fn threemf_named_rejections() {
+    // Not a zip.
+    let e = read_3mf(b"not a zip file at all").unwrap_err();
+    assert!(e.contains("zip") || e.contains("archive"), "{e}");
+    // A zip with no model entry.
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(&mut out, "readme.txt", b"hello", &mut records);
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let e = read_3mf(&out).unwrap_err();
+    assert!(e.contains("3dmodel.model"), "{e}");
+    // A model with no mesh.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources><object id=\"1\" type=\"model\"></object></resources></model>";
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let e = read_3mf(&out).unwrap_err();
+    assert!(e.contains("no object with a mesh"), "{e}");
+    // A mesh with a triangle index out of range.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources><object id=\"1\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"1\" y=\"0\" z=\"0\"/><vertex x=\"0\" y=\"1\" z=\"0\"/></vertices><triangles><triangle v1=\"0\" v2=\"1\" v3=\"5\"/></triangles></mesh></object></resources></model>";
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let e = read_3mf(&out).unwrap_err();
+    assert!(e.contains("out of range"), "{e}");
+    // An unsupported unit.
+    let model = "<?xml version=\"1.0\"?><model unit=\"micron\"><resources><object id=\"1\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/></vertices><triangles></triangles></mesh></object></resources></model>";
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let e = read_3mf(&out).unwrap_err();
+    assert!(e.contains("unit"), "{e}");
+    // A vertex missing its z attribute.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources><object id=\"1\"><mesh><vertices><vertex x=\"0\" y=\"0\"/></vertices><triangles></triangles></mesh></object></resources></model>";
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let e = read_3mf(&out).unwrap_err();
+    assert!(e.contains("z"), "{e}");
+}
+
+#[test]
+fn threemf_reads_a_foreign_single_object_file() {
+    // A hand-written minimal 3MF (one tetrahedron, centimetre units, an unnamed object):
+    // the reader must scale cm → mm and name the part "mesh".
+    let model = "<?xml version=\"1.0\"?>
+<model unit=\"centimeter\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">
+ <resources>
+  <object id=\"1\" type=\"model\">
+   <mesh>
+    <vertices>
+     <vertex x=\"0\" y=\"0\" z=\"0\"/>
+     <vertex x=\"1\" y=\"0\" z=\"0\"/>
+     <vertex x=\"0\" y=\"1\" z=\"0\"/>
+     <vertex x=\"0\" y=\"0\" z=\"1\"/>
+    </vertices>
+    <triangles>
+     <triangle v1=\"0\" v2=\"2\" v3=\"1\"/>
+     <triangle v1=\"0\" v2=\"1\" v3=\"3\"/>
+     <triangle v1=\"0\" v2=\"3\" v3=\"2\"/>
+     <triangle v1=\"1\" v2=\"2\" v3=\"3\"/>
+    </triangles>
+   </mesh>
+  </object>
+ </resources>
+ <build><item objectid=\"1\"/></build>
+</model>
+";
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(&mut out, "[Content_Types].xml", b"<Types/>", &mut records);
+    fieldsmith_mesh::zip::stream_entry(&mut out, "_rels/.rels", b"<Relationships/>", &mut records);
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    let parts = read_3mf(&out).expect("foreign 3MF reads");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].name, "mesh", "an unnamed object is named 'mesh'");
+    let m = &parts[0].mesh;
+    assert_eq!(m.verts.len(), 4);
+    assert_eq!(m.tris.len(), 4);
+    // cm → mm: the (1, 0, 0) vertex reads (10, 0, 0).
+    assert_eq!(
+        m.verts[1],
+        [10.0, 0.0, 0.0],
+        "centimetre scaled to millimetres"
+    );
+    // A unit tetrahedron (edge 10 mm) has volume 10³/6 = 166.67 mm³.
+    let v = m.volume().abs();
+    assert!(
+        (v - 1000.0 / 6.0).abs() / (1000.0 / 6.0) < 1e-9,
+        "tetrahedron volume {v}"
+    );
+}
