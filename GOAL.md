@@ -87,11 +87,11 @@ without help, and the outputs satisfy the verification criteria below.
 - [x] Region-driven extension: `extend` sweeps a labelled band along a vector, e.g. the meshy bottom plate extended downward 10 mm.
 - [x] Sidecar `.fsmz` round-trips a mesh-heavy document bit-consistently (V9, V10).
 - [x] CLI `import` / `solve` / `export` run the mesh milestone end to end headless (V10).
-- [ ] 3MF import (our export format today); mesh-convergence verification case; multi-material labelling of volumes.
+- [ ] 3MF import (our export format today); multi-material labelling of volumes. (The mesh-convergence verification case deferred here is landed as V11 in M7 — see section H.)
 
 ### H. Editing (M7 — user-set milestone, outside v0.1's definition of done)
 - [x] Booleans on imported meshes are verified compositions, not presumed: mesh×primitive and mesh×mesh union/cut volumes against closed form on the voxel test harness, and patch labels surviving each composition. (Landed: `boolean_volume.rs` — union/subtract/intersect volumes against closed form at 0.1–0.5 % error, patch labels surviving each composition; label claims through composites landed earlier — union/subtract/intersect attribute the surface to the nearest operand, blend bands to neither, GLSL twin included.)
-- [ ] The mesh-convergence verification case deferred in G: patch-labelled boundary loads on an imported body, convergence against a resolved reference.
+- [x] The mesh-convergence verification case deferred in G: boundary loads on an imported body through labelled regions, convergence against a resolved reference. (Landed: V11 — an imported 60×10×10 mm cantilever under face-labelled boundary loads solves at h = 2.0/1.0/0.5 mm; tip deflection 0.0437 mm vs Timoshenko 0.0441 mm (1.1 %), mid-span σxx 18.000 MPa vs 18.0 MPa (0.000 %), ladder converges at 0.015 %, and the labelled regions claim the full 100 mm² faces at every mesh size.)
 - [x] `Filled` (graded lattice) on a mesh document measured — was declared untested in V10. (Landed: `fill_mesh.rs` — full graded pipeline on an STL-imported 40×10×10 bar: converged graded re-solve, softer than solid (0.0049 vs 0.0024 mm), all three element classes present, 19.53 g vs 31.31 g solid (37.6 % lighter), design density inside the law's measured band, cap/tip regions still claim their facets on the filled document. V10's known-gap note updated with the measured numbers.)
 - [x] Modifiers on mesh leaves: offset and shell with thickness in mm; `.fsm` text and validate rules ride along. (Landed: a hydrated single-mesh operand bakes a keyed derived grid — pointwise within one band, mask bake beyond it; groups of several operands, unhydrated meshes and refused bakes keep the eval-time wrap, which validate now names.)
 - [ ] Face selectors on derived solids: extend nodes and boolean results expose labelled faces, closing V10's gap — the skirt wall is clampable.
@@ -116,6 +116,7 @@ error. Tolerances are on the **reported** value, as the user would see it.
 | V8 | Exported mesh of the bracket test | Mesh volume vs. field volume; manifold checks | ≤ 1 %, 0 defects |
 | V9 | Save → reload → re-solve of `bracket.fsm` | Previous run | Bit-identical |
 | V10 | Import a 87k-triangle meshy STL, label its faces, extend the bottom 10 mm, solve, export (M6) | Facet-histogram cone coverage; cross-section continuity; PrusaSlicer manifold | Cone ≥ 88 %; Δ ≤ 10 µm; slicer-clean |
+| V11 | Mesh convergence: imported 60×10×10 mm cantilever under face-labelled boundary loads (M7) | Timoshenko `FL³/3EI + FL/GAk` = 0.0441 mm; mid-span `Mc/I` = 18.0 MPa | ≤ 5 % (deflection, stress); ladder ≤ 10 % |
 
 ---
 
