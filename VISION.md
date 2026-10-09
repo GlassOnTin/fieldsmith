@@ -162,8 +162,9 @@ Key technical choices:
 
 ### Non-goals (for now)
 
-- Full B-rep / NURBS parametric CAD with drawings and tolerances. Import STEP? Later, as a
-  field via voxelisation/SDF, not as editable B-rep.
+- Full B-rep / NURBS parametric CAD with drawings and tolerances. Reading STEP to make a
+  field is on the v0.3 goal (see the landscape below); editing B-rep is not a non-goal,
+  it is a different product.
 - Nonlinear, dynamic, thermal or CFD analysis. Linear static elasticity, done well, first.
 - Full topology optimisation (SIMP). Grading a lattice inside a fixed envelope is the scope;
   topology optimisation may come once the honest grading loop is solid.
@@ -171,7 +172,53 @@ Key technical choices:
 
 ---
 
-## 7. Principles, in one list
+## 7. The competitive landscape
+
+Recorded 2026-10-09 from product documents and published pricing, competitors read but
+not exercised by hand. The Fieldsmith column is this repo at v0.2.0.
+
+There are two markets with our name in them.
+
+**Team CAD.** OnShape Professional ($2,500/user/year), Fusion ($680 base, $2,190 with
+simulation added), SolidWorks (~$2,820/year by subscription). Sketches with constraints,
+assemblies, drawings, BOM, sheet metal; STEP/IGES/Parasolid and native-CAD exchange;
+managed versions, release management, live co-editing. OnShape's simulation, bundled at
+Professional tier, does linear static and modal with no user-visible meshing and results
+that track model versions. OnShape is the team-CAD spine most engineers sit behind.
+This market wins wherever we have nothing to offer: a shop that needs drawings for a
+ machinist needs this family. Fieldsmith does not pretend otherwise, and no part of the
+roadmap should chase mates, BOM columns or title blocks.
+
+**Design-for-additive.** nTop ($7.5k–$20k/seat/year by quote, Windows, closed) is the true
+sibling: an implicit SDF kernel, field-driven design, TPMS plus beam, honeycomb and
+stochastic lattices, voxel FEA, heat-exchanger and implant workflows, Automate scripting.
+Fieldsmith shares the representation and one flagship workflow (stress-graded TPMS
+infill), with a smaller surface: three TPMS families in sheet and network modes, no beam
+or stochastic cells, no conformal mapping, no thermal or CFD, one material, one part.
+What Fieldsmith adds is uncommon anywhere: the fill is graded by stress from the same
+solver loop, its homogenised stiffness laws are fitted and measured (V6 within 10 %,
+V7 at 2.1 % against a resolved reference), imported meshes become editable field leaves
+with labelled faces, and every number in the verification set carries a measured error
+against theory (V1–V11).
+
+**OnShape specifically.** Where it is strictly ahead of us, named: sketch-driven B-rep,
+assemblies, drawings, STEP/IGES/Parasolid/native-CAD import, sheet metal, managed
+collaboration, modal analysis. Where it does not reach us: it reads meshes only as
+reference geometry, has no lattice or graded fill of any kind, does no slicer-quality
+AM export, keeps every feature of the tool behind accounts in a cloud we do not use,
+and its published verification is marketing, not measured error bars.
+
+**What follows for the roadmap.** The nearest real users are the ones in section 6, and
+the files they already have are STEP and 3MF. OnShape and every mainstream tool exports
+3MF; we read 3MF (single object so far, multi-volume next, with per-volume materials recorded
+for the slicer even though analysis stays single-material). The named gap versus OnShape's
+simulation is modal, and `fenics-rs` already carries an eigen route, so that one is cheap
+to close. STEP stays on the old route this file always allowed: read the file, voxelise,
+make it a field, never edit a B-rep. That is the v0.3 goal: the CAD round-trip.
+
+---
+
+## 8. Principles, in one list
 
 1. The user's part, not ours.
 2. Live, not wizard.
@@ -184,6 +231,6 @@ Key technical choices:
 
 ---
 
-## 8. License
+## 9. License
 
 AGPL-3.0-or-later, consistent with `fenics-rs`.
