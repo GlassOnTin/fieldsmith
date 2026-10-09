@@ -596,12 +596,13 @@ function removeFace(regionId: string, index: number) {
   });
 }
 
-/** Leaf shapes a region selector can name: the field's prims and meshes. Groups and extends
- * are left out (an Extend exposes no face selector of its own — V10's stated gap). */
+/** Leaf shapes a region selector can name: the field's prims, meshes and extends. A
+ * group is left out (it is a container, not a surface); an extend is in — it exposes
+ * its swept surface's face (M7), so `skirt.nz` labels the skirt wall. */
 function selectableShapes(doc: Document): Node[] {
   const out: Node[] = [];
   walk(doc.root, (n) => {
-    if (n.kind.type !== 'group' && n.kind.type !== 'extend') out.push(n);
+    if (n.kind.type !== 'group') out.push(n);
   });
   return out;
 }
@@ -609,9 +610,13 @@ function selectableShapes(doc: Document): Node[] {
 /** The face options the .fsm actually accepts for one shape. A mesh lists its face names
  * without `side` (validate refuses it: a mesh has no side face) plus one patch entry per
  * segmented patch; prims keep the full face list — a prim without the named face simply
- * claims nothing at the solve. */
+ * claims nothing at the solve. An extend lists its axis faces without `all` or `side`
+ * (validate refuses those on a derived solid: the swept surface has no side wall). */
 function faceOptions(node: Node | null): { value: string; label: string }[] {
   if (!node) return [];
+  if (node.kind.type === 'extend') {
+    return FACE_CODES.filter((f) => f !== 'all' && f !== 'side').map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
+  }
   if (node.kind.type !== 'mesh') {
     return FACE_CODES.map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
   }
