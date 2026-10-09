@@ -129,6 +129,7 @@ fn extend_doc(hash: &str, bbox: [f64; 6], region: &str, dir: [f64; 3], len: f64)
                 blend: 0.0,
                 suppressed: false,
                 transform: Transform::default(),
+                material: None,
                 kind: NodeKind::Mesh {
                     src: "test.stl".into(),
                     hash: hash.to_string(),
@@ -147,6 +148,7 @@ fn extend_doc(hash: &str, bbox: [f64; 6], region: &str, dir: [f64; 3], len: f64)
                 blend: 0.0,
                 suppressed: false,
                 transform: Transform::default(),
+                material: None,
                 kind: NodeKind::Extend {
                     region: region.into(),
                     dir,
@@ -178,6 +180,7 @@ fn extend_doc_face(hash: &str, bbox: [f64; 6], region: &str, dir: [f64; 3], len:
                 blend: 0.0,
                 suppressed: false,
                 transform: Transform::default(),
+                material: None,
                 kind: NodeKind::Mesh {
                     src: "test.stl".into(),
                     hash: hash.to_string(),
@@ -196,6 +199,7 @@ fn extend_doc_face(hash: &str, bbox: [f64; 6], region: &str, dir: [f64; 3], len:
                 blend: 0.0,
                 suppressed: false,
                 transform: Transform::default(),
+                material: None,
                 kind: NodeKind::Extend {
                     region: region.into(),
                     dir,

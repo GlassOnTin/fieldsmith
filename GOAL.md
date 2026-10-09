@@ -51,14 +51,20 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
       no load input and states that in `--help`.
 - [x] V13 passes (below).
 
-### B. 3MF beyond one object (M9)
-- [ ] The reader accepts a model with several mesh objects: each becomes its own field leaf,
-      named; malformed entries still fail with the existing strict, named errors.
-- [ ] Our 3MF writer records every volume's material in `basematerials`.
-- [ ] Per-volume material lives in the document model and `.fsm` text with inspector editing;
+### B. 3MF beyond one object (M9 — evidence: docs/verification/V12.md, `crates/fieldsmith-verify/tests/v12_multivolume.rs`, `fieldsmith-mesh/tests/readers.rs`)
+- [x] The reader accepts a model with several mesh objects: each becomes its own field leaf,
+      named; malformed entries still fail with the existing strict, named errors. (The
+      Consortium's `multiple_cylinders.3mf` imports as six placed leaves; `cube_gears.3mf`
+      as 17; build items, unit-scaled translations, mirrored winding, dup ids, unknown
+      item references, malformed transforms and component containers all covered.)
+- [x] Our 3MF writer records every volume's material in `basematerials` (CLI `export`
+      meshes add-shaped stacks per volume and labels each; anything else exports as one
+      labelled union).
+- [x] Per-volume material lives in the document model and `.fsm` text with inspector editing
+      (`material abs on plate`, node-material select in the Inspector);
       `validate` names unknown materials and warns when a solve would see mixed volumes
       (analysis stays single-material — labelling is for the slicer, not for the stiffness).
-- [ ] V12 passes (below).
+- [x] V12 passes (below).
 
 ### C. STEP in (M10)
 - [ ] A maintained STEP reader crate is consumed as a dependency, not vendored or forked
@@ -149,7 +155,7 @@ not measured):
 | # | Milestone | Done when |
 | :-- | :-- | :-- |
 | M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; the first modes visible headless and in the Results lens. |
-| M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. |
+| M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. (2026-10-09) |
 | M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. |
 | M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
 

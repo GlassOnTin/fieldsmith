@@ -383,6 +383,7 @@ pub fn read_glb(bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
         parts.push(NamedPart {
             name,
             mesh: TriMesh { verts, tris },
+            material: None,
         });
     }
     Ok(parts)

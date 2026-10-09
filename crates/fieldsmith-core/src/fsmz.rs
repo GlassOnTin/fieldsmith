@@ -185,10 +185,7 @@ enum SweptFrom {
 /// node's own transform, which is also what maps the doc-frame sweep direction (each
 /// caller looks the parent node up by id for it). None means the node names an unknown
 /// region.
-fn extend_parents(
-    doc: &Document,
-    region: &str,
-) -> Option<Vec<(String, String, SweptFrom)>> {
+fn extend_parents(doc: &Document, region: &str) -> Option<Vec<(String, String, SweptFrom)>> {
     let r = doc.regions.iter().find(|r| r.id == region)?;
     let mut parents: Vec<(String, String, SweptFrom)> = Vec::new();
     for s in &r.selectors {
@@ -202,10 +199,9 @@ fn extend_parents(
             if p == 0 || p >= u16::MAX as u32 {
                 continue;
             }
-            match parents
-                .iter_mut()
-                .find(|(h, id, from)| *h == *hash && *id == node.id && matches!(from, SweptFrom::Patches(_)))
-            {
+            match parents.iter_mut().find(|(h, id, from)| {
+                *h == *hash && *id == node.id && matches!(from, SweptFrom::Patches(_))
+            }) {
                 Some((_, _, SweptFrom::Patches(ids))) => {
                     if !ids.contains(&(p as u16)) {
                         ids.push(p as u16);
@@ -221,12 +217,11 @@ fn extend_parents(
             // Mapped into the parent's local frame — the same mapping the compile side
             // hashes, so the recipes and their keys agree frame for frame.
             let ax_leaf = Rigid::from_doc(&node.transform).to_local_dir(ax);
-            let duplicate = parents
-                .iter()
-                .any(|(h, id, from)| {
-                    *h == *hash && *id == node.id
-                        && matches!(from, SweptFrom::Face(a2) if *a2 == ax_leaf)
-                });
+            let duplicate = parents.iter().any(|(h, id, from)| {
+                *h == *hash
+                    && *id == node.id
+                    && matches!(from, SweptFrom::Face(a2) if *a2 == ax_leaf)
+            });
             if !duplicate {
                 parents.push((hash.clone(), node.id.clone(), SweptFrom::Face(ax_leaf)));
             }
@@ -577,18 +572,18 @@ pub fn load(bytes: &[u8]) -> Result<Loaded, String> {
         let NodeKind::Extend { region, dir, len } = &n.kind else {
             unreachable!("filtered to extend nodes")
         };
-        let records: Vec<&ManifestExtend> = manifest
-            .extends
-            .iter()
-            .filter(|x| x.id == n.id)
-            .collect();
+        let records: Vec<&ManifestExtend> =
+            manifest.extends.iter().filter(|x| x.id == n.id).collect();
         if records.is_empty() {
             return Err(format!(
                 "extend node '{id}' has no record in {MANIFEST_ENTRY} — the sidecar predates or dropped this sweep",
                 id = n.id
             ));
         }
-        if records.iter().any(|x| x.region != *region || x.dir != *dir || x.len != *len) {
+        if records
+            .iter()
+            .any(|x| x.region != *region || x.dir != *dir || x.len != *len)
+        {
             return Err(format!(
                 "extend node '{}' disagrees with the manifest record's region, dir or len",
                 n.id
@@ -610,16 +605,14 @@ pub fn load(bytes: &[u8]) -> Result<Loaded, String> {
             // Each document arm pairs with exactly one record — patch arms by their sorted
             // id set, face arms by the parent-local axis — the same recipe the save wrote.
             let (arm_ids32, arm_axis) = match from {
-                SweptFrom::Patches(ids) => (
-                    ids.iter().map(|&p| p as u32).collect::<Vec<u32>>(),
-                    None,
-                ),
+                SweptFrom::Patches(ids) => {
+                    (ids.iter().map(|&p| p as u32).collect::<Vec<u32>>(), None)
+                }
                 SweptFrom::Face(axis) => (Vec::new(), Some(*axis)),
             };
-            let Some(idx) = records
-                .iter()
-                .position(|x| x.parent_hash == *parent_hash && x.patch_ids == arm_ids32 && x.face_axis == arm_axis)
-            else {
+            let Some(idx) = records.iter().position(|x| {
+                x.parent_hash == *parent_hash && x.patch_ids == arm_ids32 && x.face_axis == arm_axis
+            }) else {
                 return Err(format!(
                     "extend node '{}' has no manifest record for the arm naming '{}' — the sidecar predates or dropped this sweep",
                     n.id, parent_hash

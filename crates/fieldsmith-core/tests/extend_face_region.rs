@@ -133,6 +133,7 @@ fn skirt_doc() -> Document {
         blend: 0.0,
         suppressed: false,
         transform: Default::default(),
+        material: None,
         kind: NodeKind::Extend {
             region: "bottom".into(),
             dir: [0.0, 0.0, -1.0],

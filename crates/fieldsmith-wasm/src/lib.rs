@@ -59,6 +59,18 @@ pub fn validate(doc_json: &str) -> Result<String, JsValue> {
     to_json(&doc_from(doc_json)?.validate())
 }
 
+/// Validation with material-labelling warnings: `{"errors": […], "warnings": […]}`. The
+/// errors are `validate`'s; the warnings are the per-volume material labels' solve caveat
+/// (analysis stays single-material).
+#[wasm_bindgen(js_name = validateWithWarnings)]
+pub fn validate_with_warnings(doc_json: &str) -> Result<String, JsValue> {
+    let d = doc_from(doc_json)?;
+    to_json(&serde_json::json!({
+        "errors": d.validate(),
+        "warnings": d.material_warnings(),
+    }))
+}
+
 /// Compile a load-density `fn` and sample it for the setup editor (M11). `lo`/`hi` are the
 /// requested sample range in face-local mm, used only when the fn has no bands (a plain
 /// body); the fn's own band domain is used otherwise. Samples sit at in-plane y = 0 — a fn

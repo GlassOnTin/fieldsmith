@@ -20,9 +20,12 @@
 use crate::export::TriMesh;
 use crate::zip::read_zip;
 use crate::{NamedPart, V3};
+use std::collections::HashMap;
 
-/// Read a 3MF file into named parts (one per `<object>` with a mesh; objects without a mesh
-/// are skipped). The part name is the object's `name` attribute, or `mesh` when unnamed.
+/// Read a 3MF file into named parts (one per `<build>` item, so an instanced object is
+/// expanded to one part per placement). The part name is the object's `name` attribute, or
+/// `mesh` when unnamed; the part's material is the object's `pid`/`pindex` resolved through
+/// the model's `<basematerials>` groups, or `None` when the file records none.
 pub fn read_3mf(bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
     let entries = read_zip(bytes)?;
     let model = entries
@@ -34,30 +37,257 @@ pub fn read_3mf(bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
     parse_model(text)
 }
 
-/// Parse the model XML: the `<model unit="…">` scale, then each `<object>`'s `<mesh>`.
+/// Parse the model XML: the `<model unit="…">` scale, the `<basematerials>` groups, then
+/// each `<object>`'s `<mesh>`.
 fn parse_model(text: &str) -> Result<Vec<NamedPart>, String> {
+    // A first pass collects the `<basematerials>` groups so an object's `pid` resolves even
+    // when its group is declared after the object in the resources. `pid` values name those
+    // groups; the object's `pindex` picks one base name (0-based).
+    let mats = collect_material_groups(text)?;
     let mut s = Scanner { text, pos: 0 };
     let mut unit_scale = 1.0f64; // millimetre is the spec default
+    // Resource objects by id, in file order; `None` is an object without a `<mesh>`
+    // (e.g. a component container, whose subtree is walked through).
+    let mut objs: Vec<(u64, Option<NamedPart>)> = Vec::new();
+    let mut saw_build = false;
     let mut parts = Vec::new();
     while let Some(tag) = s.next_tag() {
         if tag.name == "model" {
             if let Some(u) = tag.attr("unit") {
                 unit_scale = unit_scale_of(u)?;
             }
-        } else if tag.name == "object" {
+        } else if tag.name == "object" && !tag.closing {
             let name = tag.attr("name").unwrap_or("mesh").to_string();
+            // The id is parsed and checked for reuse even on a self-closing object: a
+            // re-used resource id is a spec violation regardless of what follows.
+            let id = match tag.attr("id") {
+                Some(i) => i.parse::<u64>().map_err(|_| {
+                    format!("3MF object with name \"{name}\" has id \"{i}\", which is not an integer")
+                })?,
+                None => {
+                    return Err(format!("3MF object \"{name}\" has no id attribute"));
+                }
+            };
+            if objs.iter().any(|(k, _)| *k == id) {
+                return Err(format!("3MF object id '{id}' is used more than once"));
+            }
             if tag.self_closing {
+                objs.push((id, None));
                 continue;
             }
-            if let Some(mesh) = parse_object(&mut s, &name, unit_scale)? {
-                parts.push(mesh);
+            let material = match (tag.attr("pid"), tag.attr("pindex")) {
+                (None, None) => None,
+                (pid, pindex) => {
+                    let pid = material_group(&tag, pid)?;
+                    let idx = (pindex.unwrap_or("0"))
+                        .parse::<usize>()
+                        .map_err(|_| format!("3MF object '{name}' pindex is not an integer"))?;
+                    let group = mats
+                        .get(&pid)
+                        .ok_or_else(|| format!("3MF object '{name}' has pid=\"{pid}\" but the model defines no basematerials group with id {pid}"))?;
+                    let label = group.get(idx).filter(|l| !l.is_empty()).ok_or_else(|| {
+                        format!(
+                            "3MF object '{name}' has pindex=\"{idx}\" but basematerials {pid} has {} base materials",
+                            group.len()
+                        )
+                    })?;
+                    Some(label.clone())
+                }
+            };
+            let mesh = parse_object(&mut s, &name, unit_scale, material)?;
+            objs.push((id, mesh));
+        } else if tag.name == "build" && !tag.closing && !tag.self_closing {
+            saw_build = true;
+            // Each `<item>` places a resource object in build space; the item is the
+            // printed part, so one part per item, with the item's transform (12 numbers —
+            // the rows of a 4×3 affine matrix, translation last, spec §3.3) baked into the
+            // vertices as the other readers deliver source coordinates.
+            loop {
+                let Some(it) = s.next_tag() else {
+                    return Err("3MF <build> is not closed".into());
+                };
+                if it.closing && it.name == "build" {
+                    break;
+                }
+                if it.name != "item" || it.closing {
+                    if !it.self_closing && !it.closing {
+                        skip_subtree(&mut s);
+                    }
+                    continue;
+                }
+                let oid = match it.attr("objectid") {
+                    Some(o) => o.parse::<u64>().map_err(|_| {
+                        format!("3MF build item has objectid \"{o}\", which is not an integer")
+                    })?,
+                    None => return Err("3MF build item has no objectid attribute".into()),
+                };
+                // A build item may reference an object id the model never defined, or a
+                // component container object that has no mesh of its own; both are refused
+                // by name rather than silently dropped (that would change the part set).
+                let part = objs
+                    .iter()
+                    .find(|(k, _)| *k == oid)
+                    .and_then(|(_, p)| p.as_ref())
+                    .ok_or_else(|| {
+                        match objs.iter().any(|(k, _)| *k == oid) {
+                            true => format!(
+                                "3MF build item references object id '{oid}' which has no mesh (component objects are not supported)"
+                            ),
+                            false => format!(
+                                "3MF build item references object id '{oid}' which the model does not define"
+                            ),
+                        }
+                    })?;
+                parts.push(placed_item(&it, part, unit_scale)?);
             }
         }
+    }
+    // The spec requires <build>; writers that omit it still get their resource meshes (as
+    // before), so a missing build is not an error. A model with a build ends up with
+    // exactly what the build places.
+    if !saw_build {
+        parts = objs.into_iter().filter_map(|(_, p)| p).collect();
     }
     if parts.is_empty() {
         return Err("3MF model has no object with a mesh".into());
     }
     Ok(parts)
+}
+
+/// One build item placed: the object's mesh with the item's `transform` baked into the
+/// vertices. The matrix's linear part is applied as stored (the vertices already carry the
+/// model-unit scale), and the translation is scaled by the model unit. A negative-
+/// determinant transform mirrors the shape, so the triangle winding is reversed to keep
+/// the volume's sign (spec §3.3). Without a transform the object is returned unchanged.
+/// The part keeps the object's name, even under instancing; `import_mesh` de-duplicates
+/// ids when one object is built more than once.
+fn placed_item(tag: &Tag, part: &NamedPart, unit_scale: f64) -> Result<NamedPart, String> {
+    let Some(t) = tag.attr("transform") else {
+        return Ok(part.clone());
+    };
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.len() != 12 {
+        return Err(format!(
+            "3MF build item transform has {} numbers, expected 12",
+            words.len()
+        ));
+    }
+    let mut m = [0.0f64; 12];
+    for (i, w) in words.iter().enumerate() {
+        m[i] = w
+            .parse::<f64>()
+            .map_err(|_| format!("3MF build item transform value '{w}' is not a number"))?;
+    }
+    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
+        + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    let mut verts = Vec::with_capacity(part.mesh.verts.len());
+    for v in &part.mesh.verts {
+        verts.push([
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[9] * unit_scale,
+            m[3] * v[0] + m[4] * v[1] + m[5] * v[2] + m[10] * unit_scale,
+            m[6] * v[0] + m[7] * v[1] + m[8] * v[2] + m[11] * unit_scale,
+        ]);
+    }
+    let tris: Vec<[u32; 3]> = if det < 0.0 {
+        part.mesh.tris.iter().map(|t| [t[0], t[2], t[1]]).collect()
+    } else {
+        part.mesh.tris.clone()
+    };
+    Ok(NamedPart {
+        name: part.name.clone(),
+        mesh: TriMesh { verts, tris },
+        material: part.material.clone(),
+    })
+}
+
+/// Walk the model XML once and collect every `<basematerials>` group by id. Any other
+/// opening element's whole subtree is skipped, so the pass costs tag scans, not a second
+/// read of vertex and triangle data.
+fn collect_material_groups(text: &str) -> Result<HashMap<u64, Vec<String>>, String> {
+    let mut s = Scanner { text, pos: 0 };
+    let mut mats: HashMap<u64, Vec<String>> = HashMap::new();
+    while let Some(tag) = s.next_tag() {
+        if tag.closing {
+            continue;
+        }
+        match tag.name.as_str() {
+            // Objects carry the vertex/triangle bulk and no legal basematerials of their
+            // own: skip their whole subtree. Everything else (<model>, <resources>,
+            // <build>, <metadata>) is scanned through.
+            "object" => {
+                if !tag.self_closing {
+                    skip_subtree(&mut s);
+                }
+            }
+            "basematerials" => {
+                let id = tag
+                    .attr("id")
+                    .ok_or_else(|| "3MF <basematerials> has no id attribute".to_string())?
+                    .parse::<u64>()
+                    .map_err(|_| "3MF <basematerials> id is not an integer".to_string())?;
+                if mats.contains_key(&id) {
+                    return Err(format!(
+                        "3MF basematerials id '{id}' is used more than once"
+                    ));
+                }
+                let mut base = Vec::new();
+                if !tag.self_closing {
+                    loop {
+                        match s.next_tag() {
+                            None => return Err("3MF <basematerials> is not closed".into()),
+                            Some(t) if t.closing && t.name == "basematerials" => break,
+                            Some(t) if t.closing => {
+                                return Err(format!(
+                                    "3MF <basematerials>: unexpected closing tag </{}>",
+                                    t.name
+                                ))
+                            }
+                            Some(t) if t.name == "base" && !t.closing => {
+                                let name = req_str(&t, "name", "3MF")?;
+                                base.push(name);
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+                mats.insert(id, base);
+            }
+            _ => {}
+        }
+    }
+    Ok(mats)
+}
+
+/// Consume tags until the subtree opened by the current element is closed. Comments and
+/// declarations are handled by the scanner; nesting counted from this element's open tag.
+fn skip_subtree(s: &mut Scanner) {
+    let mut depth = 1usize;
+    while depth > 0 {
+        match s.next_tag() {
+            None => return, // truncated input; the object pass reports a named error
+            Some(t) => {
+                if t.closing {
+                    depth -= 1;
+                } else if !t.self_closing {
+                    depth += 1;
+                }
+            }
+        }
+    }
+}
+
+/// A material group id from an object's `pid`; `None` means no material reference. Objects
+/// that carry a `pindex` without a `pid` are refused: the spec requires both.
+fn material_group(tag: &Tag, pid: Option<&str>) -> Result<u64, String> {
+    let pid_v = pid.ok_or_else(|| {
+        format!(
+            "3MF object has pindex=\"{}\" but no pid attribute",
+            tag.attr("pindex").unwrap_or("")
+        )
+    })?;
+    pid_v
+        .parse::<u64>()
+        .map_err(|_| format!("3MF object pid=\"{pid_v}\" is not an integer"))
 }
 
 /// Scale factor from the 3MF `unit` attribute to millimetres.
@@ -75,7 +305,12 @@ fn unit_scale_of(u: &str) -> Result<f64, String> {
 
 /// Parse one `<object>`: scan to its `<mesh>` (skipping components/other children), then
 /// read vertices and triangles. Returns `None` when the object has no `<mesh>`.
-fn parse_object(s: &mut Scanner, name: &str, unit_scale: f64) -> Result<Option<NamedPart>, String> {
+fn parse_object(
+    s: &mut Scanner,
+    name: &str,
+    unit_scale: f64,
+    material: Option<String>,
+) -> Result<Option<NamedPart>, String> {
     let mut verts: Vec<V3> = Vec::new();
     let mut tris: Vec<[u32; 3]> = Vec::new();
     let mut in_mesh = false;
@@ -134,6 +369,14 @@ fn parse_object(s: &mut Scanner, name: &str, unit_scale: f64) -> Result<Option<N
                             t.name
                         ));
                     }
+                    // Per-triangle material (a `pid` on a <triangle>) is refused rather
+                    // than dropped: a mesh whose faces carry different materials would silently
+                    // lose that labelling on import.
+                    if t.attr("pid").is_some() {
+                        return Err(format!(
+                            "3MF object '{name}': per-triangle material (pid on a triangle) is not supported"
+                        ));
+                    }
                     let v1 = req_u32(&t, "v1", name)?;
                     let v2 = req_u32(&t, "v2", name)?;
                     let v3 = req_u32(&t, "v3", name)?;
@@ -180,7 +423,18 @@ fn parse_object(s: &mut Scanner, name: &str, unit_scale: f64) -> Result<Option<N
     Ok(Some(NamedPart {
         name: name.to_string(),
         mesh: TriMesh { verts, tris },
+        material,
     }))
+}
+
+fn req_str(tag: &Tag, attr: &str, what: &str) -> Result<String, String> {
+    match tag.attr(attr) {
+        Some(v) => Ok(v.to_string()),
+        None => Err(format!(
+            "{what} <{}> is missing its {attr} attribute",
+            tag.name
+        )),
+    }
 }
 
 fn req_f64(tag: &Tag, attr: &str, obj: &str) -> Result<f64, String> {

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import { findNode, kindLabel } from '../doc/types';
 import type { Document, Modifier, Node, NodeKind, Op } from '../doc/types';
-import { materialLibrary, validate } from '../doc/wasm';
+import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import { MODIFIER_LABEL, defaultModifier, renameId } from '../doc/ops';
 import { NumRow, NumberInput, Seg, VecRow } from './fields';
 import { Icon } from './icons';
@@ -394,6 +394,30 @@ function NodeInspector({ node }: { node: Node }) {
         </>
       )}
       <div class="field-grid" style={{ marginTop: '8px' }}>
+        <label class="plain">Material</label>
+        <select
+          class="select"
+          value={node.material ?? ''}
+          data-testid="node-material"
+          title="For the slicer with the 3MF export; the solve still evaluates the whole part with the document material"
+          onChange={(e) =>
+            store.transact(`Label ${id}`, (d) => {
+              const v = (e.target as HTMLSelectElement).value;
+              if (v === '') delete nodeIn(d, id).material;
+              else nodeIn(d, id).material = v;
+            })
+          }
+        >
+          <option value="">Document default</option>
+          {[...materials(), ...store.doc.custom_materials].map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+        <span />
+      </div>
+      <div class="field-grid" style={{ marginTop: '8px' }}>
         <label class="plain">Suppressed</label>
         <label class="check">
           <input type="checkbox" checked={node.suppressed} onChange={(e) => store.transact(`Toggle ${id}`, (d) => (nodeIn(d, id).suppressed = (e.target as HTMLInputElement).checked))} />
@@ -413,7 +437,7 @@ export function addModifier(target: string, type: Modifier['type']) {
 
 function DocumentInspector() {
   const doc = store.doc;
-  const problems = validate(doc);
+  const { errors: problems, warnings } = validateWithWarnings(doc);
   const mats = [...materials(), ...doc.custom_materials];
   const mat = mats.find((m) => m.id === doc.material);
   return (
@@ -451,6 +475,13 @@ function DocumentInspector() {
         <div class="error-box">
           {problems.map((p) => (
             <div key={p}>{p}</div>
+          ))}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div class="hint" data-testid="material-warnings" style={{ marginTop: '8px' }}>
+          {warnings.map((w) => (
+            <div key={w}>{w}</div>
           ))}
         </div>
       )}

@@ -57,6 +57,12 @@ export function validate(doc: Document): string[] {
   return JSON.parse(w.validate(JSON.stringify(doc)));
 }
 
+/** Validation plus the material-labelling warnings (the solve caveat: analysis stays
+ * single-material). */
+export function validateWithWarnings(doc: Document): { errors: string[]; warnings: string[] } {
+  return JSON.parse(w.validateWithWarnings(JSON.stringify(doc)));
+}
+
 /** A compiled load-density fn for the setup editor (M11): the band domain, 121 samples of
  * q(x) at y = 0, the per-1-mm integral over those samples, and the validate() strings. */
 export interface LoadFnProbe {

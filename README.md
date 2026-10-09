@@ -8,7 +8,9 @@ from integrating that field, not from a boundary representation.
 **Status:** v0.2.0. The model → setup → solve → fill → export flow works locally and is
 verified by the cases in [docs/verification/](docs/verification/); imported meshes
 (GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
-with labelled faces and region-driven extension (V10). The GOAL.md performance budgets
+with labelled faces and region-driven extension (V10); a multi-object 3MF imports as
+one field leaf per placed object (build items expand), with the file's base-material
+names recorded on the leaves.
 pass in the headed Chromium referee on a workstation — [budgets.md](docs/verification/budgets.md); the
 budgets' stated mid-range laptop and Firefox measurements have not been run.
 
@@ -45,7 +47,12 @@ Or work headless with the CLI:
     cargo run -p fieldsmith-cli -- export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
 
 The CLI exports binary STL and 3MF (millimetres, part name and material recorded); fill
-documents export the graded part, `--solid` the body alone.
+documents export the graded part, `--solid` the body alone. When the document is a plain
+stack of add-shaped nodes (no subtract/intersect, group modifiers, blends, or fill), the
+3MF carries one object per node, each labelled with its material (the node's label, else
+the document material); slicers union the objects into the printed solid. Anything that
+shapes the body beyond the volumes' own shapes exports as one labelled union, and the
+in-app export always does.
 
 ## What is verified, and what is not
 
@@ -61,9 +68,11 @@ measured non-manifold edges where TPMS sheets cross or pinch inside one cell
 
 Linear-elastic, small strain, isotropic material only; homogenisation of the fill is
 isotropic (the actual TPMS sheets are not, and the error against a resolved reference is
-measured, not assumed, in V7). One material per part. No STEP or B-rep import, no topology
-optimisation, no thermal or CFD analysis, no multi-material assembly (3MF import
-reads single-object files; multi-material labelling is not built), no g-code
+measured, not assumed, in V7). One material per part: the solve is single-material, and a
+volume's material label travels with the 3MF export for the slicer (validation reports
+unknown label ids as errors and mixed labels as a warning). No STEP or B-rep import, no
+topology optimisation, no thermal or CFD analysis, per-node material labels are not
+adopted on 3MF import (another tool's ids are not fieldsmith material ids), no g-code
 generation, no mobile layout. Modal analysis reports the first natural frequencies of
 the same linear small-strain model; it takes the same supports and ignores loads. The
 shapes are computed but not visualised; the in-browser eigensolve completed without a

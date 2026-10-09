@@ -70,6 +70,12 @@ pub struct Node {
     pub blend: f64,
     pub suppressed: bool,
     pub transform: Transform,
+    /// This volume's material id when the document assigns it one (`material <id> on
+    /// <node>`); `None` takes the document material. Labelling only: the solver evaluates
+    /// every volume with the document material (analysis stays single-material), and the
+    /// labels ride the 3MF export to the slicer. `validate` refuses unknown ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
     pub kind: NodeKind,
 }
 
@@ -428,6 +434,70 @@ pub struct SolveSettings {
 
 impl Document {
     /// Find a node anywhere in the tree by id.
+    /// Assign `mat` as the material label of the node `target` (searched recursively).
+    /// False when the document declares no shape with that id.
+    pub fn set_node_material(&mut self, target: &str, mat: &str) -> bool {
+        fn rec(nodes: &mut [Node], target: &str, mat: &str) -> bool {
+            for n in nodes {
+                if n.id == target {
+                    n.material = Some(mat.to_string());
+                    return true;
+                }
+                if let NodeKind::Group { children, .. } = &mut n.kind {
+                    if rec(children, target, mat) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        rec(&mut self.root, target, mat)
+    }
+
+    /// Every non-suppressed node's material label, document order: `(node id, material)`.
+    pub fn material_labels(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        Self::for_each_labelled(&self.root, &mut |n, m| {
+            if !n.suppressed {
+                out.push((n.id.clone(), m.to_string()));
+            }
+        });
+        out
+    }
+
+    /// Labelling warnings for the solve and export: per-volume labels change nothing in
+    /// the solve (analysis stays single-material) and only travel with the 3MF export.
+    pub fn material_warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mixed: Vec<String> = self
+            .material_labels()
+            .iter()
+            .filter(|(_, m)| *m != self.material)
+            .map(|(id, m)| format!("'{id}' ({m})"))
+            .collect();
+        if !mixed.is_empty() {
+            out.push(format!(
+                "Volumes {} carry a different material label; the solve evaluates all of them with '{}'. Labels travel with the 3MF export.",
+                mixed.join(", "),
+                self.material
+            ));
+        }
+        out
+    }
+
+    /// Visit `(node, its material id)` for every labelled node, groups recursed, including
+    /// suppressed ones (`validate` checks the label id even where the node is inactive).
+    fn for_each_labelled<'a>(nodes: &'a [Node], f: &mut impl FnMut(&'a Node, &'a str)) {
+        for n in nodes {
+            if let Some(m) = &n.material {
+                f(n, m);
+            }
+            if let NodeKind::Group { children, .. } = &n.kind {
+                Self::for_each_labelled(children, f);
+            }
+        }
+    }
+
     pub fn find(&self, id: &str) -> Option<&Node> {
         fn rec<'a>(nodes: &'a [Node], id: &str) -> Option<&'a Node> {
             for n in nodes {
@@ -609,6 +679,15 @@ impl Document {
         if crate::materials::find(self, &self.material).is_none() {
             errs.push(format!("Unknown material '{}'", self.material));
         }
+        // Per-node labels name a material the document knows; the missing-target case is
+        // a parse error (`fsm::parse` resolves `material <id> on <shape>` at parse end),
+        // so only unchecked ids remain. Mixed labels are a warning, not an error — see
+        // `material_warnings`.
+        Self::for_each_labelled(&self.root, &mut |n, m| {
+            if crate::materials::find(self, m).is_none() {
+                errs.push(format!("Unknown material '{}' on '{}'", m, n.id));
+            }
+        });
         if let Some(f) = &self.fill {
             if f.cell <= 0.0 {
                 errs.push("Fill cell size must be positive".into());
@@ -633,9 +712,15 @@ impl Document {
         Self::check_mesh_modifiers(&self.root, &mut errs);
         let mut meshes = 0usize;
         Self::check_meshes(&self.root, &mut meshes, &mut errs);
-        if meshes > 4 {
+        // The preview binds a leaf's distance grid and (when it has patches) its patch grid
+        // as sampler3D textures; WebGL2 guarantees 16 sampler units per fragment shader, so
+        // eight leaf textures exhaust that guarantee. The solve is not limited by this
+        // count, only the preview is — but a document that previews wrong is still refused
+        // at validate time. Multi-object 3MF imports make this many leaves routinely (V12).
+        if meshes > 8 {
             errs.push(format!(
-                "{meshes} mesh nodes in this document; at most 4 fit the preview's texture budget"
+                "{meshes} mesh nodes in this document; at most 8 are previewable (up to two \
+                 sampler3D textures per node against WebGL2's 16-sampler fragment guarantee)"
             ));
         }
         errs

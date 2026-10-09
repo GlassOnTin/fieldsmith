@@ -11,11 +11,13 @@
 //! ```
 
 use fieldsmith_core::import::{import_mesh, ImportOpts};
-use fieldsmith_core::{analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution};
-use fieldsmith_doc::{fsm, Document, NodeKind};
+use fieldsmith_core::{
+    analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution,
+};
+use fieldsmith_doc::{fsm, Document, NodeKind, Op};
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
-use fieldsmith_mesh::export::surface;
+use fieldsmith_mesh::export::{surface, TriMesh, Volume3mf, write_3mf_volumes};
 use std::process::ExitCode;
 
 const USAGE: &str =
@@ -58,7 +60,11 @@ fn load(path: &str) -> Result<Document, String> {
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     let doc = fsm::parse(&text).map_err(|e| format!("{path}:{}: {}", e.line, e.message))?;
-    if doc.root.iter().any(|n| matches!(n.kind, NodeKind::Mesh { .. })) {
+    if doc
+        .root
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::Mesh { .. }))
+    {
         let sidecar = std::path::Path::new(path).with_extension("fsmz");
         match std::fs::read(&sidecar) {
             Ok(bytes) => {
@@ -151,6 +157,9 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             if problems.is_empty() {
                 println!("ok");
+                for w in doc.material_warnings() {
+                    println!("warning: {w}");
+                }
                 Ok(())
             } else {
                 Err(problems.join("\n"))
@@ -207,6 +216,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 Resolution::Dofs(150_000)
             };
             let report = args.iter().any(|a| a == "--report");
+            for w in doc.material_warnings() {
+                eprintln!("warning: {w}");
+            }
             if let Some(s) = opt(args, "--modes") {
                 let count = s
                     .parse::<usize>()
@@ -242,9 +254,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     );
                 }
                 if let Some(m) = &a.modes {
-                    println!(
-                        "\n## modes (solve modes={})\n", m.frequencies.len()
-                    );
+                    println!("\n## modes (solve modes={})\n", m.frequencies.len());
                     println!("| mode | frequency (Hz) |\n| :-- | --: |");
                     for (mi, &f) in m.frequencies.iter().enumerate() {
                         println!("| {} | {:.2} |", mi + 1, f);
@@ -340,15 +350,17 @@ fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
         ..Default::default()
     };
 
-    let out_path = opt(args, "--out").unwrap_or_else(|| {
-        format!("{name}.fsm", name = doc.name)
-    });
+    let out_path = opt(args, "--out").unwrap_or_else(|| format!("{name}.fsm", name = doc.name));
     let zip_path = std::path::Path::new(&out_path).with_extension("fsmz");
     std::fs::write(&out_path, fsm::print(&doc)).map_err(|e| format!("{out_path}: {e}"))?;
     let zip = fsmz::save(&doc)?;
     std::fs::write(&zip_path, &zip).map_err(|e| format!("{}: {e}", zip_path.display()))?;
 
-    println!("imported {src}: {} part(s) in {} ms", out.parts.len(), out.ms);
+    println!(
+        "imported {src}: {} part(s) in {} ms",
+        out.parts.len(),
+        out.ms
+    );
     for p in &out.parts {
         println!(
             "  {}: {} triangles, {} welded verts, {} patches, {} open edges",
@@ -490,9 +502,78 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         );
     }
     let stl_bytes = stl.as_ref().map(|_| tri.write_stl());
-    let mf_bytes = threemf
-        .as_ref()
-        .map(|_| tri.write_3mf(&doc.name, &doc.material));
+    // When the document is a plain stack of add-shaped nodes — nothing subtracted or
+    // intersected, no group shell/offset/mirror/pattern modifiers, no per-node blends, no
+    // exported fill — each node's own shape already is a volume of the part, so the 3MF
+    // carries one object per node, each labelled with its material (the node's label, else
+    // the document material). Slicers union the shipped objects, so the printed solid is
+    // the same body, and per-volume labels travel with it; where two labelled volumes
+    // overlap, the slicer's rule (first hit) states that overlap's material.
+    // A subtract/intersect node, a modifier, or a blend shapes the body *beyond* the nodes'
+    // own shapes, so no set of per-node volumes reconstructs it: those exports stay the
+    // single-union body labelled with the document material, as before.
+    let per_volume = (doc.fill.is_none() || solid_only) && volumes_ok(&doc.root);
+    let mf_bytes = threemf.as_ref().map(|_| {
+        let mut meshes: Vec<(String, String, TriMesh)> = Vec::new();
+        if per_volume {
+            for n in &doc.root {
+                if n.suppressed {
+                    continue;
+                }
+                let fe = expr::compile_node(doc, n);
+                let nb = expr::bounds(&fe);
+                if nb.is_empty() {
+                    continue;
+                }
+                let fref = &fe;
+                let t1 = clock();
+                let part = if adaptive {
+                    fieldsmith_mesh::adaptive::surface_adaptive(
+                        |p| {
+                            let d = expr::eval(fref, p);
+                            fieldsmith_mesh::adaptive::Sample { v: d.v, g: d.g }
+                        },
+                        [nb.lo[0] - h, nb.lo[1] - h, nb.lo[2] - h],
+                        [nb.hi[0] + h, nb.hi[1] + h, nb.hi[2] + h],
+                        h,
+                        &fieldsmith_mesh::adaptive::AdaptiveOpts::default(),
+                    )
+                } else {
+                    surface(
+                        |p: [f64; 3]| expr::eval(fref, p).v,
+                        [nb.lo[0] - h, nb.lo[1] - h, nb.lo[2] - h],
+                        [nb.hi[0] + h, nb.hi[1] + h, nb.hi[2] + h],
+                        h,
+                    )
+                };
+                let mat = n.material.clone().unwrap_or_else(|| doc.material.clone());
+                let vol = volume::volume(fref, h);
+                let vs = (clock() - t1) / 1000.0;
+                println!(
+                    "  volume {}: {} verts, {} tris, material {mat}, field volume {:.1} ± {:.1} mm³ ({:.2} s)",
+                    n.id,
+                    part.verts.len(),
+                    part.tris.len(),
+                    vol.volume,
+                    vol.error,
+                    vs
+                );
+                meshes.push((n.id.clone(), mat, part));
+            }
+            if !meshes.is_empty() {
+                let vols: Vec<Volume3mf> = meshes
+                    .iter()
+                    .map(|(id, mat, m)| Volume3mf {
+                        name: id,
+                        material: mat,
+                        mesh: m,
+                    })
+                    .collect();
+                return write_3mf_volumes(&vols);
+            }
+        }
+        tri.write_3mf(&doc.name, &doc.material)
+    });
     for (path, bytes, what) in [
         stl.as_deref()
             .zip(stl_bytes)
@@ -515,6 +596,22 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         (clock() - t_all) / 1000.0
     );
     Ok(())
+}
+
+/// True when every non-suppressed top-level node is additive and shapes nothing beyond its
+/// own geometry — the condition under which one object per node reconstructs the same solid
+/// as the union. Suppressed nodes are skipped by the exporter either way, so they don't
+/// disqualify.
+fn volumes_ok(nodes: &[fieldsmith_doc::Node]) -> bool {
+    nodes.iter().all(|n| {
+        n.suppressed
+            || (n.op == Op::Add
+                && n.blend == 0.0
+                && match &n.kind {
+                    NodeKind::Group { modifiers, .. } => modifiers.is_empty(),
+                    _ => true,
+                })
+    })
 }
 
 /// Class counts and the achieved design-density range of the graded result (min-wall
@@ -571,7 +668,12 @@ fn print_load_table(cases: &[CaseResult]) {
             };
             println!(
                 "| {} | {} | {} | {} | {} | {} |",
-                r.id, r.region, r.facets, vec(&r.resultant), vec(&r.moment), applied
+                r.id,
+                r.region,
+                r.facets,
+                vec(&r.resultant),
+                vec(&r.moment),
+                applied
             );
         }
     }
@@ -582,12 +684,7 @@ fn print_load_table(cases: &[CaseResult]) {
 /// fill document is refused (the modal path meshes the solid reference at one modulus).
 /// Two rungs, the requested resolution and one coarser, so the change column shows how
 /// far each frequency has settled with refinement.
-fn modal_cmd(
-    doc: &Document,
-    res: &Resolution,
-    count: usize,
-    report: bool,
-) -> Result<(), String> {
+fn modal_cmd(doc: &Document, res: &Resolution, count: usize, report: bool) -> Result<(), String> {
     let coarse = match *res {
         Resolution::Size(h) => Resolution::Size(h * 2.0),
         Resolution::Dofs(n) => Resolution::Dofs((n / 2).max(1)),
@@ -601,7 +698,11 @@ fn modal_cmd(
     }
     for (i, run) in runs.iter().enumerate() {
         let p = &run.provenance;
-        let label = if i == 0 { "coarse rung" } else { "requested rung" };
+        let label = if i == 0 {
+            "coarse rung"
+        } else {
+            "requested rung"
+        };
         if report {
             println!("## mode report — {} ({label})\n", doc.name);
             println!(
@@ -627,7 +728,12 @@ fn modal_cmd(
             match (report, change) {
                 (true, _) => println!("| {} | {:.2} |", m + 1, f),
                 (false, Some(c)) => {
-                    println!("mode {}: {:.2} Hz ({:+.1} % from the coarser mesh)", m + 1, f, c)
+                    println!(
+                        "mode {}: {:.2} Hz ({:+.1} % from the coarser mesh)",
+                        m + 1,
+                        f,
+                        c
+                    )
                 }
                 (false, None) => println!("mode {}: {:.2} Hz", m + 1, f),
             }

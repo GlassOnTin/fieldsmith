@@ -18,7 +18,7 @@ use fieldsmith_solve::{
 };
 use serde::Serialize;
 
-pub use regions::{face_frame, region_facets, Facet, FaceFrame};
+pub use regions::{face_frame, region_facets, FaceFrame, Facet};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
 pub type Clock = fn() -> f64;
@@ -329,7 +329,13 @@ pub fn case_force_report(
                         target / unscaled
                     }
                 };
-                Some(Dist { d, scale, frame, q, unscaled })
+                Some(Dist {
+                    d,
+                    scale,
+                    frame,
+                    q,
+                    unscaled,
+                })
             }
             _ => None,
         };
@@ -384,8 +390,8 @@ pub fn case_force_report(
                 fit_extent: Some(dz.frame.extent),
             },
             None => {
-                let mag = (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2))
-                    .sqrt();
+                let mag =
+                    (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2)).sqrt();
                 LoadReport {
                     id: l.id.clone(),
                     region: l.region.clone(),

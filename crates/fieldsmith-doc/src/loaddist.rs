@@ -88,7 +88,13 @@ impl LoadExpr {
     pub fn eval(&self, x: f64, y: f64) -> f64 {
         match self {
             LoadExpr::Const(v) => *v,
-            LoadExpr::Var(is_x) => if *is_x { x } else { y },
+            LoadExpr::Var(is_x) => {
+                if *is_x {
+                    x
+                } else {
+                    y
+                }
+            }
             LoadExpr::Pi => PI,
             LoadExpr::E => EULER,
             LoadExpr::Neg(a) => -a.eval(x, y),
@@ -261,7 +267,9 @@ fn check_finite(e: &LoadExpr, what: &str, band: usize, errs: &mut Vec<String>) {
                     ));
                 }
                 if base == 0.0 && p < 0.0 {
-                    errs.push(format!("{what}: band {band} raises zero to a negative power"));
+                    errs.push(format!(
+                        "{what}: band {band} raises zero to a negative power"
+                    ));
                 }
             }
             check_finite(a, what, band, errs);
@@ -281,7 +289,9 @@ fn check_finite(e: &LoadExpr, what: &str, band: usize, errs: &mut Vec<String>) {
                         ));
                     }
                     if base == 0.0 && p < 0.0 {
-                        errs.push(format!("{what}: band {band} raises zero to a negative power"));
+                        errs.push(format!(
+                            "{what}: band {band} raises zero to a negative power"
+                        ));
                     }
                 }
             }
@@ -363,7 +373,10 @@ fn tokenize(src: &str) -> Result<Vec<TokPos>, String> {
             let v: f64 = text
                 .parse()
                 .map_err(|_| format!("at character {start}: '{text}' is not a number"))?;
-            toks.push(TokPos { tok: Tok::Num(v), pos: start });
+            toks.push(TokPos {
+                tok: Tok::Num(v),
+                pos: start,
+            });
             continue;
         }
         let (tok, len) = match c {
@@ -383,7 +396,11 @@ fn tokenize(src: &str) -> Result<Vec<TokPos>, String> {
             ',' => (Tok::Comma, 1),
             '<' => (Tok::Lt, 1),
             ';' => (Tok::Semi, 1),
-            other => return Err(format!("at character {pos}: unexpected character '{other}'")),
+            other => {
+                return Err(format!(
+                    "at character {pos}: unexpected character '{other}'"
+                ))
+            }
         };
         toks.push(TokPos { tok, pos });
         i += len;
@@ -568,22 +585,34 @@ impl P {
 /// `end_char` is where an empty piece would sit, for the empty-band error.
 fn parse_piece(piece: &[TokPos], end_char: usize) -> Result<Band, String> {
     if piece.is_empty() {
-        return Err(format!("at character {end_char}: nothing here (bands are separated by ';')"));
+        return Err(format!(
+            "at character {end_char}: nothing here (bands are separated by ';')"
+        ));
     }
     let arrow = piece.iter().position(|t| t.tok == Tok::Arrow);
     let (header, body_toks) = match arrow {
         Some(at) => (&piece[..at], &piece[at + 1..]),
         None => (&piece[..0], piece),
     };
-    let mut p = P { toks: body_toks.to_vec(), i: 0 };
+    let mut p = P {
+        toks: body_toks.to_vec(),
+        i: 0,
+    };
     let body = p.expr()?;
     if p.i != p.toks.len() {
         return Err(p.err("unexpected text after the expression"));
     }
     if arrow.is_none() {
-        return Ok(Band { lo: f64::NEG_INFINITY, hi: f64::INFINITY, body });
+        return Ok(Band {
+            lo: f64::NEG_INFINITY,
+            hi: f64::INFINITY,
+            body,
+        });
     }
-    let mut h = P { toks: header.to_vec(), i: 0 };
+    let mut h = P {
+        toks: header.to_vec(),
+        i: 0,
+    };
     let lo_e = h.expr()?;
     h.expect(Tok::Lt, "'<' in the band header")?;
     h.expect(Tok::Var(true), "x in the band header")?;
@@ -592,14 +621,12 @@ fn parse_piece(piece: &[TokPos], end_char: usize) -> Result<Band, String> {
     if h.i != h.toks.len() {
         return Err(h.err("trailing text in the band header"));
     }
-    let lo = lo_e
-        .fold()
-        .filter(|v| v.is_finite())
-        .ok_or_else(|| "the band's lower bound must be a constant number (no x or y)".to_string())?;
-    let hi = hi_e
-        .fold()
-        .filter(|v| v.is_finite())
-        .ok_or_else(|| "the band's upper bound must be a constant number (no x or y)".to_string())?;
+    let lo = lo_e.fold().filter(|v| v.is_finite()).ok_or_else(|| {
+        "the band's lower bound must be a constant number (no x or y)".to_string()
+    })?;
+    let hi = hi_e.fold().filter(|v| v.is_finite()).ok_or_else(|| {
+        "the band's upper bound must be a constant number (no x or y)".to_string()
+    })?;
     if lo > hi {
         return Err(format!(
             "the band's bounds are reversed ([{lo}, {hi}]: the lower bound is above the upper)"

@@ -13,13 +13,13 @@
 //! The patch grid stores the segmentation id of the nearest triangle (ids 1..=65524 so a
 //! face code `PATCH_CODE0 + id` fits a u16) and is [`NO_PATCH`] beyond the band.
 
+use crate::now_ms;
 use fieldsmith_field::expr::Aabb;
 use fieldsmith_field::lattice::Grid3;
 use fieldsmith_field::meshfield::{MeshField, MeshMeta, BAND_CELLS, NO_PATCH};
 use fieldsmith_field::V3;
 use fieldsmith_mesh::export::TriMesh;
 use fieldsmith_mesh::weld::edge_adjacency;
-use crate::now_ms;
 use rayon::prelude::*;
 use std::collections::VecDeque;
 use std::sync::Arc;

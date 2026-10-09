@@ -809,3 +809,385 @@ fn threemf_reads_a_foreign_single_object_file() {
         "tetrahedron volume {v}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// 3MF materials and multi-volume packages (goal M9)
+
+use fieldsmith_mesh::export::{write_3mf_volumes, Volume3mf};
+
+/// Zip a model-text-only 3MF in our writer's layout; the reader only needs the model entry.
+fn zip_model(model: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    fieldsmith_mesh::zip::stream_entry(&mut out, "[Content_Types].xml", b"<Types/>", &mut records);
+    fieldsmith_mesh::zip::stream_entry(&mut out, "_rels/.rels", b"<Relationships/>", &mut records);
+    fieldsmith_mesh::zip::stream_entry(
+        &mut out,
+        "3D/3dmodel.model",
+        model.as_bytes(),
+        &mut records,
+    );
+    fieldsmith_mesh::zip::write_central(&mut out, &records);
+    out
+}
+
+/// The model text inside a packaged 3MF.
+fn model_text(bytes: &[u8]) -> String {
+    let entries = fieldsmith_mesh::zip::read_zip(bytes).unwrap();
+    String::from_utf8(
+        entries
+            .iter()
+            .find(|e| e.name == "3D/3dmodel.model")
+            .unwrap()
+            .data
+            .clone(),
+    )
+    .unwrap()
+}
+
+/// A complete object holding a tetrahedron (legs 10 mm, watertight) with the given
+/// attributes, plus any `<resources>` content that follows it. Extras after the object is
+/// the declaration order other tools are free to use; our own writer declares the group
+/// first (covered by the writer tests' round trips).
+fn tet_model(object_attrs: &str, extras: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<object id=\"2\"{object_attrs}><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"10\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"10\" z=\"0\"/><vertex x=\"0\" y=\"0\" z=\"10\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"2\" v3=\"1\"/><triangle v1=\"0\" v2=\"1\" v3=\"3\"/>\
+<triangle v1=\"0\" v2=\"3\" v3=\"2\"/><triangle v1=\"1\" v2=\"2\" v3=\"3\"/></triangles>\
+</mesh></object>{extras}</resources><build><item objectid=\"2\"/></build></model>"
+    )
+}
+
+#[test]
+fn threemf_writer_several_volumes_with_materials() {
+    // Two volumes, two materials: one <object> each with its name and its group's
+    // pid/pindex, one shared <basematerials>, one build item per object. Each volume reads
+    // back with its own name, material and shape, translated to its own positive octant.
+    let a = surface(cube_sdf, [-10.0; 3], [10.0; 3], 1.0);
+    let b = surface(cube_sdf, [-5.0; 3], [5.0; 3], 0.5);
+    let bytes = write_3mf_volumes(&[
+        Volume3mf {
+            name: "body",
+            material: "PETG",
+            mesh: &a,
+        },
+        Volume3mf {
+            name: "clip",
+            material: "TPU95A",
+            mesh: &b,
+        },
+    ]);
+    let parts = read_3mf(&bytes).expect("the two-volume 3MF reads back");
+    assert_eq!(parts.len(), 2, "one part per volume");
+    assert_eq!(parts[0].name, "body");
+    assert_eq!(parts[0].material.as_deref(), Some("PETG"));
+    assert_eq!(parts[1].name, "clip");
+    assert_eq!(parts[1].material.as_deref(), Some("TPU95A"));
+    for (part, m0) in parts.iter().zip([&a, &b]) {
+        for v in &part.mesh.verts {
+            assert!(
+                v.iter().all(|c| *c >= -1e-6),
+                "vertex {v:?} fell below zero (the per-volume octant shift)"
+            );
+        }
+        assert_eq!(part.mesh.tris.len(), m0.tris.len(), "triangle count");
+        assert!(
+            (part.mesh.volume() - m0.volume()).abs() / m0.volume() < 1e-4,
+            "volume survives the round trip"
+        );
+    }
+    // The package: one shared basematerials group in encounter order, and one object and
+    // build item per volume with the group's index as pindex.
+    let model = model_text(&bytes);
+    assert!(
+        model.contains(
+            "<basematerials id=\"1\"><base name=\"PETG\"/><base name=\"TPU95A\"/></basematerials>"
+        ),
+        "one shared group in encounter order: {model}"
+    );
+    assert!(
+        model.contains("<object id=\"2\" type=\"model\" name=\"body\" pid=\"1\" pindex=\"0\">"),
+        "{model}"
+    );
+    assert!(
+        model.contains("<object id=\"3\" type=\"model\" name=\"clip\" pid=\"1\" pindex=\"1\">"),
+        "{model}"
+    );
+    assert!(
+        model.contains("<item objectid=\"2\"/><item objectid=\"3\"/>"),
+        "{model}"
+    );
+
+    // The single-volume wrapper writes the same model text the volumes API writes for one
+    // volume.
+    let wrapper = a.write_3mf("body", "PETG");
+    let direct = write_3mf_volumes(&[Volume3mf {
+        name: "body",
+        material: "PETG",
+        mesh: &a,
+    }]);
+    assert_eq!(
+        model_text(&wrapper),
+        model_text(&direct),
+        "the wrapper and the volumes API agree"
+    );
+}
+
+#[test]
+fn threemf_writer_dedups_materials_and_skips_empty_labels() {
+    // Three volumes, two labels: the group holds one base per unique label and the
+    // unlabelled volume names no group.
+    let a = surface(cube_sdf, [-10.0; 3], [10.0; 3], 1.0);
+    let bytes = write_3mf_volumes(&[
+        Volume3mf {
+            name: "bare",
+            material: "",
+            mesh: &a,
+        },
+        Volume3mf {
+            name: "left",
+            material: "ABS",
+            mesh: &a,
+        },
+        Volume3mf {
+            name: "right",
+            material: "ABS",
+            mesh: &a,
+        },
+    ]);
+    let parts = read_3mf(&bytes).expect("reads back");
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].material, None, "an empty label names no group");
+    assert_eq!(parts[1].material.as_deref(), Some("ABS"));
+    assert_eq!(parts[2].material.as_deref(), Some("ABS"));
+    let model = model_text(&bytes);
+    assert!(
+        model.contains("<basematerials id=\"1\"><base name=\"ABS\"/></basematerials>"),
+        "one base per unique label: {model}"
+    );
+    assert!(
+        model.contains("<object id=\"2\" type=\"model\" name=\"bare\"><mesh>"),
+        "no pid on the unlabelled volume: {model}"
+    );
+    assert!(
+        model.contains("<object id=\"3\" type=\"model\" name=\"left\" pid=\"1\" pindex=\"0\">"),
+        "{model}"
+    );
+    assert!(
+        model.contains("<object id=\"4\" type=\"model\" name=\"right\" pid=\"1\" pindex=\"0\">"),
+        "{model}"
+    );
+}
+
+#[test]
+fn threemf_reader_resolves_materials_declared_after_the_object() {
+    // The collection pass runs before the object pass, so a basematerials group declared
+    // after the object that cites it still resolves.
+    let model = tet_model(
+        " name=\"tet\" pid=\"3\" pindex=\"1\"",
+        "<basematerials id=\"3\"><base name=\"PLA\"/><base name=\"PETG\"/></basematerials>",
+    );
+    let parts = read_3mf(&zip_model(&model)).expect("reads");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].name, "tet");
+    assert_eq!(
+        parts[0].material.as_deref(),
+        Some("PETG"),
+        "pindex 1 of the group"
+    );
+}
+
+#[test]
+fn threemf_named_rejections_materials() {
+    // A duplicate basematerials id.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<basematerials id=\"1\"><base name=\"A\"/></basematerials>\
+<basematerials id=\"1\"><base name=\"B\"/></basematerials>\
+<object id=\"2\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/></vertices>\
+<triangles></triangles></mesh></object></resources></model>";
+    let e = read_3mf(&zip_model(model)).unwrap_err();
+    assert!(e.contains("used more than once"), "{e}");
+
+    // An object naming a group the model does not define.
+    let e = read_3mf(&zip_model(&tet_model(" pid=\"3\" pindex=\"0\"", ""))).unwrap_err();
+    assert!(e.contains("no basematerials group with id 3"), "{e}");
+
+    // A pindex past the group's bases.
+    let model = tet_model(
+        " pid=\"3\" pindex=\"1\"",
+        "<basematerials id=\"3\"><base name=\"A\"/></basematerials>",
+    );
+    let e = read_3mf(&zip_model(&model)).unwrap_err();
+    assert!(e.contains("has 1 base materials"), "{e}");
+
+    // A pindex without a pid.
+    let e = read_3mf(&zip_model(&tet_model(" pindex=\"0\"", ""))).unwrap_err();
+    assert!(e.contains("but no pid attribute"), "{e}");
+
+    // Non-integer pid and pindex.
+    let e = read_3mf(&zip_model(&tet_model(" pid=\"a\" pindex=\"0\"", ""))).unwrap_err();
+    assert!(e.contains("pid=\"a\" is not an integer"), "{e}");
+    let model = tet_model(" pid=\"3\" pindex=\"x\"", "");
+    let e = read_3mf(&zip_model(&model)).unwrap_err();
+    assert!(e.contains("pindex is not an integer"), "{e}");
+
+    // Per-triangle material: refused, not silently dropped.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<object id=\"2\"><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"10\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"10\" z=\"0\"/><vertex x=\"0\" y=\"0\" z=\"10\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"2\" v3=\"1\"/><triangle v1=\"0\" v2=\"1\" v3=\"3\"/>\
+<triangle v1=\"0\" v2=\"3\" v3=\"2\"/><triangle pid=\"5\" v1=\"1\" v2=\"2\" v3=\"3\"/>\
+</triangles></mesh></object></resources><build><item objectid=\"2\"/></build></model>";
+    let e = read_3mf(&zip_model(model)).unwrap_err();
+    assert!(e.contains("per-triangle material"), "{e}");
+
+    // Input ending inside a <basematerials>.
+    let model = "<model unit=\"millimeter\"><resources><basematerials id=\"1\"><base name=\"A\"/>";
+    let e = read_3mf(&zip_model(model)).unwrap_err();
+    assert!(
+        e.contains("not closed") || e.contains("unexpected closing"),
+        "{e}"
+    );
+
+    // A <base> with no name attribute.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<basematerials id=\"1\"><base/></basematerials>\
+<object id=\"2\"><mesh><vertices><vertex x=\"0\" y=\"0\" z=\"0\"/></vertices>\
+<triangles></triangles></mesh></object></resources></model>";
+    let e = read_3mf(&zip_model(model)).unwrap_err();
+    assert!(e.contains("is missing its name attribute"), "{e}");
+}
+
+/// A model from an arbitrary string (items, component containers, everything the
+/// `tet_model` fixture can't express), zipped like a real 3MF.
+fn raw_model(model: &str) -> Vec<u8> {
+    zip_model(model)
+}
+
+#[test]
+fn threemf_reader_expands_build_items() {
+    // One cylinder object instanced twice with build-item transforms — the 3MF
+    // Consortium's multiple_cylinders.3mf pattern. Each item becomes its own part,
+    // the transform baked into the vertices (translation scaled by the model unit), and
+    // a mirrored item keeps its volume sign, winding reversed.
+    let model = "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<object id=\"2\" name=\"cyl\"><mesh><vertices>\
+<vertex x=\"1\" y=\"0\" z=\"0\"/><vertex x=\"0\" y=\"1\" z=\"0\"/>\
+<vertex x=\"0\" y=\"0\" z=\"1\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"1\" v3=\"2\"/></triangles></mesh></object>\
+</resources>\
+<build><item objectid=\"2\"/><item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 4 0 0\"/>\
+<item objectid=\"2\" transform=\"0 -1 0 1 0 0 0 0 1 0 0 0\"/>\
+<item objectid=\"2\" transform=\"-1 0 0 0 1 0 0 0 1 0 0 0\"/></build></model>";
+    let parts = read_3mf(&zip_model(model)).expect("instanced items expand");
+    assert_eq!(parts.len(), 4, "one part per build item");
+    assert_eq!(parts[0].name, "cyl");
+    for p in &parts {
+        assert_eq!(p.name, "cyl", "the part keeps the object's name (import dedupes)");
+        assert_eq!(p.mesh.tris.len(), 1);
+    }
+    assert_eq!(parts[0].mesh.verts[0], [1.0, 0.0, 0.0]);
+    assert_eq!(parts[1].mesh.verts[0], [5.0, 0.0, 0.0], "translation baked in");
+    assert_eq!(
+        parts[2].mesh.verts[0],
+        [0.0, 1.0, 0.0],
+        "90° rotation about +z baked in"
+    );
+    assert_eq!(
+        parts[3].mesh.verts[0],
+        [-1.0, 0.0, 0.0],
+        "mirror baked in"
+    );
+    assert!(
+        parts[3].mesh.tris[0] == [0, 2, 1],
+        "negative-determinant transform reverses the winding: {:?}",
+        parts[3].mesh.tris[0]
+    );
+    assert!(parts[2].mesh.tris[0] == [0, 1, 2]);
+}
+
+#[test]
+fn threemf_reader_scales_item_translations_by_the_model_unit() {
+    // The item matrix is applied in model units: its translation scales with the unit
+    // like everything else, so the part lands in millimetres.
+    let model = "<?xml version=\"1.0\"?><model unit=\"centimeter\"><resources>\
+<object id=\"2\" name=\"c\"><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"1\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"1\" z=\"0\"/><vertex x=\"0\" y=\"0\" z=\"1\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"2\" v3=\"1\"/><triangle v1=\"0\" v2=\"1\" v3=\"3\"/>\
+<triangle v1=\"0\" v2=\"3\" v3=\"2\"/><triangle v1=\"1\" v2=\"2\" v3=\"3\"/></triangles>\
+</mesh></object></resources>\
+<build><item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 2 0 0\"/></build></model>";
+    let parts = read_3mf(&raw_model(model)).expect("reads");
+    assert_eq!(parts[0].mesh.verts[0], [20.0, 0.0, 0.0], "2 cm → 20 mm move");
+}
+
+#[test]
+fn threemf_reader_refuses_damaged_build_items() {
+    // A one-triangle mesh, as a reusable object body.
+    let body = "<object id=\"2\"><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"1\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"1\" z=\"0\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"1\" v3=\"2\"/></triangles></mesh></object>";
+
+    // An object id used twice.
+    let e = read_3mf(&raw_model(&format!(
+        "<model unit=\"millimeter\"><resources>{body}\
+<object id=\"2\"/></resources><build><item objectid=\"2\"/></build></model>"
+    )))
+    .unwrap_err();
+    assert!(e.contains("2' is used more than once"), "{e}");
+
+    // An item referencing an object the model never defined.
+    let e = read_3mf(&raw_model(&format!(
+        "<model unit=\"millimeter\"><resources>{body}\
+</resources><build><item objectid=\"7\"/></build></model>"
+    )))
+    .unwrap_err();
+    assert!(e.contains("'7' which the model does not define"), "{e}");
+
+    // An item without an objectid.
+    let e = read_3mf(&raw_model(&format!(
+        "<model unit=\"millimeter\"><resources>{body}\
+</resources><build><item/></build></model>"
+    )))
+    .unwrap_err();
+    assert!(e.contains("has no objectid attribute"), "{e}");
+
+    // An item referencing a component container (an object with no mesh).
+    let e = read_3mf(&raw_model(&format!(
+        "<model unit=\"millimeter\"><resources>{body}\
+<object id=\"3\" name=\"stack\"><components componentpath=\"2\"/></object></resources>\
+<build><item objectid=\"3\"/></build></model>"
+    )))
+    .unwrap_err();
+    assert!(
+        e.contains("has no mesh (component objects are not supported"),
+        "{e}"
+    );
+
+    // A transform with the wrong number count and a non-number.
+    let with_transform = |t: &str| {
+        let m = format!(
+            "<model unit=\"millimeter\"><resources>{body}\
+</resources><build><item objectid=\"2\"{t}/></build></model>"
+        );
+        read_3mf(&raw_model(&m)).unwrap_err()
+    };
+    let e = with_transform(" transform=\"1 2 3 4 5 6 7 8 9 10 11\"");
+    assert!(e.contains("transform has 11 numbers, expected 12"), "{e}");
+    let e = with_transform(" transform=\"1 2 3 4 5 6 7 8 9 10 11 x\"");
+    assert!(e.contains("transform value 'x' is not a number"), "{e}");
+
+    // An unclosed <build>.
+    let model = format!(
+        "<model unit=\"millimeter\"><resources>{body}\
+</resources><build><item objectid=\"2\"/>"
+    );
+    let e = read_3mf(&raw_model(&model)).unwrap_err();
+    assert!(e.contains("<build> is not closed"), "{e}");
+}

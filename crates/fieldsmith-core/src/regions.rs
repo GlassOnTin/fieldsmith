@@ -111,7 +111,11 @@ pub fn jacobi3(a: &[[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
     order.sort_by(|&i, &j| a[j][j].total_cmp(&a[i][i]));
     // Eigenvectors sit in the ACCUMULATED ROTATION'S columns, not rows.
     (
-        [a[order[0]][order[0]], a[order[1]][order[1]], a[order[2]][order[2]]],
+        [
+            a[order[0]][order[0]],
+            a[order[1]][order[1]],
+            a[order[2]][order[2]],
+        ],
         [
             [v[0][order[0]], v[1][order[0]], v[2][order[0]]],
             [v[0][order[1]], v[1][order[1]], v[2][order[1]]],
@@ -166,11 +170,20 @@ pub fn face_frame(mesh: &P2Mesh, facets: &[Facet], fs: &[usize]) -> FaceFrame {
     for k in 0..3 {
         x[k] -= dot(axes[axis], n) * n[k];
     }
-    let xl = (x[0].powi(2) + x[1].powi(2) + x[2].powi(2)).sqrt().max(1e-300);
+    let xl = (x[0].powi(2) + x[1].powi(2) + x[2].powi(2))
+        .sqrt()
+        .max(1e-300);
     let x = x.map(|v| v / xl);
     // y = n × x keeps (x, y, n) right-handed.
     let y = cross(n, x);
-    FaceFrame { origin: c, x, y, n, rms, extent }
+    FaceFrame {
+        origin: c,
+        x,
+        y,
+        n,
+        rms,
+        extent,
+    }
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -237,7 +250,12 @@ pub fn region_facets(
                 })
             });
             placed_shape(doc, &s.shape)
-                .map(|e| Rule { e, face: s.face, patch: s.patch, axis })
+                .map(|e| Rule {
+                    e,
+                    face: s.face,
+                    patch: s.patch,
+                    axis,
+                })
                 .ok_or_else(|| {
                     SetupError(format!(
                         "region '{id}' refers to '{}', which is not in the model",
@@ -282,7 +300,9 @@ pub fn region_facets(
             }
             match r.patch {
                 None => true,
-                Some(p) => expr::eval_mesh_patch(&r.e, c).map(|q| q == p as u16).unwrap_or(false),
+                Some(p) => expr::eval_mesh_patch(&r.e, c)
+                    .map(|q| q == p as u16)
+                    .unwrap_or(false),
             }
         });
         if hit {

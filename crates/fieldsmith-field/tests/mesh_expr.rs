@@ -101,6 +101,7 @@ fn mesh_node(id: &str, hash: String, bbox: [f64; 6], transform: Transform) -> No
         blend: 0.0,
         suppressed: false,
         transform,
+        material: None,
         kind: NodeKind::Mesh {
             src: "test.stl".into(),
             hash,
@@ -185,6 +186,7 @@ fn unhydrated_key_is_vacuum_and_neutral_in_a_document() {
             blend: 0.0,
             suppressed: false,
             transform: Transform::default(),
+            material: None,
             kind: NodeKind::Box {
                 size: [16.0; 3],
                 round: 0.0,
@@ -379,6 +381,7 @@ fn glsl_generate_emits_mesh_sampler_and_spec() {
             blend: 0.0,
             suppressed: false,
             transform: Transform::default(),
+            material: None,
             kind: NodeKind::Box {
                 size: [2.0; 3],
                 round: 0.0,
@@ -651,9 +654,10 @@ fn mesh_node_field_validation() {
     }
     assert!(doc.validate().iter().any(|e| e.contains("inverted")));
 
-    // Five mesh nodes exceed the four-texture budget.
+    // Nine mesh nodes exceed the eight-previewable budget (WebGL2's 16-sampler guarantee,
+    // two sampler3D per leaf; the V12 multi-object imports make this count reachable).
     let mut doc = Document::default();
-    for i in 0..5 {
+    for i in 0..9 {
         doc.root.push(mesh_node(
             &format!("mesh{i}"),
             format!("{:016x}", i as u64 + 1),
@@ -662,8 +666,8 @@ fn mesh_node_field_validation() {
         ));
     }
     let errs = doc.validate();
-    assert!(errs.iter().any(|e| e.contains("at most 4")), "{errs:?}");
-    // Four are fine.
+    assert!(errs.iter().any(|e| e.contains("at most 8")), "{errs:?}");
+    // Eight are fine.
     doc.root.pop();
-    assert!(!doc.validate().iter().any(|e| e.contains("at most 4")));
+    assert!(!doc.validate().iter().any(|e| e.contains("at most 8")));
 }

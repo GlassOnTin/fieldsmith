@@ -31,10 +31,16 @@ pub type V3 = [f64; 3];
 /// One named mesh read from a scene file (GLB, OBJ): all of that mesh's triangle
 /// primitives, with every node instance's transform baked into the vertices. The empty
 /// name means the file did not name the object; the import layer names it then.
+///
+/// `material` is the file's own material label when the format records one (3MF
+/// `basematerials` via the object's `pid`/`pindex`); `None` elsewhere. Provenance only:
+/// names from another tool's library are not the document's material ids, so import
+/// reports them but does not adopt them.
 #[derive(Clone, Debug)]
 pub struct NamedPart {
     pub name: String,
     pub mesh: export::TriMesh,
+    pub material: Option<String>,
 }
 
 /// A linear tetrahedral mesh. Tetrahedra are positively oriented.

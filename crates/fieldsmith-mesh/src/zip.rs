@@ -248,32 +248,79 @@ pub fn crc32(data: &[u8]) -> u32 {
     crc32fast::hash(data)
 }
 
-/// Read an archive written by [`ZipWriter`] / [`ZipStream`]: inflate each local-file entry
-/// checking its declared length and CRC, then reconcile the walked entry count and the
-/// central-directory offset against the end record. Errors name the failing entry.
+/// Read an archive written by [`ZipWriter`] / [`ZipStream`] **and** foreign files
+/// (Consortium samples, slicer and CAD exports): walk the central directory (the
+/// authoritative sizes/CRC table — local headers carry zeros when a writer defers them to a
+/// data descriptor, flag bit 3), locate each entry's local header by its recorded offset,
+/// and inflate its payload checking length and CRC. The end record is located from the
+/// tail, backwards, so an archive comment in front of it is tolerated; zip64 (0xFFFFFFFF
+/// fields) is refused by name, not mis-read. Errors name the failing entry.
 pub fn read_zip(bytes: &[u8]) -> Result<Vec<ZipEntry>, String> {
     let u32at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
     let u16at = |i: usize| u16::from_le_bytes(bytes[i..i + 2].try_into().unwrap());
+    if bytes.len() < 22 {
+        return Err("not a recognised zip archive (shorter than one end record)".into());
+    }
+    // End record: the last 22 bytes when the archive carries no comment; otherwise within
+    // 64 KiB back from the tail (the comment's spec limit). We write none, but foreign
+    // archives do.
+    let e = (0..=bytes.len().saturating_sub(22).min(65_535))
+        .map(|k| bytes.len() - 22 - k)
+        .find(|&i| u32at(i) == 0x06054b50)
+        .ok_or_else(|| {
+            "not a recognised zip archive (missing the central directory end record)".to_string()
+        })?;
+    let total = u16at(e + 10) as usize;
+    let mut cd = u32at(e + 16) as usize;
+    if total == 0xFFFF || cd == 0xFFFF_FFFF {
+        return Err("zip64 archives are not supported (0xFFFFFFFF field in the end record)".into());
+    }
+    let u32at16 = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+    if cd + 4 > bytes.len() || u32at16(cd) != 0x02014b50 {
+        return Err("central directory is not where the end record says".into());
+    }
     let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 30 <= bytes.len() && u32at(i) == 0x04034b50 {
-        let method = u16at(i + 8);
-        let crc = u32at(i + 14);
-        let csize = u32at(i + 18) as usize;
-        let uncomp = u32at(i + 22) as usize;
-        let nlen = u16at(i + 26) as usize;
-        if i + 30 + nlen > bytes.len() {
-            return Err("archive truncated inside an entry".into());
+    for n in 0..total {
+        if cd + 46 > bytes.len() || u32at16(cd) != 0x02014b50 {
+            return Err(format!("archive truncated inside central entry {n}"));
         }
-        let name = String::from_utf8(bytes[i + 30..i + 30 + nlen].to_vec())
-            .map_err(|_| "entry name is not UTF-8".to_string())?;
-        if i + 30 + nlen + csize > bytes.len() {
+        let method = u16at(cd + 10);
+        let crc = u32at16(cd + 16);
+        let csize = u32at16(cd + 20) as usize;
+        let uncomp = u32at16(cd + 24) as usize;
+        let nlen = u16at(cd + 28) as usize;
+        let clen = u16at(cd + 30) as usize;
+        let local_off = u32at16(cd + 42) as usize;
+        // File names are the same in the local and central headers; take the central one.
+        if cd + 46 + nlen > bytes.len() {
+            return Err(format!("archive truncated inside central entry {n}'s name"));
+        }
+        let name = String::from_utf8(bytes[cd + 46..cd + 46 + nlen].to_vec())
+            .map_err(|_| format!("central entry {n}'s name is not UTF-8"))?;
+        if csize == 0xFFFF_FFFF
+            || uncomp == 0xFFFF_FFFF
+            || local_off == 0xFFFF_FFFF
+        {
+            return Err(format!(
+                "entry '{name}' is a zip64 entry (0xFFFFFFFF size field), not supported"
+            ));
+        }
+        // The local header supplies the in-file layout only (name + extra lengths vary
+        // between the directories); sizes, method and CRC come from above.
+        if local_off + 30 > bytes.len() || u32at(local_off) != 0x04034b50 {
+            return Err(format!(
+                "entry '{name}': local file header is not where the central directory says"
+            ));
+        }
+        let lnlen = u16at(local_off + 26) as usize;
+        let lelen = u16at(local_off + 28) as usize;
+        if local_off + 30 + lnlen + lelen + csize > bytes.len() {
             return Err(format!("archive truncated inside entry '{name}'"));
         }
-        let raw = &bytes[i + 30 + nlen..i + 30 + nlen + csize];
+        let raw = &bytes[local_off + 30 + lnlen + lelen..local_off + 30 + lnlen + lelen + csize];
         let data = match method {
             8 => miniz_oxide::inflate::decompress_to_vec(raw)
-                .map_err(|e| format!("entry '{name}' does not inflate: {e}"))?,
+                .map_err(|er| format!("entry '{name}' does not inflate: {er}"))?,
             0 => raw[..uncomp].to_vec(),
             m => {
                 return Err(format!(
@@ -291,25 +338,7 @@ pub fn read_zip(bytes: &[u8]) -> Result<Vec<ZipEntry>, String> {
             return Err(format!("entry '{name}' fails its crc32"));
         }
         out.push(ZipEntry { name, data });
-        i = i + 30 + nlen + csize;
-    }
-    // End record: 22 bytes at the tail (this module writes no archive comment or zip64
-    // fields a general reader would have to locate).
-    if bytes.len() < 22 || u32at(bytes.len() - 22) != 0x06054b50 {
-        return Err(
-            "not a recognised zip archive (missing the central directory end record)".into(),
-        );
-    }
-    let e = bytes.len() - 22;
-    let total = u16at(e + 10) as usize;
-    if total != out.len() {
-        return Err(format!(
-            "the archive declares {total} entries, {walked} read",
-            walked = out.len()
-        ));
-    }
-    if u32at(e + 16) as usize != i {
-        return Err("unexpected bytes between the entries and the central directory".into());
+        cd += 46 + nlen + clen;
     }
     Ok(out)
 }
@@ -345,14 +374,19 @@ mod tests {
 
     #[test]
     fn corrupt_crc_names_the_entry() {
-        // The header's declared CRC no longer matches the payload: the entry inflates fine,
-        // then the CRC check refuses it, naming it.
+        // The central directory's declared CRC no longer matches the payload: the entry
+        // inflates fine, then the CRC check refuses it, naming it. (The reader takes sizes
+        // and CRC from the central directory, not the local header.)
         let mut z = ZipWriter::new();
         z.entry("bad", &[0xAB; 200]);
         let mut bytes = z.finish();
-        // Local header layout: sig(4) version(2) flags(2) method(2) time(2) date(2) crc(4)…
-        // — the crc field sits at byte 14, and this is the archive's first entry.
-        bytes[14] ^= 0x01;
+        // Central header layout: sig(4) version(2) version-needed(2) flags(2) method(2)
+        // time(2) date(2) crc(4)… — the crc field sits at byte 16 of the central header.
+        let central = bytes
+            .windows(4)
+            .position(|w| w == 0x02014b50u32.to_le_bytes())
+            .unwrap();
+        bytes[central + 16] ^= 0x01;
         let err = read_zip(&bytes).unwrap_err();
         assert_eq!(err, "entry 'bad' fails its crc32");
     }
@@ -371,16 +405,93 @@ mod tests {
 
     #[test]
     fn truncated_payload_names_the_entry() {
+        // The entry inflates fine but its declared uncompressed size is beyond reach.
         let mut z = ZipWriter::new();
         z.entry("one", b"payload");
-        let mut z2 = ZipWriter::new();
-        z2.entry("two", b"payload");
-        let mut bytes = z2.finish();
-        // Cut inside entry 'two's compressed stream (after its header and name).
-        bytes.truncate(30 + 5 + 6);
+        let mut bytes = z.finish();
+        let central = bytes
+            .windows(4)
+            .position(|w| w == 0x02014b50u32.to_le_bytes())
+            .unwrap();
+        // Declared past the file's end, so the payload is out of reach with the file as
+        // it stands.
+        let big = bytes.len() as u32;
+        bytes[central + 20..central + 24].copy_from_slice(&big.to_le_bytes());
         assert_eq!(
             read_zip(&bytes).unwrap_err(),
-            "archive truncated inside entry 'two'"
+            "archive truncated inside entry 'one'"
+        );
+    }
+
+    #[test]
+    fn foreign_data_descriptor_entry_round_trips() {
+        // A foreign writer defers sizes and CRC to a data descriptor behind the payload
+        // (flag bit 3, local header carrying zeros): multiple_cylinders.3mf from the 3MF
+        // Consortium's samples ships exactly this. The reader takes sizes and CRC from the
+        // central directory, so the payload reads as ours does.
+        let data = b"hello world";
+        let mut bytes = Vec::new();
+        let record = {
+            let mut z = ZipStream::start(&mut bytes, "aa");
+            z.push(data);
+            z.finish()
+        };
+        // Patch the local header into the deferred form the writer would have left: flag
+        // bit 3 with the crc and sizes zeroed (local layout: flags +6, crc +14, sizes
+        // +18..+26).
+        bytes[6] |= 0x08;
+        bytes[14..26].fill(0);
+        push_u32(&mut bytes, 0x08074b50); // data descriptor signature
+        push_u32(&mut bytes, crc32(data));
+        push_u32(&mut bytes, record.comp);
+        push_u32(&mut bytes, data.len() as u32);
+        write_central(&mut bytes, &[record]);
+        let got = read_zip(&bytes).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "aa");
+        assert_eq!(got[0].data, data);
+    }
+
+    #[test]
+    fn archive_comment_is_tolerated() {
+        let mut z = ZipWriter::new();
+        z.entry("aa", b"hello world");
+        let mut bytes = z.finish();
+        bytes.extend_from_slice(b"glue"); // comment
+        let n = bytes.len();
+        bytes[n - 2..].copy_from_slice(&3u16.to_le_bytes()); // its length, in the end record
+        let got = read_zip(&bytes).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].data, b"hello world");
+    }
+
+    #[test]
+    fn zip64_fields_are_refused_by_name() {
+        let mut z = ZipWriter::new();
+        z.entry("aa", b"hello world");
+        let mut bytes = z.finish();
+        // End-record layout: … total(2) at +10, central-directory offset(4) at +16, then
+        // the comment length. Offset 0xFFFFFFFF is the zip64 sentinel.
+        let e = bytes.len() - 22;
+        bytes[e + 16..e + 20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert_eq!(
+            read_zip(&bytes).unwrap_err(),
+            "zip64 archives are not supported (0xFFFFFFFF field in the end record)".to_string()
+        );
+        // An entry's 0xFFFFFFFF size field is the same refusal, named per entry.
+        let mut bytes = {
+            let mut z = ZipWriter::new();
+            z.entry("aa", b"hello world");
+            z.finish()
+        };
+        let central = bytes
+            .windows(4)
+            .position(|w| w == 0x02014b50u32.to_le_bytes())
+            .unwrap();
+        bytes[central + 20..central + 24].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert_eq!(
+            read_zip(&bytes).unwrap_err(),
+            "entry 'aa' is a zip64 entry (0xFFFFFFFF size field), not supported".to_string()
         );
     }
 }

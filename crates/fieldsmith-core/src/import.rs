@@ -115,6 +115,11 @@ fn pick_id(base: &str, taken: &[String]) -> String {
 pub struct ImportReport {
     /// The part's raw name (GLB node / OBJ object; the file stem slot for STL).
     pub name: String,
+    /// The file's own material label when the format records one (3MF basematerials);
+    /// reported but not adopted as a solve or document material — another tool's labels
+    /// are not this document's material ids.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
     /// The generated node id.
     pub id: String,
     pub tris: u32,
@@ -170,6 +175,7 @@ fn read_any(kind: &str, bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
             Ok(vec![NamedPart {
                 name: "mesh".into(),
                 mesh,
+                material: None,
             }])
         }
         "obj" => {
@@ -264,6 +270,7 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
             blend: 0.0,
             suppressed: false,
             transform: Transform::default(),
+            material: None,
             kind: NodeKind::Mesh {
                 src: opts.src.into(),
                 hash: hash.clone(),
@@ -280,6 +287,7 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
         });
         reports.push(ImportReport {
             name: part.name.clone(),
+            material: part.material.clone(),
             id,
             tris: meta.tris,
             verts: m.verts.len(),
@@ -321,7 +329,12 @@ mod tests {
         };
         // Quads in outward-CCW order (i, j, k components):
         // x−: yz seen from −x; x+: mirrored; y−/y+/z−/z+ likewise.
-        type Quad = ((usize, usize, usize), (usize, usize, usize), (usize, usize, usize), (usize, usize, usize));
+        type Quad = (
+            (usize, usize, usize),
+            (usize, usize, usize),
+            (usize, usize, usize),
+            (usize, usize, usize),
+        );
         let quads: [Quad; 6] = [
             ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)), // x−
             ((1, 1, 0), (1, 1, 1), (1, 0, 1), (1, 0, 0)), // x+
@@ -521,5 +534,105 @@ f 4 5 8
             import_mesh("step", b"", &opts(None, None, None, "", &[])).unwrap_err(),
             "kind 'step' is not one of glb, stl, obj, 3mf"
         );
+    }
+
+    /// Zip a model-text-only 3MF in the mesh crate writer's layout.
+    fn zip_model(model: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut records = Vec::new();
+        fieldsmith_mesh::zip::stream_entry(
+            &mut out,
+            "[Content_Types].xml",
+            b"<Types/>",
+            &mut records,
+        );
+        fieldsmith_mesh::zip::stream_entry(
+            &mut out,
+            "_rels/.rels",
+            b"<Relationships/>",
+            &mut records,
+        );
+        fieldsmith_mesh::zip::stream_entry(
+            &mut out,
+            "3D/3dmodel.model",
+            model.as_bytes(),
+            &mut records,
+        );
+        fieldsmith_mesh::zip::write_central(&mut out, &records);
+        out
+    }
+
+    #[test]
+    fn threemf_import_makes_a_leaf_per_object_with_its_material() {
+        // Two tetrahedron objects (watertight, legs 10 and 5 mm), each carrying a
+        // basematerials label: the import yields one named node per object and reports
+        // each one's file material without adopting it as a document material.
+        let tet = |id: u32, name: &str, pindex: u32, s: f64| {
+            format!(
+                "<object id=\"{id}\" type=\"model\" name=\"{name}\" pid=\"1\" pindex=\"{pindex}\"><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"{s}\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"{s}\" z=\"0\"/><vertex x=\"0\" y=\"0\" z=\"{s}\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"2\" v3=\"1\"/><triangle v1=\"0\" v2=\"1\" v3=\"3\"/>\
+<triangle v1=\"0\" v2=\"3\" v3=\"2\"/><triangle v1=\"1\" v2=\"2\" v3=\"3\"/></triangles>\
+</mesh></object>"
+            )
+        };
+        let model = format!(
+            "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>\
+<basematerials id=\"1\"><base name=\"PETG\"/><base name=\"TPU95A\"/></basematerials>{}{}</resources>\
+<build><item objectid=\"2\"/><item objectid=\"3\"/></build></model>",
+            tet(2, "body", 0, 10.0),
+            tet(3, "clip", 1, 5.0),
+        );
+        let out = import_mesh(
+            "3mf",
+            &zip_model(&model),
+            &opts(None, None, None, "t.3mf", &[]),
+        )
+        .unwrap();
+        assert_eq!(out.nodes.len(), 2, "one mesh node per object");
+        assert_eq!(out.nodes[0].id, "body");
+        assert_eq!(out.nodes[1].id, "clip");
+        assert_eq!(out.parts[0].material.as_deref(), Some("PETG"));
+        assert_eq!(out.parts[1].material.as_deref(), Some("TPU95A"));
+        assert_eq!(out.parts[0].open_edges, 0, "each tet is a closed shell");
+        assert_eq!(out.parts[0].tris, 4);
+        // The generated nodes carry no document material: the file's labels are
+        // provenance, and material assignment stays a document decision.
+        assert_eq!(
+            out.nodes[0].material, None,
+            "import does not adopt file labels"
+        );
+    }
+
+    #[test]
+    fn threemf_import_expands_instances_into_leaves() {
+        // One object built twice with item transforms: two nodes, in build order, named
+        // apart by the id chooser, each in its item's place (the transform is baked, so
+        // the two bboxes sit apart by the translation).
+        let tet = "<object id=\"2\" type=\"model\" name=\"peg\"><mesh><vertices>\
+<vertex x=\"0\" y=\"0\" z=\"0\"/><vertex x=\"4\" y=\"0\" z=\"0\"/>\
+<vertex x=\"0\" y=\"4\" z=\"0\"/><vertex x=\"0\" y=\"0\" z=\"4\"/></vertices>\
+<triangles><triangle v1=\"0\" v2=\"2\" v3=\"1\"/><triangle v1=\"0\" v2=\"1\" v3=\"3\"/>\
+<triangle v1=\"0\" v2=\"3\" v3=\"2\"/><triangle v1=\"1\" v2=\"2\" v3=\"3\"/></triangles>\
+</mesh></object>";
+        let model = format!(
+            "<?xml version=\"1.0\"?><model unit=\"millimeter\"><resources>{tet}</resources>\
+<build><item objectid=\"2\"/><item objectid=\"2\" \
+transform=\"1 0 0 0 1 0 0 0 1 40 0 0\"/></build></model>"
+        );
+        let out = import_mesh(
+            "3mf",
+            &zip_model(&model),
+            &opts(None, None, None, "p.3mf", &[]),
+        )
+        .unwrap();
+        assert_eq!(out.nodes.len(), 2, "one node per build item");
+        assert_eq!(out.nodes[0].id, "peg");
+        assert_eq!(out.nodes[1].id, "peg1", "the id chooser numbers the duplicate");
+        let size = |p: &ImportReport| [p.bbox[3] - p.bbox[0], p.bbox[4] - p.bbox[1], p.bbox[5] - p.bbox[2]];
+        assert_eq!(size(&out.parts[0]), size(&out.parts[1]), "shape is identical");
+        assert_eq!(out.parts[0].bbox[0], 0.0);
+        assert_eq!(out.parts[1].bbox[0], 40.0, "the item translation is baked");
     }
 }

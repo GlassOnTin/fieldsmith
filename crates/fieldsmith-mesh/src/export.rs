@@ -401,95 +401,146 @@ impl TriMesh {
         out
     }
 
-    /// 3MF package (millimetre units) with the part name and the material recorded as a base
-    /// material. Vertices are translated into the positive octant (3MF requires it), so the
-    /// model's own origin is the part's bounding-box minimum.
-    ///
-    /// At the export-budget spacings the model text would be gigabytes of XML (the bracket at
-    /// 0.1 mm meshes to ~9 M vertices and ~18 M triangles), and a wasm32 page has ~4 GiB of
-    /// memory, so the text is never held: chunks of it are formatted and DEFLATE-compressed
-    /// into independent segments in a bounded rayon window, and appended to the archive in
-    /// order. Chunk contents, segment boundaries and append order are fixed by element index,
-    /// so the package is identical whatever the thread count.
+    /// 3MF package (millimetre units) of this mesh as a single volume; the one-volume form
+    /// of [`write_3mf_volumes`], which documents the format and the streaming.
     pub fn write_3mf(&self, name: &str, material: &str) -> Vec<u8> {
+        write_3mf_volumes(&[Volume3mf {
+            name,
+            material,
+            mesh: self,
+        }])
+    }
+}
+
+/// One volume of a multi-volume 3MF package; see [`write_3mf_volumes`].
+pub struct Volume3mf<'a> {
+    /// The volume's name (the object's `name` attribute); empty records none.
+    pub name: &'a str,
+    /// The volume's material label, written into the package's one shared
+    /// `<basematerials>` group; empty records no material for this volume.
+    pub material: &'a str,
+    pub mesh: &'a TriMesh,
+}
+
+/// 3MF package (millimetre units) of several volumes: one `<object>` per volume, each with
+/// its own name and — when its material is non-empty — its material as a `base` in the
+/// one shared `<basematerials>` group (`pid="1" pindex="<i>"`), and one `<build>` item per
+/// object. Vertices are translated into the positive octant (3MF requires it), per volume,
+/// so each object's own origin is its bounding-box minimum.
+///
+/// At the export-budget spacings the model text would be gigabytes of XML (the bracket at
+/// 0.1 mm meshes to ~9 M vertices and ~18 M triangles), and a wasm32 page has ~4 GiB of
+/// memory, so the text is never held: chunks of it are formatted and DEFLATE-compressed
+/// into independent segments in a bounded rayon window, and appended to the archive in
+/// order. Chunk contents, segment boundaries and append order are fixed by element index,
+/// so the package is identical whatever the thread count.
+pub fn write_3mf_volumes(volumes: &[Volume3mf<'_>]) -> Vec<u8> {
+    // Unique material labels in encounter order; a base's index in this list is the
+    // owning object's `pindex`.
+    let mut mats: Vec<&str> = Vec::new();
+    for v in volumes {
+        if !v.material.is_empty() && !mats.contains(&v.material) {
+            mats.push(v.material);
+        }
+    }
+    let mat = if mats.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::from("<basematerials id=\"1\">");
+        for m in &mats {
+            let _ = write!(s, "<base name=\"{}\"/>", esc(m));
+        }
+        s.push_str("</basematerials>");
+        s
+    };
+    let types = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
+        "<Default Extension=\"rels\" \
+         ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
+        "<Default Extension=\"model\" \
+         ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/>",
+        "</Types>"
+    );
+    let rels = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+        "<Relationship Target=\"/3D/3dmodel.model\" Id=\"rel0\" \
+         Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>",
+        "</Relationships>"
+    );
+    // The model text starts at the xml declaration; the streamed object chunks fill the
+    // middle, and the build lists them after.
+    let head = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <model unit=\"millimeter\" xml:lang=\"en-US\" \
+         xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
+         <resources>{mat}"
+    );
+
+    // One window of chunk texts (and their segments) in flight at a time; 16 chunks
+    // (~55 MB of text) is the largest window the memory argument needs, whatever the
+    // host reports.
+    let window = rayon::current_num_threads().clamp(1, 16);
+
+    let mut out = Vec::new();
+    let mut records = Vec::new();
+    stream_entry(
+        &mut out,
+        "[Content_Types].xml",
+        types.as_bytes(),
+        &mut records,
+    );
+    stream_entry(&mut out, "_rels/.rels", rels.as_bytes(), &mut records);
+    let mut z = ZipStream::start(&mut out, "3D/3dmodel.model");
+    z.push(head.as_bytes());
+
+    for (i, v) in volumes.iter().enumerate() {
+        let mesh = v.mesh;
         let mut min = [f64::MAX; 3];
-        for v in &self.verts {
+        for p in &mesh.verts {
             for k in 0..3 {
-                min[k] = min[k].min(v[k]);
+                min[k] = min[k].min(p[k]);
             }
         }
-
-        let mat = if material.is_empty() {
+        let name_attr = if v.name.is_empty() {
             String::new()
         } else {
-            format!(
-                "<basematerials id=\"1\"><base name=\"{}\"/></basematerials>",
-                esc(material)
-            )
+            format!(" name=\"{}\"", esc(v.name))
         };
-        let pid = if material.is_empty() {
-            ""
-        } else {
-            " pid=\"1\" pindex=\"0\""
-        };
-        let name_attr = if name.is_empty() {
+        let mat_attr = if v.material.is_empty() {
             String::new()
         } else {
-            format!(" name=\"{}\"", esc(name))
+            let pidx = mats.iter().position(|m| *m == v.material).unwrap_or(0);
+            format!(" pid=\"1\" pindex=\"{pidx}\"")
         };
-        let types = concat!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
-            "<Default Extension=\"rels\" \
-             ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
-            "<Default Extension=\"model\" \
-             ContentType=\"application/vnd.ms-package.3dmanufacturing-3dmodel+xml\"/>",
-            "</Types>"
+        let opener = format!(
+            "<object id=\"{id}\" type=\"model\"{name_attr}{mat_attr}><mesh>",
+            id = i + 2
         );
-        let rels = concat!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
-            "<Relationship Target=\"/3D/3dmodel.model\" Id=\"rel0\" \
-             Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>",
-            "</Relationships>"
-        );
-        // The model text starts at the xml declaration and the object header; the streamed
-        // vertex and triangle chunks fill the middle.
-        let head = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-             <model unit=\"millimeter\" xml:lang=\"en-US\" \
-             xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
-             <resources>{mat}<object id=\"2\" type=\"model\"{name_attr}{pid}><mesh>"
-        );
-        let tail =
-            "</mesh></object></resources>\n<build><item objectid=\"2\"/></build>\n</model>\n";
 
-        // One window of chunk texts (and their segments) in flight at a time; 16 chunks
-        // (~55 MB of text) is the largest window the memory argument needs, whatever the
-        // host reports.
-        let window = rayon::current_num_threads().clamp(1, 16);
         let vfmt = |ci: usize| -> String {
             let a = ci * STREAM_CHUNK;
-            let b = (a + STREAM_CHUNK).min(self.verts.len());
+            let b = (a + STREAM_CHUNK).min(mesh.verts.len());
             let mut s = String::with_capacity((b - a) * 44);
             // `write!` into the pre-sized chunk: no allocation per element (a per-element
             // `format!` serialises the rayon window on the wasm allocator's global lock).
-            for v in &self.verts[a..b] {
+            for p in &mesh.verts[a..b] {
                 let _ = write!(
                     s,
                     "<vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>",
-                    v[0] - min[0],
-                    v[1] - min[1],
-                    v[2] - min[2]
+                    p[0] - min[0],
+                    p[1] - min[1],
+                    p[2] - min[2]
                 );
             }
             s
         };
         let tfmt = |ci: usize| -> String {
             let a = ci * STREAM_CHUNK;
-            let b = (a + STREAM_CHUNK).min(self.tris.len());
+            let b = (a + STREAM_CHUNK).min(mesh.tris.len());
             let mut s = String::with_capacity((b - a) * 52);
-            for t in &self.tris[a..b] {
+            for t in &mesh.tris[a..b] {
                 let _ = write!(
                     s,
                     "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
@@ -499,27 +550,24 @@ impl TriMesh {
             s
         };
 
-        let mut out = Vec::new();
-        let mut records = Vec::new();
-        stream_entry(
-            &mut out,
-            "[Content_Types].xml",
-            types.as_bytes(),
-            &mut records,
-        );
-        stream_entry(&mut out, "_rels/.rels", rels.as_bytes(), &mut records);
-        let mut z = ZipStream::start(&mut out, "3D/3dmodel.model");
-        z.push(head.as_bytes());
+        z.push(opener.as_bytes());
         z.push(b"<vertices>");
-        feed_chunked(&mut z, self.verts.len(), window, &vfmt);
+        feed_chunked(&mut z, mesh.verts.len(), window, &vfmt);
         z.push(b"</vertices><triangles>");
-        feed_chunked(&mut z, self.tris.len(), window, &tfmt);
-        z.push(b"</triangles>");
-        z.push(tail.as_bytes());
-        records.push(z.finish());
-        write_central(&mut out, &records);
-        out
+        feed_chunked(&mut z, mesh.tris.len(), window, &tfmt);
+        z.push(b"</triangles></mesh></object>");
     }
+
+    let mut tail = String::from("</resources>\n<build>");
+    for i in 0..volumes.len() {
+        let _ = write!(tail, "<item objectid=\"{}\"/>", i + 2);
+    }
+    tail.push_str("</build>\n</model>\n");
+
+    z.push(tail.as_bytes());
+    records.push(z.finish());
+    write_central(&mut out, &records);
+    out
 }
 
 /// XML-escape the five built-in entities.
@@ -1193,7 +1241,9 @@ mod tests {
 
     /// Golden digest of a whole package (compressed layout included). Re-pinned when the
     /// model entry moved from one sequential DEFLATE stream to independent parallel
-    /// segments; the text itself is pinned unchanged by `three_mf_model_text_is_pinned`.
+    /// segments, and again (578625 → 578668) when the writer became the one-volume form of
+    /// `write_3mf_volumes` and the object opener turned into its own segment boundary; the
+    /// text itself is pinned unchanged by `three_mf_model_text_is_pinned`.
     #[test]
     fn three_mf_package_bytes_are_pinned() {
         let m = surface(sphere, [-10.0; 3], [10.0; 3], 0.5);
@@ -1204,7 +1254,7 @@ mod tests {
         }
         assert_eq!(
             (bytes.len(), format!("{h:016x}")),
-            (578625, "98494099064e7b7c".to_string())
+            (578668, "a31c4ab6a660d9a1".to_string())
         );
     }
 

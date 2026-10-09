@@ -126,6 +126,7 @@ pub fn read_obj(text: &str) -> Result<Vec<NamedPart>, String> {
         out.push(NamedPart {
             name: p.name,
             mesh: TriMesh { verts, tris },
+            material: None,
         });
     }
     if out.is_empty() {

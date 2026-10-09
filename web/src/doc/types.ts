@@ -50,6 +50,10 @@ export interface Node {
   blend: number;
   suppressed: boolean;
   transform: Transform;
+  /** This volume's material id when the document assigns one; absent takes the document
+   * material. Labelling only — the solve stays single-material, the label rides the 3MF
+   * export (validation returns its solve caveat as a warning). */
+  material?: string;
   kind: NodeKind;
 }
 

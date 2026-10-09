@@ -360,6 +360,10 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     // Stack of open groups: (header node, children, modifiers).
     let mut stack: Vec<(Node, Vec<Node>, Vec<Modifier>)> = Vec::new();
     let mut saw_header = false;
+    // Per-node material labels wait here until parse end: `material <id> on <shape>` may
+    // run before the shape's line. A shape the document never declares fails then, by
+    // name, instead of the label being dropped.
+    let mut pending_labels: Vec<(String, String)> = Vec::new();
 
     for (idx, raw) in text.lines().enumerate() {
         let lineno = idx + 1;
@@ -414,7 +418,16 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 Some(Tok::Str(s)) => doc.name = s,
                 _ => return Err(err("expected a quoted name".into())),
             },
-            "material" => doc.material = c.ident("material id")?,
+            "material" => {
+                let id = c.ident("material id")?;
+                if matches!(c.peek(), Some(Tok::Ident(t)) if t == "on") {
+                    c.next();
+                    let target = c.ident("the shape to label")?;
+                    pending_labels.push((id, target));
+                } else {
+                    doc.material = id;
+                }
+            }
             "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "mesh" | "group"
             | "extend" => {
                 let id = c.ident("a shape name")?;
@@ -536,6 +549,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     blend,
                     suppressed,
                     transform,
+                    material: None,
                     kind,
                 };
                 if kw == "group" {
@@ -638,20 +652,28 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     let (dir_v, local_v) = (a.vec3("dir")?, a.vec3("local")?);
                     let dir = match (dir_v, local_v) {
                         (Some(_), Some(_)) => {
-                            return Err(err("load has both dir= and local= — give one direction".into()))
+                            return Err(err(
+                                "load has both dir= and local= — give one direction".into()
+                            ))
                         }
                         (Some(v), None) => LoadDir::Global { v },
                         (None, Some(v)) => LoadDir::Local { v },
                         (None, None) => {
-                            return Err(
-                                err("a load with fn= needs dir=(x, y, z) or local=(lx, ly, ln)".into())
-                            )
+                            return Err(err(
+                                "a load with fn= needs dir=(x, y, z) or local=(lx, ly, ln)".into(),
+                            ))
                         }
                     };
                     let total = a.num("total")?;
-                    LoadKind::Distributed { expr: src, dir, total }
+                    LoadKind::Distributed {
+                        expr: src,
+                        dir,
+                        total,
+                    }
                 } else {
-                    return Err(err("load needs force=(x, y, z), pressure=value, or fn=...".into()));
+                    return Err(err(
+                        "load needs force=(x, y, z), pressure=value, or fn=...".into()
+                    ));
                 };
                 a.finish()?;
                 doc.loads.push(Load {
@@ -742,6 +764,16 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             line: text.lines().count(),
             message: "missing '}'".into(),
         });
+    }
+    for (mat, target) in &pending_labels {
+        if !doc.set_node_material(target, mat) {
+            return Err(ParseError {
+                line: text.lines().count(),
+                message: format!(
+                    "material '{mat}' labels shape '{target}', but no shape is named '{target}'"
+                ),
+            });
+        }
     }
     Ok(doc)
 }
@@ -1073,6 +1105,9 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
     {
         line.push_str(" {");
         let _ = writeln!(o, "{line}");
+        if let Some(m) = &node.material {
+            let _ = writeln!(o, "{ind}material {m} on {}", node.id);
+        }
         for c in children {
             print_node(o, c, depth + 1);
         }
@@ -1105,6 +1140,9 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
         let _ = writeln!(o, "{ind}}}");
     } else {
         let _ = writeln!(o, "{line}");
+        if let Some(m) = &node.material {
+            let _ = writeln!(o, "{ind}material {m} on {}", node.id);
+        }
     }
 }
 
@@ -1155,6 +1193,82 @@ solve size=2.5 modes=3
     fn validates_sample() {
         let d = parse(SAMPLE).unwrap();
         assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    #[test]
+    fn material_label_round_trips() {
+        let text = r#"fieldsmith 1
+name "t"
+material petg
+
+box body size=(40, 10, 10)
+cylinder clip r=2 h=12 at=(10, 20, 6)
+group sub {
+  box inner size=(4, 4, 4)
+  material abs on inner
+}
+material abs on body
+material abs
+"#;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        // Statements before and after their shape all resolve; the document material is
+        // the last unqualified one.
+        assert_eq!(d.material, "abs");
+        assert_eq!(
+            d.material_labels(),
+            [
+                ("body".to_string(), "abs".to_string()),
+                ("inner".to_string(), "abs".to_string())
+            ],
+            "labels in document order"
+        );
+    }
+
+    #[test]
+    fn material_label_forwards_and_names_its_missing_target() {
+        // The label may precede the shape it names.
+        let d =
+            parse("fieldsmith 1\nmaterial petg\nmaterial abs on late\nbox late size=(1, 1, 1)\n")
+                .unwrap();
+        assert_eq!(
+            d.material_labels(),
+            vec![("late".to_string(), "abs".to_string())]
+        );
+        // A target the document never declares fails by name (the label is not dropped).
+        let e = parse("fieldsmith 1\nmaterial petg\nmaterial abs on ghost\n").unwrap_err();
+        assert!(e.message.contains("ghost"), "{}", e.message);
+    }
+
+    #[test]
+    fn material_validate_and_warnings() {
+        // An unknown label id is an error.
+        let d = parse(
+            "fieldsmith 1\nmaterial petg\nbox body size=(1, 1, 1)\nmaterial ghostmat on body\n",
+        )
+        .unwrap();
+        let errs = d.validate();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("Unknown material 'ghostmat' on 'body'")),
+            "{errs:?}"
+        );
+
+        // A label the document knows but different from the document material warns;
+        // identical labels and suppressed nodes do not.
+        let d = parse("fieldsmith 1\nmaterial petg\nbox body size=(1, 1, 1)\nbox plain size=(1, 1, 1)\nbox gone size=(1, 1, 1) suppressed\nmaterial abs on body\nmaterial abs on gone\n").unwrap();
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        let w = d.material_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("'body' (abs)"), "{w:?}");
+        assert!(w[0].contains("petg"), "{w:?}");
+
+        // Same-material labels stay silent.
+        let d =
+            parse("fieldsmith 1\nmaterial petg\nbox body size=(1, 1, 1)\nmaterial petg on body\n")
+                .unwrap();
+        assert!(d.material_warnings().is_empty());
     }
 
     #[test]

@@ -57,6 +57,7 @@ fn push(doc: &mut Document, id: &str, kind: NodeKind) {
         blend: 0.0,
         suppressed: false,
         transform: Default::default(),
+        material: None,
         kind,
     });
 }
@@ -216,9 +217,13 @@ fn curved_side_is_refused_by_name() {
         "side",
         load_kind("1", LoadDir::Global { v: [0.0, 0.0, 1.0] }, None),
     );
-    let err = case_force_report(&d, &mesh, &facets, "Load 1", h)
-        .expect_err("the curved side is refused");
-    assert!(err.0.contains("curves away from its fitted plane"), "{}", err.0);
+    let err =
+        case_force_report(&d, &mesh, &facets, "Load 1", h).expect_err("the curved side is refused");
+    assert!(
+        err.0.contains("curves away from its fitted plane"),
+        "{}",
+        err.0
+    );
     assert!(err.0.contains("'side'"), "{}", err.0);
 }
 
@@ -239,7 +244,13 @@ fn constant_density_equals_the_force_load() {
         &mut d_q,
         "push",
         "top",
-        load_kind("0.4", LoadDir::Global { v: [0.0, 0.0, -1.0] }, None),
+        load_kind(
+            "0.4",
+            LoadDir::Global {
+                v: [0.0, 0.0, -1.0],
+            },
+            None,
+        ),
     );
     let (m_f, fc_f) = surface_facets(&d_f, 1.0);
     let (m_q, fc_q) = surface_facets(&d_q, 1.0);
@@ -289,7 +300,9 @@ fn total_rescales_to_the_stated_resultant() {
         "top",
         load_kind(
             "0 < x < 20 -> 0.5",
-            LoadDir::Global { v: [0.0, 0.0, -1.0] },
+            LoadDir::Global {
+                v: [0.0, 0.0, -1.0],
+            },
             Some(30.0),
         ),
     );
@@ -321,7 +334,9 @@ fn zero_resultant_rescale_is_refused() {
         "top",
         load_kind(
             "x",
-            LoadDir::Global { v: [0.0, 0.0, -1.0] },
+            LoadDir::Global {
+                v: [0.0, 0.0, -1.0],
+            },
             Some(10.0),
         ),
     );
@@ -341,7 +356,13 @@ fn divergent_density_is_caught_at_a_facet() {
         &mut d,
         "bad",
         "top",
-        load_kind("1 / 0", LoadDir::Global { v: [0.0, 0.0, -1.0] }, None),
+        load_kind(
+            "1 / 0",
+            LoadDir::Global {
+                v: [0.0, 0.0, -1.0],
+            },
+            None,
+        ),
     );
     let (mesh, facets) = surface_facets(&d, 1.0);
     let err = case_force_report(&d, &mesh, &facets, "Load 1", 1.0)
