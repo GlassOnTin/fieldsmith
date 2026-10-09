@@ -537,8 +537,9 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
                 // Records of the block's mixed leaves (parallel, order-preserving), their
                 // crossings, deduplicated within the block, and the multi-sheet side entries
                 // and component vertices of records whose pairing split more than one sheet.
+                type BlockParts = (Vec<LeafRec>, Vec<Xing>, Vec<MultiSheet>, Vec<V3>);
                 let rchunk = 1usize << 12;
-                let parts: Vec<(Vec<LeafRec>, Vec<Xing>, Vec<MultiSheet>, Vec<V3>)> = cands
+                let parts: Vec<BlockParts> = cands
                     .par_chunks(rchunk)
                     .zip(refined.par_chunks(rchunk))
                     .map(|(cs, rs)| {
@@ -877,10 +878,10 @@ fn saddle_pairs(p: &[V3; 4], n: &[V3; 4]) -> ([usize; 2], [usize; 2]) {
         xbits(&p[3], &n[3]),
     ];
     let (mut r, mut rk) = (0usize, k[0]);
-    for i in 1..4 {
-        if k[i] < rk {
+    for (i, &ki) in k.iter().enumerate().skip(1) {
+        if ki < rk {
             r = i;
-            rk = k[i];
+            rk = ki;
         }
     }
     let mut cs = [r, (r + 1) % 4, (r + 2) % 4, (r + 3) % 4];
@@ -935,6 +936,7 @@ fn saddle_pairs(p: &[V3; 4], n: &[V3; 4]) -> ([usize; 2], [usize; 2]) {
 /// record vertex — the coarse-fine multi-sheet-B pairing is the open case here. Winding is a
 /// first guess (against the average crossing normal) and is settled by `orient` plus the
 /// volume sign.
+#[allow(clippy::too_many_arguments)]
 fn emit_face(
     st: &mut Stitch,
     arec: &LeafRec,
@@ -1006,7 +1008,17 @@ fn emit_face(
         // earlier face's — triangulates along its own crossings, never drawing the second
         // chord on the pair (a bowtie with four incident triangles).
         let reuse = chord_reuse(st, va, vb);
-        emit_quad(va, vb, xp[0], xp[1], xn[0], xn[1], st.verts, st.tris, reuse);
+        emit_quad(
+            va,
+            vb,
+            xp[0],
+            xp[1],
+            xn[0],
+            xn[1],
+            &mut *st.verts,
+            st.tris,
+            reuse,
+        );
     } else {
         // Saddle: the face's perimeter crosses the surface twice, once per sheet; the
         // pairs are the shared canonical decision (`saddle_pairs`), and each pair takes
@@ -1030,7 +1042,17 @@ fn emit_face(
             // triangulated along its crossings chord instead; either way one chord remains
             // on the pair.
             let reuse = first_fan == Some((va, vb)) || chord_reuse(st, va, vb);
-            emit_quad(va, vb, xp[i], xp[j], xn[i], xn[j], st.verts, st.tris, reuse);
+            emit_quad(
+                va,
+                vb,
+                xp[i],
+                xp[j],
+                xn[i],
+                xn[j],
+                &mut *st.verts,
+                st.tris,
+                reuse,
+            );
             first_fan = Some((va, vb));
         }
     }
@@ -1043,6 +1065,7 @@ fn emit_face(
 /// (face lattice corners differ only in the face-axis bit), not from the collection order,
 /// which only matches the cycle when all four perimeter edges cross. Equal-size neighbours
 /// only: a coarser B has no edge on that fine line and keeps its record vertex.
+#[allow(clippy::too_many_arguments)]
 fn pair_fans(
     arec: &LeafRec,
     aix: u32,
@@ -1128,6 +1151,7 @@ fn chord_reuse(st: &mut Stitch, va: u32, vb: u32) -> bool {
 /// second strip is triangulated along its own crossings; both triangulations of the cycle
 /// cover its four edges once plus their own diagonal in both directions, so neither choice
 /// changes the edge census.
+#[allow(clippy::too_many_arguments)]
 fn emit_quad(
     va: u32,
     vb: u32,
@@ -1135,7 +1159,7 @@ fn emit_quad(
     x1: u32,
     n0: V3,
     n1: V3,
-    verts: &mut Vec<V3>,
+    verts: &mut [V3],
     tris: &mut Vec<[u32; 3]>,
     cross_diag: bool,
 ) {
@@ -1380,7 +1404,7 @@ fn leaf_record(
     let mut root_comp = [255u8; 12];
     let mut comp_of_slot = [0u8; 12];
     let mut nsheets = 0u8;
-    for e in 0..12usize {
+    for (e, slot) in comp_of_slot.iter_mut().enumerate() {
         if crossed & (1 << e) == 0 {
             continue;
         }
@@ -1389,7 +1413,7 @@ fn leaf_record(
             root_comp[r] = nsheets;
             nsheets += 1;
         }
-        comp_of_slot[e] = root_comp[r];
+        *slot = root_comp[r];
         comps |= (root_comp[r] as u64) << (3 * e);
     }
     if nsheets < 2 {
@@ -1409,8 +1433,8 @@ fn leaf_record(
     // Per-sheet vertices: component 0 keeps the record's slot; components 1.. append to
     // the extras, in component order (the side table maps a slot's component to its id).
     let mut cp0: Vec<(V3, V3)> = Vec::new();
-    for e in 0..12usize {
-        if crossed & (1 << e) == 0 || comp_of_slot[e] != 0 {
+    for (e, &comp) in comp_of_slot.iter().enumerate() {
+        if crossed & (1 << e) == 0 || comp != 0 {
             continue;
         }
         cp0.push(planes[plane_ix[e] as usize]);
@@ -1419,8 +1443,8 @@ fn leaf_record(
     let eb = ex.len() as u32;
     for c in 1..nsheets {
         let mut cp: Vec<(V3, V3)> = Vec::new();
-        for e in 0..12usize {
-            if crossed & (1 << e) == 0 || comp_of_slot[e] != c {
+        for (e, &comp) in comp_of_slot.iter().enumerate() {
+            if crossed & (1 << e) == 0 || comp != c {
                 continue;
             }
             cp.push(planes[plane_ix[e] as usize]);
