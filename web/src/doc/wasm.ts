@@ -161,11 +161,12 @@ export interface ImportOut {
   ms: number;
 }
 
-/** Import GLB / STL / OBJ bytes (`kind`: 'glb' | 'stl' | 'obj') into mesh nodes. Units and
- * up-axis default per kind (GLB: m + Y-up; STL/OBJ: mm + Z-up) and are baked into the grid. */
+/** Import GLB / STL / OBJ / 3MF bytes (`kind`: 'glb' | 'stl' | 'obj' | '3mf') into mesh
+ * nodes. Units and up-axis default per kind (GLB: m + Y-up; STL/OBJ: mm + Z-up; 3MF:
+ * the file's own `<model unit>` already scaled to mm) and are baked into the grid. */
 export function importMesh(
   bytes: Uint8Array,
-  kind: 'glb' | 'stl' | 'obj',
+  kind: 'glb' | 'stl' | 'obj' | '3mf',
   opts: { units?: string; up?: string; voxel?: number; src?: string; ids?: string[] } = {},
 ): ImportOut {
   return JSON.parse(w.importMesh(bytes, kind, JSON.stringify({
@@ -504,7 +505,7 @@ export type WorkerIn =
   | { type: 'bytes'; what: 'stl' | '3mf'; name: string }
   /** Voxelise an imported model in the worker (rayon threads); the grids come back in
    * `importDone` for the main-thread cache. */
-  | { type: 'import'; bytes: ArrayBuffer; kind: 'glb' | 'stl' | 'obj'; src: string; opts: { units?: string; up?: string; voxel?: number; ids?: string[] } }
+  | { type: 'import'; bytes: ArrayBuffer; kind: 'glb' | 'stl' | 'obj' | '3mf'; src: string; opts: { units?: string; up?: string; voxel?: number; ids?: string[] } }
   /** Register mesh grids in the worker's registry (fresh copies — the main-thread cache
    * keeps ownership of its own). Posted before `run`/`export` when the doc carries meshes. */
   | { type: 'hydrate'; entries: HydrateEntry[] };

@@ -144,7 +144,7 @@ export class AnalysisEngine {
   /** Import a model file in the worker (the voxeliser runs on its rayon pool). The grids
    * arrive in `importDone` and go into the main-thread cache; the splice into the document
    * is the caller's. Rejects with the failure message. */
-  importFile(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] } = {}): Promise<ImportOut> {
+  importFile(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj' | '3mf', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] } = {}): Promise<ImportOut> {
     if (this.importWait) return Promise.reject('an import is already running');
     return new Promise<ImportOut>((resolve, reject) => {
       this.importWait = { resolve, reject };

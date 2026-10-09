@@ -141,16 +141,19 @@ export function openFile() {
 export function importMeshCommand() {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.stl,.obj,.glb';
+  input.accept = '.stl,.obj,.glb,.3mf';
   input.onchange = async () => {
     const f = input.files?.[0];
     if (!f) return;
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const kind: 'glb' | 'stl' | 'obj' = f.name.toLowerCase().endsWith('.stl')
+    const lower = f.name.toLowerCase();
+    const kind: 'glb' | 'stl' | 'obj' | '3mf' = lower.endsWith('.stl')
       ? 'stl'
-      : f.name.toLowerCase().endsWith('.obj')
+      : lower.endsWith('.obj')
         ? 'obj'
-        : 'glb';
+        : lower.endsWith('.3mf')
+          ? '3mf'
+          : 'glb';
     try {
       const out = await analysis.importFile(bytes.buffer, kind, f.name, { ids: [...allIds(store.doc)] });
       if (!out.parts.length) {
@@ -273,7 +276,7 @@ const hasNode = () => selectedNodeId() !== null;
 export function commands(): Command[] {
   const list: Command[] = [
     { id: 'file.new', group: 'File', label: 'New document', run: newDocument },
-    { id: 'file.importMesh', group: 'File', label: 'Import mesh (.stl / .obj / .glb)…', run: importMeshCommand },
+    { id: 'file.importMesh', group: 'File', label: 'Import mesh (.stl / .obj / .glb / .3mf)…', run: importMeshCommand },
     { id: 'file.open', group: 'File', label: 'Open .fsm / .fsmz…', keys: 'Ctrl O', run: openFile },
     { id: 'file.save', group: 'File', label: 'Save as .fsm / .fsmz', keys: 'Ctrl S', run: saveFile },
     ...EXAMPLES.map((e) => ({ id: `file.example.${e.id}`, group: 'File', label: `Open example: ${e.label}`, run: () => openText(e.text, `${e.id}.fsm`) })),

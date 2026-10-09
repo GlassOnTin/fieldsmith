@@ -87,7 +87,7 @@ function unhydratedHash(doc: Document): string | null {
 
 /** Import: voxelise in the worker (rayon) and post the nodes/reports plus the grids for the
  * main-thread cache. The worker's own registry is hydrated by `importMesh` itself. */
-async function doImport(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] }) {
+async function doImport(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj' | '3mf', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] }) {
   // The import can be the first message a fresh worker sees, so wasm is not loaded yet.
   if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
   await ready;
