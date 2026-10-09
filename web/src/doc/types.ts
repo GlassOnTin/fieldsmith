@@ -73,7 +73,14 @@ export interface Support {
   fixed: [boolean, boolean, boolean];
 }
 
-export type LoadKind = { type: 'force'; vector: Vec3 } | { type: 'pressure'; mpa: number };
+/** Direction a distributed load pushes in: a global vector, or frame components
+ * (x, y, then outward normal n) of the load's region face. */
+export type LoadDir = { form: 'global'; v: Vec3 } | { form: 'local'; v: Vec3 };
+
+export type LoadKind =
+  | { type: 'force'; vector: Vec3 }
+  | { type: 'pressure'; mpa: number }
+  | { type: 'distributed'; expr: string; dir: LoadDir; total?: number };
 
 export interface Load {
   id: string;

@@ -629,8 +629,29 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     LoadKind::Force { vector: v }
                 } else if let Some(p) = a.num("pressure")? {
                     LoadKind::Pressure { mpa: p }
+                } else if let Some(src) = a.string("fn")? {
+                    // Compiled here, so a bad function names its character, not a
+                    // distant validate error.
+                    if let Err(e) = crate::loaddist::LoadFn::compile(&src) {
+                        return Err(err(format!("fn: {e}")));
+                    }
+                    let (dir_v, local_v) = (a.vec3("dir")?, a.vec3("local")?);
+                    let dir = match (dir_v, local_v) {
+                        (Some(_), Some(_)) => {
+                            return Err(err("load has both dir= and local= — give one direction".into()))
+                        }
+                        (Some(v), None) => LoadDir::Global { v },
+                        (None, Some(v)) => LoadDir::Local { v },
+                        (None, None) => {
+                            return Err(
+                                err("a load with fn= needs dir=(x, y, z) or local=(lx, ly, ln)".into())
+                            )
+                        }
+                    };
+                    let total = a.num("total")?;
+                    LoadKind::Distributed { expr: src, dir, total }
                 } else {
-                    return Err(err("load needs force=(x, y, z) or pressure=value".into()));
+                    return Err(err("load needs force=(x, y, z), pressure=value, or fn=...".into()));
                 };
                 a.finish()?;
                 doc.loads.push(Load {
@@ -859,6 +880,17 @@ pub fn print(doc: &Document) -> String {
         let kind = match &l.kind {
             LoadKind::Force { vector } => format!("force={}", v3(*vector)),
             LoadKind::Pressure { mpa } => format!("pressure={}", n(*mpa)),
+            LoadKind::Distributed { expr, dir, total } => {
+                let mut k = format!("fn={}", q(expr));
+                match dir {
+                    LoadDir::Global { v } => k += &format!(" dir={}", v3(*v)),
+                    LoadDir::Local { v } => k += &format!(" local={}", v3(*v)),
+                }
+                if let Some(t) = total {
+                    k += &format!(" total={}", n(*t));
+                }
+                k
+            }
         };
         let _ = writeln!(o, "load {} {} {} case={}", l.id, l.region, kind, q(&l.case));
     }
@@ -1087,10 +1119,12 @@ group arms at=(1, 2, 3) rotate=(0, 0, 45) subtract blend=0.5 {
 
 region holes = hole1.side + base.nz
 region all = upright
+region top = base.pz
 support fix1 holes
 support roll all fixed=xz
 load push holes pressure=0.25 case="Load 2"
 load tip all force=(0, -103.5, -386.4) case="Load 1"
+load sweep top fn="0 < x < 25 -> 0.02*x/25; 25 < x < 60 -> 0.02" dir=(0, 0, -1) total=400 case="Load 1"
 
 fill gyroid sheet cell=6 skin=1.2 rho=(0.2, 0.8) curve=1 wall=0.8 protect=(hole1, base) margin=2 case="Load 1"
 solve size=2.5
@@ -1118,6 +1152,81 @@ solve size=2.5
         assert!(e.message.contains("unknown keyword"));
         let e = parse("fieldsmith 1\ngroup g {\nsphere s r=1\n").unwrap_err();
         assert!(e.message.contains("missing '}'"));
+    }
+
+    #[test]
+    fn distributed_load_round_trips() {
+        let text = r#"fieldsmith 1
+name "t"
+material petg
+
+box b size=(40, 10, 10)
+region face = b.px
+load w face fn="-0.1 < x < 0.1 -> 1; 0.1 < x < 0.9 -> -1" local=(1, 0, 0) case="Load 2"
+"#;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        assert!(
+            canon.contains(r#"fn="-0.1 < x < 0.1 -> 1; 0.1 < x < 0.9 -> -1""#),
+            "{canon}"
+        );
+        match &d.loads[0].kind {
+            LoadKind::Distributed {
+                expr,
+                dir: LoadDir::Local { v },
+                total,
+            } => {
+                assert_eq!(expr, "-0.1 < x < 0.1 -> 1; 0.1 < x < 0.9 -> -1");
+                assert_eq!(*v, [1.0, 0.0, 0.0]);
+                assert_eq!(*total, None);
+            }
+            other => panic!("wrong kind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn distributed_load_errors_are_named() {
+        let e = parse(
+            r#"fieldsmith 1
+name "t"
+material petg
+box b size=(40, 10, 10)
+region r = b.px
+load w r fn="0.1 < x < 1 -> w * 2" dir=(0, 0, -1)
+"#,
+        )
+        .unwrap_err();
+        assert!(e.message.contains("unknown name 'w'"), "{}", e.message);
+
+        let e = parse(
+            r#"fieldsmith 1
+name "t"
+material petg
+box b size=(40, 10, 10)
+region r = b.px
+load w r fn="1" case="Load 2"
+"#,
+        )
+        .unwrap_err();
+        assert!(e.message.contains("needs dir="), "{}", e.message);
+
+        // JSON-authored docs slip past the parser's checks; validate catches them.
+        let d = parse(
+            r#"fieldsmith 1
+name "t"
+material petg
+box b size=(40, 10, 10)
+region r = b.px
+load w r fn="1 / (x - x)" dir=(0, 0, 0) total=0
+"#,
+        )
+        .unwrap();
+        let e = d.validate().join(" | ");
+        assert!(e.contains("zero vector"), "{e}");
+        assert!(e.contains("total=0"), "{e}");
+        // A variable-dependent division is a solve-time fault, not a static one.
+        assert!(!e.contains("divides"), "{e}");
     }
 
     #[test]

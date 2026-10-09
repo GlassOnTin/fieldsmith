@@ -226,6 +226,7 @@ fn run(args: &[String]) -> Result<(), String> {
                         c.name, c.max_vm_elem, c.max_displacement
                     );
                 }
+                print_load_table(&a.cases);
             } else {
                 println!(
                     "{}: {} elements (P2), {} DOF, element size {:.2} mm",
@@ -517,6 +518,36 @@ fn print_case_lines(cases: &[CaseResult], tag: &str) {
     }
 }
 
+/// Per-load provenance for `solve --report`: what each labelled load applied, on how
+/// many boundary facets, with its resultant and moment about the document origin.
+/// Distributed (`fn=`) loads also report the unscaled density resultant, the factor the
+/// `total=` rescale applied (1 when absent), and the face-frame fit numbers.
+fn print_load_table(cases: &[CaseResult]) {
+    if !cases.iter().any(|c| !c.load_reports.is_empty()) {
+        return;
+    }
+    println!(
+        "\n| load | region | facets | resultant (N) | moment about origin (N·mm) | applied as |\n\
+         | :-- | :-- | --: | :-- | :-- | :-- |"
+    );
+    for c in cases {
+        for r in &c.load_reports {
+            let vec = |v: &[f64; 3]| format!("({:.2}, {:.2}, {:.2})", v[0], v[1], v[2]);
+            let applied = match (r.fit_rms, r.fit_extent) {
+                (Some(rms), Some(ext)) => format!(
+                    "{:.2} N along the fn's direction, ×{:.3} to apply (fit RMS {:.3} mm over a {:.1} mm extent)",
+                    r.unscaled, r.scale, rms, ext
+                ),
+                _ => format!("{:.4}× setpoint", r.scale),
+            };
+            println!(
+                "| {} | {} | {} | {} | {} | {} |",
+                r.id, r.region, r.facets, vec(&r.resultant), vec(&r.moment), applied
+            );
+        }
+    }
+}
+
 /// `solve` on a document with a fill statement: the solid reference solve first, then the
 /// graded re-solve with mass and class summary.
 fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), String> {
@@ -537,6 +568,7 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
             p.element_size, p.elements, p.dofs, p.mesh_ms, p.solve_ms, p.iterations
         );
         print_case_table(&a.cases, "solid");
+        print_load_table(&a.cases);
         println!(
             "\n## fill — {:?} {:?}, cell {} mm, skin {} mm, ρ {:.2}..{:.2}, curve {}, min wall {} mm\n",
             fill.family, fill.mode, fill.cell, fill.skin, fill.rho_min, fill.rho_max, fill.curve, fill.min_wall

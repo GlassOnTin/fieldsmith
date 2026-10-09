@@ -42,6 +42,149 @@ impl Facet {
     }
 }
 
+// ---------------------------------------------------------------- face frame --
+
+/// Face-local frame of a labelled region (M11): a least-squares plane through the
+/// region's facet centroids gives the normal n; the world axis least aligned with n
+/// projects onto the local x axis (ties break in x, y, z order); y = n × x, so
+/// (x, y, n) is right-handed and n points outward. Coordinates in the frame are
+/// millimetres measured from the facets' area-weighted centroid.
+#[derive(Clone, Copy, Debug)]
+pub struct FaceFrame {
+    /// The fitted plane's point (region centroid, mm).
+    pub origin: [f64; 3],
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    /// Unit outward normal of the fitted plane.
+    pub n: [f64; 3],
+    /// RMS distance of the centroids from the fitted plane (mm).
+    pub rms: f64,
+    /// Sided in-plane extent: sqrt(12·λmax/N) of the centroid scatter (mm).
+    pub extent: f64,
+}
+
+/// A region whose plane-fit RMS exceeds this fraction of its in-plane extent is
+/// refused for face-local loads (GOAL.md M11: refused by name, not silently flattened).
+pub const FACE_FRAME_RMS_FRACTION: f64 = 0.1;
+
+/// Eigen-decomposition of a symmetric 3×3 by cyclic Jacobi rotations: the eigenvalues,
+/// descending, and the unit eigenvector for each (column i of the returned matrix).
+pub fn jacobi3(a: &[[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
+    let mut a = *a;
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let scale = (a[0][0].abs() + a[1][1].abs() + a[2][2].abs()).max(1e-300);
+    for _ in 0..50 {
+        let (p, q) = if a[0][1].abs() >= a[0][2].abs() && a[0][1].abs() >= a[1][2].abs() {
+            (0usize, 1usize)
+        } else if a[0][2].abs() >= a[1][2].abs() {
+            (0, 2)
+        } else {
+            (1, 2)
+        };
+        let e = a[p][q];
+        if e.abs() < 1e-16 * scale {
+            break;
+        }
+        let tau = (a[q][q] - a[p][p]) / (2.0 * e);
+        let t = if tau >= 0.0 {
+            1.0 / (tau + (1.0 + tau * tau).sqrt())
+        } else {
+            1.0 / (tau - (1.0 + tau * tau).sqrt())
+        };
+        let c = 1.0 / (1.0 + t * t).sqrt();
+        let s = t * c;
+        for k in 0..3 {
+            let (akp, akq) = (a[k][p], a[k][q]);
+            a[k][p] = c * akp - s * akq;
+            a[k][q] = s * akp + c * akq;
+            let (vkp, vkq) = (v[k][p], v[k][q]);
+            v[k][p] = c * vkp - s * vkq;
+            v[k][q] = s * vkp + c * vkq;
+        }
+        for k in 0..3 {
+            let (apk, aqk) = (a[p][k], a[q][k]);
+            a[p][k] = c * apk - s * aqk;
+            a[q][k] = s * apk + c * aqk;
+        }
+    }
+    let mut order: [usize; 3] = [0, 1, 2];
+    order.sort_by(|&i, &j| a[j][j].total_cmp(&a[i][i]));
+    // Eigenvectors sit in the ACCUMULATED ROTATION'S columns, not rows.
+    (
+        [a[order[0]][order[0]], a[order[1]][order[1]], a[order[2]][order[2]]],
+        [
+            [v[0][order[0]], v[1][order[0]], v[2][order[0]]],
+            [v[0][order[1]], v[1][order[1]], v[2][order[1]]],
+            [v[0][order[2]], v[1][order[2]], v[2][order[2]]],
+        ],
+    )
+}
+
+/// Fit the face-local frame for one region's facet set. Refuses nothing here — the
+/// caller checks the fit against `FACE_FRAME_RMS_FRACTION` and names the load.
+pub fn face_frame(mesh: &P2Mesh, facets: &[Facet], fs: &[usize]) -> FaceFrame {
+    let pts: Vec<[f64; 3]> = fs.iter().map(|&i| facets[i].centroid(mesh)).collect();
+    let areas: Vec<f64> = fs.iter().map(|&i| facets[i].area(mesh)).collect();
+    let area_sum: f64 = areas.iter().sum::<f64>().max(1e-300);
+    let mut c = [0.0f64; 3];
+    for (p, w) in pts.iter().zip(&areas) {
+        for k in 0..3 {
+            c[k] += w * p[k] / area_sum;
+        }
+    }
+    let mut s = [[0.0f64; 3]; 3];
+    for p in &pts {
+        let d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
+        for r in 0..3 {
+            for cc in 0..3 {
+                s[r][cc] += d[r] * d[cc];
+            }
+        }
+    }
+    let (eig, vecs) = jacobi3(&s);
+    let count = fs.len().max(1) as f64;
+    let rms = (eig[2] / count).max(0.0).sqrt();
+    let extent = (12.0 * eig[0] / count).max(0.0).sqrt();
+    // Orient the normal outward: along the area-weighted mean of the facets' normals.
+    let mut nbar = [0.0f64; 3];
+    for (&i, w) in fs.iter().zip(&areas) {
+        let m = facets[i].normal(mesh);
+        for k in 0..3 {
+            nbar[k] += w * m[k];
+        }
+    }
+    let mut n = vecs[2];
+    if dot(n, nbar) < 0.0 {
+        n = n.map(|v| -v);
+    }
+    // The world axis least aligned with n becomes x (ties keep the earlier axis).
+    let axes: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let axis = (0..3)
+        .min_by(|&a, &b| dot(axes[a], n).abs().total_cmp(&dot(axes[b], n).abs()))
+        .unwrap_or(0);
+    let mut x = axes[axis];
+    for k in 0..3 {
+        x[k] -= dot(axes[axis], n) * n[k];
+    }
+    let xl = (x[0].powi(2) + x[1].powi(2) + x[2].powi(2)).sqrt().max(1e-300);
+    let x = x.map(|v| v / xl);
+    // y = n × x keeps (x, y, n) right-handed.
+    let y = cross(n, x);
+    FaceFrame { origin: c, x, y, n, rms, extent }
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
 /// One selector's compiled rule. `axis` is the face-rule's unit world direction (the axis
 /// face on a mesh node, mapped through the node placement); `None` keeps the exact
 /// primitive face test.

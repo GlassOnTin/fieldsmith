@@ -319,6 +319,24 @@ pub enum LoadKind {
     Force { vector: [f64; 3] },
     /// Pressure in MPa acting against the outward normal (positive pushes into the part).
     Pressure { mpa: f64 },
+    /// Force per unit area (N/mm²) from a compiled `fn` over the region's face-local
+    /// coordinates, applied in `dir`. `total` optionally rescales the function so the
+    /// applied resultant equals that many newtons (signed against the stated direction).
+    Distributed {
+        expr: String,
+        dir: LoadDir,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<f64>,
+    },
+}
+
+/// The direction a distributed load pushes in: a fixed global vector, or components
+/// in the region's face-local frame (x, y, then the outward normal n).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "form", rename_all = "lowercase")]
+pub enum LoadDir {
+    Global { v: [f64; 3] },
+    Local { v: [f64; 3] },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -552,6 +570,36 @@ impl Document {
                     "Load '{}' refers to missing region '{}'",
                     l.id, l.region
                 ));
+            }
+            if let LoadKind::Distributed { expr, dir, total } = &l.kind {
+                let what = format!("load '{}'", l.id);
+                match crate::loaddist::LoadFn::compile(expr) {
+                    Ok(f) => errs.extend(f.static_checks(&what)),
+                    Err(e) => errs.push(format!("{what}: fn: {e}")),
+                }
+                let (v, form) = match dir {
+                    LoadDir::Global { v } => (v, "dir"),
+                    LoadDir::Local { v } => (v, "local"),
+                };
+                if !v.iter().all(|c| c.is_finite()) {
+                    errs.push(format!("{what}: {form} has a non-finite component"));
+                } else if v.iter().all(|c| *c == 0.0) {
+                    errs.push(format!("{what}: {form} is the zero vector"));
+                }
+                if expr.contains(['\n', '\r']) {
+                    errs.push(format!(
+                        "{what}: fn must be one line (separate bands with ';')"
+                    ));
+                }
+                match total {
+                    Some(t) if *t == 0.0 => errs.push(format!(
+                        "{what}: total=0 makes the load vanish; give the intended resultant in N"
+                    )),
+                    Some(t) if !t.is_finite() => {
+                        errs.push(format!("{what}: total= is not a finite number"))
+                    }
+                    _ => {}
+                }
             }
         }
         if crate::materials::find(self, &self.material).is_none() {

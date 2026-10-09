@@ -45,7 +45,7 @@ use fieldsmith_solve::P2Mesh;
 
 use crate::Facet;
 use crate::{
-    case_force, case_names, fixed_mask, material_of, run_case, Analysis, CaseResult, Clock,
+    case_force_report, case_names, fixed_mask, material_of, run_case, Analysis, CaseResult, Clock,
     Resolution, SetupError,
 };
 
@@ -446,8 +446,10 @@ pub fn graded_of(
     let fixed = fixed_mask(doc, &base.mesh, &facets, h)?;
     let mut cases = Vec::new();
     for name in case_names(doc) {
-        let force = case_force(doc, &base.mesh, &facets, &name, h)?;
-        cases.push(run_case(&base.mesh, &young, mat.nu, &fixed, force, name)?);
+        let (force, reports) = case_force_report(doc, &base.mesh, &facets, &name, h)?;
+        let mut case = run_case(&base.mesh, &young, mat.nu, &fixed, force, name)?;
+        case.load_reports = reports;
+        cases.push(case);
     }
     let nn = base.mesh.nodes.len();
     let envelope = (0..nn)

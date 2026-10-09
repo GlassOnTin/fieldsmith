@@ -8,7 +8,8 @@ pub mod probe;
 pub mod regions;
 pub mod voxel;
 
-use fieldsmith_doc::{materials, Document, LoadKind};
+use fieldsmith_doc::loaddist::LoadFn;
+use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
@@ -17,7 +18,7 @@ use fieldsmith_solve::{
 };
 use serde::Serialize;
 
-pub use regions::{region_facets, Facet};
+pub use regions::{face_frame, region_facets, Facet, FaceFrame};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
 pub type Clock = fn() -> f64;
@@ -66,6 +67,10 @@ pub struct CaseResult {
     pub max_vm_elem: f64,
     pub max_displacement: f64,
     pub solve: SolveReport,
+    /// Provenance of each load in this case, in document order: the applied resultant
+    /// and moment, and the face-fit numbers of distributed loads. Empty for the
+    /// verifier's resolved-model runs (which call `run_case` directly).
+    pub load_reports: Vec<LoadReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -177,17 +182,38 @@ pub fn fixed_mask(
     Ok(fixed)
 }
 
-/// Nodal force vector for one load case: uniform traction over the case's facets, corners 0 and
-/// each midside a/3. Shared by the solid and graded-fill solve paths, and by the verifier's
-/// resolved-model runs.
-pub fn case_force(
+/// Provenance of one load's application: how the function or vector became nodal loads.
+/// Resultant and moment are integrated over the region's facets with the traction
+/// actually applied (after any `total=` rescale); moment is about the document origin.
+/// `fit_*` numbers exist only for distributed loads; `unscaled`/`scale` are the
+/// resultant along the load's own direction before/after rescale (for Force and
+/// Pressure loads: the resultant's magnitude, scale always 1).
+#[derive(Clone, Debug, Serialize)]
+pub struct LoadReport {
+    pub id: String,
+    pub region: String,
+    pub facets: usize,
+    pub resultant: [f64; 3],
+    pub moment: [f64; 3],
+    pub unscaled: f64,
+    pub scale: f64,
+    pub fit_rms: Option<f64>,
+    pub fit_extent: Option<f64>,
+}
+
+/// Nodal force vector for one load case, plus the per-load provenance: uniform traction
+/// over the case's facets (corners 0, each midside a/3) or a distributed density
+/// evaluated at facet centroids. Shared by the solid and graded-fill solve paths, and
+/// by the verifier's resolved-model runs.
+pub fn case_force_report(
     doc: &Document,
     mesh: &P2Mesh,
     facets: &[Facet],
     name: &str,
     h: f64,
-) -> Result<Vec<f64>, SetupError> {
+) -> Result<(Vec<f64>, Vec<LoadReport>), SetupError> {
     let mut force = vec![0.0; mesh.nodes.len() * 3];
+    let mut reports = Vec::new();
     for l in doc.loads.iter().filter(|l| l.case == name) {
         let fs = region_facets(doc, &l.region, mesh, facets, h)?;
         if fs.is_empty() {
@@ -197,22 +223,193 @@ pub fn case_force(
             )));
         }
         let area: f64 = fs.iter().map(|&i| facets[i].area(mesh)).sum();
-        for &fi in &fs {
+        // The distributed arm: compile, fit the face frame, choose the direction, spot
+        // a zero or divergent resultant before nodal loads are built.
+        /// The distributed arm's pre-computed bits for one load.
+        struct Dist {
+            d: [f64; 3],
+            scale: f64,
+            frame: regions::FaceFrame,
+            q: Vec<f64>,
+            unscaled: f64,
+        }
+        let dist: Option<Dist> = match &l.kind {
+            LoadKind::Distributed { expr, dir, total } => {
+                let f = LoadFn::compile(expr)
+                    .map_err(|e| SetupError(format!("load '{}': fn: {e}", l.id)))?;
+                let frame = face_frame(mesh, facets, &fs);
+                if frame.rms > regions::FACE_FRAME_RMS_FRACTION * frame.extent {
+                    return Err(SetupError(format!(
+                        "load '{}': region '{}' curves away from its fitted plane (fit RMS \
+                         {:.3} mm over a {:.3} mm extent, the bound is {:.0} %); label a \
+                         flatter patch or set the load with dir=",
+                        l.id,
+                        l.region,
+                        frame.rms,
+                        frame.extent,
+                        regions::FACE_FRAME_RMS_FRACTION * 100.0
+                    )));
+                }
+                let d = match dir {
+                    LoadDir::Global { v } => *v,
+                    LoadDir::Local { v } => {
+                        let mut d = [0.0; 3];
+                        for k in 0..3 {
+                            d[k] = v[0] * frame.x[k] + v[1] * frame.y[k] + v[2] * frame.n[k];
+                        }
+                        d
+                    }
+                };
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if len == 0.0 {
+                    return Err(SetupError(format!(
+                        "load '{}': the direction is the zero vector",
+                        l.id
+                    )));
+                }
+                let d = d.map(|c| c / len);
+                // Density at each facet's centroid in face-local coordinates.
+                let mut q = Vec::<f64>::with_capacity(fs.len());
+                for &fi in &fs {
+                    let c = facets[fi].centroid(mesh);
+                    let lx = (c[0] - frame.origin[0]) * frame.x[0]
+                        + (c[1] - frame.origin[1]) * frame.x[1]
+                        + (c[2] - frame.origin[2]) * frame.x[2];
+                    let ly = (c[0] - frame.origin[0]) * frame.y[0]
+                        + (c[1] - frame.origin[1]) * frame.y[1]
+                        + (c[2] - frame.origin[2]) * frame.y[2];
+                    let v = f.eval(lx, ly);
+                    if !v.is_finite() {
+                        return Err(SetupError(format!(
+                            "load '{}': the density is not finite at facet {}'s centroid \
+                             (x = {:.3}, y = {:.3} mm on the face; world ({:.3}, {:.3}, {:.3}) mm); \
+                             the fn diverges or divides by zero there",
+                            l.id, fi, lx, ly, c[0], c[1], c[2]
+                        )));
+                    }
+                    q.push(v);
+                }
+                let unscaled: f64 = fs
+                    .iter()
+                    .zip(&q)
+                    .map(|(&fi, v)| *v * facets[fi].area(mesh))
+                    .sum();
+                let scale = match total {
+                    None => 1.0,
+                    Some(target) => {
+                        // Near-cancellation: Σ|q|·A dwarfs Σq·A means the function has a
+                        // spread it cannot rescale to a stated resultant without an
+                        // unbounded factor. Bound: the signed resultant must be at least
+                        // 1 % of the density's total absolute weight.
+                        let rabs: f64 = fs
+                            .iter()
+                            .zip(&q)
+                            .map(|(&fi, v)| v.abs() * facets[fi].area(mesh))
+                            .sum();
+                        if *target == 0.0 {
+                            return Err(SetupError(format!(
+                                "load '{}': total=0 makes the load vanish — give the \
+                                 intended resultant in N",
+                                l.id
+                            )));
+                        }
+                        if unscaled.abs() < 0.01 * rabs {
+                            return Err(SetupError(format!(
+                                "load '{id}': total={target} N cannot rescale: the function's \
+                                 resultant along the stated direction almost cancels \
+                                 ({unscaled} N against {rabs} N of density; the bound \
+                                 is 1 %) — write the sign sense into the fn",
+                                id = l.id
+                            )));
+                        }
+                        target / unscaled
+                    }
+                };
+                Some(Dist { d, scale, frame, q, unscaled })
+            }
+            _ => None,
+        };
+        let mut resultant = [0.0f64; 3];
+        let mut moment = [0.0f64; 3];
+        for (i, &fi) in fs.iter().enumerate() {
             let fct = &facets[fi];
             let a = fct.area(mesh);
-            let t = match l.kind {
-                LoadKind::Force { vector } => vector.map(|c| c / area),
-                LoadKind::Pressure { mpa } => fct.normal(mesh).map(|c| -mpa * c),
+            let t = match &dist {
+                Some(dz) => {
+                    let v = dz.q[i] * dz.scale;
+                    dz.d.map(|c| v * c)
+                }
+                None => match l.kind {
+                    LoadKind::Force { vector } => vector.map(|c| c / area),
+                    LoadKind::Pressure { mpa } => fct.normal(mesh).map(|c| -mpa * c),
+                    LoadKind::Distributed { .. } => unreachable!("dist is Some here"),
+                },
             };
             // Uniform traction on a 6-node triangle: corners 0, each midside a/3.
             for &n in &fct.nodes[3..] {
                 for c in 0..3 {
                     force[3 * n as usize + c] += t[c] * a / 3.0;
                 }
+                let _ = n;
+            }
+            for c in 0..3 {
+                resultant[c] += t[c] * a;
+            }
+            // Moment of the traction about the document origin: r × F_t.
+            let c = fct.centroid(mesh);
+            let f3 = t.map(|v| v * a);
+            let m = [
+                c[1] * f3[2] - c[2] * f3[1],
+                c[2] * f3[0] - c[0] * f3[2],
+                c[0] * f3[1] - c[1] * f3[0],
+            ];
+            for k in 0..3 {
+                moment[k] += m[k];
             }
         }
+        let report = match &dist {
+            Some(dz) => LoadReport {
+                id: l.id.clone(),
+                region: l.region.clone(),
+                facets: fs.len(),
+                resultant,
+                moment,
+                unscaled: dz.unscaled,
+                scale: dz.scale,
+                fit_rms: Some(dz.frame.rms),
+                fit_extent: Some(dz.frame.extent),
+            },
+            None => {
+                let mag = (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2))
+                    .sqrt();
+                LoadReport {
+                    id: l.id.clone(),
+                    region: l.region.clone(),
+                    facets: fs.len(),
+                    resultant,
+                    moment,
+                    unscaled: mag,
+                    scale: 1.0,
+                    fit_rms: None,
+                    fit_extent: None,
+                }
+            }
+        };
+        reports.push(report);
     }
-    Ok(force)
+    Ok((force, reports))
+}
+
+/// Nodal force vector for one load case. Verifier-resolved runs and simple callers use
+/// this; the analyse and graded paths use `case_force_report` for provenance.
+pub fn case_force(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<Vec<f64>, SetupError> {
+    case_force_report(doc, mesh, facets, name, h).map(|(f, _)| f)
 }
 
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
@@ -252,6 +449,7 @@ pub fn run_case(
         von_mises: vm,
         vm_elem,
         solve: rep,
+        load_reports: Vec::new(),
     })
 }
 
@@ -332,8 +530,9 @@ pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis
     let mut cases = Vec::new();
     let mut iterations = 0;
     for name in case_names(doc) {
-        let force = case_force(doc, &mesh, &facets, &name, h)?;
-        let case = run_case(&mesh, &young, mat.nu, &fixed, force, name)?;
+        let (force, reports) = case_force_report(doc, &mesh, &facets, &name, h)?;
+        let mut case = run_case(&mesh, &young, mat.nu, &fixed, force, name)?;
+        case.load_reports = reports;
         iterations += case.solve.iterations;
         cases.push(case);
     }

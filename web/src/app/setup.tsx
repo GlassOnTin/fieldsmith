@@ -7,8 +7,8 @@ import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
 import type { Document, Face, Load, Node, Region, Support } from '../doc/types';
-import { FACE_CODES, evalBody } from '../doc/wasm';
-import type { LevelResult, PickHit } from '../doc/wasm';
+import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
+import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
 import { inspectors, NameField } from './Inspector';
@@ -399,6 +399,29 @@ function buildGlyphs(lvl: LevelResult) {
         arrow.renderOrder = 3;
         glyphs.add(arrow);
       }
+    } else if (l.kind.type === 'distributed') {
+      // The traction direction is constant per load (per-facet magnitude varies, which the
+      // browser cannot compute — it never rescales), so one arrow at the centroid anchor.
+      // A frame-local direction needs the solve-fitted face frame, which is not carried
+      // here; the inspector's fn probe and the provenance report carry the numbers instead
+      // of a guessed arrow.
+      if (l.kind.dir.form !== 'global') continue;
+      const v = l.kind.dir.v;
+      const mag = Math.hypot(v[0], v[1], v[2]);
+      if (mag < 1e-9) continue;
+      if (!cs.length) continue;
+      const anchorC = centroidAnchor(cs);
+      const len = base * 0.5;
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(v[0] / mag, v[1] / mag, v[2] / mag),
+        anchorC.pos.clone().addScaledVector(anchorC.normal, 0.2),
+        len,
+        LOAD_COLOR,
+        Math.min(2.2, len * 0.3),
+        Math.min(1.3, len * 0.15),
+      );
+      arrow.renderOrder = 3;
+      glyphs.add(arrow);
     } else {
       // Pressure pushes into the face: a short arrow along −normal at each patch.
       const len = base * 0.5;
@@ -519,7 +542,12 @@ function SetupTree() {
       <SectionHead label="Loads" add={() => addAnalysis('load')} title="Add load on the selected region" testId="add-load" />
       {doc.loads.length === 0 && <div class="hint">Select a region, then add a load.</div>}
       {doc.loads.map((l) => (
-        <AnalysisRow key={l.id} kind="load" id={l.id} meta={`${l.kind.type === 'force' ? 'force' : 'pressure'} · ${l.case}`} />
+        <AnalysisRow
+          key={l.id}
+          kind="load"
+          id={l.id}
+          meta={`${l.kind.type} · ${l.case}`}
+        />
       ))}
     </>
   );
@@ -766,15 +794,115 @@ function SupportInspector({ id }: { id: string }) {
   );
 }
 
+/** Curved preview of one live-compiled fn (M11): the q(x) samples from the wasm probe,
+ * band edges as hairlines, and the per-1-mm integral. The probe runs on each keystroke —
+ * compiling a short expression is microseconds. y-dependence previews its y = 0 slice. */
+function FnCurve(p: LoadFnProbe) {
+  if (!p.ok || !p.xs || !p.q || !p.domain) {
+    return <div class="error-box">{p.error ?? 'nothing to draw'}</div>;
+  }
+  const { xs, q, domain, integral = 0 } = p;
+  const W = 220;
+  const H = 64;
+  const PAD = 5;
+  const xr = domain.hi - domain.lo || 1;
+  const qmax = Math.max(1e-12, ...q.map(Math.abs));
+  const y0 = H * 0.72;
+  const amp = (H * 0.25) / qmax;
+  const px = (x: number) => PAD + ((x - domain.lo) / xr) * (W - 2 * PAD);
+  const pts = xs.map((x, i) => `${px(x).toFixed(1)},${(y0 - q[i] * amp).toFixed(1)}`).join(' ');
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        data-testid="fn-curve"
+        style={{ width: '100%', display: 'block', marginTop: 4 }}
+      >
+        {p.bands?.map((b, i) => (
+          <Fragment key={i}>
+            <line x1={px(b.lo)} y1={0} x2={px(b.lo)} y2={H} stroke="var(--line-strong)" strokeWidth="1" />
+            <line x1={px(b.hi)} y1={0} x2={px(b.hi)} y2={H} stroke="var(--line-strong)" strokeWidth="1" />
+          </Fragment>
+        ))}
+        <line x1={PAD} y1={y0} x2={W - PAD} y2={y0} stroke="var(--line)" strokeWidth="1" />
+        <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
+        <text x={PAD} y={H - 1} fontSize="9" fill="var(--text-3)" fontFamily="var(--mono)">
+          x {domain.lo.toFixed(1)} … {domain.hi.toFixed(1)} mm ({domain.from === 'bands' ? 'fn bands' : 'default'}) · from the face's centroid
+        </text>
+      </svg>
+      <div class="hint">
+        ∫ q dx ≈ {integral.toFixed(3)} N per 1 mm of face width (y = 0 slice). The applied
+        total uses the real facets; the solve report names it.
+      </div>
+    </div>
+  );
+}
+
+/** One distributed-load fn editor: live-compiled text plus the probe's curve, integral,
+ * and validate strings. Commits to the document on blur, like the other text rows. */
+function FnField({ id, expr }: { id: string; expr: string }) {
+  const [v, setV] = useState(expr);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty) setV(expr);
+  }, [expr, dirty]);
+  const probe = loadFnProbe(v, -20, 20);
+  const commit = () => {
+    const t = v.trim();
+    if (dirty && t !== expr) {
+      store.transact('Set load fn', (d) => {
+        const k = loadIn(d, id).kind;
+        if (k.type === 'distributed') k.expr = t;
+      });
+    }
+    setDirty(false);
+  };
+  return (
+    <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div class="numbox">
+        <input
+          class="num"
+          value={v}
+          data-testid="load-fn"
+          spellcheck={false}
+          title={'Bands `lo < x < hi -> value` separated by ; at the face frame: x from the centroid, y across, n outward'}
+          onInput={(e) => {
+            setV((e.target as HTMLInputElement).value);
+            setDirty(true);
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
+          onBlur={commit}
+        />
+      </div>
+      {probe.checks && probe.checks.length > 0 && (
+        <div class="error-box">
+          {probe.checks.map((c) => (
+            <div key={c}>{c}</div>
+          ))}
+        </div>
+      )}
+      <FnCurve {...probe} />
+    </div>
+  );
+}
+
 function LoadInspector({ id }: { id: string }) {
   useApp();
   const l = store.doc.loads.find((x) => x.id === id);
   if (!l) return null;
-  const setKind = (t: 'force' | 'pressure') => {
+  const setKind = (t: 'force' | 'pressure' | 'distributed') => {
     if (t === l.kind.type) return;
     store.transact('Set load kind', (d) => {
       const load = loadIn(d, id);
-      load.kind = t === 'force' ? { type: 'force', vector: [0, 0, -100] } : { type: 'pressure', mpa: 1 };
+      load.kind =
+        t === 'force'
+          ? { type: 'force', vector: [0, 0, -100] }
+          : t === 'pressure'
+            ? { type: 'pressure', mpa: 1 }
+            : { type: 'distributed', expr: '0.01', dir: { form: 'local', v: [0, 0, -1] } };
     });
   };
   return (
@@ -792,11 +920,12 @@ function LoadInspector({ id }: { id: string }) {
           commit={(rid) => store.transact('Set load region', (d) => void (loadIn(d, id).region = rid))}
         />
         <label class="plain">Type</label>
-        <Seg<'force' | 'pressure'>
+        <Seg<'force' | 'pressure' | 'distributed'>
           value={l.kind.type}
           options={[
             { value: 'force', label: 'Force' },
             { value: 'pressure', label: 'Pressure' },
+            { value: 'distributed', label: 'Fn', title: 'Force per unit area from a compiled fn over the face' },
           ]}
           onChange={setKind}
           testId="load-kind"
@@ -846,6 +975,82 @@ function LoadInspector({ id }: { id: string }) {
           />
         )}
       </div>
+      {l.kind.type === 'distributed' && (
+        <div class="field-grid" style={{ marginTop: 4 }}>
+          <FnField id={id} expr={l.kind.expr} />
+          <label class="plain">Direction</label>
+          <Seg<'global' | 'local'>
+            value={l.kind.dir.form}
+            options={[
+              { value: 'global', label: 'World', title: 'Fixed world vector (x, y, z); normalised at the solve' },
+              { value: 'local', label: 'Face frame', title: 'x, y, then outward normal n of the face frame' },
+            ]}
+            onChange={(t) =>
+              store.transact('Set load direction', (d) => {
+                const k = loadIn(d, id).kind;
+                if (k.type !== 'distributed') return;
+                k.dir = t === 'global' ? { form: 'global', v: [0, 0, -1] } : { form: 'local', v: [0, 0, -1] };
+              })
+            }
+            testId="load-dir-form"
+          />
+          {l.kind.dir.form === 'global' ? (
+            <VecRow
+              label="Direction"
+              get={(d) => {
+                const k = loadIn(d, id).kind;
+                return k.type === 'distributed' && k.dir.form === 'global' ? k.dir.v : [0, 0, -1];
+              }}
+              set={(d, v) => {
+                const k = loadIn(d, id).kind;
+                if (k.type === 'distributed' && k.dir.form === 'global') k.dir = { form: 'global', v };
+              }}
+              undoLabel="Set load direction"
+              testId="load-dir"
+              step={1}
+            />
+          ) : (
+            <VecRow
+              label="Frame dir"
+              get={(d) => {
+                const k = loadIn(d, id).kind;
+                return k.type === 'distributed' && k.dir.form === 'local' ? k.dir.v : [0, 0, -1];
+              }}
+              set={(d, v) => {
+                const k = loadIn(d, id).kind;
+                if (k.type === 'distributed' && k.dir.form === 'local') k.dir = { form: 'local', v };
+              }}
+              undoLabel="Set load frame direction"
+              testId="load-dir"
+              step={1}
+            />
+          )}
+          <NumRow
+            label="Total"
+            unit="N"
+            get={(d) => {
+              const k = loadIn(d, id).kind;
+              return k.type === 'distributed' ? k.total ?? 0 : 0;
+            }}
+            set={(d, v) => {
+              const k = loadIn(d, id).kind;
+              if (k.type !== 'distributed') return;
+              if (v === 0) delete k.total;
+              else k.total = v;
+            }}
+            undoLabel="Set load total"
+            testId="load-total"
+            step={10}
+            title="Optional: rescale the fn so its resultant is this many newtons (0 keeps the fn as written)"
+          />
+          <div class="hint" style={{ gridColumn: '1 / -1' }}>
+            Density in N/mm² at the face's frame: x runs from the face centroid, y across it,
+            n out. The solve fits the frame and reports the applied resultant; a face that
+            curves away from its plane (fit RMS over 10% of extent) is refused — a swept
+            skirt needs dir= instead of the frame.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

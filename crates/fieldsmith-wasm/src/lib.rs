@@ -59,6 +59,49 @@ pub fn validate(doc_json: &str) -> Result<String, JsValue> {
     to_json(&doc_from(doc_json)?.validate())
 }
 
+/// Compile a load-density `fn` and sample it for the setup editor (M11). `lo`/`hi` are the
+/// requested sample range in face-local mm, used only when the fn has no bands (a plain
+/// body); the fn's own band domain is used otherwise. Samples sit at in-plane y = 0 — a fn
+/// of both x and y previews its x slice. The integral is the trapezoid over those samples,
+/// per 1 mm of face width; the applied resultant uses the real face areas. Checks list the
+/// document validate() strings this fn would raise.
+#[wasm_bindgen(js_name = loadFnProbe)]
+pub fn load_fn_probe(src: &str, lo: f64, hi: f64) -> Result<String, JsValue> {
+    let f = match fieldsmith_doc::loaddist::LoadFn::compile(src) {
+        Ok(f) => f,
+        Err(e) => {
+            return to_json(&serde_json::json!({ "ok": false, "error": e }));
+        }
+    };
+    let (d, from): ((f64, f64), &str) = match f.domain() {
+        Some(d) => (d, "bands"),
+        None => ((lo, hi), "requested"),
+    };
+    let n = 121usize;
+    let mut xs = Vec::with_capacity(n);
+    let mut q = Vec::with_capacity(n);
+    for i in 0..n {
+        let x = d.0 + (d.1 - d.0) * i as f64 / (n - 1).max(1) as f64;
+        xs.push(x);
+        q.push(f.eval(x, 0.0));
+    }
+    // Per-1-mm-of-width integral of the sampled curve (the applied total scales with the
+    // real facet areas; this is the shape-check number only).
+    let mut integral = 0.0f64;
+    for i in 1..n {
+        integral += 0.5 * (q[i - 1] + q[i]) * (xs[i] - xs[i - 1]);
+    }
+    to_json(&serde_json::json!({
+        "ok": true,
+        "domain": { "lo": d.0, "hi": d.1, "from": from },
+        "bands": f.bands().iter().map(|b| serde_json::json!({ "lo": b.lo, "hi": b.hi })).collect::<Vec<_>>(),
+        "xs": xs,
+        "q": q,
+        "integral": integral,
+        "checks": f.static_checks("load"),
+    }))
+}
+
 /// The built-in material library (JSON array).
 #[wasm_bindgen]
 pub fn material_library() -> Result<String, JsValue> {

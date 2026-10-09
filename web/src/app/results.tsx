@@ -12,6 +12,7 @@ import type { Viewport } from '../view/viewport';
 import { analysis } from './analysis';
 import { fmt } from './fields';
 import * as THREE from 'three';
+import type { LoadReport } from '../doc/wasm';
 import type { LevelResult } from '../doc/wasm';
 
 // ---- colour ramp ---------------------------------------------------------------------
@@ -429,6 +430,26 @@ function ResultsPanel() {
               </Fragment>
             ))}
           </div>
+          {lvl.meta.cases.some((c) => (c.load_reports ?? []).length > 0) && (
+            <div class="field-grid" data-testid="load-provenance">
+              <span class="plain">Loads (applied)</span>
+              <span class="meta">resultant and moment about the document origin</span>
+              {lvl.meta.cases.flatMap((c) =>
+                (c.load_reports ?? []).map((r: LoadReport) => (
+                  <Fragment key={`${c.name}·${r.id}`}>
+                    <span class="plain">{r.id} · {r.region}</span>
+                    <span class="num">
+                      {fmt(r.resultant[0], 1)}, {fmt(r.resultant[1], 1)}, {fmt(r.resultant[2], 1)} N ·
+                      M {fmt(r.moment[0], 0)}, {fmt(r.moment[1], 0)}, {fmt(r.moment[2], 0)} N·mm · {r.facets} faces
+                      {r.fit_rms != null
+                        ? ` · ×${fmt(r.scale, 3)} of ${fmt(r.unscaled, 2)} N`
+                        : ''}
+                    </span>
+                  </Fragment>
+                )),
+              )}
+            </div>
+          )}
           {lvl.meta.fill && (
             <div class="field-grid" data-testid="fill-summary">
               <span class="plain">Fill</span>

@@ -72,25 +72,28 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
       that carry `tessellated_lods`, named as such in the case report — and if that is still
       undoable, this file is changed in a reviewed commit, not quietly skipped.
 
-### D. Distributed loading (M11 — user-set, 2026-10-09)
-- [ ] Face-local coordinates for a labelled region: its facets fit a least-squares plane;
+### D. Distributed loading (M11 — user-set, 2026-10-09; evidence: docs/verification/V15.md, `crates/fieldsmith-core/tests/distributed_load.rs`, CLI `solve --report` load table, the Setup-lens Fn editor)
+- [x] Face-local coordinates for a labelled region: its facets fit a least-squares plane;
       local frame (x, y, n) with a deterministic rule for which in-plane direction is x
       (documented in the load module's header). The fit residual is reported with the
       load's provenance, and a region whose residual exceeds a stated bound is refused
       by name rather than silently flattened.
-- [ ] A distributed load compiles: chained band terms (`lo < x < hi -> value`) plus an
+- [x] A distributed load compiles: chained band terms (`lo < x < hi -> value`) plus an
       arithmetic expression body over {x, y} (sin, cos, exp, polynomials), compiled once
       in the doc layer and evaluated at facet centroids; `.fsm` text round-trips losslessly.
-- [ ] Semantics: the function returns force per unit area (N/mm²) applied in a stated
+- [x] Semantics: the function returns force per unit area (N/mm²) applied in a stated
       direction (global vector or components in {x, y, n}); the applied resultant (N) and
       moment (N·mm about the document origin) are computed and shown with the load's
       provenance; `total=` optionally rescales the function to a stated resultant.
-- [ ] The solver consumes it as consistent nodal loads through the same area-weighted
-      path `press` already uses; no per-node special cases.
-- [ ] The Setup lens gains a distribution editor: the text body with a parsed preview of
+- [x] The solver consumes it as consistent nodal loads through the same area-weighted
+      path `press` already uses; no per-node special cases. (constant density matches a
+      `force=` load to 1e-9 relative at the nodes)
+- [x] The Setup lens gains a distribution editor: the text body with a parsed preview of
       F(x) over the band extent and the integrated total; `validate()` errors surface
       specifically (unknown variable, non-finite value, overlapping bands).
-- [ ] V15 passes (below).
+- [x] V15 passes (below): deflections within 0.4 % of the Euler–Bernoulli references
+      (tolerance 15 %), resultants within 0.5 % (tolerance 2 %), fit RMS ~1e−13 mm on the
+      flat face.
 
 ### E. Carried engineering criteria (already shipped, audited in git at `9606890`)
 - [x] Cargo workspace + TypeScript web app, Vite, static hosting; `fenics-rs` as a dependency;

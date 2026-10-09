@@ -57,6 +57,23 @@ export function validate(doc: Document): string[] {
   return JSON.parse(w.validate(JSON.stringify(doc)));
 }
 
+/** A compiled load-density fn for the setup editor (M11): the band domain, 121 samples of
+ * q(x) at y = 0, the per-1-mm integral over those samples, and the validate() strings. */
+export interface LoadFnProbe {
+  ok: boolean;
+  error?: string;
+  domain?: { lo: number; hi: number; from: 'bands' | 'requested' };
+  bands?: { lo: number; hi: number }[];
+  xs?: number[];
+  q?: number[];
+  integral?: number;
+  checks?: string[];
+}
+
+export function loadFnProbe(src: string, lo: number, hi: number): LoadFnProbe {
+  return JSON.parse(w.loadFnProbe(src, lo, hi));
+}
+
 export function materialLibrary(): Material[] {
   return JSON.parse(w.material_library());
 }
@@ -320,6 +337,24 @@ export interface CaseSummary {
   max_vm_elem: number;
   max_displacement: number;
   solve: SolveReport;
+  /** Applied-load provenance when the case has resolved loads (serde field of
+   * fieldsmith_core::CaseResult; absent on older bundles). */
+  load_reports?: LoadReport[];
+}
+
+/** What one labelled load applied at the solve (M11 provenance): resultant and moment
+ * about the document origin, and for distributed (`fn=`) loads the unscaled density
+ * resultant, the factor `total=` applied and the face-frame fit numbers. */
+export interface LoadReport {
+  id: string;
+  region: string;
+  facets: number;
+  resultant: Vec3;
+  moment: Vec3;
+  unscaled: number;
+  scale: number;
+  fit_rms: number | null;
+  fit_extent: number | null;
 }
 
 export interface AnalysisMeta {

@@ -1,6 +1,7 @@
 //! Fieldsmith document model, `.fsm` text format and material library.
 
 pub mod fsm;
+pub mod loaddist;
 pub mod materials;
 pub mod model;
 
