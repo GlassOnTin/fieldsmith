@@ -7,7 +7,7 @@ import { Tree } from './Tree';
 import { Inspector } from './Inspector';
 import { ViewportHost } from './ViewportHost';
 import { Palette, Menus } from './Palette';
-import { EXAMPLES, addShape, openFile, openText, runCommand, saveFile } from './commands';
+import { EXAMPLES, addShape, importMeshCommand, openFile, openText, runCommand, saveFile } from './commands';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -64,6 +64,9 @@ function EmptyState() {
           </button>
           <button class="btn" onClick={() => addShape('cylinder')}>
             <Icon.cylinder /> Cylinder
+          </button>
+          <button class="btn" onClick={importMeshCommand} data-testid="empty-import-mesh">
+            <Icon.mesh /> Import mesh…
           </button>
           <button class="btn" onClick={openFile}>
             Open .fsm…
@@ -156,6 +159,12 @@ export function App() {
           </button>
           <button class="btn ghost icon" title={`Redo ${store.redoLabel()} (Ctrl Shift Z)`} disabled={!store.canRedo()} onClick={() => store.redo()} data-testid="redo">
             <Icon.redo />
+          </button>
+          <button class="btn ghost icon" title="Open .fsm / .fsmz (Ctrl O)" onClick={openFile} data-testid="open">
+            <Icon.folder />
+          </button>
+          <button class="btn ghost icon" title="Import mesh (.stl / .obj / .glb / .3mf)" onClick={importMeshCommand} data-testid="import-mesh">
+            <Icon.mesh />
           </button>
           <button class="btn ghost icon" title="Save .fsm (Ctrl S)" onClick={saveFile} data-testid="save">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">

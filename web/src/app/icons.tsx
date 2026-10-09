@@ -74,6 +74,18 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M5.5 3.5 10 8l-4.5 4.5" />
     </S>
   ),
+  folder: () => (
+    <S>
+      <path d="M2 4.5h4l1.2 1.5H14v7H2z" />
+      <path d="M2 4.5v-1h4l1 1" />
+    </S>
+  ),
+  mesh: () => (
+    <S>
+      <path d="M8 2 13.5 5v6L8 14 2.5 11V5z" />
+      <path d="M2.5 5 8 8l5.5-3M8 8v6M5.25 3.5l5.5 3M10.75 3.5l-5.5 3" />
+    </S>
+  ),
   menu: () => (
     <S>
       <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
