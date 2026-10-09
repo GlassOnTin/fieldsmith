@@ -7,9 +7,9 @@ from integrating that field, not from a boundary representation.
 
 **Status:** v0.2.0. The model → setup → solve → fill → export flow works locally and is
 verified by the cases in [docs/verification/](docs/verification/); imported meshes
-(GLB, OBJ, binary and ASCII STL) become field leaves with labelled faces and
-region-driven extension (V10). The GOAL.md performance budgets pass in the headed
-Chromium referee on a workstation — [budgets.md](docs/verification/budgets.md); the
+(GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
+with labelled faces and region-driven extension (V10). The GOAL.md performance budgets
+pass in the headed Chromium referee on a workstation — [budgets.md](docs/verification/budgets.md); the
 budgets' stated mid-range laptop and Firefox measurements have not been run.
 
 ## Building and running
@@ -62,7 +62,8 @@ measured non-manifold edges where TPMS sheets cross or pinch inside one cell
 Linear-elastic, small strain, isotropic material only; homogenisation of the fill is
 isotropic (the actual TPMS sheets are not, and the error against a resolved reference is
 measured, not assumed, in V7). One material per part. No STEP or B-rep import, no topology
-optimisation, no modal, thermal or CFD analysis, no multi-material assembly, no g-code
+optimisation, no modal, thermal or CFD analysis, no multi-material assembly (3MF import
+reads single-object files; multi-material labelling is not built), no g-code
 generation, no mobile layout. One load case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 

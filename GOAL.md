@@ -81,13 +81,13 @@ without help, and the outputs satisfy the verification criteria below.
 - [ ] No emoji icons, no gradient text, no status-pill clutter. Zero console errors on the bracket test.
 
 ### G. Import (M6 — user-set milestone, outside v0.1's definition of done)
-- [x] Import GLB, OBJ, binary and ASCII STL; units and up-axis baked at import with an explicit choice in the dialog.
+- [x] Import GLB, OBJ, binary and ASCII STL, and 3MF (our own export format); units and up-axis baked at import with an explicit choice in the dialog (3MF units come from the file's `<model unit>` attribute).
 - [x] The imported mesh becomes a field leaf (voxelised signed distance + segmentation patches) that composes with primitives and modifiers.
 - [x] Faces label on imported meshes through the shared normal-cone rule; patch-click labelling works.
 - [x] Region-driven extension: `extend` sweeps a labelled band along a vector, e.g. the meshy bottom plate extended downward 10 mm.
 - [x] Sidecar `.fsmz` round-trips a mesh-heavy document bit-consistently (V9, V10).
 - [x] CLI `import` / `solve` / `export` run the mesh milestone end to end headless (V10).
-- [ ] 3MF import (our export format today); multi-material labelling of volumes. (The mesh-convergence verification case deferred here is landed as V11 in M7 — see section H.)
+- [ ] Multi-material labelling of volumes. (3MF import and the mesh-convergence verification case, both deferred here, are landed in M7 — see section H.)
 
 ### H. Editing (M7 — user-set milestone, outside v0.1's definition of done)
 - [x] Booleans on imported meshes are verified compositions, not presumed: mesh×primitive and mesh×mesh union/cut volumes against closed form on the voxel test harness, and patch labels surviving each composition. (Landed: `boolean_volume.rs` — union/subtract/intersect volumes against closed form at 0.1–0.5 % error, patch labels surviving each composition; label claims through composites landed earlier — union/subtract/intersect attribute the surface to the nearest operand, blend bands to neither, GLSL twin included.)
@@ -95,7 +95,7 @@ without help, and the outputs satisfy the verification criteria below.
 - [x] `Filled` (graded lattice) on a mesh document measured — was declared untested in V10. (Landed: `fill_mesh.rs` — full graded pipeline on an STL-imported 40×10×10 bar: converged graded re-solve, softer than solid (0.0049 vs 0.0024 mm), all three element classes present, 19.53 g vs 31.31 g solid (37.6 % lighter), design density inside the law's measured band, cap/tip regions still claim their facets on the filled document. V10's known-gap note updated with the measured numbers.)
 - [x] Modifiers on mesh leaves: offset and shell with thickness in mm; `.fsm` text and validate rules ride along. (Landed: a hydrated single-mesh operand bakes a keyed derived grid — pointwise within one band, mask bake beyond it; groups of several operands, unhydrated meshes and refused bakes keep the eval-time wrap, which validate now names.)
 - [x] Face selectors on derived solids: extend nodes and boolean results expose labelled faces, closing V10's gap — the skirt wall is clampable. (Landed: a face-rule extend's derived leaf carries a `face_hint` (the swept surface's axis); `eval_face` labels the derived surface from it, signed by the SDF gradient; `region_facets` matches the facet's outward normal against it — the same cone rule as an imported mesh. Boolean results inherit the hint through the step-1 composite rule. Measured: `extend_face_region.rs` — a `skirt.nz` region claims 468 facets (105.0 mm²) on the skirt's tip, a support clamps 1045 nodes there, and the skirt-clamped solve converges; `all`/`side` on an extend validate as errors. The web face menu lists extends with their axis faces.)
-- [ ] 3MF import rides along if cheap; multi-material labelling stays out (its own milestone).
+- [x] 3MF import rides along. (Landed: `threemf.rs` — a strict single-object reader over the existing zip/inflate path; our own writer's files round-trip with the volume intact (8000.0 → 7998.1 ± 0.6 mm³, 0 open edges, 6 patches), units scale from the `<model unit>` attribute, and foreign files read. Wired into `import_mesh`, the CLI `import` verb and the web file menu. Multi-material labelling stays out — its own milestone.)
 
 ---
 
