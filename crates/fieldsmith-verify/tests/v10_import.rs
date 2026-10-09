@@ -13,7 +13,7 @@ use fieldsmith_core::{region_facets, Facet};
 use fieldsmith_doc::{Document, Face, NodeKind, Region, Selector};
 use fieldsmith_field::volume::volume_auto;
 use fieldsmith_field::expr;
-use fieldsmith_mesh::export::TriMesh;
+use fieldsmith_mesh::export::{surface, TriMesh};
 use fieldsmith_mesh::{stuff, V3};
 use fieldsmith_solve::p2::face_nodes;
 use fieldsmith_solve::P2Mesh;
@@ -531,4 +531,68 @@ fn cube_stl_bytes() -> Vec<u8> {
     }
     s.push_str("endsolid box\n");
     s.into_bytes()
+}
+// ---------------------------------------------------------------------------------------------
+// 3MF round trip (goal M7, step 6): export a mesh to 3MF with our own writer, import it
+// back through the real chain, and check the volume survives.
+
+#[test]
+fn threemf_exports_and_reimports_with_the_volume_intact() {
+    // Mesh a 20 mm cube, export it as 3MF, re-import the bytes through the real chain.
+    let cube = surface(
+        |p: V3| {
+            let t = [p[0].abs() - 10.0, p[1].abs() - 10.0, p[2].abs() - 10.0];
+            let o = [t[0].max(0.0), t[1].max(0.0), t[2].max(0.0)];
+            (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt() + t[0].max(t[1]).max(t[2]).min(0.0)
+        },
+        [-10.0; 3],
+        [10.0; 3],
+        0.5,
+    );
+    let v_export = cube.volume();
+    let bytes = cube.write_3mf("Round trip", "petg");
+    println!(
+        "export: {} verts, {} tris, volume {:.1} mm³, {} bytes 3MF",
+        cube.verts.len(),
+        cube.tris.len(),
+        v_export,
+        bytes.len()
+    );
+
+    let out = import_mesh("3mf", &bytes, &opts(None, None, None, "roundtrip.3mf")).unwrap();
+    assert_eq!(out.nodes.len(), 1, "one object in our writer's file");
+    // The object's name attribute names the part, sanitized to a valid node id
+    // (spaces become underscores).
+    assert_eq!(
+        out.nodes[0].id, "Round_trip",
+        "the object's name attribute names the part"
+    );
+    let p = &out.parts[0];
+    println!(
+        "reimport: {} tris, {} welded verts, {} patches, {} open edges, bbox {} mm, voxel {} mm",
+        p.tris,
+        p.verts,
+        p.patches,
+        p.open_edges,
+        p.bbox.map(|v| v.to_string()).join(" "),
+        p.voxel
+    );
+    assert_eq!(p.open_edges, 0, "the round-tripped mesh is watertight");
+    // Our writer emits 6-decimal coordinates, so the re-imported vertices match the
+    // export's to the printed precision; the volume is intact to well under 1 %.
+    assert_eq!(p.tris as usize, cube.tris.len(), "triangle count survives");
+
+    let doc = part_doc(&out.nodes, &[], "3MF round trip");
+    let (vol, err, spacing) = doc_volume_all(&doc);
+    println!(
+        "reimported volume {vol:.1} ± {err:.1} at h {spacing} vs export {v_export:.1}"
+    );
+    assert!(
+        (vol - v_export).abs() / v_export < 0.01,
+        "volume {vol} ± {err} vs export {v_export}"
+    );
+    // The re-imported part is a field leaf: solid inside, vacuum outside. The writer
+    // shifts vertices into the positive octant, so the cube spans [0, 20]³.
+    assert!(sample(&doc, [10.0, 10.0, 10.0]) < 0.0, "interior is solid");
+    assert!(sample(&doc, [10.0, 10.0, 21.0]) > 0.0, "just outside the +z face is air");
 }
