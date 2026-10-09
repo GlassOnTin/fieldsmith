@@ -19,6 +19,7 @@ pub mod export;
 pub mod gltf;
 pub mod obj;
 pub mod quality;
+pub mod threemf;
 pub mod weld;
 pub mod zip;
 pub use quality::{quality, Quality};
