@@ -516,6 +516,23 @@ impl Document {
                         r.id, s.shape
                     ));
                 }
+                // An extend node exposes its swept surface's face (M7): the axis faces
+                // label the skirt wall, but `all` and `side` are not faces of a derived
+                // solid.
+                if matches!(s.face, Face::All | Face::Side)
+                    && s.patch.is_none()
+                    && self
+                        .find(&s.shape)
+                        .is_some_and(|n| matches!(&n.kind, NodeKind::Extend { .. }))
+                {
+                    errs.push(format!(
+                        "Region '{}' faces '{}' of extend '{}' — an extend exposes its swept face, not '{}'",
+                        r.id,
+                        s.face.name(),
+                        s.shape,
+                        s.face.name()
+                    ));
+                }
             }
         }
         for s in &self.supports {

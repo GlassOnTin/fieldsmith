@@ -1331,6 +1331,44 @@ region bottom = mesh1.p1
     }
 
     #[test]
+    fn extend_face_selector_names_the_swept_face() {
+        // M7: face selectors on derived solids. A region selecting a geometric face of
+        // an extend node is valid (the extend's derived leaf carries the face hint), and
+        // `all`/`side` on an extend are refused — the swept solid has no side wall and
+        // `all` is not a face.
+        let mesh_line = "mesh mesh1 src=\"s\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=1 patches=2 open_edges=0";
+        let doc = |body: &str| {
+            parse(&format!(
+                "fieldsmith 1\nname \"n\"\nmaterial petg\n{mesh_line}\n{body}\n"
+            ))
+            .unwrap()
+        };
+        // A face selector on the extend node validates clean.
+        let d = doc(
+            "region bottom = mesh1.p1\nextend skirt bottom dir=(0, 0, -1) len=10\nregion wall = skirt.nz\n",
+        );
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        // `all` on an extend is not a face.
+        let d = doc(
+            "region bottom = mesh1.p1\nextend skirt bottom dir=(0, 0, -1) len=10\nregion all = skirt.all\n",
+        );
+        let errs = d.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("exposes its swept face")),
+            "{errs:?}"
+        );
+        // `side` on an extend is refused: the swept solid has no side wall.
+        let d = doc(
+            "region bottom = mesh1.p1\nextend skirt bottom dir=(0, 0, -1) len=10\nregion side = skirt.side\n",
+        );
+        let errs = d.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("exposes its swept face")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
     fn mesh_modifier_validate_names_the_fallback_conditions() {
         // One mesh node per document (ids are unique); the group wraps a single mesh
         // child, so the modifier check sees exactly the group's contents.
