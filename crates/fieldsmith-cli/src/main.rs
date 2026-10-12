@@ -41,8 +41,12 @@ const USAGE: &str =
           near the surface; needed for the 0.1 mm budget, carries the
           defect classes measured in V8)
   import  mesh an external part         [--out OUT.fsm] [--units m|mm|cm|in]
-                                        [--up y|z] [--voxel MM]
-          SRC is a .glb, .stl, .obj or .3mf file. Writes OUT.fsm (default: the
+                                        [--up y|z] [--voxel MM] [--step-chord MM]
+          SRC is a .glb, .stl, .obj, .3mf, .step or .stp file. STEP B-reps are
+          tessellated from their analytic faces (planes, cylinders, spheres,
+          cones, tori, B-splines) at the chord tolerance (--step-chord, mm
+          sagitta, default derived from the model's size). Writes OUT.fsm
+          (default: the
           source stem in the working directory) plus the .fsmz sidecar
           that stores its grids; volume/solve/export of the written
           document need that sidecar beside the .fsm.";
@@ -294,22 +298,31 @@ fn run(args: &[String]) -> Result<(), String> {
 /// the app.
 fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
     let path = std::path::Path::new(src);
-    let kind = path
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !matches!(kind.as_str(), "glb" | "stl" | "obj" | "3mf") {
+    if !matches!(ext.as_str(), "glb" | "stl" | "obj" | "3mf" | "step" | "stp") {
         return Err(format!(
-            "import: source must be .glb, .stl, .obj or .3mf, got .{kind}"
+            "import: source must be .glb, .stl, .obj, .3mf, .step or .stp, got .{ext}"
         ));
     }
+    // .stp is an alias; the core kind is "step"
+    let kind = if ext == "stp" { "step" } else { ext.as_str() };
     let units = opt(args, "--units");
     let up = opt(args, "--up");
     let voxel = match opt(args, "--voxel") {
         Some(s) => Some(
             s.parse::<f64>()
                 .map_err(|_| format!("bad --voxel value: {s}"))?,
+        ),
+        None => None,
+    };
+    let step_chord = match opt(args, "--step-chord") {
+        Some(s) => Some(
+            s.parse::<f64>()
+                .map_err(|_| format!("bad --step-chord value: {s}"))?,
         ),
         None => None,
     };
@@ -341,8 +354,9 @@ fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
         voxel,
         src: &file_name,
         taken: &[],
+        step_chord,
     };
-    let out = import_mesh(&kind, &bytes, &opts)?;
+    let out = import_mesh(kind, &bytes, &opts)?;
 
     let doc = Document {
         name: stem,
@@ -374,6 +388,21 @@ fn import_cmd(src: &str, args: &[String]) -> Result<(), String> {
             p.ms,
             p.hash
         );
+        if let Some(s) = &p.step {
+            match s.volume {
+                Some(v) => println!("    STEP: {} b-rep faces, flux volume {v:.3}", s.faces),
+                None => println!("    STEP: {} b-rep faces, flux volume unavailable", s.faces),
+            }
+        }
+    }
+    if let Some(s) = &out.step {
+        println!(
+            "    STEP file: unit {}, chord {:.6} mm, {} solid(s), parse {} ms, tessellate {} ms",
+            s.length_unit, s.chord, s.solids, s.parse_ms, s.tess_ms
+        );
+        for r in &s.refusals {
+            println!("    STEP refusal: {r}");
+        }
     }
     println!(
         "wrote {out_path} and {} ({:.1} MiB of grids) — geometry verbs need the sidecar beside the .fsm",

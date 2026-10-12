@@ -280,14 +280,17 @@ struct ImportOptions {
     src: String,
     #[serde(default)]
     ids: Vec<String>,
+    /// STEP tessellation chord override (mm, sagitta); `None` = derived default.
+    #[serde(default)]
+    step_chord: Option<f64>,
 }
 
-/// Import a GLB / STL / OBJ / 3MF (`kind`: "glb" | "stl" | "obj" | "3mf") into documented
-/// mesh nodes,
+/// Import a GLB / STL / OBJ / 3MF / STEP (`kind`: "glb" | "stl" | "obj" | "3mf" | "step")
+/// into documented mesh nodes,
 /// voxelising and hydrating the session registry. `opts_json`: `{units?, up?, voxel?,
-/// src?, ids?}`. Returns `ImportOut` JSON — the nodes to splice into `doc.root` plus an
-/// honest per-part report (tris, welded verts, patches, open edges, bounds, hash, cell
-/// budget and timings).
+/// src?, ids?, step_chord?}`. Returns `ImportOut` JSON — the nodes to splice into
+/// `doc.root` plus an honest per-part report (tris, welded verts, patches, open edges,
+/// bounds, hash, cell budget and timings).
 #[wasm_bindgen(js_name = importMesh)]
 pub fn import_mesh(bytes: &[u8], kind: &str, opts_json: &str) -> Result<String, JsValue> {
     let o: ImportOptions = serde_json::from_str(opts_json).map_err(js_err)?;
@@ -297,6 +300,7 @@ pub fn import_mesh(bytes: &[u8], kind: &str, opts_json: &str) -> Result<String, 
         voxel: o.voxel,
         src: &o.src,
         taken: &o.ids,
+        step_chord: o.step_chord,
     };
     let out = fieldsmith_core::import::import_mesh(kind, bytes, &opts)?;
     to_json(&out)

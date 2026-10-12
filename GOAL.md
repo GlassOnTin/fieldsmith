@@ -66,21 +66,23 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
       (analysis stays single-material — labelling is for the slicer, not for the stiffness).
 - [x] V12 passes (below).
 
-### C. STEP in (M10)
-- [ ] A maintained STEP reader crate is consumed as a dependency, not vendored or forked
-      (candidates checked 2026-10-09: `step-io` 0.2.x, experimental, MIT/Apache; 
-      `cadmpeg-codec-step` 0.5.x, Apache-2.0 — neither tessellates B-rep).
-- [ ] Tessellation is ours: planes, cylinders, spheres, cones and tori are flattened from
+### C. STEP in (M10 — evidence: docs/verification/V14.md, `crates/fieldsmith-verify/tests/v14_step.rs`, `crates/fieldsmith-core/src/step.rs` (reader) and `steptess.rs` (tessellation))
+- [x] A maintained STEP reader crate is consumed as a dependency, not vendored or forked
+      (chosen 2026-10-09: `step-io` 0.2.x, experimental, MIT/Apache).
+- [x] Tessellation is ours: planes, cylinders, spheres, cones and tori are flattened from
       their stored analytic forms; B-spline faces are triangulated in parameter space; a face
       whose surfaces the reader cannot produce is refused by name (no silent drops, the
       V10 dirty-data lesson applied up front).
-- [ ] Units come from the file's `SI_UNIT`; up-axis override as with mesh imports.
-- [ ] The tessellated body enters the same voxelisation path as GLB/OBJ/STL/3MF: field leaf,
+- [x] Units come from the file's unit context — `SI_UNIT` for millimetre files,
+      conversion-based units where the context declares them (amended in a reviewed
+      commit: CTC-05's only unit context is a `CONVERSION_BASED_UNIT('INCH',…)` whose
+      factor bases are the file's only `SI_UNIT`s); up-axis override as with mesh
+      imports.
+- [x] The tessellated body enters the same voxelisation path as GLB/OBJ/STL/3MF: field leaf,
       patch labelling, face cones, region-driven extension, `.fsmz` sidecar, CLI `import`.
-- [ ] V14 passes (below).
-- [ ] If the reader crates stall, the honest fallback is recorded: accept only AP242 files
-      that carry `tessellated_lods`, named as such in the case report — and if that is still
-      undoable, this file is changed in a reviewed commit, not quietly skipped.
+- [x] V14 passes (below).
+- [x] The reader-crates-stall fallback was not needed — `step-io` hands over analytic
+      surfaces for all five CTC fixtures, so tessellation is ours from them end to end.
 
 ### D. Distributed loading (M11 — user-set, 2026-10-09; evidence: docs/verification/V15.md, `crates/fieldsmith-core/tests/distributed_load.rs`, CLI `solve --report` load table, the Setup-lens Fn editor)
 - [x] Face-local coordinates for a labelled region: its facets fit a least-squares plane;
@@ -132,8 +134,8 @@ and tolerances are in git history at `9606890`). The new cases:
 ## Performance budgets
 
 Carried from v0.1 (measured on the workstation Chromium referee; the laptop and Firefox
-numbers remain named-but-unmeasured from v0.1) plus a STEP row, still provisional until
-M10 measures it; the modal row was measured and revised on 2026-10-09 (the browser
+numbers remain named-but-unmeasured from v0.1) plus a STEP row, measured 2026-10-12
+(see V14); the modal row was measured and revised on 2026-10-09 (the browser
 verified it at a 190 k-DOF rung, memory ceiling not reached; the exact wasm32 peak was
 not measured):
 
@@ -146,7 +148,7 @@ not measured):
 | Cold load, compressed transfer size | ≤ 3 MB |
 | Main thread long tasks during solve | none > 50 ms |
 | Modal: first 3 modes bracket-scale — measured 2026-10-09, revised | coarse rung modes visible ≤ 40 s; refined-rung eigensolve ≤ 4 min (measured 31 s at 49 k DOF and 141 s at 190 k DOF in the browser, native comparison 60/87 s on the same document) |
-| STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s (provisional) |
+| STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s — measured 2.3 s on a synthetic 49.9 MB plane-solid file (9 120 solids; parse-dominated; V14 names the per-face caveat for spline-heavy files) |
 
 ---
 
@@ -156,7 +158,7 @@ not measured):
 | :-- | :-- | :-- |
 | M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; the first modes visible headless and in the Results lens. |
 | M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. (2026-10-09) |
-| M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. |
+| M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. (2026-10-12) |
 | M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
 
 ---

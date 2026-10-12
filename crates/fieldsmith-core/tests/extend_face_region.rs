@@ -112,6 +112,7 @@ fn skirt_doc() -> Document {
             voxel: Some(1.0),
             src: "cube.stl",
             taken: &[],
+            step_chord: None,
         },
     )
     .expect("STL import succeeds");

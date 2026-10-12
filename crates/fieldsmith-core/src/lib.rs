@@ -6,6 +6,8 @@ pub mod fsmz;
 pub mod import;
 pub mod probe;
 pub mod regions;
+pub mod step;
+pub mod steptess;
 pub mod voxel;
 
 use fieldsmith_doc::loaddist::LoadFn;
@@ -257,11 +259,11 @@ pub fn case_force_report(
                 let d = match dir {
                     LoadDir::Global { v } => *v,
                     LoadDir::Local { v } => {
-                        let mut d = [0.0; 3];
-                        for k in 0..3 {
-                            d[k] = v[0] * frame.x[k] + v[1] * frame.y[k] + v[2] * frame.n[k];
-                        }
-                        d
+                        [
+                            v[0] * frame.x[0] + v[1] * frame.y[0] + v[2] * frame.n[0],
+                            v[0] * frame.x[1] + v[1] * frame.y[1] + v[2] * frame.n[1],
+                            v[0] * frame.x[2] + v[1] * frame.y[2] + v[2] * frame.n[2],
+                        ]
                     }
                 };
                 let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();

@@ -29,6 +29,7 @@ fn import_sample() -> ImportOut {
         voxel: None,
         src: SAMPLE_SRC,
         taken: &[],
+        step_chord: None,
     };
     import_mesh("3mf", SAMPLE, &opts).expect("the Consortium sample imports")
 }

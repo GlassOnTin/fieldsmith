@@ -30,6 +30,7 @@ fn opts<'a>(
         voxel,
         src,
         taken: &[],
+        step_chord: None,
     }
 }
 

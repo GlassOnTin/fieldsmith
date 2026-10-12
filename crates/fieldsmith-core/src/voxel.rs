@@ -497,11 +497,20 @@ pub fn voxelize(
         }
     }
 
-    let open_edges = edge_adjacency(mesh)
+    let adj = edge_adjacency(mesh);
+    // weld_verts deliberately keeps triangles a collapse turned degenerate
+    // (two corners merged); edge_adjacency skips those collapsed slots, but
+    // only for tris it walks — here the flat census must too, or every
+    // degenerate's phantom (a,a) slot counts as an open edge.
+    let open_edges = adj
         .nbr
         .iter()
-        .flat_map(|t| t.iter())
-        .filter(|&&e| e == u32::MAX)
+        .enumerate()
+        .flat_map(|(ti, t)| {
+            t.iter()
+                .enumerate()
+                .filter(move |&(k, &e)| e == u32::MAX && mesh.tris[ti][k] != mesh.tris[ti][(k + 1) % 3])
+        })
         .count() as u32;
     let patches_count = segs.map_or(0, |s| s.iter().max().copied().unwrap_or(0));
     let meta = MeshMeta {

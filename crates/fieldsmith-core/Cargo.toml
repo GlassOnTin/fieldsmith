@@ -13,6 +13,8 @@ fenics-element = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
+step-io = "0.2.5"
+earcut = "0.4.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }

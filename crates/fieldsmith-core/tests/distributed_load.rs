@@ -84,8 +84,10 @@ fn load(doc: &mut Document, id: &str, region: &str, kind: LoadKind) {
 
 /// Box 40×10×10 mm centred on the origin: top face z = +5, x spans ±20.
 fn box_doc() -> Document {
-    let mut doc = Document::default();
-    doc.name = "Dist test box".into();
+    let mut doc = Document {
+        name: "Dist test box".into(),
+        ..Document::default()
+    };
     push(
         &mut doc,
         "b",
@@ -101,8 +103,10 @@ fn box_doc() -> Document {
 
 /// Cylinder r = 12.5, h = 25 along z, centred: its `side` region is a full curved band.
 fn cyl_doc() -> Document {
-    let mut doc = Document::default();
-    doc.name = "Dist test cyl".into();
+    let mut doc = Document {
+        name: "Dist test cyl".into(),
+        ..Document::default()
+    };
     push(
         &mut doc,
         "c",

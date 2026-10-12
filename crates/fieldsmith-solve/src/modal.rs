@@ -154,8 +154,8 @@ mod tests {
 
     fn fixed_corners(mesh: &P2Mesh) -> Vec<u8> {
         let mut fixed = vec![0u8; mesh.nodes.len()];
-        for i in 0..mesh.nverts {
-            fixed[i] = 0b111;
+        for f in fixed.iter_mut().take(mesh.nverts) {
+            *f = 0b111;
         }
         fixed
     }

@@ -101,10 +101,10 @@ pub fn jacobi3(a: &[[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
             v[k][p] = c * vkp - s * vkq;
             v[k][q] = s * vkp + c * vkq;
         }
+        let (row_p, row_q) = (a[p], a[q]);
         for k in 0..3 {
-            let (apk, aqk) = (a[p][k], a[q][k]);
-            a[p][k] = c * apk - s * aqk;
-            a[q][k] = s * apk + c * aqk;
+            a[p][k] = c * row_p[k] - s * row_q[k];
+            a[q][k] = s * row_p[k] + c * row_q[k];
         }
     }
     let mut order: [usize; 3] = [0, 1, 2];

@@ -4,26 +4,26 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.66 s | bracket-01.png |
+| Empty document | 0.64 s | bracket-01.png |
 | Base plate 60 × 40 × 8 | 1.05 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.41 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 2.07 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 2.30 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.97 s | bracket-06.png |
-| Setup lens | 0.82 s | bracket-07.png |
-| Region: base-hole walls | 1.11 s | bracket-08.png |
-| Region: upright-hole wall | 1.33 s | bracket-09.png |
-| Support on the base_holes | 0.86 s | bracket-10.png |
+| Upright plate with 8 mm fillet | 1.45 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 2.12 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 2.44 s | bracket-05.png |
+| Upright hole ⌀8.5 | 2.80 s | bracket-06.png |
+| Setup lens | 0.87 s | bracket-07.png |
+| Region: base-hole walls | 1.49 s | bracket-08.png |
+| Region: upright-hole wall | 0.77 s | bracket-09.png |
+| Support on the base_holes | 1.22 s | bracket-10.png |
 | Load on the upright_hole | 1.33 s | bracket-11.png |
-| Coarse result streamed | 0.98 s | bracket-12.png |
-| Refined solve finished | 2.35 s | bracket-13.png |
+| Coarse result streamed | 1.08 s | bracket-12.png |
+| Refined solve finished | 2.25 s | bracket-13.png |
 | Results lens: stress field | 0.24 s | bracket-14.png |
 | Probe the base plate | 0.20 s | bracket-15.png |
-| Fill lens: add lattice fill | 6.73 s | bracket-16.png |
-| Fill lens: badge and results rows | 0.30 s | bracket-17.png |
-| Fill lens: ρ band cross-clamp and undo/redo | 1.21 s | bracket-18.png |
+| Fill lens: add lattice fill | 6.78 s | bracket-16.png |
+| Fill lens: badge and results rows | 0.19 s | bracket-17.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 1.31 s | bracket-18.png |
 
-Total scripted time: 28.2 s.
+Total scripted time: 28.6 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
@@ -42,8 +42,8 @@ Total scripted time: 28.2 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 961 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 3173 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 1048 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 3319 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | results panel, badge and legend render | pass |  |
@@ -66,11 +66,11 @@ Total scripted time: 28.2 s.
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 356 | 383 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 53 | 2157 | 2210 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 355 | 382 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 49 | 2218 | 2267 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 961 ms of the 1500 ms budget; launch fired 150 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 3173 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 1048 ms of the 1500 ms budget; launch fired 179 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 3319 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 

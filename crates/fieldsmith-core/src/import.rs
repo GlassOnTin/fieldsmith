@@ -56,10 +56,8 @@ fn bake(m: &TriMesh, scale: f64, up_y: bool) -> TriMesh {
     }
 }
 
-/// Weld tolerance relative to the mesh extent: binary STL rewrites each corner in f32 so
-/// shared corners agree exactly, ASCII writers round to ~6 digits; 1e-5 of the diagonal
-/// covers that while keeping distinct detail vertices apart.
-fn weld_tol(m: &TriMesh) -> f64 {
+/// Mesh extent diagonal (mm), for tolerance rules relative to size.
+fn mesh_diag(m: &TriMesh) -> f64 {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [-f64::INFINITY; 3];
     for p in &m.verts {
@@ -68,8 +66,21 @@ fn weld_tol(m: &TriMesh) -> f64 {
             hi[a] = hi[a].max(p[a]);
         }
     }
-    let diag = (hi[0] - lo[0]).hypot(hi[1] - lo[1]).hypot(hi[2] - lo[2]);
-    (diag * 1e-5).clamp(1e-6, 0.01)
+    (hi[0] - lo[0]).hypot(hi[1] - lo[1]).hypot(hi[2] - lo[2])
+}
+
+/// Weld tolerance relative to the mesh extent: binary STL rewrites each corner in f32 so
+/// shared corners agree exactly, ASCII writers round to ~6 digits; 1e-5 of the diagonal
+/// covers that while keeping distinct detail vertices apart.
+fn weld_tol(m: &TriMesh) -> f64 {
+    (mesh_diag(m) * 1e-5).clamp(1e-6, 0.01)
+}
+
+/// The STEP tessellation's vertex-pool quantum: a tessellated part arrives welded, so
+/// nothing here may merge beyond what the pool kept apart — the pool's own rule
+/// (diag × 1e-9, clamped [1e-9, 1e-4]) merges only round-off below it.
+fn pool_weld_tol(m: &TriMesh) -> f64 {
+    (mesh_diag(m).abs() * 1e-9).clamp(1e-9, 1e-4)
 }
 
 /// An imported part name as a legal node id (`[A-Za-z_][A-Za-z0-9_]*`): every other
@@ -140,6 +151,19 @@ pub struct ImportReport {
     pub cells: usize,
     /// This part's weld + segment + voxelize time (ms).
     pub ms: u64,
+    /// STEP provenance (this part's tessellated solid) — present for STEP parts only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<StepPartInfo>,
+}
+
+/// Per-part STEP facts (present on STEP parts only).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct StepPartInfo {
+    /// The tessellated solid's B-rep face count.
+    pub faces: u32,
+    /// Analytic flux volume (mm³) — `None` when a face had no flux potential.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
 }
 
 /// The import result: nodes to splice into `doc.root` (in `parts` order) and the reports.
@@ -147,6 +171,9 @@ pub struct ImportReport {
 pub struct ImportOut {
     pub nodes: Vec<Node>,
     pub parts: Vec<ImportReport>,
+    /// Whole-file STEP provenance — present for STEP imports only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<crate::step::StepReport>,
     /// Whole-import wall-clock time (ms), reads included.
     pub ms: u64,
 }
@@ -162,57 +189,102 @@ pub struct ImportOpts<'a> {
     pub voxel: Option<f64>,
     pub src: &'a str,
     pub taken: &'a [String],
+    /// STEP tessellation chord override (mm, sagitta); `None` uses the
+    /// derived default (`scene diagonal · 3e-4`, clamped). STEP only.
+    pub step_chord: Option<f64>,
 }
 
-/// Read `bytes` as the mesh kind (`"glb"`, `"stl"` or `"obj"`), returning one named part
-/// per scene element (STL is a single anonymous part).
-fn read_any(kind: &str, bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
+/// Read `bytes` as the mesh kind (`"glb"`, `"stl"`, `"obj"`, `"3mf"`, `"step"`), returning
+/// one named part per scene element (STL is a single anonymous part), plus — for `"step"` —
+/// the file-level provenance and each part's face/volume facts.
+type PartsAndProvenance = (
+    Vec<NamedPart>,
+    Option<crate::step::StepReport>,
+    Vec<StepPartInfo>,
+);
+
+fn read_any(
+    kind: &str,
+    bytes: &[u8],
+    step_chord: Option<f64>,
+) -> Result<PartsAndProvenance, String> {
+    let none = |parts: Vec<NamedPart>| (parts, None, Vec::new());
     match kind {
-        "glb" => gltf::read_glb(bytes),
+        "glb" => Ok(none(gltf::read_glb(bytes)?)),
         "stl" => {
             let mesh = read_stl_any(bytes)
                 .ok_or_else(|| "not recognised as a binary or ASCII STL file".to_string())?;
-            Ok(vec![NamedPart {
+            Ok(none(vec![NamedPart {
                 name: "mesh".into(),
                 mesh,
                 material: None,
-            }])
+            }]))
         }
         "obj" => {
             let text = std::str::from_utf8(bytes)
                 .map_err(|_| "OBJ source is not valid UTF-8 text".to_string())?;
-            obj::read_obj(text)
+            Ok(none(obj::read_obj(text)?))
         }
-        "3mf" => threemf::read_3mf(bytes),
-        _ => Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf")),
+        "3mf" => Ok(none(threemf::read_3mf(bytes)?)),
+        "step" => {
+            let doc = crate::step::tessellate(bytes, step_chord)?;
+            let info = crate::step::StepReport {
+                length_unit: doc.length_unit.clone(),
+                chord: doc.chord,
+                solids: doc.parts.len() as u32,
+                refusals: doc.refusals.clone(),
+                parse_ms: doc.parse_ms,
+                tess_ms: doc.tess_ms,
+            };
+            let (parts, infos): (Vec<NamedPart>, Vec<StepPartInfo>) = doc
+                .parts
+                .into_iter()
+                .map(|p| {
+                    (
+                        NamedPart {
+                            name: p.name.clone(),
+                            mesh: p.mesh,
+                            material: None,
+                        },
+                        StepPartInfo {
+                            faces: p.faces,
+                            volume: p.volume,
+                        },
+                    )
+                })
+                .unzip();
+            Ok((parts, Some(info), infos))
+        }
+        _ => Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf, step")),
     }
 }
 
-/// Import `bytes` as the mesh kind (`"glb"`, `"stl"`, `"obj"` or `"3mf"`) and hydrate the
+/// Import `bytes` as the mesh kind (`"glb"`, `"stl"`, `"obj"`, `"3mf"` or `"step"`) and
+/// hydrate the
 /// registry. A 3MF file's units come from its `<model unit="…">` attribute (the reader
 /// scales to millimetres); the `units` override still applies on top.
 pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<ImportOut, String> {
     let t0 = now_ms();
-    if !matches!(kind, "glb" | "stl" | "obj" | "3mf") {
-        return Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf"));
+    if !matches!(kind, "glb" | "stl" | "obj" | "3mf" | "step") {
+        return Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf, step"));
     }
-    let parts = read_any(kind, bytes).map_err(|e| format!("{kind} import failed: {e}"))?;
+    let (parts, step_file, step_parts) =
+        read_any(kind, bytes, opts.step_chord).map_err(|e| format!("{kind} import failed: {e}"))?;
     if parts.is_empty() {
         return Err("the file contains no geometry".into());
     }
 
-    // A 3MF file's units come from its model attribute and are already scaled to
-    // millimetres by the reader; the `units` override applies on top of the file's own
-    // scale only when the caller names one (the default is mm, i.e. no extra scale).
+    // A 3MF file's units come from its model attribute and a STEP file's from its own
+    // SI_UNIT contexts; both readers already scale to millimetres, so the `units`
+    // override, when given, treats the baked coordinates as being in that unit (an
+    // explicit re-interpret). The default is mm, i.e. no extra scale.
     let (def_units, def_up) = match kind {
         "glb" => ("m", "y"),
         _ => ("mm", "z"),
     };
     let units = opts.units.unwrap_or(def_units);
     let up = opts.up.unwrap_or(def_up);
-    let scale = if kind == "3mf" {
-        // The reader already applied the file's unit scale; the override, when given,
-        // treats the file's coordinates as being in that unit (an explicit re-interpret).
+    let scale = if matches!(kind, "3mf" | "step") {
         match opts.units {
             Some(_) => unit_scale(units)?,
             None => 1.0,
@@ -227,7 +299,20 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
     let mut reports = Vec::with_capacity(parts.len());
     for (i, part) in parts.iter().enumerate() {
         let baked = bake(&part.mesh, scale, up_y);
-        let m = weld::weld_verts(&baked, weld_tol(&baked));
+        // A STEP tessellation is already welded by the tessellator's vertex pool — the
+        // chain weld must not merge beyond what the pool kept apart: at the mesh-file
+        // tolerance (diag × 1e-5 clamped to 0.01) CTC-02's 1.17 m bbox hit the clamp and
+        // the weld merged 916 legitimate vertices, collapsing sliver trim edges and
+        // inflating the open-edge census (60 used-once edges and 15 three-user keys on
+        // the raw mesh became 360 keys).
+        let m = weld::weld_verts(
+            &baked,
+            if kind == "step" {
+                pool_weld_tol(&baked)
+            } else {
+                weld_tol(&baked)
+            },
+        );
         // Segment patches; a finely-detailed surface can split past the patch-grid cap
         // (the moon-globe lithophane emits 228k patches at 30°), so coarsen the dihedral
         // angle and re-segment until the ids fit. Every surface is still segmented —
@@ -254,8 +339,14 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
         let req_voxel = opts
             .voxel
             .unwrap_or_else(|| crate::voxel::default_spacing(&bbox));
+        // a different STEP chord tessellates differently, so the hash must
+        // distinguish chords even though the voxel size does not
+        let salt_extra = step_file
+            .as_ref()
+            .map(|s| format!("|{:.6}", s.chord))
+            .unwrap_or_default();
         let salt = format!(
-            "{kind}|{}|{i}|{}|{units}|{up}|{req_voxel:.6}",
+            "{kind}|{}|{i}|{}|{units}|{up}|{req_voxel:.6}{salt_extra}",
             opts.src, part.name
         );
         let key = hash_mesh_input(bytes, salt.as_bytes());
@@ -301,11 +392,13 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
             spacing: v.field.dist.spacing,
             cells: v.cells,
             ms: v.ms,
+            step: step_parts.get(i).cloned(),
         });
     }
     Ok(ImportOut {
         nodes,
         parts: reports,
+        step: step_file,
         ms: (now_ms() - t0) as u64,
     })
 }
@@ -371,6 +464,7 @@ mod tests {
             voxel,
             src,
             taken,
+            step_chord: None,
         }
     }
 
@@ -531,8 +625,8 @@ f 4 5 8
         let bad = import_mesh("obj", b"", &opts(None, None, None, "", &[]));
         assert!(bad.is_err(), "empty file refuses");
         assert_eq!(
-            import_mesh("step", b"", &opts(None, None, None, "", &[])).unwrap_err(),
-            "kind 'step' is not one of glb, stl, obj, 3mf"
+            import_mesh("iges", b"", &opts(None, None, None, "", &[])).unwrap_err(),
+            "kind 'iges' is not one of glb, stl, obj, 3mf, step"
         );
     }
 

@@ -117,6 +117,7 @@ fn mesh_bar_doc() -> Document {
             voxel: Some(1.0),
             src: "bar.stl",
             taken: &[],
+            step_chord: None,
         },
     )
     .expect("STL import succeeds");

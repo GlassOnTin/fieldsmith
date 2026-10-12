@@ -31,7 +31,7 @@ fn clock() -> f64 {
 /// Composite Simpson over [a, b] with `n` (even, ≥ 2) panels.
 fn simpson(f: &dyn Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
     let n = n.max(2);
-    let n = if n % 2 == 0 { n } else { n + 1 };
+    let n = if n.is_multiple_of(2) { n } else { n + 1 };
     let hh = (b - a) / n as f64;
     let mut s = f(a) + f(b);
     for i in 1..n {
@@ -97,7 +97,8 @@ fn v15_distributed() {
         "| Element size | Tets | DOFs | Iterations | Mesh | Solve | δ tip (Triangle) | δ tip (Piecewise) | R_z (Triangle) | unscaled dR | fit RMS | extent |\n\
          | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |\n",
     );
-    let mut last: Option<(f64, f64, [f64; 3], [f64; 3], f64, f64, f64, f64)> = None;
+    type LastRow = (f64, f64, [f64; 3], [f64; 3], f64, f64, f64, f64);
+    let mut last: Option<LastRow> = None;
     for h in [5.0, 2.5, 2.0] {
         let a = analyse(&d, Resolution::Size(h), clock).expect("analysis");
         let ci_tri = a.cases.iter().position(|c| c.name == "Triangle").expect("tri case");
@@ -155,12 +156,11 @@ fn v15_distributed() {
     );
     r.section(
         "Frame",
-        format!(
-            "The loads' region is the top face (a flat plane): the least-squares frame's residual is \
+        "The loads' region is the top face (a flat plane): the least-squares frame's residual is \
              mesh rounding (reported per rung below; the refusal bound is 10 % of extent), the local \
              x axis is world +x (the deterministic rule), and the fn's −50..50 coordinates are mm \
              from the face's area-weighted centroid at x = 50. `local=(0, 0, -1)` is the frame's −n."
-        ),
+            .to_string(),
     );
     r.section("Mesh study", rows);
 

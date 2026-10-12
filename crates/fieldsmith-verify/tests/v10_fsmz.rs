@@ -64,6 +64,7 @@ fn mesh_doc(src: &str) -> (Document, String) {
             voxel: Some(1.5),
             src,
             taken: &[],
+            step_chord: None,
         },
     )
     .unwrap();
