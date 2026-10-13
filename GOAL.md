@@ -1,239 +1,184 @@
-# Fieldsmith — Goal (v0.3)
+# Fieldsmith — Goal (v0.4)
 
-**Closed 2026-10-13** — all legs done: milestones M8–M11 committed and CI-green, budgets
-measured with the owner's verdicts, reference task run end to end on the foreign fixture,
-hallway leg passed. The post-v0.3 asks (section F, M12) are done too: 2026-10-13.
+**Open.** Drafted 2026-10-13 from the owner's agenda and the same-day VISION refresh
+(`18754c2`; the computed-leaves-the-desk and declared-question commitments live there).
+Milestones are declared, nothing measured yet. Each milestone enters execution through a
+reviewed plan, as M12 did; design detail lands there, not here. If a criterion turns out
+to be wrong, change this file in a reviewed commit; do not quietly skip it.
 
-This file defines **what "done" means for v0.3**. It is deliberately concrete and testable.
-The [VISION](VISION.md) says *why* (section 7 records the competitive landscape this version
-answers); this says *what.* The previous goal, with its close-out audit, is in git history at
-`9606890` (v0.1 definition of done, M6/M7 user-set milestones, tag `v0.2.0`).
+This file defines **what "done" means for v0.4**. It is deliberately concrete and testable.
+The [VISION](VISION.md) says *why*; this says *what.* The previous goal, with its close-out
+audit, is in git history at `0b92e1c` (v0.3: the CAD round-trip, M8–M12).
+
+The ranking follows the owner's criterion of 2026-10-13: does the change make a leading
+commercial tool's capability available to everyone, freely — licence and hardware class
+both count as "freely". That is why v0.4 takes a flow rather than CAD-parity asks
+(grouping, sketch, section planes), which are named for later.
 
 ---
 
 ## The goal in one sentence
 
-> A user drops a real CAD part (a STEP a mainstream tool exported, or a 3MF another tool
-> wrote) into Fieldsmith, fixes and loads it, reads how the part will ring, fills it with a
-> stress-graded lattice, and hands a slicer-clean 3MF to the printer — in a browser, with
-> every number carrying a measured error.
+> The user declares what a good answer means — a tolerance to meet or a time to spend —
+> and Fieldsmith answers with the measured rungs, their cost, and the result itself; the
+> first packaged engineering flow (steady heat driving thermal expansion) puts a paid
+> simulation capability within reach of anyone with a browser and the repo; and when the
+> desk box is too small, the analysis runs on machines the user owns, driven through an
+> API agents and scripts can use.
 
 ---
 
-## The reference task — "the CAD round-trip"
+## The reference task — "the declared question"
 
-The acceptance test for v0.3, on a part Fieldsmith did not author:
+The acceptance test for v0.4, on the reference fixture ladder (provenance stated as in
+v0.3):
 
-1. Obtain the part (fixture ladder named in the cases; provenance stated in the report).
-2. Import via CLI or the file palette; units and up-axis from the file, overridable.
-3. Label faces; fix the mounting face, load the working face with 400 N at 15° outward.
-4. Solve in PETG; probe stress and deflection.
-5. Run modal: the first natural frequencies, with provenance (element count, order,
-   solve time, change since the previous refinement rung). V13 checks the first two bending
-   pairs (ranks 1–4): on a square section they arrive as degenerate pairs, and the third
-   bending pair sits above the first torsion mode.
-6. Fill: gyroid, cell 6 mm, skin 1.2 mm, density graded by envelope stress; mass in grams,
-   solid vs graded side by side.
-7. Export 3MF; PrusaSlicer reports `manifold = yes`; scrub slices at 0.2 mm.
-8. Save as `.fsmz`, reload, re-solve, get bit-identical results.
+1. Open the bracket document; confirm the carried ladder still holds (V1–V16 in CI).
+2. Ask in **tolerance mode**: tip deflection to within a stated mm. The ladder refines
+   until the rung-to-rung change sits inside it; the report states the per-rung error
+   estimates, the time each rung took, the total, and the residual.
+3. Ask in **budget mode**: a stated time. The report states the rungs that budget bought
+   and the tolerance they imply, measured after the fact.
+4. Switch to the **thermal flow**: mounting face held at 20 °C, working face at 80 °C.
+   Solve conduction, then thermal expansion; read the thermal stress beside the
+   mechanical one. The temperature field renders with a legend and units.
+5. The desk box too small? Start a worker on another machine you own, enrol it by token,
+   re-run the same declaration. The report states the wall time, the cost at your own
+   rate, and the measured divergence from the local solve — not bit-identity.
+6. Sweep one parameter over a range, headless; the table carries each point's own box,
+   measured time and outputs; the Results lens shows the same table.
+7. Save as `.fsmz`, reload, re-solve: bit-identical on the same machine (the v0.3
+   criterion holds), and the rung records are part of what the Results view shows.
 
-**Pass:** the machine-side legs of steps 2–8 are covered by V12–V14 plus the carried ladder
-(V1–V11, still in CI); the hallway leg closed 2026-10-13 — three sessions administered and
-passed per the owner's verdict (the ≤ 5-minutes criterion met; per-run timings not formally
-captured; the participants' stumbles are product notes in `docs/hallway-test.md`).
+**Pass:** the machine-side legs of steps 2–7 are covered by V17–V23 plus the carried
+ladder (V1–V16, still in CI); the privacy leg by the capture artifacts named in V21; the
+community rows by `data/costs/` being present with provenance stated.
 
 ---
 
 ## New acceptance criteria
 
-### A. Modal (M8)
-- [x] Elastic P2-consistent mass matrix is assembled through `fenics-rs`
-      (`assemble_elasticity_mass_p2_3d`), and first modes via
-      `solve_vibration_modes_with_inner` with the static path's two-level PCG as the inner
-      solve — consumed as a dependency, not reimplemented.
-- [x] `fieldsmith solve --modes 3` prints the first three natural frequencies (Hz) with
-      per-mode provenance; the web Results lens shows the first mode beside the static results.
-- [x] Modal takes the same region-based supports (fixed DOFs from the same masks); it needs
-      no load input and states that in `--help`.
-- [x] V13 passes (below).
+### A. Measured rungs and the declared question (M13 — evidence: docs/verification/V17.md, V18.md, `data/costs/`)
+- [ ] Every refinement rung becomes a first-class record: solve wall time, element count,
+      and the error estimate taken from rung-to-rung change of the tracked quantities
+      (tip deflection, peak von Mises). Records stream into the web UI and print from the
+      CLI. Measured, not claimed: a headless replay asserts the records are the solver's
+      own — time deltas within the run timer's resolution, estimates equal to the
+      two-solve differences to floating-point roundoff.
+- [ ] The Results view shows the rung table with provenance — engine, element type and
+      count, per-rung time and error estimate, load case — every entry with units and a
+      stated source.
+- [ ] Declared-tolerance mode: the user states a tolerance on a tracked quantity; the
+      ladder stops when the measured rung-to-rung change sits inside it, and the report
+      states total time and the residual. A tolerance the stated budget cannot meet is
+      answered with a named refusal (the V15 load-plane-fit precedent) — never a
+      stretched answer.
+- [ ] Declared-budget mode: state a time budget; the report states the rungs it buys and
+      the tolerance they imply, measured from the rung record after the fact.
+- [ ] Cost estimates carry their own error: the fit over rungs ≤ k projects rung k+1,
+      and the report shows the fit residual next to the projection (for example
+      "about 4.7 min, fit residual 6 %"). Cost is time in this milestone; the worker
+      (M15) converts it with the user's own rate. Local rung history seeds the estimator
+      on the next run (machine-specific; the store is chosen at plan time).
+- [ ] The community rows live in the repo: `data/costs/` carries a header stating every
+      field of a row, and seed rows derived from the current referee and N100 budget
+      baselines with their provenance stated. A CLI command prints the record row for
+      the last run — shape-only fields: DOF, element count, field-leaf count, CPU class,
+      cores, RAM, engine, wasm-or-CLI, rung, wall time, error where known; timestamps at
+      month level; no geometry, no names. The command is a redaction preview: it prints
+      exactly what would be contributed and writes nothing; contribution is the user
+      opening a pull request. There is no submit endpoint.
+- [ ] V17 and V18 pass (below).
 
-### B. 3MF beyond one object (M9 — evidence: docs/verification/V12.md, `crates/fieldsmith-verify/tests/v12_multivolume.rs`, `fieldsmith-mesh/tests/readers.rs`)
-- [x] The reader accepts a model with several mesh objects: each becomes its own field leaf,
-      named; malformed entries still fail with the existing strict, named errors. (The
-      Consortium's `multiple_cylinders.3mf` imports as six placed leaves; `cube_gears.3mf`
-      as 17; build items, unit-scaled translations, mirrored winding, dup ids, unknown
-      item references, malformed transforms and component containers all covered.)
-- [x] Our 3MF writer records every volume's material in `basematerials` (CLI `export`
-      meshes add-shaped stacks per volume and labels each; anything else exports as one
-      labelled union).
-- [x] Per-volume material lives in the document model and `.fsm` text with inspector editing
-      (`material abs on plate`, node-material select in the Inspector);
-      `validate` names unknown materials and warns when a solve would see mixed volumes
-      (analysis stays single-material — labelling is for the slicer, not for the stiffness).
-- [x] V12 passes (below).
+### B. First flow — steady heat into thermal expansion (M14 — evidence: docs/verification/V19.md, V20.md)
+- [ ] One-way coupled solve: steady linear conduction on the existing tet mesh;
+      temperature regions carry fixed values placed on labelled faces; the temperature
+      field then enters the elasticity solve as thermal strain from a stated reference
+      temperature. Both fields render in the Results lens, temperature with a legend and
+      units.
+- [ ] A temperature region is placed like a load (pick a face, set the value); `.fsm`
+      round-trips it losslessly with named validation errors.
+- [ ] Single isotropic material for the coupled solve; per-volume material laws are named
+      for later, not attempted here.
+- [ ] V19 and V20 pass (three analytic cases below).
+- [ ] The thermal solve leg gets budget rows on the referee and on the N100 class
+      (below).
 
-### C. STEP in (M10 — evidence: docs/verification/V14.md, `crates/fieldsmith-verify/tests/v14_step.rs`, `crates/fieldsmith-core/src/step.rs` (reader) and `steptess.rs` (tessellation))
-- [x] A maintained STEP reader crate is consumed as a dependency, not vendored or forked
-      (chosen 2026-10-09: `step-io` 0.2.x, experimental, MIT/Apache).
-- [x] Tessellation is ours: planes, cylinders, spheres, cones and tori are flattened from
-      their stored analytic forms; B-spline faces are triangulated in parameter space; a face
-      whose surfaces the reader cannot produce is refused by name (no silent drops, the
-      V10 dirty-data lesson applied up front).
-- [x] Units come from the file's unit context — `SI_UNIT` for millimetre files,
-      conversion-based units where the context declares them (amended in a reviewed
-      commit: CTC-05's only unit context is a `CONVERSION_BASED_UNIT('INCH',…)` whose
-      factor bases are the file's only `SI_UNIT`s); up-axis override as with mesh
-      imports.
-- [x] The tessellated body enters the same voxelisation path as GLB/OBJ/STL/3MF: field leaf,
-      patch labelling, face cones, region-driven extension, `.fsmz` sidecar, CLI `import`.
-- [x] V14 passes (below).
-- [x] The reader-crates-stall fallback was not needed — `step-io` hands over analytic
-      surfaces for all five CTC fixtures, so tessellation is ours from them end to end.
+### C. The connection — API, MCP, and the worker you own (M15 — evidence: docs/verification/V21.md, V22.md)
+- [ ] A versioned, headless JSON API over the verified crates: document and question in
+      — tolerance mode, budget mode, sweep mode — result out with provenance, rung
+      records and measurements. A contract case pins the schema; version bumps are named
+      changes, not silent ones.
+- [ ] An MCP server over that API, running as a local process on the user's machine:
+      typed tools to open and inspect a document, place supports, loads and temperatures,
+      solve to a declaration, export. Nothing hosted; no accounts.
+- [ ] `fieldsmith worker` (working name) — the worker on machines the user owns:
+      enrols once by token to a session host started on a machine the user owns; connects
+      outbound only; runs solve jobs with the same verified crates; artifacts stay in the
+      directory the operator states. The session host binds only where the user says
+      (default loopback). Reaching a worker across networks is the user's own path
+      (Tailscale/WireGuard/SSH class); the browser-attached session host is named for
+      later, and this milestone's sessions are the CLI/API ones.
+- [ ] Verified, not promised: session traffic captured during a full run and scanned for
+      plaintext model or field bytes; the worker's artifact directory scanned afterwards;
+      the same `.fsmz` re-solved locally and on the worker with the divergence measured
+      and reported. Cross-machine bit-identity is not promised; the divergence numbers
+      are stated in the case (V21).
+- [ ] Remote rungs enter the M13 measures; the worker's cost is the user-stated rate
+      times measured time, shown per rung.
+- [ ] V21 (privacy evidence) and V22 (API/MCP contract) pass (below).
 
-### D. Distributed loading (M11 — user-set, 2026-10-09; evidence: docs/verification/V15.md, `crates/fieldsmith-core/tests/distributed_load.rs`, CLI `solve --report` load table, the Setup-lens Fn editor)
-- [x] Face-local coordinates for a labelled region: its facets fit a least-squares plane;
-      local frame (x, y, n) with a deterministic rule for which in-plane direction is x
-      (documented in the load module's header). The fit residual is reported with the
-      load's provenance, and a region whose residual exceeds a stated bound is refused
-      by name rather than silently flattened.
-- [x] A distributed load compiles: chained band terms (`lo < x < hi -> value`) plus an
-      arithmetic expression body over {x, y} (sin, cos, exp, polynomials), compiled once
-      in the doc layer and evaluated at facet centroids; `.fsm` text round-trips losslessly.
-- [x] Semantics: the function returns force per unit area (N/mm²) applied in a stated
-      direction (global vector or components in {x, y, n}); the applied resultant (N) and
-      moment (N·mm about the document origin) are computed and shown with the load's
-      provenance; `total=` optionally rescales the function to a stated resultant.
-- [x] The solver consumes it as consistent nodal loads through the same area-weighted
-      path `press` already uses; no per-node special cases. (constant density matches a
-      `force=` load to 1e-9 relative at the nodes)
-- [x] The Setup lens gains a distribution editor: the text body with a parsed preview of
-      F(x) over the band extent and the integrated total; `validate()` errors surface
-      specifically (unknown variable, non-finite value, overlapping bands).
-- [x] V15 passes (below): deflections within 0.4 % of the Euler–Bernoulli references
-      (tolerance 15 %), resultants within 0.5 % (tolerance 2 %), fit RMS ~1e−13 mm on the
-      flat face.
+### D. Parameter sweep (M16 — evidence: docs/verification/V23.md)
+- [ ] Sweep any numeric document parameter over a stated range and point count; each
+      point solves to its declaration (tolerance or the ladder default); the headless
+      runner emits a table (JSON and CSV) with per-point measured records.
+- [ ] The Results lens shows the sweep table — parameter, tracked outputs, per-point box
+      and time — and exports the same CSV.
+- [ ] V23 passes (below).
 
-### E. Carried engineering criteria (already shipped, audited in git at `9606890`)
-- [x] Cargo workspace + TypeScript web app, Vite, static hosting; `fenics-rs` as a dependency;
-      everything headless via the CLI; small wasm surface; workers with transferables; CI runs
-      the whole ladder. For v0.3 the CI row widens to V1–V14 and gains the modal and STEP stages.
-- [x] README states limitations plainly — for v0.3 it gains: modal is linear (small strain),
-      frequencies from inverse iteration with mode shapes indicative; per-volume materials are
-      recorded for the slicer while analysis remains single-material.
-
----
-
-## Post-v0.3 asks (M12) — planned on top of the closed definition
-
-The 2026-10-13 hallway sessions surfaced them as product notes (`docs/hallway-test.md`);
-the owner requested them verbatim the same day: "let's next add an adjustable
-semi-transparent view as often helpful, and colour coding options for parts too". Scope
-fixed by the owner in the planning session: seeing-inside is opacity only (no section
-plane); colours travel into the 3MF export. Budgets stay referee-scoped and unchanged,
-and the definition-of-done statement above stays scoped to sections A–E; this section
-carries its own pass criteria.
-
-### F. See-through fill and part colour (M12)
-- [x] **The fill is visible in the viewport.** A document with a fill compiles the lattice
-      into the viewport field shader (the body pass's field is unaffected — silhouette and
-      the opaque view byte-identical; before analysis a constant-grade preview stands in,
-      the graded parameter grid arriving from analysis afterwards).
-- [x] **Adjustable opacity.** A session-only control (shape/fill/make lenses; hidden in
-      Results where the field does not render) drives the body pass's alpha: 0–100 %,
-      uniform-only except the one transparent↔opaque regime flip. Interior material is
-      rendered by a dedicated pass that shows the fill with the outer skin removed
-      (lattice struts and protected zones; flat cut faces at the skin-depth line are the
-      intended look). Opacity is a viewing choice: not document data, not undoable, resets
-      to 100 % on every load — and the e2e case asserts that reset rather than silently
-      ignoring it.
-- [x] **Part colour.** `Node.color` (display/3MF-render colour only, never a printed- or
-      solve-material property), `.fsm` statement `color <hex> on <name>` round-tripping
-      losslessly with named errors for bad hex and unknown targets; a group's colour covers
-      it as a whole; Inspector palette row (fixed palette + Default, no free-form input in
-      this milestone) and tree colour dots, inherited state stated.
-- [x] **Per-part colour in the viewport.** The part's leaves render in the part's colour
-      before lighting; hover/selection highlights still blend over it; capped per-shader
-      (first 32 leaves, documented).
-- [x] **Colour travels to the slicer.** The per-volume CLI export writes each volume's
-      colour as `displaycolor` on its `basematerials` `<base>` — the attribute the 3MF
-      Core schema makes required — with the application's default surface colour where a
-      volume has none. V12's reader tests stay green (the reader ignores the attribute).
-- [x] **V16 passes** (below).
-- [x] **The preview ≥ 59 fps fill-lens budget row is re-measured** in both states it now
-      needs — default opaque and 35 % semi-transparent — on the referee first, then the
-      Firefox paragraph; the edit→coarse, refined and export rows re-run as sanity. If a
-      row misses after mitigation, this file is revised in a reviewed commit rather than
-      the row quietly skipped.
-
-Done 2026-10-13. V16 green: interior-field numerics max |Δ| 3.58e-6 mm
-(SwiftShader headless) and 3.05e-6 mm (ANGLE/Vulkan referee) against the ≤ 1e-4
-tolerance, over one driver round-trip so both sides consume the stack's actual texel
-values; the app checks (8 %+ changed pixels at 35 % opacity, strut/void shading
-spread, Inspector-set colours in viewport/tree/uniforms, `.fsm` round-trip, opacity
-reset on reload) all pass. Referee budgets (`budgets.md`, headed): preview 59.7 fps
-opaque and 59.6 fps at 35 % opacity, frame-arrival p95 17.4 ms both, no long tasks;
-Firefox (`budgets-firefox.md`) holds 164.8 fps in both states, its edit→coarse miss
-above unchanged. Slicer-side caveat named in V16: the XML carries `displaycolor`
-spec-conformantly, but PrusaSlicer 2.9.6 (flatpak) in a single-material profile paints
-the active filament colour over every volume and ignores the attribute, so per-part
-colours are not visible in-slicer in that setup (not measured: the 3.0 alpha in
-Downloads is a Windows build).
+### E. Carried
+- [ ] CI runs the whole ladder: V1–V16 unchanged, V17–V23 as they land; `budgets.md`
+      regenerated per milestone on the referee.
+- [ ] README limitations gain the honesty lines: rung error estimates are estimates from
+      rung-to-rung change, not bounds; cross-machine results are not bit-identical —
+      divergence is measured and reported; the thermal flow names its scope (steady,
+      fixed-temperature boundaries, one material).
 
 ---
 
 ## Verification cases (must pass in CI)
 
-Cases V1–V11 are the audited ladder and run in CI unchanged (their definitions, references
-and tolerances are in git history at `9606890`). The new cases:
+Cases V1–V16 are the carried ladder and run in CI unchanged (definitions live in
+`docs/verification/` and git history). The new cases; each tolerance is a declared
+target until first measured, then stated in the case and its report:
 
 | ID | Case | Reference | Tolerance |
 | :-- | :-- | :-- | :-- |
-| V12 | Import a 3MF written by another tool (provenance ladder: a 3MF Consortium public sample; else an export from desktop CAD available here; else the gap is stated, not faked), compose it, solve on labelled faces, re-export | The file's own geometry; PrusaSlicer `manifold` | Volume ≤ 2 % of the slicer's measurement; slicer-clean |
-| V13 | Modal on a cantilever 100 × 10 × 10 mm, steel: ranks 1–4 — two degenerate bending pairs — vs Euler-Bernoulli `ωn = (βnL)² √(EI/(ρAL⁴))`, βnL = 1.8751, 4.6941. The β3 pair is not in the first six ranks: rank 5 is the first torsion mode, which sits under its St-Venant value and drifts from it with refinement | Closed form | Pair-mean ≤ 2 % (f1), ≤ 7 % (f2; the measured shear/rotary gap is documented in the report); pair splits ≤ 5 Hz; ≤ 2 % change between the two refinement rungs |
-| V14 | Import a mainstream-CAD STEP (fixture ladder: NIST CTC test files, else any local desktop-CAD export, else state the gap), voxelize, label faces, re-export | The B-rep's analytic volume; PrusaSlicer `manifold` | Analytic-surface fixtures: volume ≤ 1 %, 0 open edges, slicer-clean; name the tessellation chord tolerance used; cone coverage of three named faces ≥ 85 % |
-| V15 | Distributed load on the cantilever: triangle profile q(x) = q₀·x/L on the top face (zero at the clamp, peak at the tip) and a two-band piecewise profile | Euler-Bernoulli δ_tip = 11 q₀ L⁴/(120 EI); analytic resultant and moment of the applied profile | Deflection ≤ 15 %; resultant force and moment ≤ 2 %; the fitted plane's residual and the integrated total appear in the report |
-| V16 | See-through fill + part colour on `examples/bracket-filled.fsm`: the viewport's interior pass (fill with the outer skin removed) against the Rust evaluator; 35 %-opacity frame against the opaque reference; an Inspector-set per-part colour seen in the viewport, the tree, and the 3MF `basematerials` | V5-style GPU-vs-Rust field evaluation; frame-pixel difference; `.fsm`/`.fsmz` text round-trip | Interior field max \|Δ\| ≤ 1e-4 mm (the V5 tolerance); lattice-visible fraction ≥ the bound stated in the report; colour pixel match; colour statement lossless |
+| V17 | Rung-estimate honesty: the reference cantilever solved through the ladder; each rung pair's reported estimate (rung-to-rung change in tip deflection) tabulated against the known analytic error (V3's reference) | V3 analytic deflection | Both numbers reported each run; their ratio band recorded across the ladder; pass when a re-run reproduces the recorded band and the UI labels the number an estimate |
+| V18 | Estimator residual: after the coarse rung, the fit predicts refined and export rung times; compared with actual on the referee and on the N100 class (headless CLI); `data/costs/` seed rows carry provenance | Predicted vs actual wall time | Each report states its residual; pass when residuals fall inside the band recorded at ship time and the seed rows hold |
+| V19 | Thermal, linear: (a) unconstrained uniform ΔT — stress ≈ 0, displacement linear in L·α·ΔT; (b) long bar fixed at both ends, free laterally, uniform ΔT — uniaxial stress E·α·ΔT | Closed form | (a) stress within a stated roundoff-level bound; displacement linearity within a stated %; (b) stress ≤ 5 % of the closed form (declared target, revisable only in a reviewed commit) |
+| V20 | Thermal conduction + stress: long hollow cylinder, fixed inner and outer surface temperatures, single material | Exact radial temperature profile; Lamé-class thermal stress formulas | Temperature profile within a stated tolerance; peak hoop and axial stress within a stated % across a 3-point mesh study |
+| V21 | Privacy: reference task through a worker; packet capture of the session; scan of the worker's artifact directory; `.fsmz` re-solve local vs worker | Captured bytes and storage listings; divergence table | Zero matches for the model/field-content patterns the capture names, within its stated limits; divergence measured and stated; no capture or empty scan is a failure, not a pass |
+| V22 | API + MCP contract: golden request/response headless for the reference document at a pinned engine version; MCP tools return the same result for the same document | Golden JSON | Byte-stable for the pinned version; version bumps named, not silent |
+| V23 | Sweep correctness: a 5-point sweep of a parameter with known monotone physics (cantilever section height h: δ ∝ 1/h³) | Analytic ratio | Per-point boxes present; the ratio tracks the h³ relation within the stated tolerance |
 
 ---
 
 ## Performance budgets
 
-Carried from v0.1 (first measured on the workstation Chromium referee, every row passing —
-`docs/verification/budgets.md`, regenerated 2026-10-13; the laptop and Firefox rows were
-measured 2026-10-13 as well, paragraph after the table) plus a STEP row, measured 2026-10-12
-(see V14); the modal row was measured and revised on 2026-10-09 (the browser
-verified it at a 190 k-DOF rung, memory ceiling not reached; the exact wasm32 peak was
-not measured):
+Declared targets below; each row is measured as its milestone lands, and a miss is
+answered in a reviewed commit, never a quiet skip. Referee = the workstation referee from
+the previous goals; N100 legs are headless/CLI only, as in v0.3 (that box has no GL
+driver stack for Firefox — the v0.3 finding).
 
 | Metric | Budget |
 | :-- | :-- |
-| Preview frame rate, bracket with gyroid fill, 1080p | ≥ 60 fps |
-| Edit → coarse stress result visible | ≤ 1.5 s |
-| Edit → refined result (P2, ≈ 150 k DOF) | ≤ 10 s |
-| Export 3MF of graded bracket at 0.1 mm feature resolution | ≤ 15 s |
-| Cold load, compressed transfer size | ≤ 3 MB |
-| Main thread long tasks during solve | none > 50 ms |
-| Modal: first 3 modes bracket-scale — measured 2026-10-09, revised | coarse rung modes visible ≤ 40 s; refined-rung eigensolve ≤ 4 min (measured 31 s at 49 k DOF and 141 s at 190 k DOF in the browser, native comparison 60/87 s on the same document) |
-| STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s — measured 2.3 s on a synthetic 49.9 MB plane-solid file (9 120 solids; parse-dominated; V14 names the per-face caveat for spline-heavy files) |
-| See-through fill (M12): preview at 35 % body opacity, 1080p | ≥ 59 fps — measured 59.6 fps headed on the referee (opaque 59.7, p95 17.4 ms both; no long tasks; Firefox 164.8) |
-
-The v0.1-carried laptop and Firefox rows were measured 2026-10-13. Firefox on the referee
-meets every budget except edit → coarse — 1650 ms against ≤ 1500 ms
-(`docs/verification/budgets-firefox.md`). The laptop row (Intel N100, 4 threads, 7 GiB RAM,
-headless only — the box has no display, so the headed referee pass is not possible there;
-`budgets-laptop-chrome.md` and `budgets-laptop-firefox.md`): Chrome runs coarse 4.92 s,
-refined 15.06 s, export 64.1 s — 1.5–4.3× the rows above — with ~0.6–0.9 s of main-thread
-block around each edit (the headless GPU-flush artifact, larger on 4 cores), and the preview
-row is not interpretable off a displayless box (1.8 fps headless; the same referee machine
-measures 6.7 fps headless against 59.5 headed). Firefox cannot create a WebGL context on
-that box at all (no GL driver stack — Chrome gets there through its bundled SwiftShader),
-so its render- and export-dependent rows are unmeasurable there.
-
-Verdict (2026-10-13, goal owner): the laptop row passes — for a £100 passively cooled N100
-mini PC, running the reference task end to end at 4.9 s coarse / 15.1 s refined / 64 s
-export is judged good for the class; the budget rows above stay referee-scoped. The
-referee-Firefox coarse edit passes as measured too: 1650 ms is within 10 % of the 1500 ms
-budget on the same hardware, and is the number a capable machine can be expected to hold.
+| Rung-record collection adds no measurable leg time | the v0.3 coarse/refined/export rows reproduce within their stated bounds |
+| Declared-tolerance ladder, reference task, referee | ≤ 25 s end to end at a 1 % deflection declaration (declared target) |
+| Estimator residual, per rung | ≤ 35 %, stated band measured and recorded by V18 |
+| Thermal leg (conduction + expansion), reference bracket | ≤ 2 × the v0.3 refined static row (declared target) |
+| Worker round-trip overhead vs local CLI, same task | ≤ 20 % on the LAN path (declared target) |
+| Sweep throughput at the reference tolerance | ≥ 6 points/hour referee, ≥ 2 points/hour N100 (declared targets) |
 
 ---
 
@@ -241,35 +186,34 @@ budget on the same hardware, and is the number a capable machine can be expected
 
 | # | Milestone | Done when |
 | :-- | :-- | :-- |
-| M8 | **Modal** — mass assembly, eigen route, CLI and web surface | V13 passes; the first modes visible headless and in the Results lens. |
-| M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. (2026-10-09) |
-| M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. (2026-10-12) |
-| M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
-| M12 | **See-through fill + part colour** — fill in the viewport field, interior pass, opacity control, `Node.color`, 3MF `displaycolor` | V16 passes; the preview ≥ 59 fps row re-measured in its default and semi-transparent states (referee first). (2026-10-13) |
+| M13 | **Measured rungs + declared question + `data/costs/`** | V17, V18 pass; the rung table visible headless and in the Results lens; the dataset seeded with provenance. |
+| M14 | **Thermal-structural flow** — conduction, temperature regions, thermal expansion | V19, V20 pass; temperature regions round-trip; the thermal budget row measured. |
+| M15 | **API/MCP + the worker** — JSON API, MCP server, `fieldsmith worker` | V21 passes with its capture artifacts; V22 green; cost rows flow per rung. |
+| M16 | **Parameter sweep** — headless runner, Results-lens table | V23 passes; the throughput row measured. |
 
 ---
 
-## Explicitly out of scope for v0.3
+## Explicitly out of scope for v0.4
 
-B-rep editing · STEP *export* · topology optimisation (SIMP) · nonlinear, thermal or CFD
-analysis · multi-material analysis (per-volume labelling is in; mixed-material stiffness is
-not) · assemblies, drawings or BOM · conformal lattice mapping · beam/stochastic lattice
-classes · collaboration, accounts or cloud storage · G-code generation · mobile layout.
-
-Out of scope for M12 specifically (post-v0.3 asks): section/cut-away planes · persisting
-the opacity control between sessions · colouring by region rather than node · free-form
-hex colour input in the Inspector (fixed palette only) · reading another tool's colours
-back into the document · per-object web/wasm export paths (the web Make-lens export stays
-single-union, as in v0.3).
+Transient heat, convection or radiation boundaries · multi-material conduction (the
+bi-metal strip waits for it) · thermal behaviour of the graded lattice (homogenised α) ·
+nonlinear or material-law analysis · the other flows of the 2026-10-13 agenda (RF/EM,
+molding, waves, material laws; each takes its own verification ladder when taken) · any
+Fieldsmith-hosted service: relay, accounts, metering, a submit endpoint for cost rows ·
+provider provisioner helpers (Terraform-class) · the browser-attached session host ·
+bit-identical cross-machine results (divergence measured, never promised) · part
+grouping, sketch and section planes (supporting cast under the ranking; named for later)
+· multi-parameter sweep grids and optimisers · topology optimisation (SIMP), B-rep
+editing, collaboration, drawings (carried from v0.3).
 
 ---
 
 ## Definition of done
 
-v0.3 is done when every box in sections A–E is ticked, V1–V15 pass in CI, the budgets are
-met on the referee, the two provisional budgets are confirmed or honestly revised by
-measurement, and the reference task is run once end to end on a foreign fixture with its
-report filed next to `docs/verification/` — and not before. If a criterion turns out to be
-wrong, change this file in a reviewed commit; do not quietly skip it. (Section F defines
-the post-v0.3 M12 milestone, which carries its own pass criteria and does not reopen this
-definition.)
+v0.4 is done when every box in sections A–E is ticked, V1–V23 pass in CI, the budget
+table is measured on the referee and on the N100 class's headless legs with the owner's
+verdicts recorded where a row misses its target, `data/costs/` holds its header and seed
+rows with provenance, and the V21 capture artifacts are filed in `docs/verification/` —
+and not before. If a criterion turns out to be wrong, change this file in a reviewed
+commit; do not quietly skip it. Each milestone's design detail lands in a reviewed plan
+before code, as in previous goals.
