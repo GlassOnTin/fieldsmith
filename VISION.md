@@ -18,7 +18,7 @@ MorphoForge (an earlier experiment by another agent) found the right ingredients
 | Kept idea | Why it is right |
 | :--- | :--- |
 | Implicit / SDF geometry | Booleans never fail; lattices with millions of features are just another function. |
-| In-browser FEA via `fenics-rs` | Real physics, no cloud, works air-gapped. |
+| In-browser FEA via `fenics-rs` | Real physics, no Fieldsmith cloud, works air-gapped. |
 | Stress-graded TPMS infill | The genuinely new thing: geometry that responds to load. |
 | Direct-to-print export + slice preview | The output is a physical object, not a picture. |
 | Literate, executable verification cases | Credibility comes from reproducible comparison with theory. |
@@ -104,6 +104,12 @@ Engineers will only use a tool whose numbers they can defend.
 - **One unit system internally**: mm · N · MPa · tonne · s (self-consistent). Display units are a preference.
 - **Every result carries provenance**: element type, element count, solve time, convergence
   indicator, and which load case produced it.
+- **Refinement is measured and shown**: each analysis climbs refinement rungs, and the
+  result shows the per-rung error estimate taken from rung-to-rung change and the time
+  each rung took. Declare a tolerance and see what it costs to meet; declare a budget and
+  see what tolerance it buys. When compute leaves the desk (section 6), a cost estimate
+  appears with its own stated error, and a tolerance the budget cannot meet is answered
+  with a stated refusal, never a stretched result.
 - **Lattice properties are modelled, not assumed**: each TPMS family has a fitted homogenised
   stiffness law `E*(ρ) = C·E_s·ρ^n` (Gibson–Ashby form), with the coefficients and their
   source documented and verified by a shipped unit-cell study.
@@ -171,6 +177,9 @@ or wave study will not stay in that class. The licence is what this project remo
 hardware class is the user's choice, desk machine or cloud account, and the compute cost
 matters as soon as that choice does: what a commercial tool blends into a per-seat price
 or a quote appears here as a line in the user's own provider bill, unbundled and visible.
+Measurements make it concrete: each refinement rung is a measured error-and-time pair,
+and anonymised, shape-only measurements of real runs are contributed to the repository
+itself, so a first run on an unfamiliar machine starts from the community's numbers.
 
 The standing rule, the same one the opening paragraph commits to:
 
@@ -192,10 +201,12 @@ hosted solver is exactly what they cannot use, whereas a worker on machines they
 
 ### Non-goals (for now)
 
-- Full B-rep / NURBS parametric CAD with drawings and tolerances. Reading STEP to make a
-  field is on the v0.3 goal (see the landscape below); editing B-rep is not a non-goal,
-  it is a different product.
-- Nonlinear, dynamic, thermal or CFD analysis. Linear static elasticity, done well, first.
+- Full B-rep / NURBS parametric CAD with drawings and tolerances. Reading STEP into a
+  field shipped that way at v0.3 (see the landscape below); editing B-rep is not a
+  non-goal, it is a different product.
+- Transient dynamics, nonlinearity or CFD analysis. Linear static and steady-state
+  analysis, done well, first; the engineering flows enter through it one coupling at a
+  time.
 - Full topology optimisation (SIMP). Grading a lattice inside a fixed envelope is the scope;
   topology optimisation may come once the honest grading loop is solid.
 - Being a slicer. We preview slices; Prusa/Orca/Cura print.
@@ -205,7 +216,8 @@ hosted solver is exactly what they cannot use, whereas a worker on machines they
 ## 7. The competitive landscape
 
 Recorded 2026-10-09 from product documents and published pricing, competitors read but
-not exercised by hand. The Fieldsmith column is this repo at v0.2.0.
+not exercised by hand. The Fieldsmith column is this repo at v0.2.0; STEP reading and
+modal analysis shipped in v0.3, after this was written.
 
 There are two markets with our name in them.
 
@@ -240,11 +252,15 @@ and its published verification is marketing, not measured error bars.
 
 **What follows for the roadmap.** The nearest real users are the ones in section 6, and
 the files they already have are STEP and 3MF. OnShape and every mainstream tool exports
-3MF; we read 3MF (single object so far, multi-volume next, with per-volume materials recorded
-for the slicer even though analysis stays single-material). The named gap versus OnShape's
-simulation is modal, and `fenics-rs` already carries an eigen route, so that one is cheap
-to close. STEP stays on the old route this file always allowed: read the file, voxelise,
-make it a field, never edit a B-rep. That is the v0.3 goal: the CAD round-trip.
+3MF; we read it, multi-volume since v0.3 with per-volume materials recorded for the slicer
+even though analysis stays single-material. The named gap versus OnShape's simulation,
+modal analysis, closed at v0.3. STEP shipped on the old route this file always allowed:
+read the file, voxelise, make it a field, never edit a B-rep. The CAD round-trip was the
+v0.3 goal; v0.4 asks the declared question instead: state a tolerance or a budget, get
+the measured cost and the answer. Beyond it the ranking is one question: does the change
+make a capability engineers currently pay per seat available to everyone? The engineering
+flows are that ranking's winners, computed on hardware the user chooses under the
+section 6 rule.
 
 ---
 
