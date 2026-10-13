@@ -246,3 +246,15 @@ export function effectiveLeafColors(doc: Document): Record<string, string> {
   rec(doc.root);
   return out;
 }
+
+/** The nearest ancestor group that carries its own colour, and what it is — the Inspector's
+ * inherited hint and the rule `effectiveLeafColors` applies. `undefined` when nothing above
+ * the node has a colour. */
+export function inheritedColor(doc: Document, id: string): { from: string; color: string } | undefined {
+  let parent = containerOf(doc, id)?.parent ?? null;
+  while (parent) {
+    if (parent.color) return { from: parent.id, color: parent.color };
+    parent = containerOf(doc, parent.id)?.parent ?? null;
+  }
+  return undefined;
+}

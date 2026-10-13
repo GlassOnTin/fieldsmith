@@ -4,7 +4,7 @@ import type { JSX } from 'preact';
 import { store } from '../doc/store';
 import { kindLabel } from '../doc/types';
 import type { Node } from '../doc/types';
-import { moveNode, renameId } from '../doc/ops';
+import { moveNode, renameId, inheritedColor } from '../doc/ops';
 import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -60,6 +60,7 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
   const isGroup = node.kind.type === 'group';
   const collapsed = ui.collapsed.has(node.id);
   const children = node.kind.type === 'group' ? node.kind.children : [];
+  const rowColour = node.color ?? inheritedColor(store.doc, node.id)?.color;
 
   const zone = (e: DragEvent): 'before' | 'after' | 'inside' => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -126,6 +127,9 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       <span class="glyph">
         <ShapeIcon type={node.kind.type} />
       </span>
+      {rowColour && (
+        <span class="swatch" style={{ background: rowColour }} title={node.color ? `Own colour ${node.color}` : `Colour ${rowColour} inherited`} />
+      )}
       <span class="row-name">{ui.renaming === node.id ? <RenameInput id={node.id} onDone={() => ui.set('renaming', null)} /> : node.id}</span>
       {node.blend > 0 && <span class="meta" title="Blend radius">r{node.blend}</span>}
       <span class="row-actions">

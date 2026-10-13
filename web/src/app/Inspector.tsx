@@ -5,7 +5,8 @@ import { store } from '../doc/store';
 import { findNode, kindLabel } from '../doc/types';
 import type { Document, Modifier, Node, NodeKind, Op } from '../doc/types';
 import { materialLibrary, validateWithWarnings } from '../doc/wasm';
-import { MODIFIER_LABEL, defaultModifier, renameId } from '../doc/ops';
+import { MODIFIER_LABEL, defaultModifier, inheritedColor, renameId } from '../doc/ops';
+import { PART_COLORS } from '../doc/types';
 import { NumRow, NumberInput, Seg, VecRow } from './fields';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
@@ -332,6 +333,7 @@ function MeshPanel({ node }: { node: Node }) {
 function NodeInspector({ node }: { node: Node }) {
   const id = node.id;
   const u = `Edit ${id}`;
+  const inherited = node.color ? undefined : inheritedColor(store.doc, id);
   return (
     <div class="insp" data-inspector="node">
       <div class="insp-heading">
@@ -416,6 +418,44 @@ function NodeInspector({ node }: { node: Node }) {
           ))}
         </select>
         <span />
+        <label class="plain">Colour</label>
+        <div class="chips" data-testid="node-color">
+          {PART_COLORS.map((c) => (
+            <button
+              key={c}
+              class={`swatch ${node.color === c ? 'on' : ''}`}
+              style={{ background: c }}
+              data-color={c}
+              title={`Colour this shape ${c}`}
+              onClick={() =>
+                store.transact(`Colour ${id}`, (d) => {
+                  const n = nodeIn(d, id);
+                  if (n.color === c) delete n.color;
+                  else n.color = c;
+                })
+              }
+            />
+          ))}
+          <button
+            class="mini swatch-clear"
+            data-color=""
+            title="Clear this shape's colour — it inherits the nearest group's colour above"
+            onClick={() =>
+              store.transact(`Colour ${id}`, (d) => {
+                delete nodeIn(d, id).color;
+              })
+            }
+          >
+            ✕
+          </button>
+        </div>
+        <span class="hint" data-testid="color-hint">
+          {node.color
+            ? `${node.color} — this shape`
+            : inherited
+              ? `${inherited.color} from ${inherited.from}`
+              : 'document base colour'}
+        </span>
       </div>
       <div class="field-grid" style={{ marginTop: '8px' }}>
         <label class="plain">Suppressed</label>

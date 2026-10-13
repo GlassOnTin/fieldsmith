@@ -232,3 +232,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .legend-range { display: flex; align-items: center; gap: 8px; }
 .legend-gradient { height: 8px; border-radius: 4px; flex: 1; }
 .probe { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--text-2); }
+
+/* ---- View opacity + part colours (M12) ---- */
+.opacity-panel {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: var(--shadow); padding: 8px 12px; font-size: 12px;
+}
+.opacity-panel .plain { color: var(--text-2); white-space: nowrap; }
+.opacity-panel input { width: 130px; accent-color: var(--accent); }
+.opacity-panel .num { min-width: 36px; font-family: var(--mono); text-align: right; color: var(--text-2); }
+.chips .swatch {
+  width: 18px; height: 18px; padding: 0; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--line-strong); flex: none;
+}
+.chips .swatch:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
+.chips .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chips .swatch-clear { width: 18px; height: 18px; padding: 0; line-height: 1; display: grid; place-items: center; color: var(--text-3); }

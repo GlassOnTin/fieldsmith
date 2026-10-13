@@ -165,6 +165,22 @@ export function emptyDocument(): Document {
   };
 }
 
+/** Fixed display-colour palette for the Inspector (canonical sRGB `#RRGGBB`). Free-form
+ * hex input is out of scope: this palette is the only source of colours, matching what
+ * `.fsm` and 3MF carry. */
+export const PART_COLORS: string[] = [
+  '#21BB4C',
+  '#B5432A',
+  '#2C7BE5',
+  '#F2C842',
+  '#8E4FE3',
+  '#18A0A8',
+  '#E8823C',
+  '#D0457F',
+  '#6B7280',
+  '#1D3B6E',
+];
+
 /** Depth-first walk over every node. */
 export function walk(nodes: Node[], fn: (n: Node, parent: Node | null, depth: number) => void, parent: Node | null = null, depth = 0) {
   for (const n of nodes) {
