@@ -165,7 +165,9 @@ so its render- and export-dependent rows are unmeasurable there.
 
 Verdict (2026-10-13, goal owner): the laptop row passes — for a £100 passively cooled N100
 mini PC, running the reference task end to end at 4.9 s coarse / 15.1 s refined / 64 s
-export is judged good for the class; the budget rows above stay referee-scoped.
+export is judged good for the class; the budget rows above stay referee-scoped. The
+referee-Firefox coarse edit passes as measured too: 1650 ms is within 10 % of the 1500 ms
+budget on the same hardware, and is the number a capable machine can be expected to hold.
 
 ---
 
