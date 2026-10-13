@@ -93,6 +93,12 @@ export interface ShaderInfo {
   leaves: string[];
   /** Mesh texture specs to bind as `u_mesh{slot}` / `u_mesh{slot}p`. */
   meshes: MeshTexInfo[];
+  /** Filled documents: the program carries `vec4 fs_core(vec3 p)`, the interior pass. */
+  core: boolean;
+  /** The core pass's `u_param` grid spec — bind its data (via `previewFillParamData`) as
+   * the texture; `null` means a single-node grid whose literal the source already embeds.
+   * `core` with `grid: null` is fine; both `false` together for body-only programs. */
+  grid: { dims: [number, number, number]; origin: Vec3; spacing: number } | null;
 }
 
 /** One emitted mesh texture slot (matches `MeshTexOut` in Rust). */
@@ -112,6 +118,13 @@ export const FACE_CODES: Face[] = ['all', 'px', 'nx', 'py', 'ny', 'pz', 'nz', 's
 
 export function bodyShader(doc: Document): ShaderInfo {
   return JSON.parse(w.body_shader(JSON.stringify(doc)));
+}
+
+/** Data for the `u_param` texture named by `bodyShader`'s `grid` (f32, row-major with x
+ * fastest). Re-derived per call; always in sync with the grid spec the same document's
+ * `bodyShader` reported. */
+export function previewFillParamData(doc: Document): Float32Array {
+  return w.previewFillParamData(JSON.stringify(doc));
 }
 
 /** One shape as placed in the model, for drawing a ghost. */
@@ -507,6 +520,14 @@ export function exportGraded(doc: Document, h: number): MeshHandle {
   return w.exportGraded(JSON.stringify(doc), h);
 }
 
+/** The graded parameter grid riding a fill level: spec `[ox, oy, oz, spacing]`, dims
+ * `[nx, ny, nz]`, values row-major with x fastest (mm). */
+export interface FillParamLevel {
+  spec: Float64Array;
+  dims: Uint32Array;
+  data: Float32Array;
+}
+
 /** One ladder level streamed back from the analysis worker. Typed arrays are standalone
  * copies (transferred buffers). */
 export interface LevelResult {
@@ -529,6 +550,8 @@ export interface LevelResult {
   vmElemEnvelope: Float64Array;
   /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */
   class: Uint8Array | null;
+  /** Fill levels only: the graded parameter grid for the bound texture. */
+  fillParam: FillParamLevel | null;
 }
 
 /** One mesh grid handed to (or from) a worker: spec plus payloads. The typed arrays are

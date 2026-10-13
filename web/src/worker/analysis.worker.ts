@@ -26,7 +26,11 @@ function post(m: WorkerOut, transfers?: ArrayBuffer[]) {
 
 /** Copy every array out of the wasm handle, then release it (keep=false keeps it for the
  * Make lens export path). */
-function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array }, keep = false): LevelResult {
+function pack(
+  label: string,
+  out: AnalysisHandle & { class?: () => Uint8Array; fillParamSpec?: () => Float64Array; fillParamDims?: () => Uint32Array; fillParamData?: () => Float32Array },
+  keep = false,
+): LevelResult {
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
@@ -34,6 +38,14 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array },
     u.push(out.u(c).slice());
     vmElem.push(out.vmElem(c).slice());
   }
+  const fillParam =
+    out.fillParamData && out.fillParamSpec && out.fillParamDims
+      ? {
+          spec: out.fillParamSpec().slice(),
+          dims: out.fillParamDims().slice(),
+          data: out.fillParamData().slice(),
+        }
+      : null;
   const r: LevelResult = {
     label,
     meta,
@@ -47,6 +59,7 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array },
     vmElem,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     class: out.class ? out.class().slice() : null,
+    fillParam,
   };
   if (!keep) out.free();
   return r;
@@ -54,8 +67,9 @@ function pack(label: string, out: AnalysisHandle & { class?: () => Uint8Array },
 
 /** The message carries the buffers by transfer, so nothing is copied across the boundary. */
 function transfersOf(r: LevelResult): ArrayBuffer[] {
-  return [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem]
-    .map((a) => a.buffer as ArrayBuffer);
+  const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem];
+  if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
+  return ls.map((a) => a.buffer as ArrayBuffer);
 }
 
 function errText(e: unknown): string {

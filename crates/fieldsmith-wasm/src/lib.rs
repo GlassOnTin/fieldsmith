@@ -130,6 +130,18 @@ struct ShaderOut {
     leaves: Vec<String>,
     /// Mesh texture specs to bind as `u_mesh{slot}` / `u_mesh{slot}p`.
     meshes: Vec<MeshTexOut>,
+    /// Filled documents: the program carries `vec4 fs_core(vec3 p)` (the interior pass).
+    core: bool,
+    /// `u_param` grid spec when the core pass wants a texture (a single-node grid embeds a
+    /// literal instead); the data rides [`preview_fill_param_data`] as a typed array.
+    grid: Option<ParamGridOut>,
+}
+
+#[derive(Serialize)]
+struct ParamGridOut {
+    dims: [usize; 3],
+    origin: [f64; 3],
+    spacing: f64,
 }
 
 /// One mesh texture spec for the JS side. The registry key travels as 16 hex digits
@@ -167,20 +179,59 @@ fn bounds_of(e: &Expr) -> Option<[[f64; 3]; 2]> {
     }
 }
 
-/// GLSL for the body field plus its bounding box.
+/// GLSL for the body field plus its bounding box. On a filled document this is the shared
+/// viewport program: the body field exactly as before, plus `vec4 fs_core(vec3 p)` — the
+/// fill with the outer skin removed — with `core`/`grid` saying so. The core pass's
+/// parameter grid is the pre-analysis preview look (`fieldsmith_core::fill::preview_fill`):
+/// uniformly at the spec's ρmax, on precisely the grid the graded build uses, so the
+/// analysis arrival can swap the texture instead of recompiling. A transiently invalid
+/// fill degrades to body-only (`core: false`); `validate` owns the error UX.
 #[wasm_bindgen]
 pub fn body_shader(doc_json: &str) -> Result<String, JsValue> {
     let doc = doc_from(doc_json)?;
     let e = expr::compile_body(&doc);
-    let g = glsl::generate(&e);
-    let (ident, leaves) = glsl::ident(&doc);
-    to_json(&ShaderOut {
-        source: g.source,
-        bounds: bounds_of(&e),
-        ident,
-        leaves,
-        meshes: g.meshes.iter().map(mesh_tex_out).collect(),
-    })
+    match fieldsmith_core::fill::preview_fill(&doc) {
+        Ok(fx) => {
+            let g = glsl::generate_viewport(&e, Some(&fx));
+            let (ident, leaves) = glsl::ident_with_slots(&doc, &g.slots);
+            to_json(&ShaderOut {
+                source: g.source,
+                bounds: bounds_of(&e),
+                ident,
+                leaves,
+                meshes: g.meshes.iter().map(mesh_tex_out).collect(),
+                core: true,
+                grid: (fx.param.data.len() > 1).then(|| ParamGridOut {
+                    dims: fx.param.dims,
+                    origin: fx.param.origin,
+                    spacing: fx.param.spacing,
+                }),
+            })
+        }
+        Err(_) => {
+            let g = glsl::generate(&e);
+            let (ident, leaves) = glsl::ident(&doc);
+            to_json(&ShaderOut {
+                source: g.source,
+                bounds: bounds_of(&e),
+                ident,
+                leaves,
+                meshes: g.meshes.iter().map(mesh_tex_out).collect(),
+                core: false,
+                grid: None,
+            })
+        }
+    }
+}
+
+/// Data for the `u_param` texture bound from a `bodyShader` grid spec (f32, row-major with
+/// x fastest). Re-derived per call — cheap, the preview look carries no stress probe — and
+/// always in sync with the grid spec the same document's `bodyShader` reported.
+#[wasm_bindgen(js_name = previewFillParamData)]
+pub fn preview_fill_param_data(doc_json: &str) -> Result<Float32Array, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let fx = fieldsmith_core::fill::preview_fill(&doc).map_err(js_err)?;
+    Ok(Float32Array::from(fx.param.data.as_slice()))
 }
 
 /// GLSL for one shape as placed in the model (ancestor transforms and patterns applied),
@@ -196,6 +247,8 @@ pub fn shape_shader(doc_json: &str, id: &str) -> Result<String, JsValue> {
         ident: NO_IDENT.into(),
         leaves: vec![],
         meshes: g.meshes.iter().map(mesh_tex_out).collect(),
+        core: false,
+        grid: None,
     })
 }
 
@@ -875,7 +928,8 @@ impl GradedOut {
         Uint32Array::from(&d[..])
     }
 
-    /// Graded density values on the parameter grid, row-major with x fastest (relative density).
+    /// Graded parameter values on the grid, row-major with x fastest (mm: sheet wall
+    /// thickness or network level offset, after grading and min-wall clamps).
     #[wasm_bindgen(js_name = fillParamData)]
     pub fn fill_param_data(&self) -> Float32Array {
         Float32Array::from(&self.g.fill.param.data[..])
