@@ -16,13 +16,20 @@ pub mod modal;
 pub mod p2;
 pub mod pcg;
 pub mod stress;
+pub mod thermal;
 
 pub use assemble::assemble;
 pub use bsr::Bsr;
 pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
-pub use stress::{element_stress, nodal_stress, von_mises, Stress};
+pub use stress::{
+    element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, von_mises, Stress,
+};
+pub use thermal::{
+    assemble_laplace, element_laplace, element_thermal_integrals, solve_conduction, thermal_load,
+    Csr, ThermalRefData,
+};
 
 pub type V3 = [f64; 3];
 

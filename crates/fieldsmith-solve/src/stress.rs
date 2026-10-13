@@ -79,3 +79,67 @@ pub fn nodal_stress(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Ve
     }
     acc
 }
+
+// -- thermal variants (M14) ------------------------------------------------
+
+/// Stress in element `e` at reference point `xi` with the thermal term of the one-way
+/// coupled solve: σ = C:B(u) − (3λ+2μ)·α·ΔT(xi)·I. `dt` is ΔT = T − t_ref at `xi`
+/// (the caller evaluates it — at a P2 node it is that node's ΔT exactly, by the basis's
+/// Kronecker property). Shear components are untouched: the thermal strain is isotropic.
+#[allow(clippy::too_many_arguments)]
+pub fn element_stress_thermal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    young: f64,
+    poisson: f64,
+    alpha: f64,
+    dt: f64,
+    xi: [f64; 3],
+) -> Stress {
+    let m = ElasticMaterial::new(young, poisson);
+    let beta = (3.0 * m.lame_lambda() + 2.0 * m.lame_mu()) * alpha;
+    let mut s = element_stress(mesh, u, e, young, poisson, xi);
+    let th = beta * dt;
+    s[0] -= th;
+    s[1] -= th;
+    s[2] -= th;
+    s
+}
+
+/// [`nodal_stress`] with the thermal term per [`element_stress_thermal`], nodal ΔT in hand
+/// (at a node the interpolated field reproduces the nodal ΔT exactly).
+pub fn nodal_stress_thermal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha: f64,
+    dt: &[f64],
+) -> Vec<Stress> {
+    let pts = P2Tetrahedron.nodal_coordinates();
+    let mut acc = vec![[0.0f64; 6]; mesh.nodes.len()];
+    let mut w = vec![0.0f64; mesh.nodes.len()];
+    assert_eq!(young.len(), mesh.tets.len(), "one modulus per element");
+    assert_eq!(dt.len(), mesh.nodes.len(), "one ΔT per node");
+    for (e, y) in young.iter().enumerate() {
+        let vol = mesh.tet_volume(e).abs();
+        let t = &mesh.tets[e];
+        for (a, xi) in pts.iter().enumerate() {
+            let s = element_stress_thermal(mesh, u, e, *y, poisson, alpha, dt[t[a] as usize], *xi);
+            let n = t[a] as usize;
+            for k in 0..6 {
+                acc[n][k] += vol * s[k];
+            }
+            w[n] += vol;
+        }
+    }
+    for (s, wn) in acc.iter_mut().zip(&w) {
+        if *wn > 0.0 {
+            for v in s.iter_mut() {
+                *v /= wn;
+            }
+        }
+    }
+    acc
+}
