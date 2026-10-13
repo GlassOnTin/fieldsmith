@@ -163,6 +163,10 @@ measures 6.7 fps headless against 59.5 headed). Firefox cannot create a WebGL co
 that box at all (no GL driver stack — Chrome gets there through its bundled SwiftShader),
 so its render- and export-dependent rows are unmeasurable there.
 
+Verdict (2026-10-13, goal owner): the laptop row passes — for a £100 passively cooled N100
+mini PC, running the reference task end to end at 4.9 s coarse / 15.1 s refined / 64 s
+export is judged good for the class; the budget rows above stay referee-scoped.
+
 ---
 
 ## Build order
