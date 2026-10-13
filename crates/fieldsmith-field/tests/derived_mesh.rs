@@ -106,6 +106,7 @@ fn mesh_node(id: &str, key: u64, half: f64) -> Node {
         suppressed: false,
         transform: Transform::default(),
         material: None,
+        color: None,
         kind: NodeKind::Mesh {
             src: "test.stl".into(),
             hash: format!("{key:016x}"),
@@ -129,6 +130,7 @@ fn group(id: &str, children: Vec<Node>, modifiers: Vec<Modifier>) -> Node {
         suppressed: false,
         transform: Transform::default(),
         material: None,
+        color: None,
         kind: NodeKind::Group {
             children,
             modifiers,
@@ -440,6 +442,7 @@ fn group_of_one_bakes_and_group_of_two_keeps_the_wrap() {
                     rotate: [0.0; 3],
                 },
                 material: None,
+                color: None,
                 kind: NodeKind::Box {
                     size: [8.0; 3],
                     round: 0.0,

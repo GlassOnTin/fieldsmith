@@ -362,6 +362,7 @@ pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<Import
             suppressed: false,
             transform: Transform::default(),
             material: None,
+            color: None,
             kind: NodeKind::Mesh {
                 src: opts.src.into(),
                 hash: hash.clone(),

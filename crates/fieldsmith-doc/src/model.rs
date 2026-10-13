@@ -76,7 +76,22 @@ pub struct Node {
     /// labels ride the 3MF export to the slicer. `validate` refuses unknown ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
+    /// This volume's render colour as canonical `#RRGGBB` or `#RRGGBBAA` (`color <hex> on
+    /// <node>`). Display colour only — the 3MF spec says the same of its `displaycolor`: it
+    /// never affects the solve or what is printed. `validate` refuses malformed hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     pub kind: NodeKind,
+}
+
+/// Canonicalise a text colour: optional `#`, then exactly 6 or 8 hex digits, stored
+/// uppercase with the `#`. `None` when the input is anything else.
+pub fn canonical_color(input: &str) -> Option<String> {
+    let digits = input.strip_prefix('#').unwrap_or(input);
+    if !(digits.len() == 6 || digits.len() == 8) || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", digits.to_ascii_uppercase()))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -498,6 +513,39 @@ impl Document {
         }
     }
 
+    /// Assign `col` as the render colour of the node `target` (searched recursively);
+    /// `None` clears it. False when the document declares no shape with that id.
+    pub fn set_node_color(&mut self, target: &str, col: Option<String>) -> bool {
+        fn rec(nodes: &mut [Node], target: &str, col: Option<&str>) -> bool {
+            for n in nodes {
+                if n.id == target {
+                    n.color = col.map(|s| s.to_string());
+                    return true;
+                }
+                if let NodeKind::Group { children, .. } = &mut n.kind {
+                    if rec(children, target, col) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        rec(&mut self.root, target, col.as_deref())
+    }
+
+    /// Visit `(node, its colour)` for every coloured node, groups recursed, including
+    /// suppressed ones (`validate` checks the hex even where the node is inactive).
+    fn for_each_coloured<'a>(nodes: &'a [Node], f: &mut impl FnMut(&'a Node, &'a str)) {
+        for n in nodes {
+            if let Some(c) = &n.color {
+                f(n, c);
+            }
+            if let NodeKind::Group { children, .. } = &n.kind {
+                Self::for_each_coloured(children, f);
+            }
+        }
+    }
+
     pub fn find(&self, id: &str) -> Option<&Node> {
         fn rec<'a>(nodes: &'a [Node], id: &str) -> Option<&'a Node> {
             for n in nodes {
@@ -686,6 +734,16 @@ impl Document {
         Self::for_each_labelled(&self.root, &mut |n, m| {
             if crate::materials::find(self, m).is_none() {
                 errs.push(format!("Unknown material '{}' on '{}'", m, n.id));
+            }
+        });
+        // Colours travel to the 3MF writer as `displaycolor` (`#` + 6 or 8 hex digits);
+        // a malformed value cannot render in the viewport either, so name it here.
+        Self::for_each_coloured(&self.root, &mut |n, c| {
+            if canonical_color(c).is_none() {
+                errs.push(format!(
+                    "Colour '{c}' on '{}' is not a hex colour ('#' plus 6 or 8 hex digits, e.g. '#21BB4C')",
+                    n.id
+                ));
             }
         });
         if let Some(f) = &self.fill {

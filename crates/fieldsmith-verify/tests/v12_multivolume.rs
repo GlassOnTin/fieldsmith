@@ -81,6 +81,7 @@ fn the_composed_part_labels_volumes_and_warns_mixing() {
             rotate: [0.0; 3],
         },
         material: Some("abs".into()),
+        color: None,
         kind: NodeKind::Box {
             size: [80.0, 21.0, 4.0],
             round: 0.5,
@@ -124,6 +125,7 @@ fn an_imported_leaves_patch_labels_face_regions() {
             rotate: [0.0; 3],
         },
         material: None,
+        color: None,
         kind: NodeKind::Box {
             size: [80.0, 21.0, 4.0],
             round: 0.5,
@@ -204,6 +206,7 @@ fn the_composed_part_exports_per_volume_and_reads_back_labelled() {
             rotate: [0.0; 3],
         },
         material: Some("abs".into()),
+        color: None,
         kind: NodeKind::Box {
             size: [80.0, 21.0, 4.0],
             round: 0.5,

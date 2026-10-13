@@ -58,6 +58,7 @@ fn push(doc: &mut Document, id: &str, kind: NodeKind) {
         suppressed: false,
         transform: Default::default(),
         material: None,
+        color: None,
         kind,
     });
 }

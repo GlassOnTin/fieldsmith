@@ -135,6 +135,7 @@ fn skirt_doc() -> Document {
         suppressed: false,
         transform: Default::default(),
         material: None,
+        color: None,
         kind: NodeKind::Extend {
             region: "bottom".into(),
             dir: [0.0, 0.0, -1.0],

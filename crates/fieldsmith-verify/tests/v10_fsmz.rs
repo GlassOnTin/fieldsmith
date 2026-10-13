@@ -264,6 +264,7 @@ fn face_and_patch_arm_extends_round_trip() {
         suppressed: false,
         transform: Transform::default(),
         material: None,
+        color: None,
         kind: NodeKind::Extend {
             region: "bottomish".into(),
             dir: [0.0, 0.0, -1.0],
@@ -335,6 +336,7 @@ fn rotated_mesh_face_extend_round_trips() {
         suppressed: false,
         transform: Transform::default(),
         material: None,
+        color: None,
         kind: NodeKind::Extend {
             region: "down".into(),
             dir: [0.0, 0.0, -1.0],

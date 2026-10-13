@@ -12,6 +12,7 @@
 //!   sphere s1 r=5
 //!   mirror x
 //! }
+//! color "#B5432A" on upright
 //!
 //! region holes = hole1.side + hole2.side
 //! support fix1 holes fixed=xyz
@@ -364,6 +365,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     // run before the shape's line. A shape the document never declares fails then, by
     // name, instead of the label being dropped.
     let mut pending_labels: Vec<(String, String)> = Vec::new();
+    // Same lane for `color <hex> on <shape>` (canonicalised at the statement).
+    let mut pending_colours: Vec<(String, String)> = Vec::new();
 
     for (idx, raw) in text.lines().enumerate() {
         let lineno = idx + 1;
@@ -426,6 +429,30 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     pending_labels.push((id, target));
                 } else {
                     doc.material = id;
+                }
+            }
+            "color" => {
+                // `#` outside a quoted string starts a comment, so the hex travels quoted
+                // in the text form; the document stores it canonical `#RRGGBB[AA]`.
+                let raw = match c.next() {
+                    Some(Tok::Str(s)) => s,
+                    _ => {
+                        return Err(err(
+                            "expected a quoted colour like \"#21BB4C\"".into()
+                        ))
+                    }
+                };
+                let col = canonical_color(&raw).ok_or_else(|| {
+                    err(format!(
+                        "colour \"{raw}\" is not '#' plus 6 or 8 hex digits, e.g. \"#21BB4C\""
+                    ))
+                })?;
+                if matches!(c.peek(), Some(Tok::Ident(t)) if t == "on") {
+                    c.next();
+                    let target = c.ident("the shape to colour")?;
+                    pending_colours.push((col, target));
+                } else {
+                    return Err(err("name the shape: color \"<hex>\" on <shape>".into()));
                 }
             }
             "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "mesh" | "group"
@@ -550,6 +577,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     suppressed,
                     transform,
                     material: None,
+                    color: None,
                     kind,
                 };
                 if kw == "group" {
@@ -771,6 +799,16 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 line: text.lines().count(),
                 message: format!(
                     "material '{mat}' labels shape '{target}', but no shape is named '{target}'"
+                ),
+            });
+        }
+    }
+    for (col, target) in &pending_colours {
+        if !doc.set_node_color(target, Some(col.clone())) {
+            return Err(ParseError {
+                line: text.lines().count(),
+                message: format!(
+                    "colour '{col}' colours shape '{target}', but no shape is named '{target}'"
                 ),
             });
         }
@@ -1108,6 +1146,9 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
         if let Some(m) = &node.material {
             let _ = writeln!(o, "{ind}material {m} on {}", node.id);
         }
+        if let Some(c) = &node.color {
+            let _ = writeln!(o, "{ind}color \"{c}\" on {}", node.id);
+        }
         for c in children {
             print_node(o, c, depth + 1);
         }
@@ -1142,6 +1183,9 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
         let _ = writeln!(o, "{line}");
         if let Some(m) = &node.material {
             let _ = writeln!(o, "{ind}material {m} on {}", node.id);
+        }
+        if let Some(c) = &node.color {
+            let _ = writeln!(o, "{ind}color \"{c}\" on {}", node.id);
         }
     }
 }
@@ -1269,6 +1313,85 @@ material abs
             parse("fieldsmith 1\nmaterial petg\nbox body size=(1, 1, 1)\nmaterial petg on body\n")
                 .unwrap();
         assert!(d.material_warnings().is_empty());
+    }
+
+    #[test]
+    fn colour_round_trips_and_canonicalises() {
+        // The hex travels quoted (a bare `#` starts a comment); input case is not kept.
+        let text = r##"fieldsmith 1
+name "t"
+material petg
+
+box body size=(40, 10, 10)
+group sub {
+  box inner size=(4, 4, 4)
+  material abs on inner
+  color "#21bb4c" on inner
+}
+color "#b5432a" on body
+"##;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert!(
+            canon.contains("color \"#21BB4C\" on inner") && canon.contains("color \"#B5432A\" on body"),
+            "{canon}"
+        );
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        assert_eq!(d.find("body").unwrap().color.as_deref(), Some("#B5432A"));
+        match &d.find("sub").unwrap().kind {
+            NodeKind::Group { children, .. } => {
+                assert_eq!(children[0].color.as_deref(), Some("#21BB4C"));
+            }
+            other => panic!("not a group: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn colour_accepts_the_alpha_form() {
+        let d = parse(
+            "fieldsmith 1\nname \"t\"\nbox b size=(1, 1, 1)\ncolor \"#11223344\" on b\n",
+        )
+        .unwrap();
+        assert_eq!(d.find("b").unwrap().color.as_deref(), Some("#11223344"));
+        // The .fsmz JSON side carries the canonical string, absent on colourless nodes.
+        let jsoned = serde_json::to_value(&d).unwrap();
+        let b = jsoned
+            .get("root")
+            .and_then(|r| r.get(0))
+            .and_then(|n| n.get("color"))
+            .and_then(|c| c.as_str());
+        assert_eq!(b, Some("#11223344"));
+        let plain = parse("fieldsmith 1\nname \"t\"\nbox b size=(1, 1, 1)\n").unwrap();
+        let jsoned = serde_json::to_value(&plain).unwrap();
+        assert!(jsoned.get("root").unwrap().get(0).unwrap().get("color").is_none());
+    }
+
+    #[test]
+    fn colour_errors_are_named() {
+        // Bad hex names itself on its own line.
+        let e = parse("fieldsmith 1\nbox b size=(1, 1, 1)\ncolor \"#11GG33\" on b\n").unwrap_err();
+        assert_eq!(e.line, 3, "{}", e.message);
+        assert!(e.message.contains("#11GG33"), "{}", e.message);
+        // A bare `#` opens a comment, so the hex must travel quoted.
+        let e = parse("fieldsmith 1\nbox b size=(1, 1, 1)\ncolor on b\n").unwrap_err();
+        assert!(e.message.contains("quoted"), "{}", e.message);
+        // A colour without a target and an unknown target are both named.
+        let e = parse("fieldsmith 1\nbox b size=(1, 1, 1)\ncolor \"#112233\"\n").unwrap_err();
+        assert!(e.message.contains("color"), "{}", e.message);
+        let e =
+            parse("fieldsmith 1\nbox b size=(1, 1, 1)\ncolor \"#112233\" on ghost\n").unwrap_err();
+        assert!(e.message.contains("ghost"), "{}", e.message);
+
+        // validate catches a hand-edited non-hex value; a valid one passes, and clearing
+        // works like the material lane does.
+        let mut d = parse("fieldsmith 1\nbox b size=(1, 1, 1)\nmaterial petg\n").unwrap();
+        d.set_node_color("b", Some("red".into()));
+        let errs = d.validate();
+        assert!(errs.iter().any(|e| e.contains("not a hex colour")), "{errs:?}");
+        d.set_node_color("b", Some("#21BB4C".into()));
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        d.set_node_color("b", None);
+        assert_eq!(d.find("b").unwrap().color, None);
     }
 
     #[test]

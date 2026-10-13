@@ -102,6 +102,7 @@ fn mesh_node(id: &str, hash: String, bbox: [f64; 6], transform: Transform) -> No
         suppressed: false,
         transform,
         material: None,
+        color: None,
         kind: NodeKind::Mesh {
             src: "test.stl".into(),
             hash,
@@ -187,6 +188,7 @@ fn unhydrated_key_is_vacuum_and_neutral_in_a_document() {
             suppressed: false,
             transform: Transform::default(),
             material: None,
+            color: None,
             kind: NodeKind::Box {
                 size: [16.0; 3],
                 round: 0.0,
@@ -382,6 +384,7 @@ fn glsl_generate_emits_mesh_sampler_and_spec() {
             suppressed: false,
             transform: Transform::default(),
             material: None,
+            color: None,
             kind: NodeKind::Box {
                 size: [2.0; 3],
                 round: 0.0,

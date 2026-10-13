@@ -91,6 +91,7 @@ fn mesh_node(id: &str, key: u64, half: f64) -> Node {
         suppressed: false,
         transform: Transform::default(),
         material: None,
+        color: None,
         kind: NodeKind::Mesh {
             src: "test.stl".into(),
             hash: format!("{key:016x}"),
@@ -116,6 +117,7 @@ fn box_node(id: &str, size: [f64; 3], translate: [f64; 3], op: Op) -> Node {
             rotate: [0.0; 3],
         },
         material: None,
+        color: None,
         kind: NodeKind::Box { size, round: 0.0 },
     }
 }
