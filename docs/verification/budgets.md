@@ -9,27 +9,29 @@ an edit even though the app JS costs ~0.5 ms per frame — see the note below.
 
 | Mode | Check | Result | Detail |
 | :-- | :-- | :-- | :-- |
-| headless | cold load (compressed) ≤ 3 MB | pass | 1510 kB |
-| headless | edit → coarse ≤ 1500 ms | pass | 1373 ms |
-| headless | edit → refined ≤ 10000 ms | pass | 6197 ms |
-| headless | main-thread long tasks > 50 ms: none | FAIL | longtasks [[30,157],[214,166],[387,160],[1397,139],[1713,92],[6213,143]]; timer gaps [[28,160],[212,170],[382,165],[1396,140],[1712,94],[6212,145]] |
-| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | FAIL | 6.7 fps, frame-arrival p95 165.5 ms, render CPU med 0.22 ms |
-| headless | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.8 s (mesh 11.4, write 1.4; click→meta 30 s incl. scan 9 s; 257.2 MB, 18535066 tris vs 18535066) |
-| headless | mesh doc import (box.glb fixture) ≤ 1 s | pass | 273 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
+| headless | cold load (compressed) ≤ 3 MB | pass | 1521 kB |
+| headless | edit → coarse ≤ 1500 ms | pass | 1473 ms |
+| headless | edit → refined ≤ 10000 ms | pass | 6251 ms |
+| headless | main-thread long tasks > 50 ms: none | FAIL | longtasks [[29,213],[263,300],[579,298],[1479,294],[1774,229],[6262,291],[6554,218]]; timer gaps [[27,216],[260,306],[579,299],[1479,525],[6259,514]] |
+| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | FAIL | 3.9 fps, frame-arrival p95 298.1 ms, render CPU med 0.22 ms |
+| headless | presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill) | FAIL | 1.7 fps, frame-arrival p95 787.1 ms, render CPU med 0.21 ms |
+| headless | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 13.0 s (mesh 11.6, write 1.4; click→meta 31 s incl. scan 10 s; 257.2 MB, 18535066 tris vs 18535066) |
+| headless | mesh doc import (box.glb fixture) ≤ 1 s | pass | 123 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
 | headless | mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 0.8 s (mesh 0.7, write 0.1; 9.5 MB, 950424 tris vs 950424) |
-| headed | cold load (compressed) ≤ 3 MB | pass | 1510 kB |
-| headed | edit → coarse ≤ 1500 ms | pass | 1353 ms |
-| headed | edit → refined ≤ 10000 ms | pass | 6011 ms |
+| headed | cold load (compressed) ≤ 3 MB | pass | 1521 kB |
+| headed | edit → coarse ≤ 1500 ms | pass | 1362 ms |
+| headed | edit → refined ≤ 10000 ms | pass | 6051 ms |
 | headed | main-thread long tasks > 50 ms: none | pass | none; no timer gaps |
-| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 59.5 fps, frame-arrival p95 17.4 ms, render CPU med 0.22 ms |
-| headed | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 13.3 s (mesh 11.4, write 1.9; click→meta 32 s incl. scan 12 s; 257.2 MB, 18535066 tris vs 18535066) |
-| headed | mesh doc import (box.glb fixture) ≤ 1 s | pass | 94 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
+| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 59.7 fps, frame-arrival p95 17.4 ms, render CPU med 0.20 ms |
+| headed | presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill) | pass | 59.6 fps, frame-arrival p95 17.4 ms, render CPU med 0.21 ms |
+| headed | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.9 s (mesh 11.5, write 1.4; click→meta 30 s incl. scan 9 s; 257.2 MB, 18535066 tris vs 18535066) |
+| headed | mesh doc import (box.glb fixture) ≤ 1 s | pass | 93 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
 | headed | mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 0.8 s (mesh 0.7, write 0.1; 9.5 MB, 950424 tris vs 950424) |
 
 - headless: wasm threaded (cross-origin isolated, pool of 32)
-- headless: setup solve 6169 ms; console errors 0
+- headless: setup solve 6900 ms; console errors 0
 - headed: wasm threaded (cross-origin isolated, pool of 32)
-- headed: setup solve 6001 ms; console errors 0
+- headed: setup solve 6100 ms; console errors 0
 
 Headless caveat, measured on the referee workstation (SwiftShader and ANGLE/Vulkan
 on an RTX 5090): headless Chromium reports one 123-236 ms long task per edit; a trace ties it to a

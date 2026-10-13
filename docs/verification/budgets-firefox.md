@@ -9,27 +9,29 @@ an edit even though the app JS costs ~0.5 ms per frame — see the note below.
 
 | Mode | Check | Result | Detail |
 | :-- | :-- | :-- | :-- |
-| headless | cold load (compressed) ≤ 3 MB | pass | 1510 kB |
-| headless | edit → coarse ≤ 1500 ms | FAIL | 1618 ms |
-| headless | edit → refined ≤ 10000 ms | pass | 6649 ms |
+| headless | cold load (compressed) ≤ 3 MB | pass | 1521 kB |
+| headless | edit → coarse ≤ 1500 ms | FAIL | 1634 ms |
+| headless | edit → refined ≤ 10000 ms | pass | 6445 ms |
 | headless | main-thread long tasks > 50 ms: none | pass | none; no timer gaps |
-| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 60 fps, frame-arrival p95 17.3 ms, render CPU med 0.40 ms |
-| headless | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.6 s (mesh 11.4, write 1.2; click→meta 32 s incl. scan 11 s; 257.2 MB, 18535066 tris vs 18535066) |
-| headless | mesh doc import (box.glb fixture) ≤ 1 s | pass | 85 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
-| headless | mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 0.6 s (mesh 0.5, write 0.1; 9.5 MB, 950424 tris vs 950424) |
-| headed | cold load (compressed) ≤ 3 MB | pass | 1510 kB |
-| headed | edit → coarse ≤ 1500 ms | FAIL | 1650 ms |
-| headed | edit → refined ≤ 10000 ms | pass | 6452 ms |
+| headless | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 59.9 fps, frame-arrival p95 17.2 ms, render CPU med 0.18 ms |
+| headless | presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill) | pass | 59.6 fps, frame-arrival p95 17.2 ms, render CPU med 0.14 ms |
+| headless | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.3 s (mesh 11.1, write 1.2; click→meta 31 s incl. scan 10 s; 257.2 MB, 18535066 tris vs 18535066) |
+| headless | mesh doc import (box.glb fixture) ≤ 1 s | pass | 87 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
+| headless | mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 0.7 s (mesh 0.5, write 0.1; 9.5 MB, 950424 tris vs 950424) |
+| headed | cold load (compressed) ≤ 3 MB | pass | 1521 kB |
+| headed | edit → coarse ≤ 1500 ms | FAIL | 1618 ms |
+| headed | edit → refined ≤ 10000 ms | pass | 6368 ms |
 | headed | main-thread long tasks > 50 ms: none | pass | none; no timer gaps |
-| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 164.9 fps, frame-arrival p95 6.2 ms, render CPU med 0.12 ms |
-| headed | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.0 s (mesh 10.9, write 1.1; click→meta 31 s incl. scan 10 s; 257.2 MB, 18535066 tris vs 18535066) |
-| headed | mesh doc import (box.glb fixture) ≤ 1 s | pass | 89 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
+| headed | presented preview ≥ 59 fps at 1080p (60 Hz vsync; fill lens) | pass | 164.8 fps, frame-arrival p95 6.2 ms, render CPU med 0.14 ms |
+| headed | presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill) | pass | 164.8 fps, frame-arrival p95 6.2 ms, render CPU med 0.10 ms |
+| headed | export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 12.3 s (mesh 11.1, write 1.1; click→meta 31 s incl. scan 10 s; 257.2 MB, 18535066 tris vs 18535066) |
+| headed | mesh doc import (box.glb fixture) ≤ 1 s | pass | 85 ms (file chooser → node in the document; weld + segment + voxelize in the worker) |
 | headed | mesh doc export 3MF at h 0.1: mesh + write ≤ 15 s | pass | 0.6 s (mesh 0.5, write 0.1; 9.5 MB, 950424 tris vs 950424) |
 
 - headless: wasm threaded (cross-origin isolated, pool of 32)
-- headless: setup solve 6580 ms; console errors 0
+- headless: setup solve 6759 ms; console errors 0
 - headed: wasm threaded (cross-origin isolated, pool of 32)
-- headed: setup solve 6305 ms; console errors 0
+- headed: setup solve 6432 ms; console errors 0
 
 Firefox note: the browser emits no `longtask` entries, so the long-task row
 here reads "none" from that observer; the 25 ms timer-gap probe is what

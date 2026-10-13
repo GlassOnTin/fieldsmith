@@ -2,7 +2,7 @@
 
 **Closed 2026-10-13** — all legs done: milestones M8–M11 committed and CI-green, budgets
 measured with the owner's verdicts, reference task run end to end on the foreign fixture,
-hallway leg passed. Post-v0.3 asks are planned on top of the closed definition.
+hallway leg passed. The post-v0.3 asks (section F, M12) are done too: 2026-10-13.
 
 This file defines **what "done" means for v0.3**. It is deliberately concrete and testable.
 The [VISION](VISION.md) says *why* (section 7 records the competitive landscape this version
@@ -134,11 +134,11 @@ and the definition-of-done statement above stays scoped to sections A–E; this 
 carries its own pass criteria.
 
 ### F. See-through fill and part colour (M12)
-- [ ] **The fill is visible in the viewport.** A document with a fill compiles the lattice
+- [x] **The fill is visible in the viewport.** A document with a fill compiles the lattice
       into the viewport field shader (the body pass's field is unaffected — silhouette and
       the opaque view byte-identical; before analysis a constant-grade preview stands in,
       the graded parameter grid arriving from analysis afterwards).
-- [ ] **Adjustable opacity.** A session-only control (shape/fill/make lenses; hidden in
+- [x] **Adjustable opacity.** A session-only control (shape/fill/make lenses; hidden in
       Results where the field does not render) drives the body pass's alpha: 0–100 %,
       uniform-only except the one transparent↔opaque regime flip. Interior material is
       rendered by a dedicated pass that shows the fill with the outer skin removed
@@ -146,24 +146,38 @@ carries its own pass criteria.
       intended look). Opacity is a viewing choice: not document data, not undoable, resets
       to 100 % on every load — and the e2e case asserts that reset rather than silently
       ignoring it.
-- [ ] **Part colour.** `Node.color` (display/3MF-render colour only, never a printed- or
+- [x] **Part colour.** `Node.color` (display/3MF-render colour only, never a printed- or
       solve-material property), `.fsm` statement `color <hex> on <name>` round-tripping
       losslessly with named errors for bad hex and unknown targets; a group's colour covers
       it as a whole; Inspector palette row (fixed palette + Default, no free-form input in
       this milestone) and tree colour dots, inherited state stated.
-- [ ] **Per-part colour in the viewport.** The part's leaves render in the part's colour
+- [x] **Per-part colour in the viewport.** The part's leaves render in the part's colour
       before lighting; hover/selection highlights still blend over it; capped per-shader
       (first 32 leaves, documented).
-- [ ] **Colour travels to the slicer.** The per-volume CLI export writes each volume's
+- [x] **Colour travels to the slicer.** The per-volume CLI export writes each volume's
       colour as `displaycolor` on its `basematerials` `<base>` — the attribute the 3MF
       Core schema makes required — with the application's default surface colour where a
       volume has none. V12's reader tests stay green (the reader ignores the attribute).
-- [ ] **V16 passes** (below).
-- [ ] **The preview ≥ 59 fps fill-lens budget row is re-measured** in both states it now
+- [x] **V16 passes** (below).
+- [x] **The preview ≥ 59 fps fill-lens budget row is re-measured** in both states it now
       needs — default opaque and 35 % semi-transparent — on the referee first, then the
       Firefox paragraph; the edit→coarse, refined and export rows re-run as sanity. If a
       row misses after mitigation, this file is revised in a reviewed commit rather than
       the row quietly skipped.
+
+Done 2026-10-13. V16 green: interior-field numerics max |Δ| 3.58e-6 mm
+(SwiftShader headless) and 3.05e-6 mm (ANGLE/Vulkan referee) against the ≤ 1e-4
+tolerance, over one driver round-trip so both sides consume the stack's actual texel
+values; the app checks (8 %+ changed pixels at 35 % opacity, strut/void shading
+spread, Inspector-set colours in viewport/tree/uniforms, `.fsm` round-trip, opacity
+reset on reload) all pass. Referee budgets (`budgets.md`, headed): preview 59.7 fps
+opaque and 59.6 fps at 35 % opacity, frame-arrival p95 17.4 ms both, no long tasks;
+Firefox (`budgets-firefox.md`) holds 164.8 fps in both states, its edit→coarse miss
+above unchanged. Slicer-side caveat named in V16: the XML carries `displaycolor`
+spec-conformantly, but PrusaSlicer 2.9.6 (flatpak) in a single-material profile paints
+the active filament colour over every volume and ignores the attribute, so per-part
+colours are not visible in-slicer in that setup (not measured: the 3.0 alpha in
+Downloads is a Windows build).
 
 ---
 
@@ -201,6 +215,7 @@ not measured):
 | Main thread long tasks during solve | none > 50 ms |
 | Modal: first 3 modes bracket-scale — measured 2026-10-09, revised | coarse rung modes visible ≤ 40 s; refined-rung eigensolve ≤ 4 min (measured 31 s at 49 k DOF and 141 s at 190 k DOF in the browser, native comparison 60/87 s on the same document) |
 | STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s — measured 2.3 s on a synthetic 49.9 MB plane-solid file (9 120 solids; parse-dominated; V14 names the per-face caveat for spline-heavy files) |
+| See-through fill (M12): preview at 35 % body opacity, 1080p | ≥ 59 fps — measured 59.6 fps headed on the referee (opaque 59.7, p95 17.4 ms both; no long tasks; Firefox 164.8) |
 
 The v0.1-carried laptop and Firefox rows were measured 2026-10-13. Firefox on the referee
 meets every budget except edit → coarse — 1650 ms against ≤ 1500 ms
@@ -230,7 +245,7 @@ budget on the same hardware, and is the number a capable machine can be expected
 | M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. (2026-10-09) |
 | M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. (2026-10-12) |
 | M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
-| M12 | **See-through fill + part colour** — fill in the viewport field, interior pass, opacity control, `Node.color`, 3MF `displaycolor` | V16 passes; the preview ≥ 59 fps row re-measured in its default and semi-transparent states (referee first). |
+| M12 | **See-through fill + part colour** — fill in the viewport field, interior pass, opacity control, `Node.color`, 3MF `displaycolor` | V16 passes; the preview ≥ 59 fps row re-measured in its default and semi-transparent states (referee first). (2026-10-13) |
 
 ---
 

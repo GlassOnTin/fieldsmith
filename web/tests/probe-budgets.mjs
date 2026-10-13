@@ -124,7 +124,10 @@ for (const mode of modes) {
       browser = await chromium.launch({
         headless: false,
         channel: 'chrome',
-        args: ['--use-angle=vulkan', '--no-sandbox'],
+        // The page viewport stays 1920×1080; the window args only keep the run fully on
+        // screen (the referee's right monitor), instead of an undecorated window floating
+        // off the top where the desktop session maps Playwright's default.
+        args: ['--use-angle=vulkan', '--no-sandbox', '--window-position=2280,300', '--window-size=1920,1100'],
         env: { ...process.env, DISPLAY: ':0', XAUTHORITY: cookie },
       });
     } else {

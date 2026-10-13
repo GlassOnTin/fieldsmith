@@ -74,9 +74,14 @@ const server = await createServer({ root, logLevel: 'error', server: { port: 0, 
 await server.listen();
 const url = server.resolvedUrls.local[0];
 // Headless runs on the software rasteriser (that is what must stay portable); headed runs
-// drive the machine's real GPU stack, mirroring probe-budgets.mjs's headed flags.
+// drive the machine's real GPU stack, mirroring probe-budgets.mjs's headed flags — window
+// args keep the run fully on screen instead of floating off the top.
 const launchArgs = headed
-  ? { headless: false, channel: 'chrome', args: ['--use-angle=vulkan', '--no-sandbox'] }
+  ? {
+      headless: false,
+      channel: 'chrome',
+      args: ['--use-angle=vulkan', '--no-sandbox', '--window-position=2280,300', '--window-size=1920,1100'],
+    }
   : { headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] };
 let browser;
 try {
