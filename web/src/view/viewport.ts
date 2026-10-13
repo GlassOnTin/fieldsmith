@@ -12,8 +12,13 @@ void main() {
 }`;
 
 export const MAX_HIGHLIGHTS = 16;
+/** Per-leaf colour cap; beyond the first 32 (tree order) parts render in the base colour. */
+export const MAX_PARTCOLORS = 32;
 
 function fragSource(field: string, ident: string): string {
+  const active = field.includes('vec4 fs_core(vec3 p) {')
+    ? 'vec4 fs_active(vec3 p) { if (u_core > 0.5) return fs_core(p); return fs_field(p); }'
+    : 'vec4 fs_active(vec3 p) { return fs_field(p); }';
   return /* glsl */ `
 precision highp float;
 precision highp int;
@@ -28,6 +33,10 @@ uniform vec3 u_base;
 uniform vec3 u_camRight;
 uniform vec3 u_camUp;
 uniform float u_ghost;      // 1 = draw as translucent ghost
+uniform float u_alpha;      // body alpha (1 = opaque); the interior pass is opaque
+uniform float u_core;       // 1 = march/colour through the interior field (core pass)
+uniform vec3 u_leafCol[${MAX_PARTCOLORS}];  // per-leaf display colour (linear RGB)
+uniform int u_leafN;
 uniform vec3 u_gridCol;     // floor line colour (shared; dark mode flips it)
 uniform float u_gridOn;     // 0 hides the floor (shared)
 uniform vec2 u_gridCenter;  // fade centre = document centre
@@ -39,6 +48,7 @@ in vec2 v_ndc;
 out vec4 fragColor;
 ${field}
 ${ident}
+${active}
 bool boxHit(vec3 ro, vec3 rd, out float t0, out float t1) {
   vec3 inv = 1.0 / rd;
   vec3 a = (u_lo - ro) * inv;
@@ -64,7 +74,7 @@ float floorLines(float d, float px, float spacing) {
   return (1.0 - smoothstep(0.0, aa, d)) * res;
 }
 bool floorFragment(vec3 ro, vec3 rd, out vec4 col, out float depthOut) {
-  if (u_gridOn < 0.5 || u_ghost > 0.5) return false;
+  if (u_gridOn < 0.5 || u_ghost > 0.5 || u_core > 0.5) return false;
   if (abs(rd.z) < 1e-5) return false;
   float tG = -ro.z / rd.z;
   if (tG <= 0.0) return false;
@@ -109,7 +119,7 @@ void main() {
   float tPrev = t;
   for (int i = 0; i < 300; i++) {
     vec3 p = ro + rd * t;
-    f = fs_field(p);
+    f = fs_active(p);
     eps = max(1e-4, t * u_pixel * 0.6);
     if (f.x < eps) {
       // A step that lands deep inside material overshot the surface (the field is not
@@ -118,7 +128,7 @@ void main() {
         float lo = tPrev, hi = t;
         for (int j = 0; j < 10; j++) {
           float mid = 0.5 * (lo + hi);
-          vec4 fm = fs_field(ro + rd * mid);
+          vec4 fm = fs_active(ro + rd * mid);
           if (fm.x < 0.0) { hi = mid; f = fm; } else lo = mid;
         }
         t = hi;
@@ -140,6 +150,17 @@ void main() {
   vec3 p = ro + rd * t;
   vec3 n = normalize(f.yzw);
   if (dot(n, rd) > 0.0) n = -n;
+  // Leaf identity is queried only when somebody will read it (part colours or highlights),
+  // so the no-colour/ no-selection path costs nothing.
+  vec2 id = vec2(-1.0, 0.0);
+  if (u_leafN > 0 || u_hlN > 0) id = fs_ident(p);
+  vec3 base = u_base;
+  if (u_leafN > 0) {
+    for (int i = 0; i < ${MAX_PARTCOLORS}; i++) {
+      if (i >= u_leafN) break;
+      if (abs(id.x - float(i)) < 0.5) { base = u_leafCol[i]; break; }
+    }
+  }
   // Studio lighting: camera-relative key light, sky/ground hemisphere, soft rim.
   vec3 L = normalize(u_camRight * 0.45 + u_camUp * 0.65 - rd * 0.6);
   float diff = max(dot(n, L), 0.0);
@@ -148,15 +169,14 @@ void main() {
   float h = max(0.6, t * u_pixel * 6.0);
   for (int k = 1; k <= 4; k++) {
     float s = h * float(k);
-    ao -= max(s - fs_field(p + n * s).x, 0.0) / s * 0.12;
+    ao -= max(s - fs_active(p + n * s).x, 0.0) / s * 0.12;
   }
   ao = clamp(ao, 0.35, 1.0);
-  vec3 col = u_base * (0.30 + 0.22 * hemi + 0.58 * diff) * ao;
+  vec3 col = base * (0.30 + 0.22 * hemi + 0.58 * diff) * ao;
   float spec = pow(max(dot(reflect(rd, n), L), 0.0), 48.0) * 0.18;
   float rim = pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.10;
   col += vec3(spec + rim);
   if (u_hlN > 0) {
-    vec2 id = fs_ident(p);
     for (int i = 0; i < ${MAX_HIGHLIGHTS}; i++) {
       if (i >= u_hlN) break;
       vec2 key = u_hlKey[i];
@@ -167,7 +187,7 @@ void main() {
   }
   vec4 clip = u_viewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  fragColor = vec4(pow(col, vec3(1.0 / 2.2)), u_ghost > 0.5 ? 0.28 : 1.0);
+  fragColor = vec4(pow(col, vec3(1.0 / 2.2)), u_ghost > 0.5 ? 0.28 : u_alpha);
 }`;
 }
 
@@ -211,6 +231,10 @@ export class Viewport {
   readonly overlays = new THREE.Group();
   private quad: THREE.Mesh;
   private ghostQuad: THREE.Mesh;
+  // Interior (core) pass of a filled part: opaque, drawn between the floor and the
+  // body quad so a semi-transparent body reveals the lattice — only ever mounted.
+  private coreQuad: THREE.Mesh;
+  private coreMaterial: THREE.RawShaderMaterial | null = null;
   // Floor-only pass for the lens/empty-document states without a field shader
   // (results lens, empty doc). Same floorFragment code, trivial always-miss field.
   private floorQuad: THREE.Mesh;
@@ -264,16 +288,19 @@ export class Viewport {
     this.quad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.quad.frustumCulled = false;
     this.quad.renderOrder = -10;
+    this.coreQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
+    this.coreQuad.frustumCulled = false;
+    this.coreQuad.renderOrder = -15;
     this.ghostQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.ghostQuad.frustumCulled = false;
     this.ghostQuad.renderOrder = 10;
     this.floorQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.floorQuad.frustumCulled = false;
     this.floorQuad.renderOrder = -20;
-    this.scene.add(this.quad, this.ghostQuad, this.floorQuad);
+    this.scene.add(this.quad, this.coreQuad, this.ghostQuad, this.floorQuad);
     this.floorMaterial = this.buildMaterial(
       { source: 'vec4 fs_field(vec3 p) { return vec4(1.0, 0.0, 0.0, 0.0); }', bounds: null, stepScale: 1.0 },
-      false);
+      {});
     this.floorQuad.material = this.floorMaterial;
 
     this.grid = this.makeGrid();
@@ -367,7 +394,13 @@ export class Viewport {
     return this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
   }
 
-  private buildMaterial(spec: FieldSpec, ghost: boolean): THREE.RawShaderMaterial {
+  private buildMaterial(
+    spec: FieldSpec,
+    opts: { ghost?: boolean; core?: boolean; translucent?: boolean } = {},
+  ): THREE.RawShaderMaterial {
+    const ghost = opts.ghost === true;
+    const core = opts.core === true;
+    const translucent = opts.translucent === true;
     const uniforms: Record<string, THREE.IUniform> = {
       u_invViewProj: { value: new THREE.Matrix4() },
       u_viewProj: { value: new THREE.Matrix4() },
@@ -379,10 +412,14 @@ export class Viewport {
       u_camRight: { value: new THREE.Vector3() },
       u_camUp: { value: new THREE.Vector3() },
       u_ghost: { value: ghost ? 1 : 0 },
+      u_alpha: { value: ghost ? 0.28 : this.bodyAlpha },
+      u_core: { value: core ? 1 : 0 },
       u_gridCol: this.gridCol,
       u_gridOn: this.gridOn,
       u_gridCenter: { value: new THREE.Vector2() },
       u_gridFade: { value: new THREE.Vector2(90, 153) },
+      u_leafCol: { value: Array.from({ length: MAX_PARTCOLORS }, () => new THREE.Vector3()) },
+      u_leafN: { value: 0 },
       u_hlKey: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector2()) },
       u_hlCol: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector3()) },
       u_hlN: { value: 0 },
@@ -427,8 +464,8 @@ export class Viewport {
       fragmentShader: fragSource(spec.source, ghost ? NO_IDENT : spec.ident || NO_IDENT),
       uniforms,
       depthTest: true,
-      depthWrite: !ghost,
-      transparent: ghost,
+      depthWrite: !ghost && !translucent,
+      transparent: ghost || translucent,
     });
   }
 
@@ -444,6 +481,7 @@ export class Viewport {
   async setField(spec: FieldSpec): Promise<void> {
     const gen = ++this.fieldGen;
     const t0 = performance.now();
+    this.lastSpec = spec;
     if (!spec.bounds) {
       this.dropFieldTextures(this.material);
       this.material?.dispose();
@@ -453,7 +491,7 @@ export class Viewport {
       this.invalidate();
       return;
     }
-    const mat = this.buildMaterial(spec, false);
+    const mat = this.buildMaterial(spec, { translucent: this.bodyAlpha < 1 });
     const probe = new THREE.Mesh(this.quad.geometry, mat);
     probe.frustumCulled = false;
     try {
@@ -472,6 +510,7 @@ export class Viewport {
     this.bounds = spec.bounds;
     this.quad.material = mat;
     this.applyHighlights();
+    this.applyPartColors();
     this.lastCompileMs = performance.now() - t0;
     this.invalidate();
   }
@@ -495,10 +534,115 @@ export class Viewport {
     m.uniforms.u_hlN.value = this.highlights.length;
   }
 
+  /** Per-part display colours: id → CSS hex. Filled in on the shader swap and re-applied
+   * to whichever materials exist. */
+  private partColors: Record<string, string> = {};
+  private partLeaves: string[] = [];
+  /** The last spec handed to `setField`; the alpha regime flip rebuilds from it. */
+  private lastSpec: FieldSpec | null = null;
+  /** App-wide body alpha (1 = opaque). The interior pass shows when this is < 1. */
+  private bodyAlpha = 1;
+
+  /** The interior (core) pass of a filled document; `null` hides it (no fill, or bounds
+   * pending). The spec carries the core pass's own step scale (lower than the body's —
+   * the lattice field over-estimates distances). Mirrors `setGhost`. */
+  setCore(spec: FieldSpec | null) {
+    this.dropFieldTextures(this.coreMaterial);
+    this.coreMaterial?.dispose();
+    if (!spec || !spec.bounds) {
+      this.coreMaterial = null;
+      this.coreQuad.material = new THREE.MeshBasicMaterial({ visible: false });
+    } else {
+      this.coreMaterial = this.buildMaterial(spec, { core: true });
+      this.coreQuad.material = this.coreMaterial;
+      this.applyPartColors();
+    }
+    this.invalidate();
+  }
+
+  /** Body alpha (0–1). Below 1 the body renders translucent (no depth writes) and the
+   * interior pass mounts underneath it. Rebuilding the material happens only on the
+   * opaque↔translucent regime flip — the program cache serves the identical source — so a
+   * drag inside one regime is a uniform write. */
+  setAlpha(a: number) {
+    const next = THREE.MathUtils.clamp(a, 0, 1);
+    const flip = (this.bodyAlpha >= 1) !== (next >= 1) && !!this.lastSpec?.bounds;
+    this.bodyAlpha = next;
+    if (flip) {
+      void this.setField(this.lastSpec!);
+    } else if (this.material) {
+      (this.material.uniforms.u_alpha.value as number) = next;
+    }
+    this.invalidate();
+  }
+
+  /** Swap the bound `u_param` payload on both field materials (the analysis's graded grid
+   * arrived). Returns false when no material carries `u_param` or `dims` do not match the
+   * spec they were built with — the caller must then run a full `setField` with the new
+   * grid instead. */
+  updateParamGrid(data: Float32Array, dims: [number, number, number]): boolean {
+    const g = this.lastSpec?.grid;
+    if (!g || g.dims[0] !== dims[0] || g.dims[1] !== dims[1] || g.dims[2] !== dims[2]) return false;
+    const materials = [this.material, this.coreMaterial]
+      .filter((m): m is THREE.RawShaderMaterial => m !== null && 'u_param' in m.uniforms);
+    if (!materials.length) return false;
+    for (const m of materials) {
+      const tex = new THREE.Data3DTexture(data, dims[0], dims[1], dims[2]);
+      tex.format = THREE.RedFormat;
+      tex.type = THREE.FloatType;
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.unpackAlignment = 1;
+      tex.needsUpdate = true;
+      (m.uniforms.u_param.value as THREE.Data3DTexture | undefined)?.dispose();
+      m.uniforms.u_param.value = tex;
+    }
+    this.invalidate();
+    return true;
+  }
+
+  /** Per-part display colours: id → CSS hex, mapped through `leaves` (the fs_ident index
+   * order from the body shader). First 32 in `colors`' insertion order (tree order) ride;
+   * the rest render in the base colour. */
+  setPartColors(colors: Record<string, string>, leaves: string[]) {
+    this.partColors = colors;
+    this.partLeaves = leaves;
+    this.applyPartColors();
+    this.invalidate();
+  }
+
+  private applyPartColors() {
+    // Slots are addressed by the leaf's fs_ident index, not densified: the shader picks
+    // `u_leafCol[id.x]` for the fragment's leaf. `u_leafN` must therefore cover the last
+    // coloured slot within the first MAX_PARTCOLORS leaves; uncoloured slots still inside
+    // that span hold the base colour (a match is a no-op), so a removed colour never
+    // leaves a stale value behind. No coloured leaf within the span keeps u_leafN at 0 —
+    // the shader then never queries fs_ident for colours.
+    const covered = Math.min(this.partLeaves.length, MAX_PARTCOLORS);
+    let n = 0;
+    for (let i = 0; i < covered; i++) if (this.partColors[this.partLeaves[i]]) n = i + 1;
+    for (const m of [this.material, this.coreMaterial]) {
+      if (!m) continue;
+      const cols = m.uniforms.u_leafCol.value as THREE.Vector3[];
+      for (let i = 0; i < n; i++) {
+        const css = this.partColors[this.partLeaves[i]];
+        if (css) {
+          const c = new THREE.Color().setStyle(css); // sRGB → linear working colour space
+          cols[i].set(c.r, c.g, c.b);
+        } else {
+          cols[i].set(...this.baseColor);
+        }
+      }
+      m.uniforms.u_leafN.value = n;
+    }
+  }
+
   /** Base surface colour (linear RGB). */
   setBaseColor(c: [number, number, number]) {
     this.baseColor = c;
     if (this.material) (this.material.uniforms.u_base.value as THREE.Color).setRGB(...c);
+    // Uncoloured leaf slots hold copies of the base colour; keep them in step.
+    this.applyPartColors();
     this.invalidate();
   }
   private baseColor: [number, number, number] = [0.74, 0.73, 0.7];
@@ -511,7 +655,7 @@ export class Viewport {
       this.ghostMaterial = null;
       this.ghostQuad.material = new THREE.MeshBasicMaterial({ visible: false });
     } else {
-      this.ghostMaterial = this.buildMaterial(spec, true);
+      this.ghostMaterial = this.buildMaterial(spec, { ghost: true });
       this.ghostMaterial.userData.bounds = spec.bounds;
       this.ghostQuad.material = this.ghostMaterial;
     }
@@ -551,8 +695,12 @@ export class Viewport {
     }
     this.camera.updateMatrixWorld();
     if (this.material && this.bounds) this.updateUniforms(this.material, this.bounds);
+    if (this.coreMaterial && this.bounds) this.updateUniforms(this.coreMaterial, this.bounds);
     if (this.ghostMaterial) this.updateUniforms(this.ghostMaterial, this.ghostMaterial.userData.bounds);
     this.quad.visible = this.showField;
+    // The interior pass shows only while the body is semi-transparent: with an opaque
+    // body it would be fully hidden anyway and its marching would be pure cost.
+    this.coreQuad.visible = this.showField && this.coreMaterial !== null && this.bodyAlpha < 1;
     // The lattice draws in the field shader whenever a field is visible; the
     // results lens (showField false) and empty documents use the floor-only pass.
     const floorVisible = !(this.showField && this.material) && this.gridOn.value > 0.5;
