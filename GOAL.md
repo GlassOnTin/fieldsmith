@@ -123,6 +123,50 @@ captured; the participants' stumbles are product notes in `docs/hallway-test.md`
 
 ---
 
+## Post-v0.3 asks (M12) — planned on top of the closed definition
+
+The 2026-10-13 hallway sessions surfaced them as product notes (`docs/hallway-test.md`);
+the owner requested them verbatim the same day: "let's next add an adjustable
+semi-transparent view as often helpful, and colour coding options for parts too". Scope
+fixed by the owner in the planning session: seeing-inside is opacity only (no section
+plane); colours travel into the 3MF export. Budgets stay referee-scoped and unchanged,
+and the definition-of-done statement above stays scoped to sections A–E; this section
+carries its own pass criteria.
+
+### F. See-through fill and part colour (M12)
+- [ ] **The fill is visible in the viewport.** A document with a fill compiles the lattice
+      into the viewport field shader (the body pass's field is unaffected — silhouette and
+      the opaque view byte-identical; before analysis a constant-grade preview stands in,
+      the graded parameter grid arriving from analysis afterwards).
+- [ ] **Adjustable opacity.** A session-only control (shape/fill/make lenses; hidden in
+      Results where the field does not render) drives the body pass's alpha: 0–100 %,
+      uniform-only except the one transparent↔opaque regime flip. Interior material is
+      rendered by a dedicated pass that shows the fill with the outer skin removed
+      (lattice struts and protected zones; flat cut faces at the skin-depth line are the
+      intended look). Opacity is a viewing choice: not document data, not undoable, resets
+      to 100 % on every load — and the e2e case asserts that reset rather than silently
+      ignoring it.
+- [ ] **Part colour.** `Node.color` (display/3MF-render colour only, never a printed- or
+      solve-material property), `.fsm` statement `color <hex> on <name>` round-tripping
+      losslessly with named errors for bad hex and unknown targets; a group's colour covers
+      it as a whole; Inspector palette row (fixed palette + Default, no free-form input in
+      this milestone) and tree colour dots, inherited state stated.
+- [ ] **Per-part colour in the viewport.** The part's leaves render in the part's colour
+      before lighting; hover/selection highlights still blend over it; capped per-shader
+      (first 32 leaves, documented).
+- [ ] **Colour travels to the slicer.** The per-volume CLI export writes each volume's
+      colour as `displaycolor` on its `basematerials` `<base>` — the attribute the 3MF
+      Core schema makes required — with the application's default surface colour where a
+      volume has none. V12's reader tests stay green (the reader ignores the attribute).
+- [ ] **V16 passes** (below).
+- [ ] **The preview ≥ 59 fps fill-lens budget row is re-measured** in both states it now
+      needs — default opaque and 35 % semi-transparent — on the referee first, then the
+      Firefox paragraph; the edit→coarse, refined and export rows re-run as sanity. If a
+      row misses after mitigation, this file is revised in a reviewed commit rather than
+      the row quietly skipped.
+
+---
+
 ## Verification cases (must pass in CI)
 
 Cases V1–V11 are the audited ladder and run in CI unchanged (their definitions, references
@@ -134,6 +178,7 @@ and tolerances are in git history at `9606890`). The new cases:
 | V13 | Modal on a cantilever 100 × 10 × 10 mm, steel: ranks 1–4 — two degenerate bending pairs — vs Euler-Bernoulli `ωn = (βnL)² √(EI/(ρAL⁴))`, βnL = 1.8751, 4.6941. The β3 pair is not in the first six ranks: rank 5 is the first torsion mode, which sits under its St-Venant value and drifts from it with refinement | Closed form | Pair-mean ≤ 2 % (f1), ≤ 7 % (f2; the measured shear/rotary gap is documented in the report); pair splits ≤ 5 Hz; ≤ 2 % change between the two refinement rungs |
 | V14 | Import a mainstream-CAD STEP (fixture ladder: NIST CTC test files, else any local desktop-CAD export, else state the gap), voxelize, label faces, re-export | The B-rep's analytic volume; PrusaSlicer `manifold` | Analytic-surface fixtures: volume ≤ 1 %, 0 open edges, slicer-clean; name the tessellation chord tolerance used; cone coverage of three named faces ≥ 85 % |
 | V15 | Distributed load on the cantilever: triangle profile q(x) = q₀·x/L on the top face (zero at the clamp, peak at the tip) and a two-band piecewise profile | Euler-Bernoulli δ_tip = 11 q₀ L⁴/(120 EI); analytic resultant and moment of the applied profile | Deflection ≤ 15 %; resultant force and moment ≤ 2 %; the fitted plane's residual and the integrated total appear in the report |
+| V16 | See-through fill + part colour on `examples/bracket-filled.fsm`: the viewport's interior pass (fill with the outer skin removed) against the Rust evaluator; 35 %-opacity frame against the opaque reference; an Inspector-set per-part colour seen in the viewport, the tree, and the 3MF `basematerials` | V5-style GPU-vs-Rust field evaluation; frame-pixel difference; `.fsm`/`.fsmz` text round-trip | Interior field max \|Δ\| ≤ 1e-4 mm (the V5 tolerance); lattice-visible fraction ≥ the bound stated in the report; colour pixel match; colour statement lossless |
 
 ---
 
@@ -185,6 +230,7 @@ budget on the same hardware, and is the number a capable machine can be expected
 | M9 | **Multi-volume 3MF** — reader, per-volume materials, writer metadata | V12 passes; materials recorded and exported per volume. (2026-10-09) |
 | M10 | **STEP in** — reader dependency, tessellation, voxelisation path | V14 passes, or the fallback ladder's stall is documented with this file changed in a reviewed commit. (2026-10-12) |
 | M11 | **Distributed loading** — face-local coordinates, compiled F(x, y), consistent nodal loads, Setup-lens editor | V15 passes; bands and expression bodies round-trip and integrate to the stated resultant. |
+| M12 | **See-through fill + part colour** — fill in the viewport field, interior pass, opacity control, `Node.color`, 3MF `displaycolor` | V16 passes; the preview ≥ 59 fps row re-measured in its default and semi-transparent states (referee first). |
 
 ---
 
@@ -195,12 +241,20 @@ analysis · multi-material analysis (per-volume labelling is in; mixed-material 
 not) · assemblies, drawings or BOM · conformal lattice mapping · beam/stochastic lattice
 classes · collaboration, accounts or cloud storage · G-code generation · mobile layout.
 
+Out of scope for M12 specifically (post-v0.3 asks): section/cut-away planes · persisting
+the opacity control between sessions · colouring by region rather than node · free-form
+hex colour input in the Inspector (fixed palette only) · reading another tool's colours
+back into the document · per-object web/wasm export paths (the web Make-lens export stays
+single-union, as in v0.3).
+
 ---
 
 ## Definition of done
 
-v0.3 is done when every box above is ticked, V1–V15 pass in CI, the budgets are met on the
-referee, the two provisional budgets are confirmed or honestly revised by measurement, and
-the reference task is run once end to end on a foreign fixture with its report filed next to
-`docs/verification/` — and not before. If a criterion turns out to be wrong, change this
-file in a reviewed commit; do not quietly skip it.
+v0.3 is done when every box in sections A–E is ticked, V1–V15 pass in CI, the budgets are
+met on the referee, the two provisional budgets are confirmed or honestly revised by
+measurement, and the reference task is run once end to end on a foreign fixture with its
+report filed next to `docs/verification/` — and not before. If a criterion turns out to be
+wrong, change this file in a reviewed commit; do not quietly skip it. (Section F defines
+the post-v0.3 M12 milestone, which carries its own pass criteria and does not reopen this
+definition.)

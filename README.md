@@ -70,8 +70,10 @@ Linear-elastic, small strain, isotropic material only; homogenisation of the fil
 isotropic (the actual TPMS sheets are not, and the error against a resolved reference is
 measured, not assumed, in V7). One material per part: the solve is single-material, and a
 volume's material label travels with the 3MF export for the slicer (validation reports
-unknown label ids as errors and mixed labels as a warning). No STEP or B-rep import, no
-topology optimisation, no thermal or CFD analysis, per-node material labels are not
+unknown label ids as errors and mixed labels as a warning). STEP import is CLI-only: a
+STEP file is tessellated to a mesh, and there is no B-rep editing. Per-part colours are
+render colours, in the app and on the 3MF export; neither affects what is printed or what
+the solve assumes. No topology optimisation, no thermal or CFD analysis, per-node material labels are not
 adopted on 3MF import (another tool's ids are not fieldsmith material ids), no g-code
 generation, no mobile layout. Modal analysis reports the first natural frequencies of
 the same linear small-strain model; it takes the same supports and ignores loads. The
