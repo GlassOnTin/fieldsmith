@@ -711,6 +711,20 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     kind,
                 });
             }
+            "temperature" => {
+                let id = c.ident("a temperature name")?;
+                let region = c.ident("a region name")?;
+                let mut a = c.attrs()?;
+                let celsius = a.req_num("temp")?;
+                let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
+                a.finish()?;
+                doc.temperatures.push(Temperature {
+                    id,
+                    region,
+                    celsius,
+                    case,
+                });
+            }
             "fill" => {
                 let family = match c.ident("a lattice family")?.as_str() {
                     "gyroid" => Family::Gyroid,
@@ -755,6 +769,12 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     Some(Some(Val::Num(v))) => Some(v.round().max(1.0) as usize),
                     Some(Some(_)) => return Err(err("modes must be a count, e.g. modes=3".into())),
                 };
+                doc.solve.t_ref = match a.take("tref") {
+                    None => None,
+                    Some(None) => return Err(err("tref wants a °C value, e.g. tref=20".into())),
+                    Some(Some(Val::Num(v))) => Some(v),
+                    Some(Some(_)) => return Err(err("tref must be a number, e.g. tref=20".into())),
+                };
                 a.finish()?;
             }
             "custommaterial" => {
@@ -768,6 +788,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     yield_strength: a.req_num("yield")?,
                     density: a.req_num("density")?,
                     min_wall: a.num_or("wall", 0.8)?,
+                    // Thermal expansion 1/°C (e.g. 2e-5 for an aluminium class); optional,
+                    // and a thermal document refuses a material without one.
+                    alpha: a.num("a")?,
                     source: a
                         .string("source")?
                         .unwrap_or_else(|| "User supplied".into()),
@@ -903,18 +926,21 @@ pub fn print(doc: &Document) -> String {
     let _ = writeln!(o, "name {}", q(&doc.name));
     let _ = writeln!(o, "material {}", doc.material);
     for m in &doc.custom_materials {
-        let _ = writeln!(
-            o,
-            "custommaterial {} name={} e={} nu={} yield={} density={} wall={} source={}",
+        let mut line = format!(
+            "custommaterial {} name={} e={} nu={} yield={} density={} wall={}",
             m.id,
             q(&m.name),
             n(m.e),
             n(m.nu),
             n(m.yield_strength),
             n(m.density),
-            n(m.min_wall),
-            q(&m.source)
+            n(m.min_wall)
         );
+        if let Some(a) = m.alpha {
+            line += &format!(" a={}", n(a));
+        }
+        line += &format!(" source={}", q(&m.source));
+        let _ = writeln!(o, "{line}");
     }
     if !doc.root.is_empty() {
         o.push('\n');
@@ -922,7 +948,11 @@ pub fn print(doc: &Document) -> String {
     for node in &doc.root {
         print_node(&mut o, node, 0);
     }
-    if !doc.regions.is_empty() || !doc.supports.is_empty() || !doc.loads.is_empty() {
+    if !doc.regions.is_empty()
+        || !doc.supports.is_empty()
+        || !doc.loads.is_empty()
+        || !doc.temperatures.is_empty()
+    {
         o.push('\n');
     }
     for r in &doc.regions {
@@ -970,6 +1000,16 @@ pub fn print(doc: &Document) -> String {
         };
         let _ = writeln!(o, "load {} {} {} case={}", l.id, l.region, kind, q(&l.case));
     }
+    for t in &doc.temperatures {
+        let _ = writeln!(
+            o,
+            "temperature {} {} temp={} case={}",
+            t.id,
+            t.region,
+            n(t.celsius),
+            q(&t.case)
+        );
+    }
     if let Some(f) = &doc.fill {
         o.push('\n');
         let mut line = format!(
@@ -1001,6 +1041,9 @@ pub fn print(doc: &Document) -> String {
     }
     if let Some(m) = doc.solve.modes {
         solve_line += &format!(" modes={m}");
+    }
+    if let Some(t) = doc.solve.t_ref {
+        solve_line += &format!(" tref={}", n(t));
     }
     if solve_line.len() > "solve".len() {
         let _ = writeln!(o, "{solve_line}");
@@ -1477,6 +1520,127 @@ load w r fn="1 / (x - x)" dir=(0, 0, 0) total=0
         assert!(e.contains("total=0"), "{e}");
         // A variable-dependent division is a solve-time fault, not a static one.
         assert!(!e.contains("divides"), "{e}");
+    }
+
+    #[test]
+    fn temperature_round_trips() {
+        let text = r#"fieldsmith 1
+name "t"
+material alloy
+
+custommaterial alloy name="Test alloy" e=70000 nu=0.33 yield=230 density=2.67 wall=0.4 a=2.3e-5 source="round-trip fixture"
+
+box b size=(40, 10, 10)
+region hotface = b.px
+region coldface = b.nx
+temperature hot hotface temp=80 case="Thermal 2"
+temperature cold coldface temp=20
+solve size=2.5 tref=20
+"#;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        // Cases print explicitly, like load cases do — the default is spelled out.
+        assert!(
+            canon.contains(r#"temperature hot hotface temp=80 case="Thermal 2""#)
+                && canon.contains(r#"temperature cold coldface temp=20 case="Thermal 1""#)
+                && canon.contains("solve size=2.5 tref=20")
+                && canon.contains("a=0.000023"),
+            "{canon}"
+        );
+        assert_eq!(d.thermal_cases(), ["Thermal 2", "Thermal 1"]);
+        assert_eq!(d.temperatures[0].celsius, 80.0);
+        assert_eq!(d.temperatures[1].case, "Thermal 1");
+        assert_eq!(d.solve.t_ref, Some(20.0));
+        assert_eq!(d.custom_materials[0].alpha, Some(2.3e-5));
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    #[test]
+    fn temperatures_validate_with_named_errors() {
+        let base = |extra: &str| {
+            parse(&format!(
+                r#"fieldsmith 1
+name "t"
+material petg
+
+box b size=(40, 10, 10)
+region face = b.px
+{extra}
+"#
+            ))
+            .unwrap()
+        };
+
+        // A temperature on a region the document never declares.
+        let e = base("temperature hot ghost temp=80").validate().join(" | ");
+        assert!(e.contains("refers to missing region 'ghost'"), "{e}");
+
+        // Two unequal values on one region in one case fight over the same nodes.
+        let e = base(
+            "temperature hot face temp=80\ntemperature cold face temp=60",
+        )
+        .validate()
+        .join(" | ");
+        assert!(e.contains("conflicting values"), "{e}");
+
+        // Two equal values on one region are allowed — the nodes agree, so nothing fights.
+        assert!(base("temperature hot face temp=80\ntemperature warm face temp=80")
+            .validate()
+            .is_empty());
+
+        // A case name claimed by both a load and a temperature cannot be solved honestly.
+        let e = base(
+            r#"temperature hot face temp=80 case="Load 1"
+load w face pressure=0.25 case="Load 1""#,
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("claimed by load 'w' and temperature 'hot'"),
+            "{e}"
+        );
+
+        // The library PETG carries a sourced alpha, so a plain thermal doc validates.
+        let d = parse(
+            "fieldsmith 1\nmaterial petg\nbox b size=(1, 1, 1)\nregion f = b.px\ntemperature hot f temp=80\n",
+        )
+        .unwrap();
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+
+        // A custom material without a= is refused by name, not solved with an assumed one.
+        let e = base(
+            "custommaterial bare name=\"Bare\" e=70000 nu=0.33 yield=230 density=2.67 wall=0.4 source=\"fixture\"\nmaterial bare\ntemperature hot face temp=80",
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("thermal-expansion coefficient") && e.contains("bare"),
+            "{e}"
+        );
+
+        // Non-finite values are caught by validate; the parser cannot express them, so
+        // reach them the way a JSON-authored document would (fields are public).
+        let mut d = base("temperature hot face temp=80");
+        d.temperatures[0].celsius = f64::NAN;
+        let e = d.validate().join(" | ");
+        assert!(e.contains("not a finite number"), "{e}");
+        d.temperatures[0].celsius = 80.0;
+        d.solve.t_ref = Some(f64::NAN);
+        let e = d.validate().join(" | ");
+        assert!(e.contains("tref= is not a finite number"), "{e}");
+
+        // tref= parse errors are named.
+        let text = |line: &str| {
+            format!(
+                "fieldsmith 1\nname \"t\"\nmaterial petg\nbox b size=(40, 10, 10)\n\
+                 region face = b.px\ntemperature hot face temp=80\nsolve {line}\n"
+            )
+        };
+        let e = parse(&text("tref")).unwrap_err();
+        assert!(e.message.contains("tref wants a °C value"), "{}", e.message);
+        let e = parse(&text("tref=wat")).unwrap_err();
+        assert!(e.message.contains("tref must be a number"), "{}", e.message);
     }
 
     #[test]

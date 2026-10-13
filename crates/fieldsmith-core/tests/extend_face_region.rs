@@ -188,6 +188,7 @@ fn skirt_doc() -> Document {
         yield_strength: 250.0,
         density: 7.85,
         min_wall: 0.8,
+        alpha: None,
         source: "test".into(),
     });
     let _ = bbox;

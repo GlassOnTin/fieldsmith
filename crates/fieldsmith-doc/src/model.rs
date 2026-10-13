@@ -14,6 +14,10 @@ pub struct Document {
     pub regions: Vec<Region>,
     pub supports: Vec<Support>,
     pub loads: Vec<Load>,
+    /// Fixed boundary temperatures (°C), placed like loads: one region, one value,
+    /// one thermal case. See [`Temperature`].
+    #[serde(default)]
+    pub temperatures: Vec<Temperature>,
     /// Material id from the library (see [`crate::materials`]) or a custom material id.
     pub material: String,
     pub custom_materials: Vec<crate::materials::Material>,
@@ -29,6 +33,7 @@ impl Default for Document {
             regions: Vec::new(),
             supports: Vec::new(),
             loads: Vec::new(),
+            temperatures: Vec::new(),
             material: "petg".into(),
             custom_materials: Vec::new(),
             fill: None,
@@ -369,6 +374,22 @@ pub struct Load {
     pub kind: LoadKind,
 }
 
+/// A fixed boundary temperature (°C) on a labelled region for one thermal case, placed
+/// the way a load is. Dirichlet in the conduction solve: every P2 node on the region's
+/// facets takes the value; faces without a temperature are insulated (the natural
+/// zero-flux condition). Two temperatures claiming the same region in one case cannot
+/// both be carried by a shared node — `validate` refuses that pair.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Temperature {
+    pub id: String,
+    pub region: String,
+    /// Fixed boundary temperature (°C).
+    pub celsius: f64,
+    /// Thermal case name. Temperatures sharing a case are solved together, then drive
+    /// thermal expansion from the solve's reference temperature.
+    pub case: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
@@ -445,6 +466,11 @@ pub struct SolveSettings {
     /// `None` = static solves only. The frequencies run on the same mesh as the statics
     /// (M8): one meshing serves both.
     pub modes: Option<usize>,
+    /// Reference temperature (°C) the thermal strain measures from: ε_th = α·(T − t_ref).
+    /// Thermal stress on a fully free part is zero exactly at the reference temperature.
+    /// The statement's unit is °C like the temperature values. M14.
+    #[serde(default)]
+    pub t_ref: Option<f64>,
 }
 
 impl Document {
@@ -589,6 +615,18 @@ impl Document {
         out
     }
 
+    /// Thermal case names in first-appearance order (M14). Parses give every temperature
+    /// the default case "Thermal 1", so an unnamed thermal field is one case.
+    pub fn thermal_cases(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for t in &self.temperatures {
+            if !out.contains(&t.case) {
+                out.push(t.case.clone());
+            }
+        }
+        out
+    }
+
     /// Validate references and values. Returns human-readable problems (empty = valid).
     pub fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
@@ -721,6 +759,65 @@ impl Document {
                         errs.push(format!("{what}: total= is not a finite number"))
                     }
                     _ => {}
+                }
+            }
+        }
+        // Temperatures (M14), placed like loads: missing regions name the same way. A case
+        // name claimed by both namespaces cannot be solved honestly — the mechanical run
+        // would ignore the temperature and the thermal run the loads — so name the clash.
+        for t in &self.temperatures {
+            if !region_ids.contains(&t.region.as_str()) {
+                errs.push(format!(
+                    "Temperature '{}' refers to missing region '{}'",
+                    t.id, t.region
+                ));
+            }
+            if !t.celsius.is_finite() {
+                errs.push(format!("Temperature '{}' value is not a finite number", t.id));
+            }
+            for l in &self.loads {
+                if l.case == t.case {
+                    errs.push(format!(
+                        "Case '{}' is claimed by load '{}' and temperature '{}' — mixed \
+                         mechanical and thermal cases are not supported yet (give one of \
+                         them another case name)",
+                        t.case, l.id, t.id
+                    ));
+                }
+            }
+        }
+        // Two temperatures on one region in one thermal case can only coexist when they
+        // agree; differing values would fight over the same nodes. Conflicts the geometry
+        // creates (two regions meeting at shared edge nodes) are named at solve time,
+        // where the mesh is known.
+        for (i, a) in self.temperatures.iter().enumerate() {
+            for b in &self.temperatures[..i] {
+                if a.case == b.case && a.region == b.region && a.celsius != b.celsius {
+                    errs.push(format!(
+                        "Temperatures '{}' and '{}' set conflicting values ({} °C and \
+                         {} °C) on region '{}' in thermal case '{}' — one value per \
+                         region per case",
+                        a.id, b.id, a.celsius, b.celsius, a.region, a.case
+                    ));
+                }
+            }
+        }
+        if let Some(t) = self.solve.t_ref {
+            if !t.is_finite() {
+                errs.push("solve tref= is not a finite number".into());
+            }
+        }
+        // The thermal flow refuses a material with no sourced expansion coefficient
+        // rather than solving with an assumed one.
+        if !self.temperatures.is_empty() {
+            if let Some(m) = crate::materials::find(self, &self.material) {
+                if m.alpha.is_none() {
+                    errs.push(format!(
+                        "The thermal flow needs a thermal-expansion coefficient and material \
+                         '{}' states none — pick a material whose sheet states a CTE, or \
+                         give a custom material an a= value",
+                        self.material
+                    ));
                 }
             }
         }
@@ -1053,6 +1150,7 @@ impl Document {
         taken.extend(self.regions.iter().map(|r| r.id.clone()));
         taken.extend(self.supports.iter().map(|r| r.id.clone()));
         taken.extend(self.loads.iter().map(|r| r.id.clone()));
+        taken.extend(self.temperatures.iter().map(|r| r.id.clone()));
         (1..)
             .map(|i| format!("{prefix}{i}"))
             .find(|c| !taken.contains(c))
