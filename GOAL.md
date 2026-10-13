@@ -104,6 +104,25 @@ community rows by `data/costs/` being present with provenance stated.
 - [ ] The thermal solve leg gets budget rows on the referee and on the N100 class
       (below).
 
+Design (plan commit 2026-10-13): `temperature` statements carry fixed values on
+labelled regions like loads do (`temp=<°C>`, case default "Thermal 1"), and `solve
+tref=` states the reference temperature. Dirichlet on every P2 node of the region's
+facets; conflicting values on shared nodes are a named setup error. Steady conduction
+on the existing tet mesh with one material is conductivity-independent (∇·(k∇T)=0
+with constant k is Laplace), so no conductivity property enters v0.4 and unlabelled
+faces are insulated by the natural boundary condition; README names this scope. The
+material gains a single thermal-expansion coefficient (sourced; same honesty pattern
+as the ν entries). Each thermal case is a conduction solve (scalar two-level PCG
+beside the elastic one) plus an elastic solve driven by the thermal load —
+f = (3λ+2μ)·α·∫ΔT·∇φ dV, degree-3-exact quadrature; stress recovery subtracts
+(3λ+2μ)·α·ΔT·I. Thermal cases run as their own results beside the mechanical ones;
+a case name claimed by both a load and a temperature is a named setup error (mixed
+cases named for later). V19(a) uses three single-component supports on the faces
+through the origin: the exact free-expansion solution u = αΔT·(x,y,z) satisfies
+them and lies in the P2 space, so the discrete stress must sit at roundoff.
+V19(b) probed mid-length (Saint-Venant end effects); V20 takes the Lamé-class
+generalized-plane-strain cylinder solution with the free-end force balance.
+
 ### C. The connection — API, MCP, and the worker you own (M15 — evidence: docs/verification/V21.md, V22.md)
 - [ ] A versioned, headless JSON API over the verified crates: document and question in
       — tolerance mode, budget mode, sweep mode — result out with provenance, rung
