@@ -5,7 +5,9 @@
 Fieldsmith is a browser-native design tool for parts that are going to be 3D printed and
 are going to carry load. You model with implicit fields, pin and push the part directly
 in the viewport, and the interior is filled with a lattice whose density follows the
-stress. Nothing leaves your machine. There is no server.
+stress. Nothing unencrypted leaves your machine, and data goes only to machines you
+own. There is no Fieldsmith server, and no Fieldsmith compute either; when an analysis
+outgrows your desk it runs on machines you control, under the standing rule in section 6.
 
 ---
 
@@ -160,6 +162,34 @@ Key technical choices:
 - **Agents and scripts**: the text model format and headless CLI make Fieldsmith a target for
   automated design loops, not just a GUI.
 
+### Compute beyond the desk, by the same rule
+
+The capabilities this vision reaches for, refined rungs and parameter sweeps now and the
+engineering flows later, are compute-bound. The v0.3 budget work measured the coarse,
+refined and export legs of the reference task on a £100 passively cooled box; a molding
+or wave study will not stay in that class. The licence is what this project removes; the
+hardware class is the user's choice, desk machine or cloud account, and the compute cost
+matters as soon as that choice does: what a commercial tool blends into a per-seat price
+or a quote appears here as a line in the user's own provider bill, unbundled and visible.
+
+The standing rule, the same one the opening paragraph commits to:
+
+- No Fieldsmith compute service and no accounts. Nothing is brokered, metered or stored
+  by us.
+- The pattern is the self-hosted runner: start a Fieldsmith worker on any machine you own,
+  a box under the desk or an instance in your cloud account, and it connects out to your
+  session. No inbound ports; nothing for a firewall to open toward Fieldsmith. Provisioner
+  helpers that describe and start instances can layer on later; the worker route is
+  provider-agnostic first.
+- Transport is user-keyed and nothing leaves unencrypted; artifacts on the worker land
+  only under the user's stated handling. Verified rather than promised, like everything
+  else here: captured session traffic and worker-side storage scanned for plaintext model
+  or field bytes, and the same document re-solved locally and remotely with any divergence
+  measured and reported.
+
+The group this serves most is the confidential-geometry engineer in the list above: a
+hosted solver is exactly what they cannot use, whereas a worker on machines they control is.
+
 ### Non-goals (for now)
 
 - Full B-rep / NURBS parametric CAD with drawings and tolerances. Reading STEP to make a
@@ -226,7 +256,7 @@ make it a field, never edit a B-rep. That is the v0.3 goal: the CAD round-trip.
 4. Every number has units and a source.
 5. Verification cases are tests, and tests are documentation.
 6. One representation; everything composes.
-7. Nothing leaves the machine.
+7. Nothing unencrypted leaves the machine, and compute beyond it is the user's.
 8. Quiet interface, loud geometry.
 
 ---
