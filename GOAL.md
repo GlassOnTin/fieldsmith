@@ -1,5 +1,9 @@
 # Fieldsmith — Goal (v0.3)
 
+**Closed 2026-10-13** — all legs done: milestones M8–M11 committed and CI-green, budgets
+measured with the owner's verdicts, reference task run end to end on the foreign fixture,
+hallway leg passed. Post-v0.3 asks are planned on top of the closed definition.
+
 This file defines **what "done" means for v0.3**. It is deliberately concrete and testable.
 The [VISION](VISION.md) says *why* (section 7 records the competitive landscape this version
 answers); this says *what.* The previous goal, with its close-out audit, is in git history at
@@ -34,7 +38,9 @@ The acceptance test for v0.3, on a part Fieldsmith did not author:
 8. Save as `.fsmz`, reload, re-solve, get bit-identical results.
 
 **Pass:** the machine-side legs of steps 2–8 are covered by V12–V14 plus the carried ladder
-(V1–V11, still in CI); the hallway leg is 3 out of 3 new users ≤ 5 minutes, as with v0.1.
+(V1–V11, still in CI); the hallway leg closed 2026-10-13 — three sessions administered and
+passed per the owner's verdict (the ≤ 5-minutes criterion met; per-run timings not formally
+captured; the participants' stumbles are product notes in `docs/hallway-test.md`).
 
 ---
 

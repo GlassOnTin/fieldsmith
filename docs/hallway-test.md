@@ -142,5 +142,17 @@ volume 34 406 mm³.
 | 2 | | | | | | |
 | 3 | | | | | | |
 
-Failing runs are product notes for the next milestone, not gate verdicts; record what they
-stumbled on.
+**Leg closed 2026-10-13 by the owner's verdict** — three sessions administered and passed;
+per-run rows (timings, per-step detail) were not formally captured, so the table stays
+blank rather than filled with reconstructed numbers. What the sessions did surface,
+recorded as product notes for the next milestone:
+
+- **Fill visibility**: the natural first question after filling was "how do I see the
+  gyroid" — there is no way to look inside today: the fill lens raymarches the whole body
+  field opaquely, and no section/clip/transparency control exists in the viewport. Asked
+  for: an adjustable semi-transparent view.
+- **Per-part distinction**: asked for colour coding options for parts.
+- Slicer: a hallway export's gyroid infill confirmed correct in PrusaSlicer's 3D render
+  (owner check, same day). PrusaSlicer's flatpak lost its GL renderer to the Nvidia driver
+  update until the matching runtime extension was installed (`flatpak update` pulls it) —
+  environment note, not a product finding.
