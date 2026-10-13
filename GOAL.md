@@ -133,8 +133,9 @@ and tolerances are in git history at `9606890`). The new cases:
 
 ## Performance budgets
 
-Carried from v0.1 (measured on the workstation Chromium referee; the laptop and Firefox
-numbers remain named-but-unmeasured from v0.1) plus a STEP row, measured 2026-10-12
+Carried from v0.1 (first measured on the workstation Chromium referee, every row passing —
+`docs/verification/budgets.md`, regenerated 2026-10-13; the laptop and Firefox rows were
+measured 2026-10-13 as well, paragraph after the table) plus a STEP row, measured 2026-10-12
 (see V14); the modal row was measured and revised on 2026-10-09 (the browser
 verified it at a 190 k-DOF rung, memory ceiling not reached; the exact wasm32 peak was
 not measured):
@@ -149,6 +150,18 @@ not measured):
 | Main thread long tasks during solve | none > 50 ms |
 | Modal: first 3 modes bracket-scale — measured 2026-10-09, revised | coarse rung modes visible ≤ 40 s; refined-rung eigensolve ≤ 4 min (measured 31 s at 49 k DOF and 141 s at 190 k DOF in the browser, native comparison 60/87 s on the same document) |
 | STEP: parse + tessellate a ≤ 50 MB file | ≤ 30 s — measured 2.3 s on a synthetic 49.9 MB plane-solid file (9 120 solids; parse-dominated; V14 names the per-face caveat for spline-heavy files) |
+
+The v0.1-carried laptop and Firefox rows were measured 2026-10-13. Firefox on the referee
+meets every budget except edit → coarse — 1650 ms against ≤ 1500 ms
+(`docs/verification/budgets-firefox.md`). The laptop row (Intel N100, 4 threads, 7 GiB RAM,
+headless only — the box has no display, so the headed referee pass is not possible there;
+`budgets-laptop-chrome.md` and `budgets-laptop-firefox.md`): Chrome runs coarse 4.92 s,
+refined 15.06 s, export 64.1 s — 1.5–4.3× the rows above — with ~0.6–0.9 s of main-thread
+block around each edit (the headless GPU-flush artifact, larger on 4 cores), and the preview
+row is not interpretable off a displayless box (1.8 fps headless; the same referee machine
+measures 6.7 fps headless against 59.5 headed). Firefox cannot create a WebGL context on
+that box at all (no GL driver stack — Chrome gets there through its bundled SwiftShader),
+so its render- and export-dependent rows are unmeasurable there.
 
 ---
 
