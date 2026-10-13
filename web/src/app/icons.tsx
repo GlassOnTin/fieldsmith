@@ -125,6 +125,12 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M3.5 5h3M9.5 5h3" />
     </S>
   ),
+  sliders: () => (
+    <S>
+      <path d="M2.5 5h11M2.5 11h11" />
+      <path d="M10 3v4M6 9v4" />
+    </S>
+  ),
   region: () => (
     <S>
       <path d="M2.5 11.5 8 14l5.5-2.5V4.5L8 2 2.5 4.5z" stroke-dasharray="2 1.6" />

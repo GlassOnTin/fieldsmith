@@ -258,3 +258,32 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .chips .swatch:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
 .chips .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chips .swatch-clear { width: 18px; height: 18px; padding: 0; line-height: 1; display: grid; place-items: center; color: var(--text-3); }
+
+/* ---- Narrow screens (phones): below 900 px the app becomes one column, the tree and
+ * inspector turn into slide-in drawers over the viewport, and the drawer toggles + scrim
+ * appear. Desktop widths never see any of this. */
+.drawer-toggles, .drawer-scrim { display: none; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; grid-template-areas: 'view' 'status'; }
+  .view { min-width: 0; }
+  .drawer-toggles {
+    display: flex; flex-direction: column; gap: 4px;
+    position: absolute; top: 10px; left: 10px; z-index: 43;
+  }
+  .drawer-toggles .btn { background: var(--panel); box-shadow: var(--shadow); border-color: var(--line); }
+  .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: rgba(0, 0, 0, 0.25); }
+  .panel.tree-panel, .panel.insp-panel {
+    position: fixed; top: 0; bottom: 0; width: min(80vw, 320px); z-index: 45;
+    transform: translateX(-102%); transition: transform 180ms ease; box-shadow: var(--shadow);
+  }
+  .panel.tree-panel { left: 0; }
+  .panel.insp-panel { right: 0; transform: translateX(102%); border-left: none; border-right: 1px solid var(--line); }
+  .panel.tree-panel.open, .panel.insp-panel.open { transform: none; }
+  /* Keyboard shortcuts are mouse hints; drop them so the lens bar clears the toggles.
+   * The shortcuts themselves still work with a hardware keyboard. */
+  .lenses .kbd { display: none; }
+  /* The make/fill panel owns the bottom-left, so the opacity control moves under the
+   * toggles top-left (78 = toggle column height + gap). */
+  .opacity-panel { top: 78px; left: 10px; bottom: auto; right: auto; }
+  .results-panel { max-width: min(372px, calc(100vw - 24px)); }
+}

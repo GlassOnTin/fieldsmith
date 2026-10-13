@@ -138,7 +138,7 @@ export function App() {
   useApp();
   return (
     <div class="app">
-      <aside class="panel tree-panel">
+      <aside class={`panel tree-panel${ui.treeOpen ? ' open' : ''}`}>
         <div class="panel-head">
           <input
             class="doc-name"
@@ -184,6 +184,24 @@ export function App() {
       </aside>
       <main class="view">
         <ViewportHost />
+        <div class="drawer-toggles">
+          <button class="btn icon" title="Parts tree" data-testid="toggle-tree" onClick={() => ui.set('treeOpen', !ui.treeOpen)}>
+            <Icon.menu />
+          </button>
+          <button class="btn icon" title="Inspector" data-testid="toggle-insp" onClick={() => ui.set('inspOpen', !ui.inspOpen)}>
+            <Icon.sliders />
+          </button>
+        </div>
+        {(ui.treeOpen || ui.inspOpen) && (
+          <div
+            class="drawer-scrim"
+            data-testid="drawer-scrim"
+            onClick={() => {
+              ui.set('treeOpen', false);
+              ui.set('inspOpen', false);
+            }}
+          />
+        )}
         <Lenses />
         <ViewTools />
         <EmptyState />
@@ -192,7 +210,7 @@ export function App() {
         ))}
         <Toast />
       </main>
-      <aside class="panel insp-panel">
+      <aside class={`panel insp-panel${ui.inspOpen ? ' open' : ''}`}>
         <div class="panel-head">
           <span class="title">Inspector</span>
           <button class="btn ghost small" title="Command palette (Ctrl K)" onClick={() => ui.set('paletteOpen', true)} data-testid="palette-button">

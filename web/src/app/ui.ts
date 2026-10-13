@@ -18,6 +18,11 @@ export interface Probe {
 
 class Ui {
   paletteOpen = false;
+  /** Narrow-screen drawer state. Only meaningful under the ≤900 px layout, where the tree and
+   * inspector panels overlay the viewport as slide-in drawers instead of grid columns; at
+   * desktop widths the toggles and scrim are hidden by CSS and these fields are inert. */
+  treeOpen = false;
+  inspOpen = false;
   menu: { kind: 'add' | 'file' | 'modifier'; x: number; y: number; target?: string } | null = null;
   toast: { text: string; kind: 'info' | 'error' } | null = null;
   renaming: string | null = null;
