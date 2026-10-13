@@ -59,28 +59,28 @@ community rows by `data/costs/` being present with provenance stated.
 ## New acceptance criteria
 
 ### A. Measured rungs and the declared question (M13 — evidence: docs/verification/V17.md, V18.md, `data/costs/`)
-- [ ] Every refinement rung becomes a first-class record: solve wall time, element count,
+- [x] Every refinement rung becomes a first-class record: solve wall time, element count,
       and the error estimate taken from rung-to-rung change of the tracked quantities
       (tip deflection, peak von Mises). Records stream into the web UI and print from the
       CLI. Measured, not claimed: a headless replay asserts the records are the solver's
       own — time deltas within the run timer's resolution, estimates equal to the
       two-solve differences to floating-point roundoff.
-- [ ] The Results view shows the rung table with provenance — engine, element type and
+- [x] The Results view shows the rung table with provenance — engine, element type and
       count, per-rung time and error estimate, load case — every entry with units and a
       stated source.
-- [ ] Declared-tolerance mode: the user states a tolerance on a tracked quantity; the
+- [x] Declared-tolerance mode: the user states a tolerance on a tracked quantity; the
       ladder stops when the measured rung-to-rung change sits inside it, and the report
       states total time and the residual. A tolerance the stated budget cannot meet is
       answered with a named refusal (the V15 load-plane-fit precedent) — never a
       stretched answer.
-- [ ] Declared-budget mode: state a time budget; the report states the rungs it buys and
+- [x] Declared-budget mode: state a time budget; the report states the rungs it buys and
       the tolerance they imply, measured from the rung record after the fact.
-- [ ] Cost estimates carry their own error: the fit over rungs ≤ k projects rung k+1,
+- [x] Cost estimates carry their own error: the fit over rungs ≤ k projects rung k+1,
       and the report shows the fit residual next to the projection (for example
       "about 4.7 min, fit residual 6 %"). Cost is time in this milestone; the worker
       (M15) converts it with the user's own rate. Local rung history seeds the estimator
       on the next run (machine-specific; the store is chosen at plan time).
-- [ ] The community rows live in the repo: `data/costs/` carries a header stating every
+- [x] The community rows live in the repo: `data/costs/` carries a header stating every
       field of a row, and seed rows derived from the current referee and N100 budget
       baselines with their provenance stated. A CLI command prints the record row for
       the last run — shape-only fields: DOF, element count, field-leaf count, CPU class,
@@ -88,7 +88,7 @@ community rows by `data/costs/` being present with provenance stated.
       month level; no geometry, no names. The command is a redaction preview: it prints
       exactly what would be contributed and writes nothing; contribution is the user
       opening a pull request. There is no submit endpoint.
-- [ ] V17 and V18 pass (below).
+- [x] V17 and V18 pass (below).
 
 ### B. First flow — steady heat into thermal expansion (M14 — evidence: docs/verification/V19.md, V20.md)
 - [ ] One-way coupled solve: steady linear conduction on the existing tet mesh;
@@ -154,7 +154,7 @@ target until first measured, then stated in the case and its report:
 
 | ID | Case | Reference | Tolerance |
 | :-- | :-- | :-- | :-- |
-| V17 | Rung-estimate honesty: the reference cantilever solved through the ladder; each rung pair's reported estimate (rung-to-rung change in tip deflection) tabulated against the known analytic error (V3's reference) | V3 analytic deflection | Both numbers reported each run; their ratio band recorded across the ladder; pass when a re-run reproduces the recorded band and the UI labels the number an estimate |
+| V17 | Rung-estimate honesty: the reference cantilever solved through the ladder; each rung pair's reported estimate (rung-to-rung change in tip deflection) tabulated against the known analytic error (V1's reference) | V1 analytic deflection | Both numbers reported each run; their ratio band recorded across the ladder; pass when a re-run reproduces the recorded band and the UI labels the number an estimate |
 | V18 | Estimator residual: after the coarse rung, the fit predicts refined and export rung times; compared with actual on the referee and on the N100 class (headless CLI); `data/costs/` seed rows carry provenance | Predicted vs actual wall time | Each report states its residual; pass when residuals fall inside the band recorded at ship time and the seed rows hold |
 | V19 | Thermal, linear: (a) unconstrained uniform ΔT — stress ≈ 0, displacement linear in L·α·ΔT; (b) long bar fixed at both ends, free laterally, uniform ΔT — uniaxial stress E·α·ΔT | Closed form | (a) stress within a stated roundoff-level bound; displacement linearity within a stated %; (b) stress ≤ 5 % of the closed form (declared target, revisable only in a reviewed commit) |
 | V20 | Thermal conduction + stress: long hollow cylinder, fixed inner and outer surface temperatures, single material | Exact radial temperature profile; Lamé-class thermal stress formulas | Temperature profile within a stated tolerance; peak hoop and axial stress within a stated % across a 3-point mesh study |
@@ -179,6 +179,12 @@ driver stack for Firefox — the v0.3 finding).
 | Thermal leg (conduction + expansion), reference bracket | ≤ 2 × the v0.3 refined static row (declared target) |
 | Worker round-trip overhead vs local CLI, same task | ≤ 20 % on the LAN path (declared target) |
 | Sweep throughput at the reference tolerance | ≥ 6 points/hour referee, ≥ 2 points/hour N100 (declared targets) |
+
+Measured 2026-10-13 at M13 close:
+- Leg-time row: referee edit→coarse/refined 1352/6025 ms (Chrome), 1678/6494 ms (Firefox), e2e in-page 724/3005 ms — at or below the v0.3 rows, so record collection adds nothing on the referee. On the N100 the Chrome legs moved within the day (9-10 s / 23-25 s vs 4918/15064 this morning); an A/B run of the HEAD (v0.3) web code on the same wasm reproduces the slow numbers, the fresh-wasm rebuild lands the same place, and the same box's Firefox legs reproduce their morning walls — so the move is not the records and is confined to the Chrome path; the split between the old binary's bytes and that session's environment state is not closed (data/costs/costs.csv carries it). The three N100 Chrome rows now hold what the shipped binary measures. **Owner verdict pending on the N100 legs.**
+- Tolerance row: the declared 1 % deflection ladder ran 10.9 s end to end on the referee and named its refusal at the 750k cap (deflection change −4.1 %) — an honest answer under the named-refusal rule, but the budget could not buy the declaration. **Owner verdict pending on whether a refusal at the cap counts for this row.**
+- Residual row: 13.6 % (referee) / 18.8 % (N100), inside the ≤ 35 % target, bands recorded by V18.
+The M14–M16 rows are unmeasured until their milestones.
 
 ---
 

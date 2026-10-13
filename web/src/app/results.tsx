@@ -295,6 +295,26 @@ viewportExtensions.push({
 
 // ---- badge ---------------------------------------------------------------------------
 
+/** The badge's envelope maxima: max over cases, floored at 1e-9 so relative change stays
+ * defined where an unloaded document solves to zero. Same math the CLI's rung records use. */
+function envelopes(lvl: LevelResult): { peak: number; defl: number } {
+  return {
+    peak: Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem)),
+    defl: Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement)),
+  };
+}
+
+/** Envelope-to-envelope change vs the previous level, in percent. An estimate from
+ * refinement, not an error bound — the rung table and the badge both label it so. */
+function changePct(cur: LevelResult, prev: LevelResult): { peak: number; defl: number } {
+  const c = envelopes(cur);
+  const p = envelopes(prev);
+  return {
+    peak: ((c.peak - p.peak) / p.peak) * 100,
+    defl: ((c.defl - p.defl) / p.defl) * 100,
+  };
+}
+
 function AnalysisBadge() {
   useApp();
   const s = analysis.state;
@@ -327,8 +347,7 @@ function AnalysisBadge() {
   if (!lvl) return null;
   // In the fill lens the fill badge shows these numbers plus mass — avoid the duplicate.
   if (store.lens === 'fill' && lvl.meta.fill) return null;
-  const peak = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem));
-  const defl = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement));
+  const { peak, defl } = envelopes(lvl);
   const p = lvl.meta.provenance;
   // Provenance: refinement level, order, counts, timing, and the change since the previous level.
   const lines = [
@@ -338,10 +357,8 @@ function AnalysisBadge() {
     `quality min ${p.quality.min_dihedral_deg.toFixed(1)}° dihedral`,
   ];
   if (prev) {
-    const pv = Math.max(1e-9, ...prev.meta.cases.map((c) => c.max_vm_elem));
-    const pd = Math.max(1e-9, ...prev.meta.cases.map((c) => c.max_displacement));
-    const sv = (peak - pv) / pv, sd = (defl - pd) / pd;
-    lines.push(`peak ${sv >= 0 ? '+' : ''}${(sv * 100).toFixed(1)}% · deflect ${sd >= 0 ? '+' : ''}${(sd * 100).toFixed(1)}% vs previous level`);
+    const ch = changePct(lvl, prev);
+    lines.push(`peak ${ch.peak >= 0 ? '+' : ''}${ch.peak.toFixed(1)}% · deflect ${ch.defl >= 0 ? '+' : ''}${ch.defl.toFixed(1)}% vs previous level`);
   }
   const title = lines.join('\n');
   return (
@@ -430,6 +447,26 @@ function ResultsPanel() {
               </Fragment>
             ))}
           </div>
+          {s.levels.length > 0 && (
+            <div class="field-grid" data-testid="rung-table">
+              <span class="plain">Rungs</span>
+              <span class="meta">fieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not bounds</span>
+              {s.levels.map((lv, i) => {
+                const prevLv = s.levels[i - 1];
+                const ch = i > 0 && prevLv ? changePct(lv, prevLv) : null;
+                const sig = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+                return (
+                  <Fragment key={`${lv.label}·${i}`}>
+                    <span class="plain">rung {i}</span>
+                    <span class="num">
+                      {lv.label} · {lv.meta.provenance.dofs} dofs · {lv.meta.provenance.elements} elements · wall {fmt(lv.runMs, 0)} ms
+                      {ch && <> · case envelope vs rung {i - 1} (estimate): defl {sig(ch.defl)} · vm {sig(ch.peak)}</>}
+                    </span>
+                  </Fragment>
+                );
+              })}
+            </div>
+          )}
           {lvl.meta.cases.some((c) => (c.load_reports ?? []).length > 0) && (
             <div class="field-grid" data-testid="load-provenance">
               <span class="plain">Loads (applied)</span>

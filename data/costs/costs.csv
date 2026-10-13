@@ -1,0 +1,73 @@
+# fieldsmith cost-store seed — rows measured by this project. Contribution is PR-only (see README.md alongside).
+#
+# One row per (machine, engine, rung) within one ladder run. Every field:
+#   schema                 row-format version (1)
+#   month                  year-month of the run ("YYYY-MM") — the coarsest timestamp kept
+#   platform               "cli" (fieldsmith binary) or "wasm" (fieldsmith web worker)
+#   engine                 engine identity: "fieldsmith <ver> / fenics-rs <ver>", or the
+#                          constant "fieldsmith wasm" (no version — a version claim that
+#                          could be wrong is worse than none)
+#   cpu                    CPU model string as the machine reports itself
+#   cores                  hardware threads the engine ran on
+#   ram_gb                 the machine's total RAM in GiB
+#   rung                   0-based rung index within that run's ladder
+#   target_dofs            the rung's DOF aim; for wasm rows, the web ladder's constant
+#                          (30000 coarse / 150000 refined)
+#   dofs                   achieved DOF (cli rows only)
+#   elements               achieved element count (cli rows only)
+#   field_leaves           count of field-bearing leaves in the document (cli rows only)
+#   wall_ms                the rung's wall time. CLI rows are the host's single per-rung
+#                          measurement over mesh+solve (V17). wasm rows are the edit→level
+#                          wall as probed by web/tests/probe-budgets.mjs (budgets docs) and
+#                          INCLUDE document-UI overhead — not comparable to a CLI leg's wall.
+#   deflection_change_rel  envelope-to-envelope relative deflection change vs the previous
+#                          rung (empty on rung 0; empty on wasm rows)
+#   vm_change_rel          same for peak von Mises. Both changes are rung-to-rung ESTIMATES,
+#                          not error bounds (V17).
+#
+# Empty cell = the source row does not record it. Rows carry no file path, no document
+# name, no geometry, no field values. Provenance comments (lines starting with #) may name
+# the shipped example fixture — comments are documentation, rows are not.
+
+# ---- referee CLI ladder 2026-10-13, engine fieldsmith 0.2.0 / fenics-rs 0.1.0, examples/bracket.fsm, rungs 30000,150000,750000 (V17 measurement) ----
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,48822,9588,5,250.913718,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,190440,40643,5,1164.928266,-0.2807483011665701,0.12031574159861531
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,2,750000,876558,198414,5,9792.657955,-0.04126717503663446,0.0993936436864128
+
+# ---- N100 CLI ladder 2026-10-13, same engine (referee-built binary run over ssh; machine identity read at runtime from the N100), same doc and schedule (V18 second machine class) ----
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,569.213065,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,2642.8623829999997,-0.2807483011665701,0.12031574159861531
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,2,750000,876558,198414,5,25573.328251,-0.041267175037406054,0.09939364368535455
+
+# ---- referee wasm, Chrome headed, bracket-filled.fsm edit→coarse / edit→refined legs, docs/verification/budgets.md (regenerated 2026-10-13) ----
+1,2026-10,wasm,fieldsmith wasm,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,,,,1352,,
+1,2026-10,wasm,fieldsmith wasm,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,,,,6025,,
+
+# ---- referee wasm, Firefox headed, same legs, docs/verification/budgets-firefox.md (regenerated 2026-10-13) ----
+1,2026-10,wasm,fieldsmith wasm,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,,,,1678,,
+1,2026-10,wasm,fieldsmith wasm,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,,,,6494,,
+
+# ---- N100 wasm, Chrome headless-only, same legs, docs/verification/budgets-laptop-chrome.md (regenerated 2026-10-13) ----
+# This block moved within the day: the morning M12 run measured 4918 / 15064 on the same
+# box, code and browser; everything measured since lands at 9-10k / 23-25k across two
+# wasm binary eras (the 12:26 build and a rebuild that reproduces byte-stable across two
+# runs). Measured and ruled out: the M13 web code (a HEAD-tree A/B on the same wasm
+# reproduces the slow numbers, 9099 / 24123), the binary era (the rebuild measures the
+# same 9679 / 24967), and box health (CLI walls reproduce day-over-day to +6 %/2 %;
+# freqs, thermals and memory sane under probe; no reboot in 12 weeks). The morning
+# binary cannot be recovered, so the residual split between its bytes and that session's
+# environment state is not closed — the shipped rows are what the shipped binary measures.
+1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,0,30000,,,,9679,,
+1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,1,150000,,,,24967,,
+
+# ---- N100 wasm, Firefox headless-only, same legs, docs/verification/budgets-laptop-firefox.md (M12 measurement; the 2026-10-13 re-probe did not regenerate the doc) ----
+# Three re-probes this milestone measured the two ladder legs at 2975 / 12857, 3006 /
+# 12766 and 3056 / 12838 — within +0.4 %/+2.8 % of these rows — and then failed
+# reproducibly on the interaction legs (no WebGL context: "the viewport never attached",
+# then export and file-chooser element timeouts), so the doc could not be regenerated.
+# The third attempt, after cleaning the probe temp dirs, failed identically. Unlike the
+# Chrome block above, the Firefox ladder legs reproduce day-over-day — whatever moved on
+# this box is confined to the Chrome path. The rows and doc are the morning M12
+# measurement of the pre-rebuild binary.
+1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,0,30000,,,,2963,,
+1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,1,150000,,,,12670,,

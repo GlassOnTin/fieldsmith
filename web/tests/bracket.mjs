@@ -311,6 +311,17 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   check('results panel, badge and legend render', panelSeen, panelSeen ? '' : 'panel, badge or legend missing after switching to the results lens');
   const badgeOk = (await page.locator('[data-testid="analysis-badge"]').count()) === 1;
   check('provenance badge shows the refined level', badgeOk, 'analysis-badge present once');
+  // M13 rung records in the UI: both levels listed with a wall time, and the rung-1
+  // change labelled an estimate (V17's small e2e assert).
+  const rung = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid=rung-table]');
+    return el ? el.textContent : null;
+  });
+  check(
+    'rung table lists both levels and labels the change an estimate',
+    !!rung && /rung 0/.test(rung) && /rung 1/.test(rung) && /wall \d+ ms/.test(rung) && /\(estimate\):/.test(rung),
+    rung ? rung.slice(0, 240) : 'rung table missing',
+  );
 
   // ---- fill lens ------------------------------------------------------------------------
 

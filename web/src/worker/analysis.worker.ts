@@ -25,11 +25,13 @@ function post(m: WorkerOut, transfers?: ArrayBuffer[]) {
 }
 
 /** Copy every array out of the wasm handle, then release it (keep=false keeps it for the
- * Make lens export path). */
+ * Make lens export path). `t0` is when the level's leg began, so `runMs` — the host's one
+ * measurement — covers the wasm mesh+solve and the copies to the main thread. */
 function pack(
   label: string,
   out: AnalysisHandle & { class?: () => Uint8Array; fillParamSpec?: () => Float64Array; fillParamDims?: () => Uint32Array; fillParamData?: () => Float32Array },
   keep = false,
+  t0 = performance.now(),
 ): LevelResult {
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
@@ -60,6 +62,7 @@ function pack(
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     class: out.class ? out.class().slice() : null,
     fillParam,
+    runMs: performance.now() - t0,
   };
   if (!keep) out.free();
   return r;
@@ -188,9 +191,12 @@ async function run(doc: Document) {
    * failure, with the error already posted). */
   const runLevel = (opts: { h?: number; dofs?: number }, label: string, keep = false): LevelResult | null => {
     post({ type: 'level', label });
+    // One host measurement per level: the whole leg (wasm mesh + solve + the copies to
+    // the main thread), the same contract as the CLI's rung wall.
+    const t0 = performance.now();
     try {
       const out = fill ? analyseGraded(doc, opts) : analyse(doc, opts);
-      const level = pack(label, out, keep && fill);
+      const level = pack(label, out, keep && fill, t0);
       if (keep && fill) {
         if (graded) graded.free();
         graded = out as GradedHandleWithExport;

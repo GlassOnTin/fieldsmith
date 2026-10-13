@@ -19,7 +19,8 @@
 | A3 | Circular pattern ×6 about Z | pass | copy at 60°: -10.00 mm | shape-13.png |
 | A5 | Tree: rename (double-click), reorder (drag), suppress (eye), delete (Del) | pass | renamed true (renaming torus1, focus INPUT); first row after drag: ring; suppressed true → false; extrude deleted true | shape-14.png |
 | A5 | Every edit is undoable and redoable from the keyboard | pass | 46 undos back to an empty document (true); 46 redos restore the final document exactly (true) | shape-15.png |
-| A6 | Save → New → Open restores the identical document; the file is readable text | pass | saved 342 bytes as untitled.fsm; identical after reopening: true; file equals canonical print: true; readable: true | shape-16.png |
+| A6 | Inspector sets a palette colour: hint and tree dot | pass | #21BB4C — this shape | shape-16.png |
+| A6 | Save → New → Open restores the identical document; the file is readable text | pass | saved 368 bytes as untitled.fsm; identical after reopening: true; file equals canonical print: true; readable: true | shape-17.png |
 
 - Console errors: **0**
 

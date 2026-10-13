@@ -79,7 +79,10 @@ generation, no mobile layout. Modal analysis reports the first natural frequenci
 the same linear small-strain model; it takes the same supports and ignores loads. The
 shapes are computed but not visualised; the in-browser eigensolve completed without a
 memory error at a 190 k-DOF rung, and larger meshes may fail at the wasm memory limit
-with a named error. One load
+with a named error. Rung-to-rung changes on the refinement ladder are estimates, not
+bounds: on the V1 cantilever the ratio of remaining error to change spans 13× between
+regimes (V17), and the wall-time estimator reports its own residual instead of none
+(V18). One load
 case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 

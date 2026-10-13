@@ -11,6 +11,7 @@
 //! ```
 
 use fieldsmith_core::import::{import_mesh, ImportOpts};
+use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
 use fieldsmith_core::{
     analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution,
 };
@@ -19,20 +20,43 @@ use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
 use fieldsmith_mesh::export::{surface, TriMesh, Volume3mf, write_3mf_volumes};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod store;
+use store::{Row, CSV_HEADER};
 
 const USAGE: &str =
     "usage: fieldsmith <import|check|print|json|volume|glsl|solve|export> FILE [options]
+       fieldsmith costs
 
   check   parse and validate a document
   print   print the canonical .fsm form
   json    print the document as JSON
   volume  integrate the field volume   [--h <spacing mm>]
   glsl    print the generated preview shader
+  costs   print the record row(s) of the last rung run as the data/costs/
+          CSV — a redaction preview: exactly what a contribution PR would
+          add, writes nothing, shape-only fields only
   solve   mesh and solve               [--h <mm> | --dofs <n>] [--report]
           [--modes <n>] first n natural frequencies instead of the
           static cases: loads are ignored (supports still apply) and
           the solve is modal-only; fill documents are excluded
           (documents with a fill statement also get the graded re-solve)
+          [--tolerance Q:U] declared-tolerance mode: refine down the rung
+          schedule until the rung-to-rung change sits inside the box;
+          Q is deflection|vm, U is mm|mpa|% (% is against the current
+          rung's value) — e.g. deflection:0.1mm, deflection:1%, vm:2.5mpa.
+          [--budget TIME] declared-budget mode: rungs run while measured
+          elapsed plus the projected next rung (fit over the rungs so
+          far, residual stated) stays inside TIME, e.g. 30s, 2m.
+          [--rungs N,N,...] override the schedule (default 30000,150000,
+          750000 DOF). Both modes answer with per-rung records; a box
+          the rungs cannot meet is a named refusal and exit code 3
+          (ordinary failures exit 1). Rungs record to the local costs
+          store (~/.local/state/fieldsmith/costs.jsonl by default,
+          FIELDSMITH_COSTS_STORE to move it); [--no-store] skips writing.
+          The ladder runs the solid path: fill documents and --modes are
+          refused alongside these flags.
   export  write a printable mesh       [--stl PATH] [--3mf PATH]
           [--h <mesh spacing mm>] (default 0.25); [--solid] exports the
           body without the fill; fill documents build the graded part
@@ -50,6 +74,17 @@ const USAGE: &str =
           source stem in the working directory) plus the .fsmz sidecar
           that stores its grids; volume/solve/export of the written
           document need that sidecar beside the .fsm.";
+
+/// The rung schedule the declared-question modes walk by default. The first two entries
+/// match the web's coarse/refined constants (COARSE_DOFS/FINE_DOFS in
+/// web/src/worker/analysis.worker.ts); the third extends the ladder for V17. Override
+/// with --rungs.
+const DEFAULT_RUNGS: [usize; 3] = [30_000, 150_000, 750_000];
+
+/// Set when a declared question ends in a refusal: run() returns Ok (the refusal is an
+/// honest answer, printed as such) and main exits 3 instead of 0 (GOAL v0.4 section A).
+static REFUSED: AtomicBool = AtomicBool::new(false);
+const REFUSAL_EXIT: u8 = 3;
 
 /// Load a document for the headless verbs. A `.fsmz` is read whole (grids included); a
 /// plain `.fsm` hydrates its mesh grids from a same-stem `.fsmz` sibling when one sits
@@ -110,6 +145,11 @@ fn clock() -> f64 {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    // costs takes no document — it reads the shape-only store and prints what a
+    // contribution PR would add. It loads nothing, solves nothing, writes nothing.
+    if args.first().map(|c| c.as_str()) == Some("costs") {
+        return costs_cmd(args);
+    }
     let (cmd, path) = match (args.first(), args.get(1)) {
         (Some(c), Some(p)) => (c.as_str(), p.as_str()),
         _ => return Err(USAGE.into()),
@@ -206,6 +246,14 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "export" => export_cmd(&doc, args),
         "solve" => {
+            // The declared-question modes (GOAL v0.4 section A): any ladder flag switches
+            // the verb from "solve once" to "walk the schedule and answer".
+            if opt(args, "--rungs").is_some()
+                || opt(args, "--tolerance").is_some()
+                || opt(args, "--budget").is_some()
+            {
+                return solve_ladder(&doc, args);
+            }
             let res = if let Some(s) = opt(args, "--dofs") {
                 Resolution::Dofs(
                     s.parse::<usize>()
@@ -856,10 +904,417 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
     Ok(())
 }
 
+/// `solve` with the declared-question flags (GOAL v0.4 section A): walk the rung
+/// schedule, record each rung, and answer — stop inside the declared tolerance, spend
+/// up to the declared budget, or refuse by name (exit 3) when the box cannot be met.
+/// Every rung's wall time is one host measurement around mesh+solve; the record fields
+/// are the engine's own numbers. Records append to the local costs store unless
+/// --no-store; the store is also what seeds the estimator before the ladder has an
+/// internal fit.
+fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
+    if opt(args, "--dofs").is_some() || opt(args, "--h").is_some() {
+        return Err(
+            "the ladder chooses its own resolutions — drop --dofs/--h, or drop the ladder flags"
+                .into(),
+        );
+    }
+    if opt(args, "--modes").is_some() {
+        return Err(
+            "--modes and the ladder are separate questions — run them as separate solves".into(),
+        );
+    }
+    if doc.fill.is_some() {
+        return Err(
+            "the ladder runs the solid path — remove the fill statement to use the declared-question modes"
+                .into(),
+        );
+    }
+    for w in doc.material_warnings() {
+        eprintln!("warning: {w}");
+    }
+    let report = args.iter().any(|a| a == "--report");
+    let no_store = args.iter().any(|a| a == "--no-store");
+
+    let rungs: Vec<usize> = match opt(args, "--rungs") {
+        None => DEFAULT_RUNGS.to_vec(),
+        Some(s) => {
+            let bad = || {
+                format!(
+                    "bad --rungs value: {s} — comma-separated increasing DOF targets, \
+                     e.g. 30000,150000 (a ladder needs at least two rungs: the change \
+                     estimate needs a baseline)"
+                )
+            };
+            let v: Vec<usize> = s
+                .split(',')
+                .map(|t| t.trim().parse::<usize>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| bad())?;
+            if v.len() < 2 || !v.windows(2).all(|w| w[0] < w[1]) {
+                return Err(bad());
+            }
+            v
+        }
+    };
+    let tol_raw: Option<String> = opt(args, "--tolerance");
+    let tolerance: Option<Tolerance> = match &tol_raw {
+        Some(s) => Some(Tolerance::parse(s)?),
+        None => None,
+    };
+    let budget_raw: Option<String> = opt(args, "--budget");
+    let budget_ms: Option<f64> = match &budget_raw {
+        Some(s) => Some(parse_budget(s)? * 1000.0),
+        None => None,
+    };
+
+    let mut decl = format!(
+        "ladder: rungs {}",
+        rungs.iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join(" → ")
+    );
+    if let Some(t) = &tol_raw {
+        decl += &format!(", tolerance {t}");
+    }
+    if let Some(b) = &budget_raw {
+        decl += &format!(", budget {b}");
+    }
+    println!("{decl}");
+
+    let machine = store::Machine::probe();
+    let store_path = if no_store { None } else { store::store_path() };
+    let store_rows = match &store_path {
+        Some(p) => store::read_all(p),
+        None => Vec::new(),
+    };
+    let leaves = expr::active_leaves(doc).len();
+
+    let mut records: Vec<RungRecord> = Vec::new();
+    let mut stop_reason: Option<String> = None;
+    let mut met_tolerance = false;
+    for (i, &target) in rungs.iter().enumerate() {
+        // Affordability of rung i is checked before buying it (rung 0 always runs);
+        // the tolerance check sits after the rung whose change it reads.
+        if i > 0 {
+            if let Some(b) = budget_ms {
+                let spent: f64 = records.iter().map(|r| r.wall_ms).sum();
+                match estimate_for(target, &records, &store_rows, &machine) {
+                    Some((proj, prov)) => {
+                        if spent + proj > b {
+                            stop_reason = Some(format!(
+                                "budget: {:.1} s of the {:.1} s spent, rung {i} ({}k DOF) \
+                                 projected at about {:.1} s ({prov}) does not fit — stopping",
+                                spent / 1000.0,
+                                b / 1000.0,
+                                target / 1000,
+                                proj / 1000.0
+                            ));
+                            break;
+                        }
+                    }
+                    None => println!(
+                        "budget: no estimate for rung {i} — the fit needs two rungs and no \
+                         matching local record exists; buying the rung and measuring"
+                    ),
+                }
+            }
+        }
+        let t0 = std::time::Instant::now();
+        let a = analyse(doc, Resolution::Dofs(target), clock).map_err(|e| e.0)?;
+        let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let rec = RungRecord::of(i, target, wall_ms, records.last(), &a);
+        print_rung_streaming(&rec);
+        records.push(rec);
+        // The change this rung just measured is what the tolerance is declared against.
+        if i > 0 {
+            if let (Some(t), Some(c)) = (tolerance, records[i].change) {
+                if t.met(&c) {
+                    met_tolerance = true;
+                    break;
+                }
+            }
+        }
+    }
+    let total_ms: f64 = records.iter().map(|r| r.wall_ms).sum();
+
+    // Store the rung rows first: the refusal that may follow is still measured data,
+    // and `costs` must see the run that just happened.
+    if let Some(p) = &store_path {
+        let rows: Vec<Row> = records
+            .iter()
+            .map(|r| Row {
+                schema: store::SCHEMA,
+                month: store::month_now(),
+                platform: "cli".into(),
+                engine: store::engine_identity(),
+                cpu: machine.cpu.clone(),
+                cores: machine.cores,
+                ram_gb: machine.ram_gb,
+                rung: r.rung,
+                target_dofs: r.target_dofs,
+                dofs: r.dofs,
+                elements: r.elements,
+                field_leaves: leaves,
+                wall_ms: r.wall_ms,
+                deflection_change_rel: r.change.map(|c| c.deflection_rel),
+                vm_change_rel: r.change.map(|c| c.vm_rel),
+            })
+            .collect();
+        if let Err(e) = store::append(p, &rows) {
+            eprintln!("warning: {e}");
+        }
+    }
+
+    if report {
+        print_records_report(&records, total_ms);
+    }
+
+    // Cost fit over the rungs actually run, then projections and stored history for
+    // the rungs the answer did not buy.
+    let pts: Vec<(f64, f64)> = records
+        .iter()
+        .map(|r| (r.dofs as f64, r.wall_ms))
+        .collect();
+    let fit = CostFit::of(&pts);
+    if let Some(f) = fit {
+        let r = match f.residual {
+            Some(r) => format!("{:.0} %", 100.0 * r),
+            None => "unmeasured (two rungs — the fit is exact by construction)".into(),
+        };
+        println!(
+            "cost fit: wall ∝ DOF^{:.2} over {} rungs, fit residual {r}",
+            f.exponent,
+            pts.len()
+        );
+    }
+    for &target in rungs.iter().skip(records.len()) {
+        if let Some(f) = &fit {
+            println!(
+                "projection: rung at {target} DOF about {:.1} s (fit over {} rungs)",
+                f.project(target as f64) / 1000.0,
+                pts.len()
+            );
+        }
+        if let Some((med, n)) = store::seed_median(&store_rows, &machine, target) {
+            println!(
+                "from your recorded runs ({} machine class, {target} DOF): median {:.1} s over {n} run(s)",
+                machine.cpu,
+                med / 1000.0
+            );
+        }
+    }
+
+    if met_tolerance {
+        // Unwrap-safe: met_tolerance is only set from (Some(t) && Some(c)) above.
+        let t = tol_raw.as_ref().unwrap();
+        let c = records[records.len() - 1].change.unwrap();
+        let last = records.last().unwrap();
+        println!(
+            "met: deflection {:+.1} % ({:+.4} mm), von Mises {:+.1} % ({:+.2} MPa) sits inside {t} \
+             — rung {} ({} DOF), total {:.1} s over {} rungs.",
+            100.0 * c.deflection_rel,
+            c.deflection_mm,
+            100.0 * c.vm_rel,
+            c.vm_mpa,
+            last.rung,
+            last.dofs,
+            total_ms / 1000.0,
+            records.len()
+        );
+    } else if let Some(t) = &tol_raw {
+        // Tolerance declared and unmet: the named refusal (GOAL section A). The rung
+        // records above already show the numbers; this is the answer to the question.
+        let why = match &stop_reason {
+            Some(r) => format!("{r};"),
+            None => format!("the schedule ran to its cap ({} DOF);", rungs.last().unwrap()),
+        };
+        REFUSED.store(true, Ordering::Relaxed);
+        match records.last().and_then(|r| r.change) {
+            Some(c) => println!(
+                "refusal: {why} the change still sits outside {t}: deflection {:+.1} % \
+                 ({:+.4} mm), von Mises {:+.1} % ({:+.2} MPa).",
+                100.0 * c.deflection_rel,
+                c.deflection_mm,
+                100.0 * c.vm_rel,
+                c.vm_mpa
+            ),
+            None => println!(
+                "refusal: {why} the ladder stopped before a second rung, so no \
+                 rung-to-rung change exists and {t} is unmet."
+            ),
+        }
+    } else if let Some(r) = &stop_reason {
+        println!("{r} — tolerance-free run, so nothing is unmet.");
+    }
+    Ok(())
+}
+
+/// One rung's streamed line: the schedule aim, what the mesh actually built, the wall
+/// time, the tracked envelope, and the change estimate against the previous rung.
+fn print_rung_streaming(r: &RungRecord) {
+    println!(
+        "rung {}: {} DOF aimed, {} achieved, {} elements, h {:.2} mm, {:.2} s",
+        r.rung,
+        r.target_dofs,
+        r.dofs,
+        r.elements,
+        r.element_size_mm,
+        r.wall_ms / 1000.0
+    );
+    println!(
+        "  peak von Mises {:.2} MPa, max deflection {:.4} mm",
+        r.tracked.vm_mpa, r.tracked.deflection_mm
+    );
+    if let Some(c) = &r.change {
+        println!(
+            "  change vs rung {}: deflection {:+.1} % ({:+.4} mm), von Mises {:+.1} % \
+             ({:+.2} MPa) — estimates, not bounds",
+            r.rung - 1,
+            100.0 * c.deflection_rel,
+            c.deflection_mm,
+            100.0 * c.vm_rel,
+            c.vm_mpa
+        );
+    }
+}
+
+/// The --report records table for a ladder run.
+fn print_records_report(records: &[RungRecord], total_ms: f64) {
+    if records.is_empty() {
+        return;
+    }
+    println!("\n## rung records\n");
+    println!(
+        "| rung | DOF aimed | DOF | elements | h (mm) | wall (s) | Δ deflection | Δ von Mises |\n\
+         | :-- | --: | --: | --: | --: | --: | :-- | :-- |"
+    );
+    for r in records {
+        let (dd, dv) = match &r.change {
+            Some(c) => (
+                format!("{:+.1} %", 100.0 * c.deflection_rel),
+                format!("{:+.1} %", 100.0 * c.vm_rel),
+            ),
+            None => ("—".into(), "—".into()),
+        };
+        println!(
+            "| {} | {} | {} | {} | {:.2} | {:.2} | {} | {} |",
+            r.rung,
+            r.target_dofs,
+            r.dofs,
+            r.elements,
+            r.element_size_mm,
+            r.wall_ms / 1000.0,
+            dd,
+            dv
+        );
+    }
+    println!(
+        "\nchanges are rung-to-rung estimates, not bounds; total {:.1} s.",
+        total_ms / 1000.0
+    );
+}
+
+/// Estimate a rung's wall time at `target` DOF: the fit over the rung records so far
+/// when one exists (≥2 rungs), else the stored history from the same machine class.
+/// Returns the projection (ms) and its provenance clause.
+fn estimate_for(
+    target: usize,
+    records: &[RungRecord],
+    store_rows: &[Row],
+    machine: &store::Machine,
+) -> Option<(f64, String)> {
+    let pts: Vec<(f64, f64)> = records
+        .iter()
+        .map(|r| (r.dofs as f64, r.wall_ms))
+        .collect();
+    if let Some(f) = CostFit::of(&pts) {
+        let res = match f.residual {
+            Some(r) => format!("fit residual {:.0} %", 100.0 * r),
+            None => "two-rung fit, residual unmeasured".into(),
+        };
+        return Some((
+            f.project(target as f64),
+            format!("{} rungs so far, {res}", pts.len()),
+        ));
+    }
+    store::seed_median(store_rows, machine, target)
+        .map(|(med, n)| (med, format!("median of {n} local record(s)")))
+}
+
+/// `30s`, `2m` — seconds or minutes, returned as seconds (the caller converts to ms).
+fn parse_budget(s: &str) -> Result<f64, String> {
+    let bad = || format!("bad --budget value: {s:?} — expect e.g. 30s or 2m");
+    let (num, unit) = s.split_at(s.len().saturating_sub(1));
+    let v: f64 = num.trim().parse().map_err(|_| bad())?;
+    match unit {
+        "s" => Ok(v),
+        "m" => Ok(v * 60.0),
+        _ => Err(bad()),
+    }
+}
+
+/// `costs`: the redaction preview. Prints the last run's rows exactly as the
+/// `data/costs/` CSV, plus the cost fit and a projection. Reads the store; writes
+/// nothing, ever — contribution is the user opening a pull request, not this command.
+fn costs_cmd(args: &[String]) -> Result<(), String> {
+    if args.len() > 1 {
+        return Err("costs takes no document\n\n".to_string() + USAGE);
+    }
+    let path = store::store_path()
+        .ok_or("costs: no store location — set HOME or FIELDSMITH_COSTS_STORE")?;
+    let rows = store::read_all(&path);
+    if rows.is_empty() {
+        println!("no local records — run `fieldsmith solve FILE --tolerance ...` or with `--rungs` and rungs record as they run");
+        return Ok(());
+    }
+    let start = rows.iter().rposition(|r| r.rung == 0).unwrap_or(0);
+    let run = &rows[start..];
+    println!(
+        "# last run: {} rung(s); the rows below are exactly what a contribution PR would add — write-access: none",
+        run.len()
+    );
+    println!("{CSV_HEADER}");
+    for r in run {
+        println!("{}", r.csv());
+    }
+    let pts: Vec<(f64, f64)> = run
+        .iter()
+        .map(|r| (r.dofs as f64, r.wall_ms))
+        .collect();
+    match CostFit::of(&pts) {
+        Some(f) => {
+            let res = match f.residual {
+                Some(r) => format!("{:.0} %", 100.0 * r),
+                None => "unmeasured (two rungs)".into(),
+            };
+            println!(
+                "cost fit: wall ∝ DOF^{:.2}, fit residual {res}",
+                f.exponent
+            );
+            println!(
+                "at a 5× refined rung ({} DOF): about {:.1} s",
+                run.last().unwrap_or(&rows[start]).dofs * 5,
+                f.project(5.0 * run.last().unwrap_or(&rows[start]).dofs as f64) / 1000.0
+            );
+        }
+        None => println!("cost fit: the last run has too few rows for a projection"),
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            // A refusal is a successfully-run answer (its named text is on stdout) with
+            // its own exit code, so scripts can ask for the box and hear "not met".
+            if REFUSED.load(Ordering::Relaxed) {
+                ExitCode::from(REFUSAL_EXIT)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
         Err(e) => {
             eprintln!("{e}");
             ExitCode::FAILURE

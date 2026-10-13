@@ -331,6 +331,7 @@ dependencies = [
  "fieldsmith-doc",
  "fieldsmith-field",
  "fieldsmith-mesh",
+ "serde",
  "serde_json",
 ]
 

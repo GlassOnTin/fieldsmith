@@ -565,6 +565,9 @@ export interface LevelResult {
   class: Uint8Array | null;
   /** Fill levels only: the graded parameter grid for the bound texture. */
   fillParam: FillParamLevel | null;
+  /** Host-measured wall time of this level in the worker (mesh + solve + the copies to
+   * the main thread), ms — the browser-side counterpart of the CLI's one Instant per rung. */
+  runMs: number;
 }
 
 /** One mesh grid handed to (or from) a worker: spec plus payloads. The typed arrays are
