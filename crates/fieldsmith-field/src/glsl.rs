@@ -155,6 +155,10 @@ pub struct Generated {
     /// Mesh textures (`u_mesh{slot}`), in slot order. Data is fetched from the meshfield
     /// registry by `key` at the bind site.
     pub meshes: Vec<MeshTex>,
+    /// The slot map used (key → slot). A caller that glues a second pass into the same
+    /// fragment program — the viewport's `fs_ident` — must number keys the same, so it
+    /// takes the map back from here ([`ident_with_slots`]).
+    pub slots: MeshSlots,
 }
 
 /// One baked mesh field referenced by a generated program.
@@ -448,43 +452,83 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
         } else {
             Some(self.expr(&fx.keep))
         };
-        let fam = match fx.family {
-            Family::Gyroid => 0,
-            Family::Primitive => 1,
-            Family::Diamond => 2,
-        };
-        let g = &fx.param;
-        let param_expr = if g.data.len() == 1 {
-            lit(g.data[0] as f64)
-        } else {
-            self.grid = Some(g.clone());
-            let _ = writeln!(
-                self.out,
-                "uniform highp sampler3D u_param;\nfloat fs_grid(vec3 p) {{\n  vec3 n = vec3({}, {}, {});\n  vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  ivec3 i0 = ivec3(min(floor(u), n - 2.0));\n  vec3 f = u - vec3(i0);\n  float c000 = texelFetch(u_param, i0, 0).r; float c100 = texelFetch(u_param, i0 + ivec3(1, 0, 0), 0).r;\n  float c010 = texelFetch(u_param, i0 + ivec3(0, 1, 0), 0).r; float c110 = texelFetch(u_param, i0 + ivec3(1, 1, 0), 0).r;\n  float c001 = texelFetch(u_param, i0 + ivec3(0, 0, 1), 0).r; float c101 = texelFetch(u_param, i0 + ivec3(1, 0, 1), 0).r;\n  float c011 = texelFetch(u_param, i0 + ivec3(0, 1, 1), 0).r; float c111 = texelFetch(u_param, i0 + ivec3(1, 1, 1), 0).r;\n  float c00 = c000 * (1.0 - f.x) + c100 * f.x; float c10 = c010 * (1.0 - f.x) + c110 * f.x;\n  float c01 = c001 * (1.0 - f.x) + c101 * f.x; float c11 = c011 * (1.0 - f.x) + c111 * f.x;\n  float c0 = c00 * (1.0 - f.y) + c10 * f.y; float c1 = c01 * (1.0 - f.y) + c11 * f.y;\n  return c0 * (1.0 - f.z) + c1 * f.z;\n}}",
-                lit(g.dims[0].max(2) as f64),
-                lit(g.dims[1].max(2) as f64),
-                lit(g.dims[2].max(2) as f64),
-                v3(g.origin),
-                lit(g.spacing)
-            );
-            "fs_grid(p)".into()
-        };
-        let lattice = match fx.mode {
-            FillMode::Sheet => format!(
-                "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
-                cell = lit(fx.cell)
-            ),
-            FillMode::Network => format!(
-                "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
-                cell = lit(fx.cell)
-            ),
-        };
+        let param_expr = self.param_term(&fx.param);
+        let lattice = lattice_term(fx.family, fx.mode, fx.cell, &param_expr);
         let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n", lit(fx.skin));
         if let Some(k) = keep {
             let _ = writeln!(b, "  inner = fs_min(inner, {k}(p));");
         }
         b.push_str("  return fs_max(d, inner);\n");
         self.func(b)
+    }
+
+    /// `vec4 fs_core(vec3 p)`: the fill with the outer skin removed — what
+    /// [`generate_viewport`] appends for a filled document. Mirrors `eval` of the
+    /// shell-band fill with the band term exchanged for the shifted clip `d + skin` (see
+    /// [`crate::lattice::FillExpr::removed_skin`], the Rust twin). `body_fn` is the body
+    /// field's emitted `vec4 fs_n…(vec3 p)` name — usually the same function `fs_field`
+    /// roots on, reused here instead of re-emitting the body. Emitted under the fixed
+    /// name `fs_core` (not a numbered `fs_n…`) so the JS pass template can declare and
+    /// call it without carrying the name across.
+    fn core_fn(&mut self, fx: &FillExpr, body_fn: &str) -> String {
+        let keep = if matches!(fx.keep, Expr::Empty) {
+            None
+        } else {
+            Some(self.expr(&fx.keep))
+        };
+        let param_expr = self.param_term(&fx.param);
+        let lattice = lattice_term(fx.family, fx.mode, fx.cell, &param_expr);
+        let inner = match keep {
+            Some(k) => format!("  vec4 inner = fs_min(lat, {k}(p));\n"),
+            None => "  vec4 inner = lat;\n".to_string(),
+        };
+        let b = format!(
+            "  vec4 d = {body_fn}(p);\n{lattice}{inner}  return fs_max(vec4(d.x + {}, d.yzw), inner);\n",
+            lit(fx.skin)
+        );
+        let _ = writeln!(self.out, "vec4 fs_core(vec3 p) {{\n{b}}}");
+        "fs_core".into()
+    }
+
+    /// Declare `u_param` + emit `fs_grid` when the parameter grid has more than one node,
+    /// and return the in-shader expression for the parameter at `p`; a single-node grid
+    /// embeds the constant as a GLSL literal instead. The caller of an emitted grid
+    /// uploads its data as the R32F `u_param` texture (`Generated.grid`).
+    fn param_term(&mut self, grid: &crate::lattice::Grid3) -> String {
+        if grid.data.len() == 1 {
+            return lit(grid.data[0] as f64);
+        }
+        self.grid = Some(grid.clone());
+        let _ = writeln!(
+            self.out,
+            "uniform highp sampler3D u_param;\nfloat fs_grid(vec3 p) {{\n  vec3 n = vec3({}, {}, {});\n  vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  ivec3 i0 = ivec3(min(floor(u), n - 2.0));\n  vec3 f = u - vec3(i0);\n  float c000 = texelFetch(u_param, i0, 0).r; float c100 = texelFetch(u_param, i0 + ivec3(1, 0, 0), 0).r;\n  float c010 = texelFetch(u_param, i0 + ivec3(0, 1, 0), 0).r; float c110 = texelFetch(u_param, i0 + ivec3(1, 1, 0), 0).r;\n  float c001 = texelFetch(u_param, i0 + ivec3(0, 0, 1), 0).r; float c101 = texelFetch(u_param, i0 + ivec3(1, 0, 1), 0).r;\n  float c011 = texelFetch(u_param, i0 + ivec3(0, 1, 1), 0).r; float c111 = texelFetch(u_param, i0 + ivec3(1, 1, 1), 0).r;\n  float c00 = c000 * (1.0 - f.x) + c100 * f.x; float c10 = c010 * (1.0 - f.x) + c110 * f.x;\n  float c01 = c001 * (1.0 - f.x) + c101 * f.x; float c11 = c011 * (1.0 - f.x) + c111 * f.x;\n  float c0 = c00 * (1.0 - f.y) + c10 * f.y; float c1 = c01 * (1.0 - f.y) + c11 * f.y;\n  return c0 * (1.0 - f.z) + c1 * f.z;\n}}",
+            lit(grid.dims[0].max(2) as f64),
+            lit(grid.dims[1].max(2) as f64),
+            lit(grid.dims[2].max(2) as f64),
+            v3(grid.origin),
+            lit(grid.spacing)
+        );
+        "fs_grid(p)".into()
+    }
+}
+
+/// The lattice sampler `vec4 lat = …` lines, in the mode's wall semantics (sheet walls thin
+/// by ±param, network struts thin by param), on the TPMS surfaces of `family`.
+fn lattice_term(family: Family, mode: FillMode, cell: f64, param_expr: &str) -> String {
+    let fam = match family {
+        Family::Gyroid => 0,
+        Family::Primitive => 1,
+        Family::Diamond => 2,
+    };
+    match mode {
+        FillMode::Sheet => format!(
+            "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
+            cell = lit(cell)
+        ),
+        FillMode::Network => format!(
+            "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
+            cell = lit(cell)
+        ),
     }
 }
 
@@ -526,12 +570,69 @@ pub fn generate(e: &Expr) -> Generated {
         source,
         grid: g.grid,
         meshes,
+        slots,
     }
 }
 
 /// Index of a face in the GLSL face encoding (matches `Face::ALL` order).
 pub fn face_code(f: Face) -> usize {
     Face::ALL.iter().position(|x| *x == f).unwrap()
+}
+
+/// Generate the viewport's field program: the body field as `vec4 fs_field(vec3 p)` —
+/// byte-identical to [`generate`] of the same body, so the opaque/silhouette view and the
+/// uniform gate the JS side has today are unaffected — plus, when the document fills,
+/// `vec4 fs_core(vec3 p)` for the same program: the fill with the outer skin removed
+/// (lattice struts and protected zones; nothing within one `skin` of the body surface),
+/// what the material shown through a semi-transparent body renders. One shared program
+/// compiles once; `u_param`/`fs_grid` arrive once and only `fs_core` references them.
+pub fn generate_viewport(body: &Expr, fill: Option<&FillExpr>) -> Generated {
+    // Slot keys from every referenced expression, so a mesh leaf reachable only through a
+    // fill's protected zone (or body) still numbers its `fs_mesh{slot}` deterministically;
+    // mesh_keys collects a set, so order-independent.
+    let mut referenced: Vec<&Expr> = vec![body];
+    if let Some(fx) = fill {
+        referenced.push(&fx.body);
+        referenced.push(&fx.keep);
+    }
+    let slots = mesh_slots(referenced);
+    let keys: Vec<u64> = slots.keys().copied().collect();
+    let mut g = Gen::new("fs_n", &slots, true, false);
+    let root = g.expr(body);
+    // When the fill's body is the same expression (it always is from compile_body), the
+    // core pass reuses the emitted function instead of duplicating every node function.
+    if let Some(fx) = fill {
+        let body_fn = if fx.body == *body {
+            root.clone()
+        } else {
+            g.expr(&fx.body)
+        };
+        g.core_fn(fx, &body_fn);
+    }
+    let mut source = String::from(PRELUDE);
+    source.push_str(&g.out);
+    let _ = writeln!(source, "vec4 fs_field(vec3 p) {{ return {root}(p); }}");
+    let meshes = g
+        .meshes
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, spec)| {
+            spec.as_ref().map(|s| MeshTex {
+                slot,
+                key: keys[slot],
+                dims: s.dims,
+                origin: s.origin,
+                spacing: s.spacing,
+                patch: s.patch,
+            })
+        })
+        .collect();
+    Generated {
+        source,
+        grid: g.grid,
+        meshes,
+        slots,
+    }
 }
 
 impl Gen {
@@ -729,6 +830,13 @@ pub fn ident(doc: &Document) -> (String, Vec<String>) {
     // cheap next to the GLSL compile on the GPU.
     let body = crate::expr::compile_body(doc);
     let slots = mesh_slots(std::iter::once(&body));
+    ident_with_slots(doc, &slots)
+}
+
+/// [`ident`] with the caller's slot map. The viewport program derives its slots over the
+/// body ∪ fill-referenced keys ([`generate_viewport`]), so the ident pass glued into that
+/// program must number them the same — the caller passes `Generated.slots` back in.
+pub fn ident_with_slots(doc: &Document, slots: &MeshSlots) -> (String, Vec<String>) {
     let pairs: Vec<(String, Expr)> = crate::expr::active_leaves(doc)
         .into_iter()
         .filter_map(|id| {
@@ -736,7 +844,7 @@ pub fn ident(doc: &Document) -> (String, Vec<String>) {
             Some((id, e))
         })
         .collect();
-    let mut g = Gen::new("fs_i", &slots, false, true);
+    let mut g = Gen::new("fs_i", slots, false, true);
     let mut body = String::from("  vec2 best = vec2(1e9, 0.0); float idx = -1.0; vec2 r;\n");
     let mut ids = Vec::new();
     for (id, e) in &pairs {
@@ -777,5 +885,116 @@ mod tests {
         assert_eq!(lit(60.0), "6.0e1");
         assert_eq!(lit(-0.001), "-1.0e-3");
         assert_eq!(lit(3.25), "3.25");
+    }
+
+    /// A representative fill (sheet and network, one with a protected zone) for the
+    /// viewport-program tests below.
+    fn filled_expr(mode: FillMode, keep: Expr) -> (Expr, FillExpr) {
+        let body = Expr::Prim(Prim::Box {
+            half: [30.0, 20.0, 4.0],
+            round: 0.0,
+        });
+        let fx = FillExpr {
+            body: body.clone(),
+            skin: 1.2,
+            family: Family::Gyroid,
+            mode,
+            cell: 6.0,
+            param: crate::lattice::Grid3 {
+                origin: [0.0; 3],
+                spacing: 1.0,
+                dims: [7, 5, 4],
+                data: (0..140).map(|i| (i as f32) * 0.01).collect(),
+            },
+            keep,
+        };
+        (body, fx)
+    }
+
+    /// The body pass's field is unaffected by a fill: with no fill the program is
+    /// `generate` of the body; with a fill, every line of the body program is still in the
+    /// shared program verbatim, alongside the appended core piece.
+    #[test]
+    fn viewport_program_keeps_the_body_field() {
+        let body = Expr::Prim(Prim::Box {
+            half: [30.0, 20.0, 4.0],
+            round: 0.0,
+        });
+        assert_eq!(
+            generate_viewport(&body, None).source,
+            generate(&body).source,
+            "no fill: the viewport program is the body program"
+        );
+        for (mode, keep) in [
+            (FillMode::Sheet, Expr::Empty),
+            (
+                FillMode::Network,
+                Expr::Offset {
+                    d: 1.0,
+                    e: Box::new(Expr::Prim(Prim::Sphere { radius: 5.0 })),
+                },
+            ),
+        ] {
+            let (body, fx) = filled_expr(mode, keep);
+            let g = generate_viewport(&body, Some(&fx));
+            for plain_line in generate(&body).source.lines().filter(|l| !l.trim().is_empty()) {
+                assert!(
+                    g.source.contains(plain_line),
+                    "{mode:?}: body line missing from the shared program: {plain_line}"
+                );
+            }
+            assert!(
+                g.source.contains("vec4 fs_core(vec3 p) {"),
+                "{mode:?}: the core piece is in the program"
+            );
+            assert!(
+                g.source.contains("fs_max(vec4(d.x + 1.2"),
+                "{mode:?}: the core piece clips one skin depth inside"
+            );
+            assert!(
+                !g.source.contains("vec4 core = vec4(-(d.x"),
+                "{mode:?}: no shell-band term in the core piece"
+            );
+        }
+    }
+
+    /// One `u_param` declaration in the shared program for a graded grid, none for a
+    /// single-node grid (a literal); `Generated.grid` rides only when a texture is needed.
+    #[test]
+    fn viewport_program_declares_u_param_once() {
+        let (body, mut fx) = filled_expr(FillMode::Sheet, Expr::Empty);
+        let graded = generate_viewport(&body, Some(&fx));
+        assert_eq!(
+            graded.source.matches("uniform highp sampler3D u_param;").count(),
+            1,
+            "one declaration in the shared program"
+        );
+        assert!(
+            graded.source.contains("float fs_grid(vec3 p) {"),
+            "graded program:\n{}",
+            graded.source
+        );
+        assert!(
+            graded
+                .grid
+                .as_ref()
+                .is_some_and(|g| g.dims == [7, 5, 4] && g.data.len() == 140),
+            "the grid spec rides the emit"
+        );
+        fx.param.data = vec![0.45];
+        let constant = generate_viewport(&body, Some(&fx));
+        assert_eq!(
+            constant.source.matches("uniform highp sampler3D u_param;").count(),
+            0,
+            "a single-node grid is a literal"
+        );
+        assert!(
+            constant
+                .source
+                .contains("vec4 lat = vec4(abs(s.x) - 0.5 * 4.5e-1")
+                && constant.grid.is_none(),
+            "constant program:\n{}",
+            constant.source
+        );
     }
 }

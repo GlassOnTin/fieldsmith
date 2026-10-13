@@ -307,11 +307,25 @@ impl FillExpr {
         }
         true
     }
+
+    /// The fill with the outer skin removed — the viewport's interior pass (`fs_core` in
+    /// [`crate::glsl`], same argument order everywhere): lattice struts and protected
+    /// zones, nothing within one `skin` of the body surface. Negative = see-through-solid.
+    pub fn removed_skin(&self, p: V3) -> D {
+        let d = eval(&self.body, p);
+        let lat = lattice_field(self.family, self.mode, self.cell, self.param.sample(p), p);
+        let mut inner = lat;
+        if !matches!(self.keep, Expr::Empty) {
+            inner = dmin(inner, eval(&self.keep, p));
+        }
+        dmax(D::new(d.v + self.skin, d.g), inner)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prim::Prim;
 
     #[test]
     fn tpms_gradients_match_finite_differences() {
@@ -333,6 +347,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The interior pass (`removed_skin`, the viewport's `fs_core`) is the filled field
+    /// with the outer skin clipped: pointwise it dominates `eval` — same lattice ∪ keep
+    /// inside, the clip term gains one `skin` — so anything solid in the fill stays solid
+    /// in the interior field and the shell band goes air. Random-point property over both
+    /// modes; the real GPU-side identity check is V16's e2e job.
+    #[test]
+    fn removed_skin_dominates_the_filled_field() {
+        for mode in [FillMode::Sheet, FillMode::Network] {
+            let fx = FillExpr {
+                body: Expr::Prim(Prim::Box {
+                    half: [30.0, 20.0, 4.0],
+                    round: 0.0,
+                }),
+                skin: 1.2,
+                family: Family::Gyroid,
+                mode,
+                cell: 6.0,
+                param: Grid3::constant(0.4),
+                keep: Expr::Offset {
+                    d: 1.0,
+                    e: Box::new(Expr::Prim(Prim::Sphere { radius: 3.0 })),
+                },
+            };
+            // Deterministic LCG probes covering deep interior, shell band, struts,
+            // protected zone and open air around the part.
+            let mut s = 0x9E37_79B9_9E37_79B9u64;
+            for _ in 0..4000 {
+                let mut p = [0.0; 3];
+                for a in p.iter_mut() {
+                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    *a = ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0;
+                }
+                p[0] *= 34.0;
+                p[1] *= 24.0;
+                p[2] *= 9.0;
+                let filled = fx.eval(p).v;
+                let core = fx.removed_skin(p).v;
+                assert!(
+                    core >= filled - 1e-6,
+                    "{mode:?} at {p:?}: core {core} < filled {filled}"
+                );
+            }
+        }
+    }
+
+    /// Hand-checked clip: with a dominating protected zone the interior field is exactly
+    /// one `skin` outside the body surface (`d + skin`), not the protected zone's own
+    /// distance — the clip term wins everywhere within the keep shape.
+    #[test]
+    fn removed_skin_clips_at_one_skin_from_the_surface() {
+        let fx = FillExpr {
+            body: Expr::Prim(Prim::Box {
+                half: [30.0, 20.0, 4.0],
+                round: 0.0,
+            }),
+            skin: 1.2,
+            family: Family::Gyroid,
+            mode: FillMode::Sheet,
+            cell: 6.0,
+            param: Grid3::constant(0.4),
+            // Radius swallows the box: keep is ~−50 at the body centre, so only the clip
+            // term (−2.8) and the keep compete, and the clip wins by construction.
+            keep: Expr::Prim(Prim::Sphere { radius: 50.0 }),
+        };
+        let d = eval(&fx.body, [0.0, 0.0, 0.0]).v;
+        let c = fx.removed_skin([0.0, 0.0, 0.0]).v;
+        assert!(
+            (c - (d + fx.skin)).abs() < 1e-6,
+            "clip {c} != d+skin {} at d {d}",
+            d + fx.skin
+        );
+        // And it stays inside (solid) — the protected core renders solid.
+        assert!(c < 0.0);
     }
 
     #[test]

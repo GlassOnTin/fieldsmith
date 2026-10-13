@@ -569,6 +569,53 @@ fn glsl_unhydrated_mesh_stays_vacuum_in_field_and_ident() {
     assert!(src.contains("1e9"), "vacuum distance: {src}");
 }
 
+/// The viewport's shared program derives slots over the body ∪ fill-referenced keys, so a
+/// mesh leaf reachable only through a fill's protected zone is emitted too, and the ident
+/// pass glued with `Generated.slots` references only defined `fs_meshN` names.
+#[test]
+fn glsl_viewport_union_slots_cover_fill_references() {
+    let ka = hash_mesh_input(b"mesh_expr:viewport-a", b"");
+    let kb = hash_mesh_input(b"mesh_expr:viewport-b", b"");
+    let kc = hash_mesh_input(b"mesh_expr:viewport-c", b"");
+    hydrate(ka, bake_box([2.0; 3], 0.5, false));
+    hydrate(kb, bake_box([3.0; 3], 0.5, false));
+    hydrate(kc, bake_box([4.0; 3], 0.5, false));
+    let mut doc = mesh_doc(ka, bbox6([2.0; 3]), Transform::default());
+    doc.root.push(mesh_node(
+        "mesh2",
+        format!("{kc:016x}"),
+        bbox6([4.0; 3]),
+        Transform::default(),
+    ));
+    let e = compile_body(&doc);
+    // The protected zone is a third mesh leaf, reachable only through the fill.
+    let keep = fieldsmith_field::expr::Expr::Offset {
+        d: 0.5,
+        e: Box::new(mesh_leaf(kb)),
+    };
+    let fx = fieldsmith_field::lattice::FillExpr {
+        body: e.clone(),
+        skin: 1.0,
+        family: fieldsmith_doc::Family::Gyroid,
+        mode: fieldsmith_doc::FillMode::Sheet,
+        cell: 6.0,
+        param: Grid3::constant(0.4),
+        keep,
+    };
+    let g = glsl::generate_viewport(&e, Some(&fx));
+    let defs = mesh_fn_names(&g.source);
+    assert_eq!(
+        defs.len(),
+        3,
+        "all three mesh leaves emitted: {defs:?}\n{}",
+        g.source
+    );
+    let (isrc, ids) = glsl::ident_with_slots(&doc, &g.slots);
+    assert_eq!(ids, vec!["mesh1".to_string(), "mesh2".to_string()]);
+    let refs = mesh_fn_names(&format!("{}\n{}", g.source, isrc));
+    assert_eq!(refs, defs, "no dangling or misnumbered mesh reference");
+}
+
 #[test]
 fn selector_patch_prints_and_validates() {
     let mut doc = fsm::parse("fieldsmith 1\nbox b size=(10, 10, 10)\nregion r = b.top\n").unwrap();
