@@ -54,6 +54,11 @@ export interface Node {
    * material. Labelling only — the solve stays single-material, the label rides the 3MF
    * export (validation returns its solve caveat as a warning). */
   material?: string;
+  /** This volume's display colour as `#RRGGBB[AA]` (CSS hex). Unset takes the nearest
+   * ancestor group's colour. Colouring only — shown in the viewport and stamped as the
+   * volume's 3MF `displaycolor`; the spec keeps it render-only, never printed-material
+   * colour. */
+  color?: string;
   kind: NodeKind;
 }
 

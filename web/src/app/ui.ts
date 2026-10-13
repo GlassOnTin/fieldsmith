@@ -42,6 +42,10 @@ class Ui {
   makeLayer = 0;
   /** Whether the slice preview contour overlay is shown. */
   makeSliceOn = true;
+  // Viewport display state (not undoable, session-only).
+  /** Body opacity: 1 = opaque, < 1 renders the body translucent and shows the lattice
+   * through it. Resets on load — UI state is not persisted. */
+  bodyAlpha = 1;
   probe: Probe | null = null;
   collapsed = new Set<string>();
   version = 0;

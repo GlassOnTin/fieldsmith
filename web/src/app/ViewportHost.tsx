@@ -4,15 +4,17 @@ import { useEffect, useRef } from 'preact/hooks';
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Viewport } from '../view/viewport';
-import type { Highlight, MeshSlotSpec } from '../view/viewport';
+import type { FieldSpec, Highlight, MeshSlotSpec } from '../view/viewport';
 import { store } from '../doc/store';
 import { meshcache } from '../doc/meshcache';
-import { bodyShader, shapeShader, pick, FACE_CODES } from '../doc/wasm';
+import { bodyShader, shapeShader, pick, previewFillParamData, FACE_CODES } from '../doc/wasm';
 import type { ShaderInfo } from '../doc/wasm';
 import { findNode, walk } from '../doc/types';
 import type { Document, Node, Vec3 } from '../doc/types';
+import { effectiveLeafColors } from '../doc/ops';
 import { parentMatrix, toTransform, worldMatrix, clean } from '../doc/xform';
 import { ui } from './ui';
+import { analysis } from './analysis';
 import { viewApi } from './commands';
 
 /** What an empty document frames: a 80 mm patch of the build plate. */
@@ -79,6 +81,17 @@ export function ViewportHost() {
     let lastSel = '';
     let lastLens = store.lens;
     let pending = 0;
+    /** The field spec the viewport is running (last `setField` launch wins), so the
+     * analysis-arrival path can compare/swap the fill grid without touching `vp`'s privates. */
+    let boundSpec: FieldSpec | null = null;
+    /** What the bound param-grid payload holds (identity/contents), skip the swap when a
+     * level re-reports the same values. */
+    let appliedData: Float32Array | null = null;
+    const sameData = (a: Float32Array | null, b: Float32Array): boolean => {
+      if (a === null || a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    };
 
     const leafIndex = (id: string) => (shader ? shader.leaves.indexOf(id) : -1);
 
@@ -204,14 +217,38 @@ export function ViewportHost() {
             );
           }
         }
+        // Filled parts: the pre-analysis lattice preview rides `shader.grid`'s geometry;
+        // its payload is re-derived per document change (uniform at the max density).
+        const fillGrid =
+          shader.grid && shader.source.includes('u_param')
+            ? { ...shader.grid, data: previewFillParamData(doc) }
+            : null;
         const spec = missing.length
           ? { source: shader.source, bounds: null, ident: '' }
-          : { source: shader.source, bounds: shader.bounds, ident: shader.ident, meshes: slots };
+          : { source: shader.source, bounds: shader.bounds, ident: shader.ident, meshes: slots, grid: fillGrid };
+        boundSpec = spec;
+        appliedData = fillGrid ? fillGrid.data : null;
         void vp.setField(spec).then(() => {
           ui.compileMs = vp.lastCompileMs;
           updateHighlights();
           if (refit) vp.fit(shader?.bounds ?? EMPTY_VIEW);
         });
+        // Interior pass of a filled part: mounted whenever its part renders (the quad only
+        // draws once the body goes sub-1-α), at a slower march step — the lattice field
+        // over-estimates distances between grid nodes and would tunnel thin struts.
+        vp.setCore(
+          !missing.length && shader.core && shader.bounds
+            ? {
+                source: shader.source,
+                bounds: shader.bounds,
+                ident: shader.ident,
+                meshes: slots,
+                grid: fillGrid,
+                stepScale: 0.35,
+              }
+            : null,
+        );
+        vp.setPartColors(effectiveLeafColors(doc), shader.leaves);
         updateGhost();
       } else if (selKey !== lastSel || store.lens !== lastLens) {
         updateGhost();
@@ -228,15 +265,47 @@ export function ViewportHost() {
       if (!pending) pending = requestAnimationFrame(sync);
     };
     const unsubStore = store.subscribe(schedule);
-    let lastUi = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape };
+    let lastUi = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
     const unsubUi = ui.subscribe(() => {
-      const now = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape };
+      const now = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
+      if (now.alpha !== lastUi.alpha) vp.setAlpha(now.alpha);
       if (now.gizmo !== lastUi.gizmo || now.snap !== lastUi.snap) placeGizmo();
       if (now.hover !== lastUi.hover) updateHighlights();
       lastUi = now;
       // Data arrivals that bypass the store (analysis level completions bridge through ui)
       // still need a synced pass: extension overlays pick them up only via ext.sync.
       schedule();
+    });
+    // ---- analysis arrivals: the graded fill grid replaces the per-max preview -----------
+    let lastArrival: unknown = null;
+    const unsubAnalysis = analysis.subscribe(() => {
+      const fp = analysis.latest?.fillParam;
+      if (!fp || fp === lastArrival || !shader?.core || !boundSpec?.bounds) return;
+      // Levels of a run launched for a superseded document edition never enter the shader.
+      if (analysis.launchedFor !== store.docVersion) return;
+      lastArrival = fp;
+      const dims: [number, number, number] = [fp.dims[0], fp.dims[1], fp.dims[2]];
+      let swapped = false;
+      const g = boundSpec.grid;
+      if (g && dims[0] === g.dims[0] && dims[1] === g.dims[1] && dims[2] === g.dims[2]) {
+        if (sameData(appliedData, fp.data)) return;
+        appliedData = fp.data;
+        // Grid matching the compiled spec: texture payloads only, no recompile.
+        swapped = vp.updateParamGrid(fp.data, dims);
+      }
+      if (!swapped) {
+        // Dims differ (or the swap raced the compile): one full re-binds — after this the
+        // grid matches the spec and later levels texture-swap again.
+        const spec: FieldSpec = {
+          ...boundSpec,
+          grid: { origin: [fp.spec[0], fp.spec[1], fp.spec[2]], spacing: fp.spec[3], dims, data: fp.data },
+        };
+        boundSpec = spec;
+        appliedData = fp.data;
+        void vp.setField(spec).then(() => {
+          ui.compileMs = vp.lastCompileMs;
+        });
+      }
     });
     sync();
 
@@ -321,6 +390,7 @@ export function ViewportHost() {
     return () => {
       unsubStore();
       unsubUi();
+      unsubAnalysis();
       clearInterval(fpsTimer);
       tc.dispose();
       vp.renderer.dispose();

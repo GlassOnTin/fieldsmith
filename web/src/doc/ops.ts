@@ -228,3 +228,21 @@ export const MODIFIER_LABEL: Record<Modifier['type'], string> = {
   linear: 'Linear pattern',
   circular: 'Circular pattern',
 };
+
+// ---- read helpers -------------------------------------------------------------------
+
+/** Effective display colour per leaf volume id: the node's own colour, else the nearest
+ * ancestor group's. Leaves with no colour anywhere above them are omitted (they render in
+ * the document base colour). The viewport walks this with the shader's leaf index order. */
+export function effectiveLeafColors(doc: Document): Record<string, string> {
+  const out: Record<string, string> = {};
+  const rec = (nodes: Node[], inherited?: string) => {
+    for (const n of nodes) {
+      const colour = n.color ?? inherited;
+      if (n.kind.type === 'group') rec(n.kind.children, colour);
+      else if (colour) out[n.id] = colour;
+    }
+  };
+  rec(doc.root);
+  return out;
+}

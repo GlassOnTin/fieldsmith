@@ -82,6 +82,13 @@ export class AnalysisEngine {
     return this.latest?.meta.provenance ?? null;
   }
 
+  /** docVersion the worker is (or was last) launched for: `latest` and the per-level
+   * arrivals belong to that document edition until the next launch. The shader host reads
+   * it to ignore stale levels after an edit. */
+  get launchedFor(): number {
+    return this.launchVersion;
+  }
+
   constructor() {
     store.subscribe(() => {
       clearTimeout(this.timer);
