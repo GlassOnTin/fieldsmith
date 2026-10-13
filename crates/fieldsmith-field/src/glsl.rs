@@ -100,11 +100,34 @@ void fs_seg_arc(vec2 p, vec2 a, vec2 b, float bulge, vec2 c, float r, vec2 md, f
   float dl = length(dv);
   if (dl < best) { best = dl; float el = max(length(e), 1e-12); bv = dl > 1e-12 ? dv / dl : vec2(e.y, -e.x) / el; }
 }
+vec2 fs_sincos(float x) {
+  // Quadrant-reduced sin/cos for |x| up to a few pi. Display GPUs differ widely in
+  // builtin sin/cos accuracy (V16 diagnostic: 1.9e-4 on SwiftShader, 3.2e-2 on
+  // ANGLE/NVIDIA — both far above what the lattice's distance field tolerates), so the
+  // lattice evaluates its own. Callers fold phases to one cell first, so j stays within
+  // [-2, 2] and j*pio2 is exact in f32.
+  float j = floor(x * 0.6366197466850281 + 0.5);
+  float r = (x - j * 1.5707963705062866) - j * -4.371139006309477e-08;
+  int q = int(j) & 3;
+  float r2 = r * r;
+  float s = r * (1.0 + r2 * (-0.1666666716337204 + r2 * (0.008333333767950535 + r2 * (-0.00019841270113829523 + r2 * 2.7557318844628753e-06))));
+  float c = 1.0 + r2 * (-0.5 + r2 * (0.0416666679084301 + r2 * (-0.0013888889225199819 + r2 * 2.4801587642286904e-05)));
+  float sv = (q & 1) == 0 ? s : c;
+  float cv = (q & 1) == 0 ? c : -s;
+  if ((q & 2) != 0) { sv = -sv; cv = -cv; }
+  return vec2(sv, cv);
+}
 vec4 fs_tpms(int fam, float a, vec3 p) {
   float k = 6.283185307179586 / a;
-  float sx = sin(k * p.x); float cx = cos(k * p.x);
-  float sy = sin(k * p.y); float cy = cos(k * p.y);
-  float sz = sin(k * p.z); float cz = cos(k * p.z);
+  // One-cell fold per axis: every family is 2pi-periodic in each axis phase, and folding
+  // keeps the arguments inside fs_sincos's accurate range whatever the part's size.
+  vec3 f = p - a * round(p / a);
+  vec2 xc = fs_sincos(k * f.x);
+  vec2 yc = fs_sincos(k * f.y);
+  vec2 zc = fs_sincos(k * f.z);
+  float sx = xc.x; float cx = xc.y;
+  float sy = yc.x; float cy = yc.y;
+  float sz = zc.x; float cz = zc.y;
   if (fam == 0) return vec4(sx * cy + sy * cz + sz * cx, k * (cx * cy - sz * sx), k * (cy * cz - sx * sy), k * (cz * cx - sy * sz));
   if (fam == 1) return vec4(cx + cy + cz, -k * sx, -k * sy, -k * sz);
   return vec4(sx * sy * sz + sx * cy * cz + cx * sy * cz + cx * cy * sz,

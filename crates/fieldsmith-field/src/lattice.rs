@@ -10,9 +10,18 @@ use std::f64::consts::PI;
 #[inline]
 pub fn tpms(family: Family, a: f64, p: V3) -> D {
     let k = 2.0 * PI / a;
-    let (sx, cx) = (k * p[0]).sin_cos();
-    let (sy, cy) = (k * p[1]).sin_cos();
-    let (sz, cz) = (k * p[2]).sin_cos();
+    // One-cell fold per axis: each family is 2π-periodic in every axis phase, and folding
+    // keeps the arguments small. Mirrors the fold + own-trig in the GLSL prelude
+    // (`fs_tpms`/`fs_sincos`), which exists because display-GPU builtin trig is much
+    // coarser than f64 (V16 diagnostic: up to 3.2e-2 error on ANGLE/NVIDIA).
+    let q = [
+        p[0] - a * (p[0] / a).round(),
+        p[1] - a * (p[1] / a).round(),
+        p[2] - a * (p[2] / a).round(),
+    ];
+    let (sx, cx) = (k * q[0]).sin_cos();
+    let (sy, cy) = (k * q[1]).sin_cos();
+    let (sz, cz) = (k * q[2]).sin_cos();
     match family {
         Family::Gyroid => D::new(
             sx * cy + sy * cz + sz * cx,
@@ -343,6 +352,29 @@ mod tests {
                         (fd - d.g[i]).abs() < 1e-5,
                         "{fam:?} grad {i}: {fd} vs {}",
                         d.g[i]
+                    );
+                }
+            }
+        }
+    }
+
+    /// The one-cell fold in `tpms` preserves the value: samples far out on an axis must
+    /// agree with the same phase brought near the origin, to f64 precision. Guards the
+    /// GPU-side accuracy contract (V16) against the fold or its mirror being dropped.
+    #[test]
+    fn tpms_is_periodic_when_sampled_far_from_the_origin() {
+        for fam in [Family::Gyroid, Family::Primitive, Family::Diamond] {
+            for a in [5.0, 6.0] {
+                for (off, shift) in [([70.3, -33.7, 21.9], [-60.0, 30.0, -30.0])] {
+                    let base = tpms(fam, a, off).v;
+                    let moved = tpms(fam, a, [off[0] - shift[0], off[1] - shift[1], off[2] - shift[2]]).v;
+                    assert!(
+                        shift.iter().all(|&d| d % a == 0.0),
+                        "shift {shift:?} must be whole cells of {a}"
+                    );
+                    assert!(
+                        (base - moved).abs() < 1e-9,
+                        "{fam:?} a {a}: {off:?} gives {base}, folded shift gives {moved}"
                     );
                 }
             }
