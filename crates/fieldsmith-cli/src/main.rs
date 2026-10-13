@@ -543,7 +543,7 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
     // single-union body labelled with the document material, as before.
     let per_volume = (doc.fill.is_none() || solid_only) && volumes_ok(&doc.root);
     let mf_bytes = threemf.as_ref().map(|_| {
-        let mut meshes: Vec<(String, String, TriMesh)> = Vec::new();
+        let mut meshes: Vec<(String, String, String, TriMesh)> = Vec::new();
         if per_volume {
             for n in &doc.root {
                 if n.suppressed {
@@ -587,14 +587,17 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
                     vol.error,
                     vs
                 );
-                meshes.push((n.id.clone(), mat, part));
+                // Root-level volumes have no ancestors, so their effective colour is their
+                // own (a group passes its colour down through the per-volume carve).
+                meshes.push((n.id.clone(), mat, n.color.clone().unwrap_or_default(), part));
             }
             if !meshes.is_empty() {
                 let vols: Vec<Volume3mf> = meshes
                     .iter()
-                    .map(|(id, mat, m)| Volume3mf {
+                    .map(|(id, mat, colour, m)| Volume3mf {
                         name: id,
                         material: mat,
+                        color: colour,
                         mesh: m,
                     })
                     .collect();

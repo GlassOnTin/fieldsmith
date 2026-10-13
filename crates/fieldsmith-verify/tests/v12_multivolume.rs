@@ -253,6 +253,7 @@ fn the_composed_part_exports_per_volume_and_reads_back_labelled() {
         .map(|(id, mat, m)| Volume3mf {
             name: id,
             material: mat,
+            color: "",
             mesh: m,
         })
         .collect();

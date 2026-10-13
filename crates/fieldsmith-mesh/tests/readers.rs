@@ -872,11 +872,13 @@ fn threemf_writer_several_volumes_with_materials() {
         Volume3mf {
             name: "body",
             material: "PETG",
+            color: "",
             mesh: &a,
         },
         Volume3mf {
             name: "clip",
             material: "TPU95A",
+            color: "",
             mesh: &b,
         },
     ]);
@@ -904,9 +906,9 @@ fn threemf_writer_several_volumes_with_materials() {
     let model = model_text(&bytes);
     assert!(
         model.contains(
-            "<basematerials id=\"1\"><base name=\"PETG\"/><base name=\"TPU95A\"/></basematerials>"
+            "<basematerials id=\"1\"><base name=\"PETG\" displaycolor=\"#DFDEDA\"/><base name=\"TPU95A\" displaycolor=\"#DFDEDA\"/></basematerials>"
         ),
-        "one shared group in encounter order: {model}"
+        "one shared group in encounter order; colourless volumes take the app default: {model}"
     );
     assert!(
         model.contains("<object id=\"2\" type=\"model\" name=\"body\" pid=\"1\" pindex=\"0\">"),
@@ -927,6 +929,7 @@ fn threemf_writer_several_volumes_with_materials() {
     let direct = write_3mf_volumes(&[Volume3mf {
         name: "body",
         material: "PETG",
+        color: "",
         mesh: &a,
     }]);
     assert_eq!(
@@ -945,16 +948,19 @@ fn threemf_writer_dedups_materials_and_skips_empty_labels() {
         Volume3mf {
             name: "bare",
             material: "",
+            color: "",
             mesh: &a,
         },
         Volume3mf {
             name: "left",
             material: "ABS",
+            color: "",
             mesh: &a,
         },
         Volume3mf {
             name: "right",
             material: "ABS",
+            color: "",
             mesh: &a,
         },
     ]);
@@ -965,7 +971,7 @@ fn threemf_writer_dedups_materials_and_skips_empty_labels() {
     assert_eq!(parts[2].material.as_deref(), Some("ABS"));
     let model = model_text(&bytes);
     assert!(
-        model.contains("<basematerials id=\"1\"><base name=\"ABS\"/></basematerials>"),
+        model.contains("<basematerials id=\"1\"><base name=\"ABS\" displaycolor=\"#DFDEDA\"/></basematerials>"),
         "one base per unique label: {model}"
     );
     assert!(

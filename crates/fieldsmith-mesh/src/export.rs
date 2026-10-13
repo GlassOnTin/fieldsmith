@@ -407,6 +407,7 @@ impl TriMesh {
         write_3mf_volumes(&[Volume3mf {
             name,
             material,
+            color: "",
             mesh: self,
         }])
     }
@@ -419,14 +420,37 @@ pub struct Volume3mf<'a> {
     /// The volume's material label, written into the package's one shared
     /// `<basematerials>` group; empty records no material for this volume.
     pub material: &'a str,
+    /// Display colour: `#` + 6 or 8 hex digits (`#RRGGBB[AA]`), canonicalised on write.
+    /// Empty means no colour of the volume's own; the base then stamps the app's default
+    /// grey. Render-only (3MF `displaycolor`); never printed-material colour.
+    pub color: &'a str,
     pub mesh: &'a TriMesh,
+}
+
+/// The app's default surface grey as sRGB hex — the viewport's default base colour
+/// (linear RGB `[0.74, 0.73, 0.7]`) through the sRGB transfer. Stamped on every base that
+/// has no volume colour of its own.
+const APP_DEFAULT_DISPLAY_COLOR: &str = "#DFDEDA";
+
+/// Canonical `#RRGGBB[AA]` display colour, uppercase, `None` for anything else. The same
+/// rule the document model enforces for stored colours ([`canonical_color` in
+/// fieldsmith_doc](https://docs.rs), mirrored here so the mesh crate stays
+/// dependency-light; the two must agree).
+fn display_color(s: &str) -> Option<String> {
+    let digits = s.strip_prefix('#').unwrap_or(s);
+    if !(digits.len() == 6 || digits.len() == 8) || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", digits.to_ascii_uppercase()))
 }
 
 /// 3MF package (millimetre units) of several volumes: one `<object>` per volume, each with
 /// its own name and — when its material is non-empty — its material as a `base` in the
 /// one shared `<basematerials>` group (`pid="1" pindex="<i>"`), and one `<build>` item per
-/// object. Vertices are translated into the positive octant (3MF requires it), per volume,
-/// so each object's own origin is its bounding-box minimum.
+/// object. Every base carries a `displaycolor` (the spec marks it required): the volume's
+/// own colour when valid, else the app's default grey. Vertices are translated into the
+/// positive octant (3MF requires it), per volume, so each object's own origin is its
+/// bounding-box minimum.
 ///
 /// At the export-budget spacings the model text would be gigabytes of XML (the bracket at
 /// 0.1 mm meshes to ~9 M vertices and ~18 M triangles), and a wasm32 page has ~4 GiB of
@@ -436,19 +460,22 @@ pub struct Volume3mf<'a> {
 /// so the package is identical whatever the thread count.
 pub fn write_3mf_volumes(volumes: &[Volume3mf<'_>]) -> Vec<u8> {
     // Unique material labels in encounter order; a base's index in this list is the
-    // owning object's `pindex`.
-    let mut mats: Vec<&str> = Vec::new();
+    // owning object's `pindex`. A colour rides the base of the first volume carrying its
+    // material — two volumes sharing one material id but coloured differently can only
+    // differ in the XML if they use distinct labels (the CLI's carve rule is material).
+    let mut mats: Vec<(&str, String)> = Vec::new();
     for v in volumes {
-        if !v.material.is_empty() && !mats.contains(&v.material) {
-            mats.push(v.material);
+        if !v.material.is_empty() && !mats.iter().any(|(m, _)| *m == v.material) {
+            let display = display_color(v.color).unwrap_or_else(|| APP_DEFAULT_DISPLAY_COLOR.into());
+            mats.push((v.material, display));
         }
     }
     let mat = if mats.is_empty() {
         String::new()
     } else {
         let mut s = String::from("<basematerials id=\"1\">");
-        for m in &mats {
-            let _ = write!(s, "<base name=\"{}\"/>", esc(m));
+        for (m, display) in &mats {
+            let _ = write!(s, "<base name=\"{}\" displaycolor=\"{display}\"/>", esc(m));
         }
         s.push_str("</basematerials>");
         s
@@ -511,7 +538,7 @@ pub fn write_3mf_volumes(volumes: &[Volume3mf<'_>]) -> Vec<u8> {
         let mat_attr = if v.material.is_empty() {
             String::new()
         } else {
-            let pidx = mats.iter().position(|m| *m == v.material).unwrap_or(0);
+            let pidx = mats.iter().position(|(m, _)| *m == v.material).unwrap_or(0);
             format!(" pid=\"1\" pindex=\"{pidx}\"")
         };
         let opener = format!(
@@ -1205,7 +1232,11 @@ mod tests {
             model.contains("name=\"test &quot;bracket&quot;\""),
             "{model}"
         );
-        assert!(model.contains("base name=\"petg\""), "{model}");
+        // No volume colour: the spec-required displaycolor falls back to the app default.
+        assert!(
+            model.contains("<base name=\"petg\" displaycolor=\"#DFDEDA\"/>"),
+            "{model}"
+        );
         assert_eq!(model.matches("<vertex ").count(), m.verts.len());
         assert_eq!(model.matches("<triangle ").count(), m.tris.len());
         assert!(
@@ -1218,6 +1249,43 @@ mod tests {
         );
         let types = String::from_utf8(entries[0].1.clone()).unwrap();
         assert!(types.contains("3dmanufacturing-3dmodel+xml"), "{types}");
+    }
+
+    #[test]
+    fn three_mf_bases_carry_the_first_volumes_colour() {
+        let m = surface(cube, [-10.0; 3], [10.0; 3], 1.0);
+        let bytes = write_3mf_volumes(&[
+            Volume3mf {
+                name: "base",
+                material: "petg",
+                color: "#b5432a",
+                mesh: &m,
+            },
+            Volume3mf {
+                name: "pin",
+                material: "petg",
+                color: "",
+                mesh: &m,
+            },
+            Volume3mf {
+                name: "tab",
+                material: "pla",
+                color: "not-a-colour",
+                mesh: &m,
+            },
+        ]);
+        let model = String::from_utf8(zip_entries(&bytes)[2].1.clone()).unwrap();
+        // The first volume's colour, canonicalised to uppercase; the same material label
+        // re-reported (uncoloured) by the second volume never rewrites it.
+        assert!(
+            model.contains("<base name=\"petg\" displaycolor=\"#B5432A\"/>"),
+            "{model}"
+        );
+        assert!(
+            model.contains("<base name=\"pla\" displaycolor=\"#DFDEDA\"/>"),
+            "{model}"
+        );
+        assert_eq!(model.matches("<object ").count(), 3, "{model}");
     }
 
     #[test]
@@ -1241,8 +1309,9 @@ mod tests {
 
     /// Golden digest of a whole package (compressed layout included). Re-pinned when the
     /// model entry moved from one sequential DEFLATE stream to independent parallel
-    /// segments, and again (578625 → 578668) when the writer became the one-volume form of
-    /// `write_3mf_volumes` and the object opener turned into its own segment boundary; the
+    /// segments, again (578625 → 578668) when the writer became the one-volume form of
+    /// `write_3mf_volumes` and the object opener turned into its own segment boundary, and
+    /// again (578668 → 578689) when every base gained its `displaycolor`; the
     /// text itself is pinned unchanged by `three_mf_model_text_is_pinned`.
     #[test]
     fn three_mf_package_bytes_are_pinned() {
@@ -1254,7 +1323,7 @@ mod tests {
         }
         assert_eq!(
             (bytes.len(), format!("{h:016x}")),
-            (578668, "a31c4ab6a660d9a1".to_string())
+            (578689, "03892c04f026614b".to_string())
         );
     }
 
@@ -1300,7 +1369,7 @@ mod tests {
         let text = miniz_oxide::inflate::decompress_to_vec(&e[2].1).unwrap();
         assert_eq!(
             (text.len(), fnv(&text)),
-            (4516761, "1304e423a349b9bc".to_string())
+            (4516784, "9ff985fbf50f2fd3".to_string())
         );
     }
 
