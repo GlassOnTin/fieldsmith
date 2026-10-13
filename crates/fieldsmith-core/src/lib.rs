@@ -16,8 +16,9 @@ use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
-    element_stress, nodal_stress, solve, von_mises, Material, P2Mesh, Problem, SolveReport,
-    SolverOptions, Stress,
+    element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
+    solve_conduction, thermal_load, von_mises, Material, P2Mesh, Problem, SolveReport,
+    SolverOptions, Stress, ThermalRefData,
 };
 use serde::Serialize;
 
@@ -72,8 +73,17 @@ pub struct CaseResult {
     pub solve: SolveReport,
     /// Provenance of each load in this case, in document order: the applied resultant
     /// and moment, and the face-fit numbers of distributed loads. Empty for the
-    /// verifier's resolved-model runs (which call `run_case` directly).
+    /// verifier's resolved-model runs (which call `run_case` directly), and for
+    /// thermal cases (whose driver is the conduction field, not a load).
     pub load_reports: Vec<LoadReport>,
+    /// Nodal temperature (°C) for a thermal case — the conduction field, rendered with
+    /// a legend in the Results lens. `None` on mechanical cases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<Vec<f64>>,
+    /// The conduction solve's report for a thermal case (`solve` is the expansion
+    /// solve's own report). `None` on mechanical cases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conduction: Option<SolveReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -85,6 +95,9 @@ pub struct Provenance {
     pub element_size: f64,
     pub mesh_ms: f64,
     pub solve_ms: f64,
+    /// Time in the thermal cases' conduction and expansion solves; 0.0 for a document
+    /// without temperature statements. `total_ms` includes it.
+    pub thermal_ms: f64,
     pub total_ms: f64,
     pub quality: Quality,
     pub iterations: usize,
@@ -158,6 +171,35 @@ pub fn size_for_dofs(volume: f64, dofs: usize) -> f64 {
 pub fn elem_von_mises(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<f64> {
     (0..mesh.tets.len())
         .map(|e| von_mises(&element_stress(mesh, u, e, young[e], poisson, [0.25; 3])))
+        .collect()
+}
+
+/// [`elem_von_mises`] for a thermal case: the elastic stress with the thermal term
+/// subtracted ([`element_stress_thermal`]), ΔT at the centroid evaluated from the nodal
+/// temperature field.
+pub fn elem_von_mises_thermal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha: f64,
+    dt: &[f64],
+) -> Vec<f64> {
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    // The P2 basis at the reference centroid [1/4, 1/4, 1/4]: −1/8 on each vertex,
+    // +1/4 on each midside (sums to 1 — the partition-checked interpolation weights).
+    let phi = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
+    (0..mesh.tets.len())
+        .map(|e| {
+            let t = &mesh.tets[e];
+            let dt_c: f64 = t
+                .iter()
+                .zip(phi.iter())
+                .map(|(&n, p)| dt[n as usize] * p)
+                .sum();
+            let s = element_stress_thermal(mesh, u, e, young[e], poisson, alpha, dt_c, [0.25; 3]);
+            von_mises(&s)
+        })
         .collect()
 }
 
@@ -425,6 +467,49 @@ pub fn case_force(
     case_force_report(doc, mesh, facets, name, h).map(|(f, _)| f)
 }
 
+/// Nodal Dirichlet map for one thermal case: every P2 node on a temperature statement's
+/// facets holds the statement's value; nodes no statement reaches stay insulated (the
+/// natural boundary condition of the Laplace solve). A region that does not touch the
+/// surface, and two statements in one case meeting on a shared surface node with
+/// different values, are named setup errors — a node cannot carry both temperatures.
+pub fn case_temperatures(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<Vec<Option<f64>>, SetupError> {
+    let mut d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
+    let mut owner: Vec<Option<String>> = vec![None; mesh.nodes.len()];
+    for t in doc.temperatures.iter().filter(|t| t.case == name) {
+        let fs = region_facets(doc, &t.region, mesh, facets, h)?;
+        if fs.is_empty() {
+            return Err(SetupError(format!(
+                "temperature '{}': region '{}' does not touch the part's surface",
+                t.id, t.region
+            )));
+        }
+        for &fi in &fs {
+            for &n in &facets[fi].nodes {
+                let n = n as usize;
+                if let (Some(prev), Some(prev_v)) = (&owner[n], d[n]) {
+                    if prev != &t.id && prev_v != t.celsius {
+                        return Err(SetupError(format!(
+                            "temperatures '{prev}' and '{}' meet at shared surface nodes \
+                             but hold different values ({prev_v} °C and {} °C) — a node \
+                             cannot carry both temperatures in one thermal case",
+                            t.id, t.celsius
+                        )));
+                    }
+                }
+                owner[n] = Some(t.id.clone());
+                d[n] = Some(t.celsius);
+            }
+        }
+    }
+    Ok(d)
+}
+
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
 /// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
 /// runs.
@@ -463,6 +548,65 @@ pub fn run_case(
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
+        temperature: None,
+        conduction: None,
+    })
+}
+
+/// Solve one thermal case: steady conduction from the case's temperature regions
+/// ([`solve_conduction`]), then the elastic solve driven by the thermal-expansion
+/// load from the document's reference temperature (`solve tref=`, default 20 °C).
+/// Stress recovery carries the thermal term; the nodal temperature and the conduction
+/// report travel on the result. A thermal case runs without mechanical loads — mixed
+/// cases are named for later. Shared by the static path and the verifier's
+/// resolved-model runs.
+#[allow(clippy::too_many_arguments)]
+pub fn run_thermal_case(
+    doc: &Document,
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    alpha: f64,
+    fixed: &[u8],
+    facets: &[Facet],
+    name: String,
+    h: f64,
+) -> Result<CaseResult, SetupError> {
+    let d = case_temperatures(doc, mesh, facets, &name, h)?;
+    let (t, creport) = solve_conduction(mesh, &d, SolverOptions::default()).map_err(SetupError)?;
+    // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
+    let t_ref = doc.solve.t_ref.unwrap_or(20.0);
+    let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
+    let force = thermal_load(mesh, &dt, young, poisson, alpha, &ThermalRefData::new());
+    let problem = Problem {
+        mesh: mesh.clone(),
+        material: Material {
+            young: young.to_vec(),
+            poisson,
+        },
+        fixed: fixed.to_vec(),
+        force,
+    };
+    let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+    let stress = nodal_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
+    let vm: Vec<f64> = stress.iter().map(von_mises).collect();
+    let vm_elem = elem_von_mises_thermal(mesh, &u, young, poisson, alpha, &dt);
+    let max_d = (0..mesh.nodes.len())
+        .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
+        .fold(0.0, f64::max);
+    Ok(CaseResult {
+        name,
+        max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
+        max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
+        max_displacement: max_d,
+        u,
+        stress,
+        von_mises: vm,
+        vm_elem,
+        solve: rep,
+        load_reports: Vec::new(),
+        temperature: Some(t),
+        conduction: Some(creport),
     })
 }
 
@@ -502,7 +646,7 @@ fn prepare(
             "add a support: the part needs something to hold it".into(),
         ));
     }
-    if need_loads && doc.loads.is_empty() {
+    if need_loads && doc.loads.is_empty() && doc.temperatures.is_empty() {
         return Err(SetupError("add a load".into()));
     }
     let mat = material_of(doc)?;
@@ -632,6 +776,7 @@ pub fn analyse_modes(
             element_size: h,
             mesh_ms,
             solve_ms: modal.solve_ms,
+            thermal_ms: 0.0,
             total_ms: mesh_ms + modal.solve_ms,
             quality,
             iterations: 0,
@@ -675,13 +820,37 @@ pub fn analyse_full(
         iterations += case.solve.iterations;
         cases.push(case);
     }
+    let t_static_end = clock();
+    // Thermal cases (M14): per case a conduction solve then the expansion solve, on the
+    // same mesh and supports. Their results run beside the mechanical ones.
+    let mut thermal_ms = 0.0;
+    let thermal_cases = doc.thermal_cases();
+    if !thermal_cases.is_empty() {
+        let alpha = mat.alpha.ok_or_else(|| {
+            SetupError(format!(
+                "The thermal flow needs a thermal-expansion coefficient and material '{}' \
+                 states none — pick a material whose sheet states a CTE, or give a custom \
+                 material an a= value",
+                doc.material
+            ))
+        })?;
+        let t_thermal = clock();
+        for name in thermal_cases {
+            let case =
+                run_thermal_case(doc, &mesh, &young, mat.nu, alpha, &fixed, &facets, name, h)?;
+            iterations += case.solve.iterations;
+            cases.push(case);
+        }
+        thermal_ms = clock() - t_thermal;
+    }
+    // Envelope over every case — mechanical and thermal: the tracked readout is the
+    // worst stress the part can see from any of them.
     let envelope = (0..nn)
         .map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max))
         .collect();
     let envelope_elem = (0..mesh.tets.len())
         .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
         .collect();
-    let t_static_end = clock();
     // Density g/cm³ → N·s²/mm⁴ (the modal solve's units, mm-N-s).
     let modal = match modes {
         None => None,
@@ -712,7 +881,8 @@ pub fn analyse_full(
         element_size: h,
         mesh_ms,
         solve_ms: t_static_end - t_mesh,
-        total_ms: t_static_end - t0,
+        thermal_ms,
+        total_ms: t_static_end - t0 + thermal_ms,
         quality,
         iterations,
     };
@@ -836,6 +1006,149 @@ support clamp root fixed=xyz
             a.provenance.total_ms,
             a.provenance.mesh_ms,
             a.provenance.solve_ms
+        );
+    }
+
+    /// Thermal flow through the pipeline (M14): a heated cantilever drives a "Steady"
+    /// case beside the mechanical one — nodal temperature carries the stated face
+    /// values at the region's nodes and the conduction report arrives; the mechanical
+    /// cases carry neither; thermal cases run after mechanical ones; provenance counts
+    /// the thermal leg.
+    const THERMAL: &str = "\
+name \"Heated bar\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region cold = bar.px
+region hot = bar.nx
+support clamp cold fixed=xyz
+temperature root cold temp=20 case=\"Steady\"
+temperature tip hot temp=90 case=\"Steady\"
+load pull hot force=(10, 0, 0)
+";
+
+    #[test]
+    fn thermal_case_runs_beside_the_mechanical_cases() {
+        let d = parse(THERMAL);
+        let a = analyse(&d, Resolution::Size(2.0), now).expect("analyse");
+        let mech = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Load 1")
+            .expect("load case");
+        assert!(mech.temperature.is_none() && mech.conduction.is_none());
+        let th = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Steady")
+            .expect("thermal case");
+        let th_ix = a.cases.iter().position(|c| c.name == "Steady").unwrap();
+        assert!(
+            th_ix > a.cases.iter().position(|c| c.name == "Load 1").unwrap(),
+            "thermal cases run mechanical-first"
+        );
+        // Dirichlet faces: the fixed-end and hot-end nodes hold the stated values.
+        let t = th.temperature.as_ref().expect("temperature field");
+        let (mut cold, mut hot) = (None, None);
+        for (n, p) in a.mesh.nodes.iter().enumerate() {
+            if p[0] > 40.0 - 1e-9 {
+                cold = Some((n, t[n]));
+            } else if p[0] < 1e-9 {
+                hot = Some((n, t[n]));
+            }
+        }
+        let (_, tc) = cold.expect("cold-face node");
+        let (_, thv) = hot.expect("hot-face node");
+        assert!((tc - 20.0).abs() < 1e-9, "cold face {} °C", tc);
+        assert!((thv - 90.0).abs() < 1e-9, "hot face {} °C", thv);
+        // Laplace with linear face data: every interior node sits on the linear ramp
+        // (hot at x=0, cold at x=40).
+        for (tn, p) in a.mesh.nodes.iter().enumerate() {
+            if p[0] > 1e-9 && p[0] < 40.0 - 1e-9 {
+                let want = 90.0 - 70.0 * p[0] / 40.0;
+                assert!(
+                    (t[tn] - want).abs() < 0.5,
+                    "node at {:.3} holds {} °C, linear ramp says {:.3}",
+                    p[0],
+                    t[tn],
+                    want
+                );
+            }
+        }
+        let cr = th.conduction.as_ref().expect("conduction report");
+        assert!(cr.converged && cr.iterations > 0);
+        // The expansion solved for something measurable.
+        assert!(
+            th.max_displacement > 0.0,
+            "thermal expansion displaced nothing"
+        );
+        // Provenance: the thermal leg is timed beside the static one.
+        assert!(
+            a.provenance.thermal_ms > 0.0
+                && (a.provenance.total_ms
+                    - a.provenance.mesh_ms
+                    - a.provenance.solve_ms
+                    - a.provenance.thermal_ms)
+                    .abs()
+                    < 50.0,
+            "total {} ≠ mesh {} + solve {} + thermal {}",
+            a.provenance.total_ms,
+            a.provenance.mesh_ms,
+            a.provenance.solve_ms,
+            a.provenance.thermal_ms
+        );
+    }
+
+    /// Two temperature statements in one case meeting at the shared edge of px and py:
+    /// the shared nodes cannot carry both values — named, not silently merged.
+    const TEMPERATURE_CLASH: &str = "\
+name \"Clashing temperatures\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region right = bar.px
+region top = bar.py
+region root_face = bar.nx
+support clamp root_face fixed=xyz
+temperature cold right temp=20
+temperature warm top temp=80
+";
+
+    #[test]
+    fn temperature_clash_at_shared_edge_is_named() {
+        let d = parse(TEMPERATURE_CLASH);
+        let err = analyse(&d, Resolution::Size(2.0), now).expect_err("clash");
+        assert!(err.0.contains("meet at shared surface nodes"), "{}", err.0);
+        assert!(
+            err.0.contains("'cold'") && err.0.contains("'warm'"),
+            "{}",
+            err.0
+        );
+    }
+
+    /// A temperature region that never reaches the surface is named like a support's
+    /// and a load's: a sphere buried inside the bar selects no boundary facet.
+    const TEMPERATURE_ABSENT: &str = "\
+name \"Absent temperature\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+group g {
+  box bar size=(40, 10, 10) at=(20, 5, 5)
+  sphere inner r=2 at=(20, 5, 5)
+}
+region root_face = bar.nx
+region ghost = inner.all
+support clamp root_face fixed=xyz
+temperature warm ghost temp=80
+";
+
+    #[test]
+    fn temperature_off_the_surface_is_named() {
+        let d = parse(TEMPERATURE_ABSENT);
+        let err = analyse(&d, Resolution::Size(2.0), now).expect_err("no-touch");
+        assert_eq!(
+            err.0,
+            "temperature 'warm': region 'ghost' does not touch the part's surface"
         );
     }
 }
