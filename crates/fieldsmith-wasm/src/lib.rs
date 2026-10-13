@@ -274,6 +274,46 @@ pub fn eval_body(doc_json: &str, points: &[f64]) -> Result<Vec<f64>, JsValue> {
     Ok(out)
 }
 
+/// Evaluate the interior (core) field of the preview fill at packed points `[x0, y0, z0, x1, …]`;
+/// returns `[d, gx, gy, gz, …]`. The Rust twin of the shader's `fs_core` — the V16 case
+/// compares them point-for-point.
+#[wasm_bindgen]
+pub fn eval_core(doc_json: &str, points: &[f64]) -> Result<Vec<f64>, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let fx = fieldsmith_core::fill::preview_fill(&doc).map_err(js_err)?;
+    let mut out = Vec::with_capacity(points.len() / 3 * 4);
+    for p in points.chunks_exact(3) {
+        let d = fx.removed_skin([p[0], p[1], p[2]]);
+        out.extend_from_slice(&[d.v, d.g[0], d.g[1], d.g[2]]);
+    }
+    Ok(out)
+}
+
+/// [`eval_core`] with the parameter grid supplied explicitly: `param` (f32, row-major x
+/// fastest) replaces the preview fill's own data, so both sides of the V16 comparison can
+/// consume the *exact texel values* the GPU texture holds. Some stacks quantize float-texture
+/// uploads to half precision (measured on ANGLE/NVIDIA: fp16 quantum 0.0625 at |p| ≈ 65).
+#[wasm_bindgen]
+pub fn eval_core_with_param(doc_json: &str, param: &[f32], points: &[f64]) -> Result<Vec<f64>, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let mut fx = fieldsmith_core::fill::preview_fill(&doc).map_err(js_err)?;
+    let n = fx.param.dims[0] * fx.param.dims[1] * fx.param.dims[2];
+    if param.len() != n {
+        return Err(js_err(format!(
+            "param grid is {} values, the fill's dims are {:?}",
+            param.len(),
+            fx.param.dims
+        )));
+    }
+    fx.param.data = param.to_vec();
+    let mut out = Vec::with_capacity(points.len() / 3 * 4);
+    for p in points.chunks_exact(3) {
+        let d = fx.removed_skin([p[0], p[1], p[2]]);
+        out.extend_from_slice(&[d.v, d.g[0], d.g[1], d.g[2]]);
+    }
+    Ok(out)
+}
+
 #[derive(Serialize)]
 struct Pick {
     t: f64,

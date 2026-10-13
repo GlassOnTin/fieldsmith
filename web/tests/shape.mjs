@@ -310,6 +310,13 @@ export async function shapeTest(browser, url, { screens, docsDir }) {
 
   // ---- A6 .fsm round trip through Save and Open ---------------------------------------------
   {
+    // Colour one part through the Inspector first so the saved file demonstrates a colour
+    // line: the round trip below proves the statement survives Save → New → Open.
+    await selectRow(page, ids.box);
+    await page.locator('[data-testid="node-color"] [data-color="#21BB4C"]').click();
+    const hinted = await page.evaluate(() => document.querySelector('[data-testid="color-hint"]')?.textContent ?? '');
+    const dotted = (await page.locator(`.row[data-node="${ids.box}"] .swatch`).count()) === 1;
+    await check('A6', 'Inspector sets a palette colour: hint and tree dot', hinted.includes('#21BB4C') && dotted, hinted || 'no hint element');
     const before = await canonical(page);
     const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-testid="save"]').click()]);
     const path = await dl.path();
@@ -320,7 +327,7 @@ export async function shapeTest(browser, url, { screens, docsDir }) {
     await chooser.setFiles({ name: dl.suggestedFilename(), mimeType: 'text/plain', buffer: Buffer.from(text) });
     await page.waitForFunction(() => window.fieldsmith.store.doc.root.length > 0);
     const after = await canonical(page);
-    const readable = /^\s*box \w+/m.test(text) && /^\s*group \w+ \{/m.test(text);
+    const readable = /^\s*box \w+/m.test(text) && /^\s*group \w+ \{/m.test(text) && /^\s*color "#/m.test(text);
     await check(
       'A6',
       'Save → New → Open restores the identical document; the file is readable text',

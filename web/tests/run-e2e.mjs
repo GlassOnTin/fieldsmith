@@ -1,10 +1,10 @@
-// Headless browser checks: browser verification cases (V5) and the scripted acceptance runs.
+// Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|bracket|shape|make|mesh] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
-// docs/verification/bracket-e2e.md and docs/verification/mesh-e2e.md, and exits non-zero on
-// any failure or console error.
+// docs/verification/V16.md, docs/verification/bracket-e2e.md and docs/verification/mesh-e2e.md,
+// and exits non-zero on any failure or console error.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -14,6 +14,7 @@ import { bracketTest } from './bracket.mjs';
 import { shapeTest } from './shape.mjs';
 import { makeTest } from './make.mjs';
 import { meshTest } from './mesh.mjs';
+import { interiorTest } from './interior.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -72,7 +73,11 @@ function v5Report(r) {
 const server = await createServer({ root, logLevel: 'error', server: { port: 0, strictPort: false } });
 await server.listen();
 const url = server.resolvedUrls.local[0];
-const launchArgs = { headless: !headed, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] };
+// Headless runs on the software rasteriser (that is what must stay portable); headed runs
+// drive the machine's real GPU stack, mirroring probe-budgets.mjs's headed flags.
+const launchArgs = headed
+  ? { headless: false, channel: 'chrome', args: ['--use-angle=vulkan', '--no-sandbox'] }
+  : { headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] };
 let browser;
 try {
   browser = await chromium.launch(launchArgs);
@@ -91,6 +96,11 @@ try {
     console.log(`V5 ${ok ? 'PASS' : 'FAIL'}: max |Δd| = ${res.V5.maxAbs ?? res.V5.error}`);
     if (!ok) failed = true;
     await page.close();
+  }
+  if (!only || only === 'interior') {
+    const ok = await interiorTest(browser, url, { screens, docsDir });
+    console.log(`interior test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
   }
   if (!only || only === 'bracket') {
     const ok = await bracketTest(browser, url, { screens, docsDir, pct });

@@ -7,10 +7,11 @@
 #   clippy (-D warnings) and the TypeScript typecheck first; workspace tests (verification
 #   cases V1-V4, V8-V13, V15 and V14's standard tests run in it; V6/V7/V14's chord ladder
 #   excepted — they are #[ignore]d and run release below); the wasm package build; the
-#   headless browser suite (V5 shader check, bracket, shape, make, mesh — each refreshes its
-#   docs/verification/*.md); the heavy release cases last (V6 gyroid law, V7 graded beam,
-#   V14 STEP chord ladder — V8 in the workspace stage, V5 in the browser suite, modal V13 in
-#   the workspace stage: all of V1–V14 inside CI).
+#   headless browser suite (V5 shader check, V16 interior, bracket, shape, make, mesh —
+#   each refreshes its docs/verification/*.md; the interior case also runs isolated below);
+#   the heavy release cases last (V6 gyroid law, V7 graded beam, V14 STEP chord ladder —
+#   V8 in the workspace stage, V5/V16 in the browser suite, modal V13 in the workspace
+#   stage: all of V1–V16 inside CI).
 #
 # Not scriptable and therefore not here: the GOAL hallway test (bracket with 3 new users)
 # and human review of the produced reports. Release-blocking, but they run with people.
@@ -32,7 +33,8 @@ step 'cargo clippy -D warnings' cargo clippy --workspace --all-targets -- -D war
 step 'TypeScript typecheck' npm --prefix web run typecheck
 step 'workspace tests (V1-V4, V8-V13, V15 + V14 standard + unit tests)' cargo test --workspace
 step 'wasm package build' npm --prefix web run wasm
-step 'headless browser suite (V5 + bracket + shape + make + mesh)' npm --prefix web run test:e2e
+step 'headless browser suite (V5 + V16 + bracket + shape + make + mesh)' npm --prefix web run test:e2e
+step 'V16 interior case (isolated)' node web/tests/run-e2e.mjs --only interior
 step 'V6 gyroid law (heavy, release)' cargo test -p fieldsmith-verify --release --test v6_tpms_law -- --ignored --nocapture
 step 'V7 graded beam (heavy, release)' cargo test -p fieldsmith-verify --release --test v7_graded_beam -- --ignored
 step 'V14 STEP chord ladder (heavy, release)' cargo test -p fieldsmith-verify --release --test v14_step -- --ignored --nocapture

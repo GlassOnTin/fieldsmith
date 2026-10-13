@@ -563,17 +563,19 @@ export class Viewport {
   /** Body alpha (0–1). Below 1 the body renders translucent (no depth writes) and the
    * interior pass mounts underneath it. Rebuilding the material happens only on the
    * opaque↔translucent regime flip — the program cache serves the identical source — so a
-   * drag inside one regime is a uniform write. */
-  setAlpha(a: number) {
+   * drag inside one regime is a uniform write. Returns the flip's rebuild promise when one
+   * was started, so callers can observe `lastCompileMs` after it (a uniform-write change
+   * resolves with nothing to observe). */
+  setAlpha(a: number): Promise<void> | void {
     const next = THREE.MathUtils.clamp(a, 0, 1);
     const flip = (this.bodyAlpha >= 1) !== (next >= 1) && !!this.lastSpec?.bounds;
     this.bodyAlpha = next;
-    if (flip) {
-      void this.setField(this.lastSpec!);
-    } else if (this.material) {
+    const done = flip ? this.setField(this.lastSpec!) : undefined;
+    if (!flip && this.material) {
       (this.material.uniforms.u_alpha.value as number) = next;
     }
     this.invalidate();
+    return done;
   }
 
   /** Swap the bound `u_param` payload on both field materials (the analysis's graded grid

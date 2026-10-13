@@ -280,6 +280,79 @@ for (const mode of modes) {
       'unmeasurable: no WebGL context in this browser/environment; the viewport never attached');
   }
 
+  // The semi-transparent preview row (M12): the same presented cadence with the body at
+  // 35 % opacity — the interior pass mounted underneath a transparent body. The flip is an
+  // async setField (program-cache rebuild); wait for its compileMs to change before timing.
+  let cad35 = null;
+  try {
+    const prev = await page.evaluate(() => window.fieldsmith.ui.compileMs);
+    // The slider is an <input type="range">, which fill() does not drive; dispatch the
+    // input event directly the way a drag does.
+    await page.evaluate((v) => {
+      const el = document.querySelector('[data-testid="opacity-slider"]');
+      el.value = String(v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, 0.35);
+    await page.waitForFunction(
+      (p) => window.fieldsmith.ui.compileMs !== p && window.fieldsmith.ui.compileMs > 0,
+      prev,
+      { timeout: 30000 },
+    );
+    await page.waitForTimeout(300);
+    cad35 = await page.evaluate(() => new Promise((res) => {
+    const vp = window.fieldsmith.viewport;
+    const R = vp.renderer;
+    const cpu = [];
+    const orig = R.render.bind(R);
+    R.render = (...a) => {
+      const t = performance.now();
+      orig(...a);
+      cpu.push(performance.now() - t);
+    };
+    let calls = 0;
+    const t0 = performance.now();
+    let prev2 = 0;
+    const deltas = [];
+    const tick = () => {
+      const now = performance.now();
+      const el = now - t0;
+      if (el < 2000) {
+        if (prev2) deltas.push(now - prev2);
+        prev2 = now;
+        calls++;
+        vp.invalidate();
+        requestAnimationFrame(tick);
+      } else {
+        cpu.sort((a, b) => a - b);
+        deltas.sort((a, b) => a - b);
+        res({ calls, wall: el, cpuMed: cpu[calls >> 1], deltaP95: deltas[Math.floor(deltas.length * 0.95)] });
+      }
+    };
+    requestAnimationFrame(tick);
+  }));
+  } catch (e) {
+    notes.push(`semi-transparent row: probe error ${String(e).split('\n')[0]}`);
+  }
+  const fps35 = cad35 ? +(cad35.calls / (cad35.wall / 1000)).toFixed(1) : null;
+  if (cad35) {
+    check('presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill)',
+      fps35 >= 59 && cad35.deltaP95 <= 17.5,
+      `${fps35} fps, frame-arrival p95 ${cad35.deltaP95?.toFixed(1)} ms, render CPU med ${cad35.cpuMed?.toFixed(2)} ms`);
+  } else {
+    check('presented preview ≥ 59 fps at 1080p, body at 35 % (see-through fill)', false,
+      'unmeasurable: no WebGL context in this browser/environment; the viewport never attached');
+  }
+  try {
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="opacity-slider"]');
+      el.value = '1';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForTimeout(200);
+  } catch {
+    /* the export section below does not depend on the body alpha */
+  }
+
   // ---- Export budget: 3MF of the graded bracket at 0.1 mm, through the real Make UI ----
   // GOAL's box is mesh + write; the click→meta wall also carries the health scans (not in
   // the budget), and those wall times are in the detail. An abort (OOM at this spacing)

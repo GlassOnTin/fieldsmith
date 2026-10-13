@@ -145,6 +145,19 @@ export function evalBody(doc: Document, points: Float64Array): Float64Array {
   return w.eval_body(JSON.stringify(doc), points);
 }
 
+/** The interior (core) field of the preview fill, at the same points — the Rust twin of the
+ * shader's `fs_core`. */
+export function evalCore(doc: Document, points: Float64Array): Float64Array {
+  return w.eval_core(JSON.stringify(doc), points);
+}
+
+/** [`evalCore`] with the `u_param` grid data supplied explicitly, so both sides of the V16
+ * comparison consume the exact texel values the GPU texture holds (some stacks quantize
+ * float-texture uploads to half precision). */
+export function evalCoreWithParam(doc: Document, param: Float32Array, points: Float64Array): Float64Array {
+  return w.eval_core_with_param(JSON.stringify(doc), param, points);
+}
+
 export interface PickHit {
   t: number;
   point: Vec3;

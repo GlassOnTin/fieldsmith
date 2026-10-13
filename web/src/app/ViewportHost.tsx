@@ -268,7 +268,13 @@ export function ViewportHost() {
     let lastUi = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
     const unsubUi = ui.subscribe(() => {
       const now = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
-      if (now.alpha !== lastUi.alpha) vp.setAlpha(now.alpha);
+      if (now.alpha !== lastUi.alpha) {
+        // The opaque↔translucent regime flip rebuilds the material asynchronously — expose
+        // its compile time like setField's callers do.
+        void Promise.resolve(vp.setAlpha(now.alpha)).then(() => {
+          ui.compileMs = vp.lastCompileMs;
+        });
+      }
       if (now.gizmo !== lastUi.gizmo || now.snap !== lastUi.snap) placeGizmo();
       if (now.hover !== lastUi.hover) updateHighlights();
       lastUi = now;
