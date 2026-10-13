@@ -230,6 +230,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .results-panel .field-grid { display: grid; grid-template-columns: 84px 1fr; gap: 4px 8px; align-items: center; }
 .legend-block { margin: 8px 0 2px; }
 .legend-range { display: flex; align-items: center; gap: 8px; }
+.results-panel .legend-range .numbox { width: 78px; flex: none; }
 .legend-gradient { height: 8px; border-radius: 4px; flex: 1; }
 .probe { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--text-2); }
 

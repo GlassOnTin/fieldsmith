@@ -292,6 +292,8 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     await page.waitForSelector('[data-testid="legend"]', { timeout: 5000 });
     panelSeen = true;
   });
+  const hintBefore = await page.locator('[data-testid="probe-hint"]').count();
+  check('probe hint names the surface click before any probe', hintBefore === 1, `${hintBefore} hint elements`);
   await step('Probe the base plate', async () => {
     // A point on the top face of the base plate, away from the fillet and the holes.
     const at = await page.evaluate(() => {
@@ -308,6 +310,8 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
       probe ? `${probe.value.toFixed(2)} MPa at (${probe.point.map((v) => v.toFixed(1)).join(', ')}) mm` : 'no probe reading',
     );
   });
+  const hintAfter = await page.locator('[data-testid="probe-hint"]').count();
+  check('probe hint replaced by the probe reading', hintAfter === 0, `${hintAfter} hint elements after probing`);
   check('results panel, badge and legend render', panelSeen, panelSeen ? '' : 'panel, badge or legend missing after switching to the results lens');
   const badgeOk = (await page.locator('[data-testid="analysis-badge"]').count()) === 1;
   check('provenance badge shows the refined level', badgeOk, 'analysis-badge present once');
@@ -338,6 +342,59 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     };
   });
   check('Show seg fits the results panel (no cropped chip)', segFit.ok, segFit.detail);
+
+  // Legend range: the ramped modes' min/max are editable. Editing stores the pair against
+  // this mode + rung and marks the saturation; a mode switch must fall back to auto bounds
+  // rather than miscolour deflection with a stress range (the level key includes the doc
+  // version, so a new solve likewise drops it).
+  await step('Set the legend upper bound to 1 MPa', async () => {
+    await setNum(page, 'legend-hi', '1');
+    const r = await page.evaluate(() => {
+      const u = window.fieldsmith.ui;
+      const a = window.fieldsmith.analysis.state;
+      const label = a.levels[a.levels.length - 1].label;
+      return { range: u.resultsRange, label, cap: document.querySelector('[data-testid=legend] .meta')?.textContent ?? '' };
+    });
+    check(
+      'legend range stored against this mode and rung',
+      !!r.range && r.range.mode === 'stress' && r.range.lo === 0 && r.range.hi === 1 && r.range.levelKey.endsWith(`:${r.label}`),
+      JSON.stringify(r.range),
+    );
+    check('legend caption notes the saturation', /values outside the range/.test(r.cap), r.cap);
+  });
+  await step('Switch to deflection: range falls back to auto bounds', async () => {
+    const autoHi = await page.evaluate(() => {
+      const a = window.fieldsmith.analysis.state;
+      const lvl = a.levels[a.levels.length - 1];
+      return Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement));
+    });
+    await page.locator('[data-testid="results-mode"] button', { hasText: 'Deflection' }).click();
+    // Wait for the deflection legend to settle: caption switched AND the number input's
+    // text re-synced to the auto bound (the input's text syncs in a post-paint effect, so
+    // painting the caption alone is not proof the input shows it).
+    await page.waitForFunction(
+      (hi) => {
+        const el = document.querySelector('[data-testid=legend-hi]');
+        const cap = document.querySelector('[data-testid=legend] .meta')?.textContent ?? '';
+        return /displacement magnitude/.test(cap) && !!el
+          && !Number.isNaN(parseFloat(el.value))
+          && Math.abs(parseFloat(el.value) - hi) <= 1e-3;
+      },
+      autoHi,
+      { timeout: 5000 },
+    );
+    const r = await page.evaluate(() => ({
+      range: window.fieldsmith.ui.resultsRange,
+      hiInput: document.querySelector('[data-testid=legend-hi]')?.value ?? null,
+      cap: document.querySelector('[data-testid=legend] .meta')?.textContent ?? '',
+    }));
+    check(
+      'stress range kept but deflection legend shows auto bounds',
+      !!r.range && r.range.mode === 'stress' && !/values outside the range/.test(r.cap)
+        && !!r.hiInput && Math.abs(parseFloat(r.hiInput) - autoHi) <= 1e-3,
+      `stress range kept; deflection upper bound ${r.hiInput} ≈ auto ${autoHi.toFixed(4)}`,
+    );
+  });
 
   // ---- fill lens ------------------------------------------------------------------------
 

@@ -31,6 +31,11 @@ class Ui {
   resultsCase = -1;
   /** Deformed-shape exaggeration factor. */
   resultsScale = 5;
+  /** Legend range the user set for one colour mode. Keyed to that mode and the rung it was
+   * set on (doc version + rung label), so a mode switch or a new solve falls back to the
+   * auto bounds instead of miscolouring a different result with a stale range. */
+  resultsRange: { mode: 'stress' | 'deflection'; levelKey: string; lo: number; hi: number } | null =
+    null;
   // Make lens display state (not undoable).
   /** Export mesh spacing (mm). */
   makeH = 0.25;

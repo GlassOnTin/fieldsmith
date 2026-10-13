@@ -113,6 +113,30 @@ function legendLabels(mode: ResultMode, max: number, yieldMpa: number): { min: s
   return { min: '', max: '', caption: 'displacement direction arrows on the deformed shape' };
 }
 
+/** The active legend range for a colour mode: the user-set one while it still names this
+ * mode and rung, otherwise the auto bounds 0..dataMax. Null for the modes with fixed
+ * legends — safety keeps its SF=1-anchored spans, vectors has no numeric ramp. A range set
+ * on another doc version (the key includes `resultsFor`) is a different run and must never
+ * reach the colouring, so it falls back here. */
+function rangeFor(
+  lvl: LevelResult,
+  mode: ResultMode,
+  ci: number,
+): { lo: number; hi: number; auto: boolean; levelKey: string; unit: string } | null {
+  if (mode === 'safety' || mode === 'vectors') return null;
+  const unit = mode === 'stress' ? 'MPa' : 'mm';
+  const levelKey = `${analysis.state.resultsFor ?? ''}:${lvl.label}`;
+  const r = ui.resultsRange;
+  if (r && r.mode === mode && r.levelKey === levelKey) {
+    return { lo: r.lo, hi: Math.max(r.hi, r.lo + 1e-12), auto: false, levelKey, unit };
+  }
+  return { lo: 0, hi: modeMax(lvl, mode, ci), auto: true, levelKey, unit };
+}
+
+function isRamped(m: ResultMode): m is 'stress' | 'deflection' {
+  return m === 'stress' || m === 'deflection';
+}
+
 // ---- mesh ----------------------------------------------------------------------------
 
 function disposeDeep(o: THREE.Object3D) {
@@ -155,6 +179,11 @@ function rebuild(lvl: LevelResult) {
   const u = lvl.u[ci >= 0 ? ci : 0];
   const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
   const vmax = modeMax(lvl, mode, ci);
+  // Null range (safety / vectors) means "not adjustable"; those modes colour by their own
+  // math and never touch the ramped normaliser below.
+  const rng = rangeFor(lvl, mode, ci);
+  const rngLo = rng ? rng.lo : 0;
+  const denom = rng ? Math.max(1e-12, rng.hi - rng.lo) : vmax;
   const yieldMpa = lvl.meta.yield_strength;
 
   const positions = new Float32Array(nFacets * 9);
@@ -162,7 +191,7 @@ function rebuild(lvl: LevelResult) {
   const col: [number, number, number] = [0, 0, 0];
   for (let f = 0; f < nFacets; f++) {
     const owner = lvl.surfaceOwner[f];
-    if (mode === 'stress') rampColor(vmArr[owner] / vmax, col);
+    if (mode === 'stress') rampColor((vmArr[owner] - rngLo) / denom, col);
     else if (mode === 'safety') {
       // Diverging about the critical SF: 1 → the map's centre, ≥ cap → blue, → 0 → full
       // red. A vanishing vm means infinite SF, so it clamps onto the blue end.
@@ -178,7 +207,7 @@ function rebuild(lvl: LevelResult) {
         const n = lvl.surfaceFacets[6 * f + j];
         m += Math.hypot(u[3 * n], u[3 * n + 1], u[3 * n + 2]);
       }
-      rampColor(m / 3 / vmax, col);
+      rampColor((m / 3 - rngLo) / denom, col);
     } else {
       col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
     }
@@ -241,7 +270,9 @@ function syncResults(vp: Viewport) {
   const lvl = analysis.latest;
   const on = store.lens === 'results' && !!lvl;
   const sig = on
-    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsCase}|${ui.resultsScale}`
+    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsCase}|${ui.resultsScale}|${
+        ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
+      }`
     : 'off';
   if (sig === resultSig) return;
   resultSig = sig;
@@ -379,6 +410,9 @@ function ResultsPanel() {
   const ci = lvl ? effCase(lvl) : -1;
   const mode = ui.resultsMode;
   const legend = lvl ? legendLabels(mode, modeMax(lvl, mode, ci), lvl.meta.yield_strength) : null;
+  const rng = lvl ? rangeFor(lvl, mode, ci) : null;
+  // Arrow-key step inside the legend inputs: a tenth of the top bound, on the input's decade.
+  const rangeStep = rng ? Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rng.hi))) - 1) : 1;
   return (
     <div class="results-panel" data-testid="results-panel">
       <div class="card-head">
@@ -421,14 +455,40 @@ function ResultsPanel() {
           </div>
           {legend && legend.caption && (
             <div class="legend-block" data-testid="legend">
-              {legend.max !== '' && (
+              {isRamped(mode) && rng ? (
+                <div class="legend-range">
+                  <NumberInput
+                    value={rng.lo}
+                    min={0}
+                    max={rng.hi}
+                    step={rangeStep}
+                    unit={rng.unit}
+                    label="legend lower bound"
+                    onChange={(lo) => ui.set('resultsRange', { mode, levelKey: rng.levelKey, lo, hi: rng.hi })}
+                    testId="legend-lo"
+                  />
+                  <span class="legend-gradient" style={{ background: gradientCss(mode) }} />
+                  <NumberInput
+                    value={rng.hi}
+                    min={0}
+                    step={rangeStep}
+                    unit={rng.unit}
+                    label="legend upper bound"
+                    onChange={(hi) => ui.set('resultsRange', { mode, levelKey: rng.levelKey, lo: rng.lo, hi })}
+                    testId="legend-hi"
+                  />
+                </div>
+              ) : rng && legend.max !== '' && (
                 <div class="legend-range">
                   <span class="num">{legend.min}</span>
                   <span class="legend-gradient" style={{ background: gradientCss(mode) }} />
                   <span class="num">{legend.max}</span>
                 </div>
               )}
-              <div class="meta">{legend.caption}</div>
+              <div class="meta">
+                {legend.caption}
+                {rng && !rng.auto ? "; values outside the range render at the ramp's end colours" : ''}
+              </div>
             </div>
           )}
           <div class="field-grid" data-testid="results-summary">
@@ -533,6 +593,7 @@ function ResultsPanel() {
             </div>
           )}
           {s.skippedFine && <div class="hint" data-testid="skipped-fine">{s.skippedFine}</div>}
+          {!ui.probe && <div class="hint" data-testid="probe-hint">Click the surface to read the value at that point.</div>}
           {ui.probe && (
             <div class="probe" data-testid="probe">
               {fmt(ui.probe.value)} {ui.probe.unit} at ({ui.probe.point.map((v) => v.toFixed(1)).join(', ')}) mm
