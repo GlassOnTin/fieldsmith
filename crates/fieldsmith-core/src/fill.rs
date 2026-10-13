@@ -221,6 +221,93 @@ pub struct Graded {
     pub solve_ms: f64,
 }
 
+/// Cheap numeric spec checks shared by [`graded_of`] and [`preview_fill`]; the case
+/// resolution and the stress machinery stay graded-only.
+fn check_spec(spec: &Fill) -> Result<(), SetupError> {
+    if spec.cell <= 0.0 {
+        return Err(SetupError("fill cell size must be positive".into()));
+    }
+    if spec.skin < 0.0 || spec.margin < 0.0 || spec.min_wall < 0.0 {
+        return Err(SetupError(
+            "fill skin, margin and min wall must be non-negative".into(),
+        ));
+    }
+    if spec.curve <= 0.0 {
+        return Err(SetupError("fill curve must be positive".into()));
+    }
+    if spec.rho_min <= 0.0 || spec.rho_min > spec.rho_max || spec.rho_max > 1.0 {
+        return Err(SetupError(
+            "fill densities must satisfy 0 < ρmin ≤ ρmax ≤ 1".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Union of the fill's protected zones: each protected shape as placed (patterns
+/// included), offset outward by the margin. `Empty` when the fill protects nothing.
+fn keep_zones(doc: &fieldsmith_doc::Document, spec: &Fill) -> Result<Expr, SetupError> {
+    let mut keep = Expr::Empty;
+    for name in &spec.protect {
+        let shape = expr::placed_shape(doc, name)
+            .ok_or_else(|| SetupError(format!("fill protects missing shape '{name}'")))?;
+        let zone = Expr::Offset {
+            d: spec.margin,
+            e: Box::new(shape),
+        };
+        keep = match keep {
+            Expr::Empty => zone,
+            k => Expr::Combine {
+                op: Op::Add,
+                blend: 0.0,
+                a: Box::new(k),
+                b: Box::new(zone),
+            },
+        };
+    }
+    Ok(keep)
+}
+
+/// Pre-analysis fill look for the viewport: the fill the document authors, on the grade grid
+/// the analysed build would use (same bounds, spacing and padding as [`graded_of`]) but with
+/// the density uniformly at the spec's ρmax — a clearly visible lattice, the deliberate
+/// stand-in before the graded parameter field arrives. A uniform grid keeps the viewport's
+/// preview→graded swap a texture upload instead of a recompile when the dimensions match.
+/// Runs only the cheap spec checks; no load case, no stress probe, no re-solve.
+pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupError> {
+    let spec = doc
+        .fill
+        .clone()
+        .ok_or_else(|| SetupError("this document has no fill".into()))?;
+    check_spec(&spec)?;
+    let body = expr::compile_body(doc);
+    let b = expr::bounds(&body);
+    if b.is_empty() {
+        return Err(SetupError("the model is empty".into()));
+    }
+    let keep = keep_zones(doc, &spec)?;
+    let cal = calibration(spec.family, spec.mode);
+    let mut p0 = cal.param_for(spec.rho_max, spec.cell);
+    if spec.mode == FillMode::Sheet {
+        p0 = p0.max(spec.min_wall);
+    }
+    let spacing = (spec.cell / 2.0).max(1e-3);
+    let mut param = grid_over(&b, spacing, spec.cell)?;
+    if param.dims.iter().any(|&d| d < 2) {
+        param = Grid3::constant(p0 as f32);
+    } else {
+        param.data.iter_mut().for_each(|v| *v = p0 as f32);
+    }
+    Ok(FillExpr {
+        body,
+        skin: spec.skin,
+        family: spec.family,
+        mode: spec.mode,
+        cell: spec.cell,
+        param,
+        keep,
+    })
+}
+
 /// Solid analysis, then grading and a graded re-solve of every case. One call, both solves.
 pub fn graded(
     doc: &fieldsmith_doc::Document,
@@ -244,22 +331,7 @@ pub fn graded_of(
         .fill
         .clone()
         .ok_or_else(|| SetupError("this document has no fill".into()))?;
-    if spec.cell <= 0.0 {
-        return Err(SetupError("fill cell size must be positive".into()));
-    }
-    if spec.skin < 0.0 || spec.margin < 0.0 || spec.min_wall < 0.0 {
-        return Err(SetupError(
-            "fill skin, margin and min wall must be non-negative".into(),
-        ));
-    }
-    if spec.curve <= 0.0 {
-        return Err(SetupError("fill curve must be positive".into()));
-    }
-    if spec.rho_min <= 0.0 || spec.rho_min > spec.rho_max || spec.rho_max > 1.0 {
-        return Err(SetupError(
-            "fill densities must satisfy 0 < ρmin ≤ ρmax ≤ 1".into(),
-        ));
-    }
+    check_spec(&spec)?;
     let drive: &Vec<f64> = match &spec.case {
         Some(name) => {
             let c = base.cases.iter().find(|c| c.name == *name).ok_or_else(|| {
@@ -277,26 +349,9 @@ pub fn graded_of(
         return Err(SetupError("the model is empty".into()));
     }
 
-    // Protected zones: each protected shape as placed (patterns included), offset outward by the
-    // margin, unioned with a plain min so the material around it is kept.
-    let mut keep = Expr::Empty;
-    for name in &spec.protect {
-        let shape = expr::placed_shape(doc, name)
-            .ok_or_else(|| SetupError(format!("fill protects missing shape '{name}'")))?;
-        let zone = Expr::Offset {
-            d: spec.margin,
-            e: Box::new(shape),
-        };
-        keep = match keep {
-            Expr::Empty => zone,
-            k => Expr::Combine {
-                op: Op::Add,
-                blend: 0.0,
-                a: Box::new(k),
-                b: Box::new(zone),
-            },
-        };
-    }
+    // Protected zones: each protected shape as placed (patterns included), offset outward by
+    // the margin, unioned with a plain min so the material around it is kept.
+    let keep = keep_zones(doc, &spec)?;
 
     // A parameter-free probe, purely to read the solid/lattice split (`in_core` never looks at
     // `param`); the real fill expression is built once the grades exist.
@@ -746,6 +801,48 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             .join("\n");
         let d = parse(&src);
         let err = graded(&d, Resolution::Size(1.5), now).expect_err("no fill must be rejected");
+        assert!(err.0.contains("no fill"), "error: {}", err.0);
+    }
+
+    /// The preview's parameter grid is exactly the graded build's grid (same geometry — the
+    /// invariant the viewport's texture-only preview→graded swap relies on) and is uniform
+    /// at the ρmax parameter. The uniform value itself is not pinned here (it clamps to the
+    /// app's default minimum sheet wall, owned by the document layer's defaults).
+    #[test]
+    fn preview_grid_matches_the_graded_grid_geometry() {
+        let d = parse(BAR);
+        let fx = preview_fill(&d).expect("preview fill");
+        let (_, g) = graded(&d, Resolution::Size(1.5), now).expect("graded analysis");
+        assert_eq!(fx.param.dims, g.fill.param.dims);
+        assert_eq!(fx.param.origin, g.fill.param.origin);
+        assert_eq!(fx.param.spacing, g.fill.param.spacing);
+        let v0 = fx.param.data[0];
+        assert!(fx.param.data.iter().all(|&v| v == v0), "preview is uniform");
+        assert_eq!(fx.family, g.spec.family);
+        assert_eq!(fx.mode, g.spec.mode);
+        assert_eq!(fx.cell, g.spec.cell);
+        assert_eq!(fx.skin, g.spec.skin);
+    }
+
+    #[test]
+    fn preview_fill_rejects_bad_numbers() {
+        let d = parse(&BAR.replace("rho=(0.2, 0.6)", "rho=(0.6, 0.2)"));
+        let err = preview_fill(&d).expect_err("inverted densities must be rejected");
+        assert!(err.0.contains("ρmin"), "error: {}", err.0);
+        let d = parse(&BAR.replace("cell=4", "cell=0"));
+        let err = preview_fill(&d).expect_err("zero cell must be rejected");
+        assert!(err.0.contains("cell size"), "error: {}", err.0);
+    }
+
+    #[test]
+    fn preview_needs_a_fill() {
+        let src = BAR
+            .split("\n")
+            .filter(|l| !l.starts_with("fill"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let d = parse(&src);
+        let err = preview_fill(&d).expect_err("no fill must be rejected");
         assert!(err.0.contains("no fill"), "error: {}", err.0);
     }
 
