@@ -7,7 +7,7 @@ import { Tree } from './Tree';
 import { Inspector } from './Inspector';
 import { ViewportHost } from './ViewportHost';
 import { Palette, Menus } from './Palette';
-import { EXAMPLES, addShape, importMeshCommand, openFile, openText, runCommand, saveFile } from './commands';
+import { EXAMPLES, addShape, importMeshCommand, newDocument, openFile, openText, runCommand, saveFile } from './commands';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -159,6 +159,12 @@ export function App() {
           </button>
           <button class="btn ghost icon" title={`Redo ${store.redoLabel()} (Ctrl Shift Z)`} disabled={!store.canRedo()} onClick={() => store.redo()} data-testid="redo">
             <Icon.redo />
+          </button>
+          <button class="btn ghost icon" title="New document" onClick={newDocument} data-testid="new-doc">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.5 1.5h6l3 3v10h-9v-13Z" />
+              <path d="M8 6v4M6 8h4" />
+            </svg>
           </button>
           <button class="btn ghost icon" title="Open .fsm / .fsmz (Ctrl O)" onClick={openFile} data-testid="open">
             <Icon.folder />
