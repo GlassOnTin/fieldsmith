@@ -13,13 +13,15 @@
 #   rung                   0-based rung index within that run's ladder
 #   target_dofs            the rung's DOF aim; for wasm rows, the web ladder's constant
 #                          (30000 coarse / 150000 refined)
-#   dofs                   achieved DOF (cli rows only)
-#   elements               achieved element count (cli rows only)
+#   dofs                   achieved DOF (a row carries it when its source records one)
+#   elements               achieved element count (same rule)
 #   field_leaves           count of field-bearing leaves in the document (cli rows only)
 #   wall_ms                the rung's wall time. CLI rows are the host's single per-rung
-#                          measurement over mesh+solve (V17). wasm rows are the edit→level
-#                          wall as probed by web/tests/probe-budgets.mjs (budgets docs) and
-#                          INCLUDE document-UI overhead — not comparable to a CLI leg's wall.
+#                          measurement over mesh+solve (V17). wasm rows are level walls:
+#                          the probe-harness rows are the edit→level wall and INCLUDE
+#                          document-UI overhead; blocks read in-page from a running app are
+#                          the worker's own per-level measurement. Neither is comparable to
+#                          a CLI leg's wall; each block's provenance comment says which.
 #   deflection_change_rel  envelope-to-envelope relative deflection change vs the previous
 #                          rung (empty on rung 0; empty on wasm rows)
 #   vm_change_rel          same for peak von Mises. Both changes are rung-to-rung ESTIMATES,
@@ -71,3 +73,16 @@
 # measurement of the pre-rebuild binary.
 1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,0,30000,,,,2963,,
 1,2026-10,wasm,fieldsmith wasm,Intel(R) N100,4,7,1,150000,,,,12670,,
+
+# ---- OnePlus 13 wasm, Chrome (Android 16), examples/bracket.fsm web-ladder walls read in-page from the running app (2026-10-13) ----
+# Machine: OnePlus 13 (CPH2655), SoC as the device reports it — ro.soc.model "SM8750" —
+# 8 cores, 15 GB, on charge, 35 °C. This block's wall is the web worker's one per-level
+# measurement (wasm mesh+solve plus the result copies), read through the app's exposed
+# analysis state — not the probe harness's edit→level wall, so unlike the blocks above it
+# carries no document-UI overhead. Measured over the shipped preview build (vite preview
+# of the committed web/dist), full ladder one session, three runs:
+# coarse 1420/1228/1270 ms, refined 7537/7517/7523 ms. The rows take the third run; the
+# first run's coarse leg carries the wasm cold start. Achieved dofs and elements were
+# identical in all three runs.
+1,2026-10,wasm,fieldsmith wasm,SM8750,8,15,0,30000,48822,9588,,1270,,
+1,2026-10,wasm,fieldsmith wasm,SM8750,8,15,1,150000,190440,40643,,7523,,
