@@ -4,26 +4,26 @@
 
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
-| Empty document | 0.41 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 1.10 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.50 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 2.06 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 2.74 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.98 s | bracket-06.png |
-| Setup lens | 0.81 s | bracket-07.png |
-| Region: base-hole walls | 1.42 s | bracket-08.png |
-| Region: upright-hole wall | 1.27 s | bracket-09.png |
-| Support on the base_holes | 0.77 s | bracket-10.png |
-| Load on the upright_hole | 1.16 s | bracket-11.png |
-| Coarse result streamed | 0.74 s | bracket-12.png |
-| Refined solve finished | 2.42 s | bracket-13.png |
-| Results lens: stress field | 0.21 s | bracket-14.png |
+| Empty document | 0.78 s | bracket-01.png |
+| Base plate 60 × 40 × 8 | 1.14 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.49 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 2.18 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 2.23 s | bracket-05.png |
+| Upright hole ⌀8.5 | 3.07 s | bracket-06.png |
+| Setup lens | 0.70 s | bracket-07.png |
+| Region: base-hole walls | 1.26 s | bracket-08.png |
+| Region: upright-hole wall | 1.40 s | bracket-09.png |
+| Support on the base_holes | 0.79 s | bracket-10.png |
+| Load on the upright_hole | 1.26 s | bracket-11.png |
+| Coarse result streamed | 1.07 s | bracket-12.png |
+| Refined solve finished | 2.01 s | bracket-13.png |
+| Results lens: stress field | 0.22 s | bracket-14.png |
 | Probe the base plate | 0.21 s | bracket-15.png |
-| Fill lens: add lattice fill | 7.50 s | bracket-16.png |
-| Fill lens: badge and results rows | 0.55 s | bracket-17.png |
-| Fill lens: ρ band cross-clamp and undo/redo | 2.36 s | bracket-18.png |
+| Fill lens: add lattice fill | 7.06 s | bracket-16.png |
+| Fill lens: badge and results rows | 0.30 s | bracket-17.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 2.23 s | bracket-18.png |
 
-Total scripted time: 30.6 s.
+Total scripted time: 30.0 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
@@ -42,13 +42,14 @@ Total scripted time: 30.6 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 724 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 3005 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 875 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 3061 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | results panel, badge and legend render | pass |  |
 | provenance badge shows the refined level | pass | analysis-badge present once |
-| rung table lists both levels and labels the change an estimate | pass | Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 48822 dofs · 9588 elements · wall 387 msrung 1refined · 150k DOF · 190440 dofs · 40643 elements · wall 2281 ms · case envelope vs run |
+| rung table lists both levels and labels the change an estimate | pass | Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 48822 dofs · 9588 elements · wall 388 msrung 1refined · 150k DOF · 190440 dofs · 40643 elements · wall 2186 ms · case envelope vs run |
+| Show seg fits the results panel (no cropped chip) | pass | seg 228px holds 228px of chips, panel 372px wide |
 | fill panel shows one protect chip per shape | pass | 5 chips |
 | graded ladder ran without error | pass | ready |
 | both levels carried fill results | pass | ["coarse mesh","refined · 150k DOF"] |
@@ -67,11 +68,11 @@ Total scripted time: 30.6 s.
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 358 | 385 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 50 | 2228 | 2278 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 38 | 348 | 386 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 51 | 2132 | 2183 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 724 ms of the 1500 ms budget; launch fired 164 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 3005 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 875 ms of the 1500 ms budget; launch fired 158 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 3061 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 

@@ -322,6 +322,22 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     !!rung && /rung 0/.test(rung) && /rung 1/.test(rung) && /wall \d+ ms/.test(rung) && /\(estimate\):/.test(rung),
     rung ? rung.slice(0, 240) : 'rung table missing',
   );
+  // The Show seg must fit the panel: flex chips cannot shrink below their text, so a
+  // fifth mode or a narrower panel would silently crop the last chip (the Vectors chip
+  // read as "Ve" before the 2026-10-13 widening).
+  const segFit = await page.evaluate(() => {
+    const seg = document.querySelector('[data-testid="results-mode"]');
+    const panel = document.querySelector('.results-panel');
+    if (!seg || !panel) return { ok: false, detail: 'seg or panel missing' };
+    const pb = panel.getBoundingClientRect();
+    const sb = seg.getBoundingClientRect();
+    const inside = [...seg.querySelectorAll('button')].every((b) => b.getBoundingClientRect().right <= pb.right + 0.5);
+    return {
+      ok: seg.scrollWidth <= seg.clientWidth + 0.5 && inside,
+      detail: `seg ${seg.clientWidth}px holds ${seg.scrollWidth}px of chips, panel ${Math.round(pb.width)}px wide`,
+    };
+  });
+  check('Show seg fits the results panel (no cropped chip)', segFit.ok, segFit.detail);
 
   // ---- fill lens ------------------------------------------------------------------------
 
