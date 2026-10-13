@@ -2,7 +2,7 @@
 // by the chosen quantity, plus a status badge and a control panel. Colour comes from the
 // element that owns each boundary facet (element-centroid von Mises), so peaks read honestly.
 import { Fragment } from 'preact';
-import { ui, useApp } from './ui';
+import { ui, useApp, RESULTS_SCALE_DEFAULT } from './ui';
 import type { ResultMode } from './ui';
 import { store } from '../doc/store';
 import { Seg, NumberInput } from './fields';
@@ -444,14 +444,17 @@ function ResultsPanel() {
               </>
             )}
             <span class="plain">Deform ×</span>
-            <NumberInput
-              value={ui.resultsScale}
-              min={0}
-              max={200}
-              step={1}
-              onChange={(v) => ui.set('resultsScale', Math.round(v * 10) / 10)}
-              testId="results-scale"
-            />
+            <div class="scale-row">
+              <NumberInput
+                value={ui.resultsScale}
+                min={0}
+                max={200}
+                step={1}
+                onChange={(v) => ui.set('resultsScale', Math.round(v * 10) / 10)}
+                testId="results-scale"
+              />
+              <button type="button" class="mini-btn" data-testid="scale-reset" title="Reset to the default ×5" onClick={() => ui.set('resultsScale', RESULTS_SCALE_DEFAULT)}>Reset</button>
+            </div>
           </div>
           {legend && legend.caption && (
             <div class="legend-block" data-testid="legend">
@@ -477,6 +480,9 @@ function ResultsPanel() {
                     onChange={(hi) => ui.set('resultsRange', { mode, levelKey: rng.levelKey, lo: rng.lo, hi })}
                     testId="legend-hi"
                   />
+                  {!rng.auto && (
+                    <button type="button" class="mini-btn" data-testid="legend-reset" title="Back to the auto bounds 0..max" onClick={() => ui.set('resultsRange', null)}>Reset</button>
+                  )}
                 </div>
               ) : rng && legend.max !== '' && (
                 <div class="legend-range">

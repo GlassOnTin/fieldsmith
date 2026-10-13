@@ -231,6 +231,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .legend-block { margin: 8px 0 2px; }
 .legend-range { display: flex; align-items: center; gap: 8px; }
 .results-panel .legend-range .numbox { width: 78px; flex: none; }
+.results-panel .scale-row { display: flex; align-items: center; gap: 4px; }
+.results-panel .scale-row .numbox { flex: 1; }
+.results-panel .mini-btn {
+  height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px;
+  background: none; color: var(--text-3); font-size: 11px; cursor: pointer; flex: none;
+}
+.results-panel .mini-btn:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
 .legend-gradient { height: 8px; border-radius: 4px; flex: 1; }
 .probe { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--text-2); }
 

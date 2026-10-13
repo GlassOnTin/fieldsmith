@@ -346,8 +346,11 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   // Legend range: the ramped modes' min/max are editable. Editing stores the pair against
   // this mode + rung and marks the saturation; a mode switch must fall back to auto bounds
   // rather than miscolour deflection with a stress range (the level key includes the doc
-  // version, so a new solve likewise drops it).
+  // version, so a new solve likewise drops it). The Reset button exists to get back to the
+  // auto pair without a reload or a re-solve.
+  let stressAutoHi = 0;
   await step('Set the legend upper bound to 1 MPa', async () => {
+    stressAutoHi = parseFloat(await page.locator('[data-testid=legend-hi]').inputValue());
     await setNum(page, 'legend-hi', '1');
     const r = await page.evaluate(() => {
       const u = window.fieldsmith.ui;
@@ -394,6 +397,49 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
         && !!r.hiInput && Math.abs(parseFloat(r.hiInput) - autoHi) <= 1e-3,
       `stress range kept; deflection upper bound ${r.hiInput} ≈ auto ${autoHi.toFixed(4)}`,
     );
+  });
+  await step('Back to stress: the stored range still governs', async () => {
+    await page.locator('[data-testid="results-mode"] button', { hasText: 'Stress' }).click();
+    await page.waitForFunction(
+      () => {
+        const u = window.fieldsmith.ui;
+        const el = document.querySelector('[data-testid=legend-hi]');
+        return u.resultsRange?.mode === 'stress' && !!el && parseFloat(el.value) === 1;
+      },
+      { timeout: 5000 },
+    );
+    check('stress range survives the mode round trip', true, 'upper bound restored to 1 MPa from the stored range');
+  });
+  await step('Reset the legend to the auto bounds', async () => {
+    await page.locator('[data-testid="legend-reset"]').click();
+    // Same post-paint caveat as the mode switch above: wait on the input's own value.
+    await page.waitForFunction(
+      (hi) => {
+        const u = window.fieldsmith.ui;
+        const el = document.querySelector('[data-testid=legend-hi]');
+        const cap = document.querySelector('[data-testid=legend] .meta')?.textContent ?? '';
+        return u.resultsRange === null && !/values outside the range/.test(cap)
+          && !!el && !Number.isNaN(parseFloat(el.value))
+          && Math.abs(parseFloat(el.value) - hi) <= 1e-3;
+      },
+      stressAutoHi,
+      { timeout: 5000 },
+    );
+    check('legend reset returns to the auto bounds', true, `range cleared, upper bound back to ${stressAutoHi.toFixed(3)} MPa`);
+  });
+  await step('Reset the deform scale', async () => {
+    await setNum(page, 'results-scale', '20');
+    const before = await page.evaluate(() => window.fieldsmith.ui.resultsScale);
+    await page.locator('[data-testid="scale-reset"]').click();
+    await page.waitForFunction(
+      () => {
+        const u = window.fieldsmith.ui;
+        const el = document.querySelector('[data-testid=results-scale]');
+        return u.resultsScale === 5 && !!el && el.value === '5';
+      },
+      { timeout: 5000 },
+    );
+    check('deform scale reset returns to ×5', true, `was ×${before}, back to ×5`);
   });
 
   // ---- fill lens ------------------------------------------------------------------------

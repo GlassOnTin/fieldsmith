@@ -7,6 +7,9 @@ type Listener = () => void;
 export type GizmoMode = 'translate' | 'rotate';
 export type ResultMode = 'stress' | 'safety' | 'deflection' | 'vectors';
 
+/** Deformed-shape exaggeration the panel starts at (the ×5 reset target). */
+export const RESULTS_SCALE_DEFAULT = 5;
+
 export interface Probe {
   value: number;
   unit: string;
@@ -30,7 +33,7 @@ class Ui {
   /** Case index, −1 = envelope. */
   resultsCase = -1;
   /** Deformed-shape exaggeration factor. */
-  resultsScale = 5;
+  resultsScale = RESULTS_SCALE_DEFAULT;
   /** Legend range the user set for one colour mode. Keyed to that mode and the rung it was
    * set on (doc version + rung label), so a mode switch or a new solve falls back to the
    * auto bounds instead of miscolouring a different result with a stale range. */
