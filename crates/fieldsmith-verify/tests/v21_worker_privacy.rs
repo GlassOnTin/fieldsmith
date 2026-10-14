@@ -2,15 +2,23 @@
 //! crosses the Noise channel on real loopback TCP while `dumpcap` captures the
 //! interface, and the test then answers three questions by measurement.
 //!
-//! 1. **The wire carries no plaintext of the job.** A unique sentinel document (never
-//!    `examples/bracket.fsm`) is built into a `.fsmz`; the capture's packet payload
-//!    bytes are scanned for everything a leaking channel could expose: the document's
-//!    internal strings (node, region, support and load ids, the case label, source
-//!    fragments), sample windows of the exact base64 the request carries, the request
-//!    JSON's `docz` field name, the zip magic raw `.fsmz` bytes would start with, and
-//!    little- and big-endian f32 images of every tracked solve value. Zero matches is
-//!    the pass condition, and the capture is first proven to have seen our traffic
-//!    (TCP frames carrying the worker port) with zero drops.
+//! 1. **The channel carries no plaintext of the job.** A unique sentinel document (never
+//!    `examples/bracket.fsm`) is built into a `.fsmz`; the payload bytes of the frames
+//!    that carry the host's port — the Noise channel itself — are scanned for everything
+//!    a leaking channel could expose: the document's internal strings (node, region,
+//!    support and load ids, the case label, source fragments), sample windows of the
+//!    exact base64 the request carries, the request JSON's `docz` field name, the zip
+//!    magic raw `.fsmz` bytes would start with, and little- and big-endian f32 images of
+//!    every tracked solve value. Zero matches is the pass condition. The capture is
+//!    first proven to have seen the channel's traffic — the SYN, the Noise handshake and
+//!    the request itself, pinned by the request's exact frame size — with zero drops.
+//!    The whole capture's payload bytes are scanned too but reported informationally,
+//!    never asserted: this box's ambient services carry text shaped like the sentinel
+//!    with no job running — the session's model proxy and an ollama-backed client echo
+//!    conversation content that includes this harness's own source and prior reports
+//!    (measured 2026-10-14: 258 whole-capture matches of one generic statement string,
+//!    every sentinel string present, the docz base64 windows re-entering ambient
+//!    traffic, while the job was fully encrypted and clean).
 //! 2. **The worker writes only where the operator said.** The library worker runs with
 //!    a fresh HOME and TMPDIR and the costs store inside the stated artifacts
 //!    directory; every surface is walked afterwards — the artifacts hold the response
@@ -36,6 +44,12 @@
 //!   stage that did would have to argue its own plaintext-free transport.
 //! - Record headers carry lengths and timestamps; only packet payload bytes are
 //!   scanned (headers hold numbers, never job plaintext).
+//! - The asserted census reads the job's own sockets plus the worker's files. A worker
+//!   that exfiltrated through a foreign socket would be missed by the wire scan — a
+//!   scope boundary of this case, not a measured risk: the worker here is the library
+//!   this repo controls, and the file census bounds what it persists. The whole-capture
+//!   scan that once attempted to answer this question measured false positives from
+//!   ambient traffic instead (see the wire census section).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -291,6 +305,15 @@ fn v21_worker_privacy() {
         head.contains("Capturing"),
         "dumpcap never reported capturing (and our traffic being on the wire is unproven): {head:?}"
     );
+    // Measured on this box, 2026-10-14: dumpcap reports `Capturing` before its capture
+    // thread is armed, and the job that followed immediately fell partly inside the
+    // arm window — the request's SYN, handshake and request frames crossed before the
+    // capture's first record, leaving the census to judge only the 1028-byte answer
+    // frame (a 1000-byte envelope plus 28 bytes of channel framing). The settle is the
+    // fix: when the host binds, the capture has been taking packets for half a second,
+    // and the whole exchange must land in the file — asserted below by the request's
+    // exact frame size.
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // --- the exchange, on the wire, inside the window ------------------------------
     let host = fieldsmith_worker::Host::bind("127.0.0.1", 0).expect("host binds");
@@ -408,13 +431,19 @@ fn v21_worker_privacy() {
     );
 
     // Our traffic is on the wire, in this capture: EN10MB frames whose TCP header
-    // carries the worker's port. The handshake alone contributes three; the ~3 KB
-    // request and the answer cross as several more.
+    // carries the worker's port. In the raced run of 2026-10-14 the job crossed as
+    // six frames in total — its SYN pair, Noise handshake and request had already
+    // left before the capture's first record. With the settle above the whole
+    // exchange must land inside: SYN pair, Noise handshake (three frames), request,
+    // answer, close. The job's per-frame TCP payloads are collected here — they are
+    // exactly the bytes the wire census judges below.
     assert_eq!(
         pcap.linktype, 1,
         "loopback link type changed (observed EN10MB=1 on this box); the port census needs re-deriving"
     );
     let mut our_frames = 0usize;
+    let mut job_payloads: Vec<u8> = Vec::new();
+    let mut job_frame_sizes: Vec<usize> = Vec::new();
     for p in &pcap.pkt {
         if p.len() < 14 + 20 || p[12] != 0x08 || p[13] != 0x00 {
             continue;
@@ -426,23 +455,46 @@ fn v21_worker_privacy() {
         let t = 14 + ihl;
         let sp = u16::from_be_bytes([p[t], p[t + 1]]);
         let dp = u16::from_be_bytes([p[t + 2], p[t + 3]]);
-        if sp == port || dp == port {
-            our_frames += 1;
+        if sp != port && dp != port {
+            continue;
         }
+        our_frames += 1;
+        if p.len() < t + 20 {
+            continue; // header-only frame shape; no payload to census
+        }
+        let doff = ((p[t + 12] >> 4) as usize) * 4;
+        let payload = &p[t + doff..];
+        job_frame_sizes.push(payload.len());
+        job_payloads.extend_from_slice(payload);
     }
     assert!(
         our_frames >= 6,
         "the capture held {our_frames} frames for the job port {port} — our traffic was not seen, and a census that never saw the traffic proves nothing"
     );
+    // The request must itself be in the file. The channel's unit framing is one
+    // [u32 BE length] prefix, then — for a first chunk — an [u64 BE declared total],
+    // then the ChaChaPoly ciphertext of the plaintext plus its 16-byte tag, so a
+    // request of R bytes crosses as one frame of R + 28 (valid while R + 8 fits a
+    // chunk; this request fits). If no frame has that size, the request crossed
+    // outside the window and the census again judged only the answer.
+    assert!(
+        job_frame_sizes.contains(&(request.len() + 28)),
+        "no job frame carried a request-sized payload (expected {} = request + 28 of channel framing; frames {:?}) — the request did not cross inside the capture window",
+        request.len() + 28,
+        job_frame_sizes
+    );
 
     // --- the plaintext census ---------------------------------------------------------
     let (wire_patterns, worker_patterns) = leak_patterns(&local, &docz_b64);
     let mut census_rows = String::new();
-    let mut wire_total = 0usize;
+    let mut wire_total = 0usize; // job-socket column — asserted zero below
+    let mut ambient_total = 0usize; // whole-capture column — informational, never asserted
     for (name, pat) in &wire_patterns {
-        let n = count_matches(&pcap.payloads, pat);
-        wire_total += n;
-        census_rows.push_str(&format!("| {name} | {n} |\n"));
+        let job = count_matches(&job_payloads, pat);
+        let whole = count_matches(&pcap.payloads, pat);
+        wire_total += job;
+        ambient_total += whole;
+        census_rows.push_str(&format!("| {name} | {job} | {whole} |\n"));
     }
 
     // --- the worker's own surfaces -----------------------------------------------------
@@ -535,20 +587,22 @@ fn v21_worker_privacy() {
     rep.section(
         "What ran",
         format!(
-            "The sentinel document `sentinel-v21` was built at send time into a `.fsmz` ({} bytes, {} as base64) and travelled as the host's job request to an enrolled worker over loopback TCP and Noise_XXpsk3; the answer came back as the API response records. Host-measured wall: {:.0} ms. Rungs [30000, 150000]. Nothing in the document shares text with any other fixture, so every pattern below names this job alone.\n\nThe capture ran `dumpcap -F pcap -i lo -a duration:20`, opened before the host's port was bound (the interface banner was read first) and closed after the answer landed. Packets captured: {} (dumpcap's own account, cross-checked against the file's records — both {}). Frames carrying the job port: {}. Capture bytes: {}. Dropped: 0 (every drop counter dumpcap printed).",
+            "The sentinel document `sentinel-v21` was built at send time into a `.fsmz` ({} bytes, {} as base64) and travelled as the host's job request to an enrolled worker over loopback TCP and Noise_XXpsk3; the answer came back as the API response records. Host-measured wall: {:.0} ms. Rungs [30000, 150000]. The document's strings are unique to this case, but the box is not: its own services carry shaped text at idle (see the wire census), so the asserted census is scoped to the job's frames and the whole capture is reported informationally.\n\nThe capture ran `dumpcap -F pcap -i lo -a duration:20`, opened before the host's port was bound — the interface banner was read first, then a 500 ms settle, because dumpcap reports capturing before its capture thread is armed and without the settle the measured race of 2026-10-14 let the request cross before the file's first record — and closed after the answer landed. Packets captured: {} (dumpcap's own account, cross-checked against the file's records — both {}). Frames carrying the job port: {}. Capture bytes: {}. Dropped: 0 (every drop counter dumpcap printed). The request's own presence in the file is asserted by frame size: a request of {} bytes crosses the channel as one frame of {} bytes (4 length prefix + 8 declared total + payload + 16 tag).",
             docz.len(),
             docz_b64.len(),
             outcome.wall_ms,
             captured_n,
             pcap.pkt.len(),
             our_frames,
-            raw.len()
+            raw.len(),
+            request.len(),
+            request.len() + 28
         ),
     );
     rep.section(
         "Wire census",
         format!(
-            "Packet payload bytes only (record headers hold lengths and timestamps, not payloads). Expected zero matches for every pattern — a leaking channel exposes the request plaintext first ({} bytes of base64 are the bulk of it), and only the ciphertext crossed.\n\n| pattern | matches on the wire |\n| :-- | --: |\n{census_rows}|\nMeasured total: {wire_total}.",
+            "Packet payload bytes only (record headers hold lengths and timestamps, not payloads). The census's question has one socket: the frames that carry the host's port — the Noise channel, SYN pair included — whose concatenated payloads are the job column, asserted to zero matches. The whole capture is the informational column, because this box's ambient services carry text shaped like the sentinel with no job running: the session's model proxy and an ollama-backed client echo conversation content, which on the measured run of 2026-10-14 put 258 whole-capture matches on one generic statement string, every document string present, and all three docz base64 windows re-entering ambient traffic through prior reports' tables — the `.fsmz` zip is byte-stable per document, so a document's base64 recurs verbatim in anything that quotes a report about it. The job column is what the channel owes: a leaking channel exposes the request plaintext first ({} bytes of base64 are the bulk of it), and the request itself is pinned in-frame by size above.\n\n| pattern | job-socket (asserted 0) | whole capture (informational) |\n| :-- | --: | --: |\n{census_rows}|\nJob-socket total: {wire_total}. Whole-capture total: {ambient_total}.",
             docz_b64.len()
         ),
     );
@@ -567,10 +621,10 @@ fn v21_worker_privacy() {
     );
     rep.section(
         "Named gaps",
-        "Loopback only — the LAN leg is not sniffed in this case; the encryption argument travels with the same Noise stack the bytes pass through (the cross-machine leg is measured at M15 close). The census sees plaintext forms, not ciphertext interiors — `dumpcap`, not `tcpdump`, because this box's tcpdump carries no file caps. 4-byte f32 patterns carry a ~2e-10 per-position false-positive chance; measured 0. Zip-magic and base64 windows would miss a compressed-then-encrypted leak shape; nothing on this path compresses before encrypting. Record headers and IPv6 side traffic sit outside the payload scan.",
+        "Loopback only — the LAN leg is not sniffed in this case; the encryption argument travels with the same Noise stack the bytes pass through (the cross-machine leg is measured at M15 close). The census sees plaintext forms, not ciphertext interiors — `dumpcap`, not `tcpdump`, because this box's tcpdump carries no file caps. 4-byte f32 patterns carry a ~2e-10 per-position false-positive chance; measured 0. Zip-magic and base64 windows would miss a compressed-then-encrypted leak shape; nothing on this path compresses before encrypting. Record headers and IPv6 side traffic sit outside the payload scan. The dumpcap arm race is measured, not modelled: without the settle, the request crossed before the capture's first record and the only in-window job payload was the answer's frame — the settle plus the request-frame assertion are what make this census honest. Base64 windows recur across runs (the `.fsmz` zip is byte-stable per document), so an informational column match may reference earlier sessions' quoted reports, not this job. The wire census bounds the job's own sockets; a worker exfiltrating through a foreign socket would not appear in it — a scope boundary, bounded in kind by the worker-artifacts census above.",
     );
     rep.check(Check::absolute(
-        "wire plaintext pattern matches (expected 0)",
+        "job-socket plaintext pattern matches (expected 0)",
         0.0,
         wire_total as f64,
         "matches",
