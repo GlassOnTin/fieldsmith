@@ -147,6 +147,45 @@ generalized-plane-strain cylinder solution with the free-end force balance.
       times measured time, shown per rung.
 - [ ] V21 (privacy evidence) and V22 (API/MCP contract) pass (below).
 
+Design (plan commit 2026-10-14). Three slices, one shared verified core:
+
+1. **The API** — new crate `fieldsmith-api`. It owns two things: a JSON envelope
+   (request: `apiv` schema version, `doc` as `.fsm` text or `docz` as base64 `.fsmz`
+   bytes, `question` = ladder/solve/modes with the same tolerance/budget fields the CLI
+   parses; response: `apiv`, `engine` (the `store::engine_identity()` string), `status`
+   = ok / refusal / error, the per-rung records and their change measurements, the cost
+   fit and projections, and named errors), and the declared-question runner moved out of
+   the CLI's `solve_ladder` so there is one verified loop: records stream through a sink
+   trait; the CLI keeps its prose prints as the sink implementation. The one-shot verb
+   `fieldsmith api` reads a request on stdin and writes the response on stdout — no
+   server process to keep alive, and byte-stable golden cases are just files. Errors of
+   processing (bad request, setup error) are a JSON `error` status with exit code 2;
+   ok and refusal both exit 0 (a refusal is an answer).
+2. **The MCP server** — small binary over stdio, hand-rolled JSON-RPC (MCP is
+   initialize/tools-list/tools-call; a server library and a tokio runtime would outweight
+   the surface). It holds one document open at a time via the API crate's functions:
+   tools for inspecting, placing supports/loads/temperatures, solving to a declaration
+   (same runner, so tools return the same result the API does for the same document —
+   that is V22's second column), exporting. Local process, nothing hosted, no accounts.
+3. **The worker** — `fieldsmith session` starts the host: binds where the user says
+   (default `127.0.0.1`), prints an enrolment token once (the host's Noise static key +
+   a pre-shared key, base64). `fieldsmith worker enrol T <host:port>` stores the token;
+   `fieldsmith worker` then connects outbound, Noise_XXpsk3_25519_ChaChaPoly_SHA256
+   (via the `snow` crate — hand-rolled crypto is off the table). Jobs are the API
+   request (document inside a `.fsmz` built at send time); results come back as the API
+   response records. The worker writes artifacts only under the operator-stated
+   directory and prints nothing about geometry or fields; the host shows per-rung walls
+   from the worker's own records and computes cost = user-stated rate × measured time.
+
+V21's capture: tcpdump on loopback across a full worker run, scanned for the document's
+known plaintext patterns (shape names, coordinates, load vectors, field bytes); the
+expected match count is zero — handshake frames and one message-length prefix are
+accounted for. Worker-side scan: everything outside the stated artifact dir (temp, /tmp,
+stdout) carries no plaintext document/field bytes; the artifact dir holds what the
+operator asked for, and the listing is recorded. Divergence: the same `.fsmz` solved
+locally and through the worker, peak von Mises and max deflection compared, numbers
+stated.
+
 ### D. Parameter sweep (M16 — evidence: docs/verification/V23.md)
 - [ ] Sweep any numeric document parameter over a stated range and point count; each
       point solves to its declaration (tolerance or the ladder default); the headless
