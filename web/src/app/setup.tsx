@@ -1,12 +1,13 @@
-// Setup lens: regions, supports and loads on top of the shape model. Clicking a surface makes
-// a region (with the region selected, further clicks join its selector list); supports and
-// loads attach to regions and draw as glyphs where the analysed mesh actually supports them.
+// Setup lens: regions, supports, loads and temperatures on top of the shape model. Clicking
+// a surface makes a region (with the region selected, further clicks join its selector
+// list); supports, loads and temperatures attach to regions and supports/loads draw as
+// glyphs where the analysed mesh actually supports them.
 import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
-import type { Document, Face, Load, Node, Region, Support } from '../doc/types';
+import type { Document, Face, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
 import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
@@ -56,7 +57,13 @@ function loadIn(d: Document, id: string): Load {
   return l;
 }
 
-/** Region id the current selection refers to (a region, or its support/load). */
+function temperatureIn(d: Document, id: string): Temperature {
+  const t = d.temperatures.find((x) => x.id === id);
+  if (!t) throw new Error(`missing temperature ${id}`);
+  return t;
+}
+
+/** Region id the current selection refers to (a region, or its support/load/temperature). */
 function selectedRegion(doc: Document): string | null {
   const s = store.selection;
   if (!s) return null;
@@ -64,6 +71,7 @@ function selectedRegion(doc: Document): string | null {
   try {
     if (s.kind === 'support') return supportIn(doc, s.id).region;
     if (s.kind === 'load') return loadIn(doc, s.id).region;
+    if (s.kind === 'temperature') return temperatureIn(doc, s.id).region;
   } catch {
     return null;
   }
@@ -466,18 +474,23 @@ analysis.subscribe(() => ui.emit());
 
 // ---- add / select helpers -------------------------------------------------------------
 
-function addAnalysis(kind: 'support' | 'load') {
+function addAnalysis(kind: 'support' | 'load' | 'temperature') {
   const rid = selectedRegion(store.doc);
   if (!rid) {
     ui.notify('Create a region first: click a surface in the model.', 'error');
     return;
   }
   let id = '';
-  store.transact(kind === 'support' ? 'Add support' : 'Add load', (d) => {
-    id = freshId(d, kind);
-    if (kind === 'support') d.supports.push({ id, region: rid, fixed: [true, true, true] });
-    else d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
-  });
+  store.transact(
+    kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : 'Add temperature',
+    (d) => {
+      id = freshId(d, kind);
+      if (kind === 'support') d.supports.push({ id, region: rid, fixed: [true, true, true] });
+      else if (kind === 'load')
+        d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
+      else d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
+    }
+  );
   store.select({ kind, id });
 }
 
@@ -496,7 +509,7 @@ function SectionHead(props: { label: string; add?: () => void; title?: string; t
   );
 }
 
-function AnalysisRow(props: { kind: 'region' | 'support' | 'load'; id: string; swatch?: string; meta: string }) {
+function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature'; id: string; swatch?: string; meta: string }) {
   const selected = store.selection?.kind === props.kind && store.selection.id === props.id;
   return (
     <div
@@ -509,7 +522,7 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load'; id: string; s
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
-        <span class="glyph">{props.kind === 'support' ? '⛨︎' : '↓'}</span>
+        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : '↓'}</span>
       )}
       <span class="row-name">{props.id}</span>
       <span class="meta">{props.meta}</span>
@@ -548,6 +561,18 @@ function SetupTree() {
           id={l.id}
           meta={`${l.kind.type} · ${l.case}`}
         />
+      ))}
+      <SectionHead
+        label="Temperatures"
+        add={() => addAnalysis('temperature')}
+        title="Add fixed temperature on the selected region"
+        testId="add-temperature"
+      />
+      {doc.temperatures.length === 0 && (
+        <div class="hint">Select a region, then add a fixed temperature.</div>
+      )}
+      {doc.temperatures.map((t) => (
+        <AnalysisRow key={t.id} kind="temperature" id={t.id} meta={`${t.celsius} °C · ${t.case}`} />
       ))}
     </>
   );
@@ -619,6 +644,7 @@ function removeFace(regionId: string, index: number) {
       d.regions = d.regions.filter((x) => x.id !== regionId);
       d.supports = d.supports.filter((s) => s.region !== regionId);
       d.loads = d.loads.filter((l) => l.region !== regionId);
+      d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
       if (d.fill) d.fill.protect = d.fill.protect.filter((p) => p !== regionId);
     }
   });
@@ -738,7 +764,7 @@ function RegionInspector({ id }: { id: string }) {
       <AddFaceRow regionId={id} />
       <div class="hint">
         {r.selectors.length === 1
-          ? 'Click surfaces to add faces, or pick a shape and face above. Removing the last face removes the region and its supports and loads.'
+          ? 'Click surfaces to add faces, or pick a shape and face above. Removing the last face removes the region and its supports, loads and temperatures.'
           : 'Click surfaces in the model, or pick a shape and face above.'}
       </div>
     </div>
@@ -1055,6 +1081,55 @@ function LoadInspector({ id }: { id: string }) {
   );
 }
 
+function TemperatureInspector({ id }: { id: string }) {
+  useApp();
+  const t = store.doc.temperatures.find((x) => x.id === id);
+  if (!t) return null;
+  return (
+    <div class="insp" data-inspector="temperature">
+      <div class="insp-heading">
+        <span class="kind">Temperature</span>
+        <span class="row-name">{t.id}</span>
+      </div>
+      <NameField id={t.id} />
+      <div class="field-grid">
+        <label class="plain">Region</label>
+        <RegionPicker
+          value={t.region}
+          testId="temperature-region"
+          commit={(rid) =>
+            store.transact('Set temperature region', (d) => void (temperatureIn(d, id).region = rid))
+          }
+        />
+        <NumRow
+          label="Fixed value"
+          unit="°C"
+          get={(d) => temperatureIn(d, id).celsius}
+          set={(d, v) => {
+            temperatureIn(d, id).celsius = v;
+          }}
+          undoLabel="Set temperature"
+          testId="temperature-celsius"
+          step={10}
+          title="Fixed boundary temperature for the conduction solve; faces without one stay insulated"
+        />
+        <TextInputRow
+          label="Case"
+          value={t.case}
+          commit={(v) => store.transact('Set temperature case', (d) => void (temperatureIn(d, id).case = v))}
+          testId="temperature-case"
+          title="Named thermal case; a case name cannot also be a load case"
+        />
+      </div>
+      <div class="hint" style={{ gridColumn: '1 / -1' }}>
+        The region's facet nodes take this value Dirichlet-style in the conduction solve and the
+        whole part expands by α·(T − tref) from it; two temperatures sharing nodes inside one
+        case must agree, and the reference is the solve statement's tref (20 °C when unstated).
+      </div>
+    </div>
+  );
+}
+
 // ---- registration ---------------------------------------------------------------------
 
 viewportExtensions.push({
@@ -1066,6 +1141,7 @@ viewportExtensions.push({
 inspectors['region'] = (id) => <RegionInspector id={id} />;
 inspectors['support'] = (id) => <SupportInspector id={id} />;
 inspectors['load'] = (id) => <LoadInspector id={id} />;
+inspectors['temperature'] = (id) => <TemperatureInspector id={id} />;
 
 extraCommands.push(() => {
   if (store.lens !== 'setup') return [];
@@ -1083,6 +1159,13 @@ extraCommands.push(() => {
       label: 'Add load',
       enabled: () => !!selectedRegion(store.doc),
       run: () => addAnalysis('load'),
+    },
+    {
+      id: 'setup.add-temperature',
+      group: 'Setup',
+      label: 'Add temperature',
+      enabled: () => !!selectedRegion(store.doc),
+      run: () => addAnalysis('temperature'),
     },
   ];
 });

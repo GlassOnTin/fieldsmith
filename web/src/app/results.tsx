@@ -81,9 +81,38 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number): 
     }
     return { value: m / 3, unit: 'mm' };
   }
+  if (mode === 'temperature') {
+    const t = tempField(lvl, ci);
+    if (!t) return { value: NaN, unit: '°C' };
+    let m = 0;
+    for (let j = 0; j < 3; j++) m += t[lvl.surfaceFacets[6 * f + j]];
+    return { value: m / 3, unit: '°C' };
+  }
   const vm = (ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope)[owner];
   if (mode === 'safety') return { value: vm > 0 ? lvl.meta.yield_strength / vm : Infinity, unit: 'SF' };
   return { value: vm, unit: 'MPa' };
+}
+
+// The temperature mode reads the case's nodal °C field; the envelope (-1) shows a per-node
+// max across the thermal cases, cached per level. Non-thermal documents read null, so the
+// mode colours grey and says so.
+const tempCache = new WeakMap<LevelResult, Float64Array>();
+function tempField(lvl: LevelResult, ci: number): Float64Array | null {
+  const ts = lvl.temperature ?? [];
+  if (ci >= 0) return ts[ci] ?? null;
+  let env = tempCache.get(lvl);
+  if (env) return env;
+  let acc: Float64Array | null = null;
+  for (const t of ts) {
+    if (!t) continue;
+    if (!acc) {
+      acc = t.slice();
+      continue;
+    }
+    for (let i = 0; i < acc.length; i++) if (t[i] > acc[i]) acc[i] = t[i];
+  }
+  if (acc) tempCache.set(lvl, acc);
+  return acc;
 }
 
 /** Largest value of the current mode over the shown level (legend + colour normalisation).
@@ -100,41 +129,67 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     if (!(minVm > 0)) return 5;
     return Math.min(lvl.meta.yield_strength / minVm, 5);
   }
+  if (mode === 'temperature') {
+    const t = tempField(lvl, ci);
+    if (!t) return 1;
+    let hi = -Infinity;
+    for (const v of t) if (v > hi) hi = v;
+    return hi;
+  }
   return Math.max(
     1e-9,
     ...(ci >= 0 ? [cases[ci].max_vm_elem] : cases.map((c) => c.max_vm_elem)),
   );
 }
 
-function legendLabels(mode: ResultMode, max: number, yieldMpa: number): { min: string; max: string; caption: string } {
+/** Smallest value of the mode for the legend's lower auto bound: 0 for the stress and
+ * deflection ramps, the data minimum for temperature (whose window need not contain 0). */
+function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
+  if (mode !== 'temperature') return 0;
+  const t = tempField(lvl, ci);
+  if (!t) return 0;
+  let lo = Infinity;
+  for (const v of t) if (v < lo) lo = v;
+  return lo;
+}
+
+function legendLabels(lvl: LevelResult, mode: ResultMode, ci: number, max: number, yieldMpa: number): { min: string; max: string; caption: string } {
   if (mode === 'stress') return { min: '0', max: `${fmt(max)} MPa`, caption: 'von Mises stress, element centroids' };
   if (mode === 'safety') return { min: `≥ ${fmt(max)}`, max: '0', caption: `safety factor = yield ÷ stress (yield ${fmt(yieldMpa)} MPa); red shades below 1.0, blue above` };
   if (mode === 'deflection') return { min: '0', max: `${fmt(max)} mm`, caption: 'displacement magnitude' };
+  if (mode === 'temperature') {
+    const have = !!tempField(lvl, ci);
+    const which = ci >= 0 ? 'nodal' : 'per-node max across thermal cases, nodal';
+    return have
+      ? { min: '', max: '', caption: `temperature, ${which} (°C)` }
+      : { min: '', max: '', caption: 'no temperature field in this run — add a temperature statement' };
+  }
   return { min: '', max: '', caption: 'displacement direction arrows on the deformed shape' };
 }
 
 /** The active legend range for a colour mode: the user-set one while it still names this
- * mode and rung, otherwise the auto bounds 0..dataMax. Null for the modes with fixed
- * legends — safety keeps its SF=1-anchored spans, vectors has no numeric ramp. A range set
- * on another doc version (the key includes `resultsFor`) is a different run and must never
- * reach the colouring, so it falls back here. */
+ * mode and rung, otherwise the auto bounds 0..dataMax (dataMin..dataMax for temperature,
+ * whose scale need not start at 0). Null for the modes with fixed legends — safety keeps
+ * its SF=1-anchored spans, vectors has no numeric ramp. A range set on another doc version
+ * (the key includes `resultsFor`) is a different run and must never reach the colouring,
+ * so it falls back here. */
 function rangeFor(
   lvl: LevelResult,
   mode: ResultMode,
   ci: number,
 ): { lo: number; hi: number; auto: boolean; levelKey: string; unit: string } | null {
   if (mode === 'safety' || mode === 'vectors') return null;
-  const unit = mode === 'stress' ? 'MPa' : 'mm';
+  const unit = mode === 'stress' ? 'MPa' : mode === 'temperature' ? '°C' : 'mm';
   const levelKey = `${analysis.state.resultsFor ?? ''}:${lvl.label}`;
   const r = ui.resultsRange;
   if (r && r.mode === mode && r.levelKey === levelKey) {
     return { lo: r.lo, hi: Math.max(r.hi, r.lo + 1e-12), auto: false, levelKey, unit };
   }
-  return { lo: 0, hi: modeMax(lvl, mode, ci), auto: true, levelKey, unit };
+  return { lo: modeMin(lvl, mode, ci), hi: modeMax(lvl, mode, ci), auto: true, levelKey, unit };
 }
 
-function isRamped(m: ResultMode): m is 'stress' | 'deflection' {
-  return m === 'stress' || m === 'deflection';
+function isRamped(m: ResultMode): m is 'stress' | 'deflection' | 'temperature' {
+  return m === 'stress' || m === 'deflection' || m === 'temperature';
 }
 
 // ---- mesh ----------------------------------------------------------------------------
@@ -169,6 +224,7 @@ const MODE_NAMES: Record<ResultMode, string> = {
   safety: 'safety',
   deflection: 'deflection',
   vectors: 'vectors',
+  temperature: 'temperature',
 };
 
 function rebuild(lvl: LevelResult) {
@@ -208,6 +264,17 @@ function rebuild(lvl: LevelResult) {
         m += Math.hypot(u[3 * n], u[3 * n + 1], u[3 * n + 2]);
       }
       rampColor((m / 3 - rngLo) / denom, col);
+    } else if (mode === 'temperature') {
+      // Nodal data averaged over the facet's corners, like the deflection magnitude; a
+      // run without temperature statements stays grey.
+      const t = tempField(lvl, ci);
+      if (t) {
+        let m = 0;
+        for (let j = 0; j < 3; j++) m += t[lvl.surfaceFacets[6 * f + j]];
+        rampColor((m / 3 - rngLo) / denom, col);
+      } else {
+        col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
+      }
     } else {
       col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
     }
@@ -409,7 +476,7 @@ function ResultsPanel() {
   const lvl = s.levels[s.levels.length - 1];
   const ci = lvl ? effCase(lvl) : -1;
   const mode = ui.resultsMode;
-  const legend = lvl ? legendLabels(mode, modeMax(lvl, mode, ci), lvl.meta.yield_strength) : null;
+  const legend = lvl ? legendLabels(lvl, mode, ci, modeMax(lvl, mode, ci), lvl.meta.yield_strength) : null;
   const rng = lvl ? rangeFor(lvl, mode, ci) : null;
   // Arrow-key step inside the legend inputs: a tenth of the top bound, on the input's decade.
   const rangeStep = rng ? Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rng.hi))) - 1) : 1;
@@ -425,13 +492,18 @@ function ResultsPanel() {
       {lvl && (
         <>
           <div class="field-grid">
-            <span class="plain">Show</span>
-            <Seg<ResultMode>
-              value={mode}
-              options={(Object.keys(MODE_NAMES) as ResultMode[]).map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
-              onChange={(v) => ui.set('resultsMode', v)}
-              testId="results-mode"
-            />
+            {/* Full-span row: five mode chips need the whole row width — with the 42px
+                label+gap the seg stopped at 282px against 307px of chip text and the last
+                chip cropped in the 2026-10-14 e2e. The chips are self-descriptive, so the
+                unlabelled seg is the smaller loss. */}
+            <div class="show-row">
+              <Seg<ResultMode>
+                value={mode}
+                options={(Object.keys(MODE_NAMES) as ResultMode[]).map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
+                onChange={(v) => ui.set('resultsMode', v)}
+                testId="results-mode"
+              />
+            </div>
             {lvl.meta.cases.length > 1 && (
               <>
                 <span class="plain">Case</span>
@@ -462,7 +534,7 @@ function ResultsPanel() {
                 <div class="legend-range">
                   <NumberInput
                     value={rng.lo}
-                    min={0}
+                    min={mode === 'temperature' ? undefined : 0}
                     max={rng.hi}
                     step={rangeStep}
                     unit={rng.unit}
@@ -505,11 +577,18 @@ function ResultsPanel() {
             <span class="plain">Elements</span>
             <span class="num">{lvl.meta.provenance.elements} tet · {lvl.meta.provenance.dofs} dofs</span>
             <span class="plain">Timing</span>
-            <span class="num">mesh {lvl.meta.provenance.mesh_ms} ms · solve {lvl.meta.provenance.solve_ms} ms</span>
+            <span class="num">
+              mesh {lvl.meta.provenance.mesh_ms} ms · solve {lvl.meta.provenance.solve_ms} ms
+              {/* thermal_ms is 0 (not absent) on pre-thermal bundles */}
+              {(lvl.meta.provenance.thermal_ms ?? 0) > 0 && ` · thermal ${fmt(lvl.meta.provenance.thermal_ms!)} ms`}
+            </span>
             {lvl.meta.cases.slice(0, 4).map((c) => (
               <Fragment key={c.name}>
                 <span class="plain">{c.name}</span>
-                <span class="num">{fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm</span>
+                <span class="num">
+                  {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
+                  {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
+                </span>
               </Fragment>
             ))}
           </div>

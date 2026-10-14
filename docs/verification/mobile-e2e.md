@@ -1,6 +1,6 @@
 # Mobile e2e — the narrow-screen layout
 
-**Result: PASS**  ·  2026-10-13T21:58:54.364Z
+**Result: PASS**  ·  2026-10-14T01:02:38.290Z
 
 Viewport 412 × 892 (below the 900 px breakpoint): one column, slide-in drawers, no overlay collisions.
 

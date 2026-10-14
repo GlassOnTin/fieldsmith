@@ -36,9 +36,12 @@ function pack(
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
+  const temperature: (Float64Array | null)[] = [];
   for (let c = 0; c < meta.cases.length; c++) {
     u.push(out.u(c).slice());
     vmElem.push(out.vmElem(c).slice());
+    const t = out.temperature(c);
+    temperature.push(t.length ? t : null);
   }
   const fillParam =
     out.fillParamData && out.fillParamSpec && out.fillParamDims
@@ -59,6 +62,7 @@ function pack(
     regionFacetOffsets: out.regionFacetOffsets().slice(),
     u,
     vmElem,
+    temperature,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     class: out.class ? out.class().slice() : null,
     fillParam,
@@ -71,6 +75,7 @@ function pack(
 /** The message carries the buffers by transfer, so nothing is copied across the boundary. */
 function transfersOf(r: LevelResult): ArrayBuffer[] {
   const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem];
+  for (const t of r.temperature) if (t) ls.push(t);
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
   return ls.map((a) => a.buffer as ArrayBuffer);
 }
@@ -162,14 +167,15 @@ async function doHydrate(entries: HydrateEntry[]) {
 
 async function run(doc: Document) {
   // Setup validation before wasm: an incomplete study is not a failure, and the badge
-  // renders these as a neutral hint rather than the red 'analysis failed'.
-  if (!doc.supports.length || !doc.loads.length) {
+  // renders these as a neutral hint rather than the red 'analysis failed'. A document
+  // with temperature statements runs without loads: the thermal cases drive it.
+  if (!doc.supports.length || (!doc.loads.length && !doc.temperatures.length)) {
     post({
       type: 'error',
       kind: 'setup',
       message: !doc.supports.length
         ? 'add a support: the part needs something to hold it'
-        : 'add a load',
+        : 'add a load or a temperature',
     });
     return;
   }

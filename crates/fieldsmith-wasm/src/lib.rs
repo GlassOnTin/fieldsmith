@@ -294,7 +294,11 @@ pub fn eval_core(doc_json: &str, points: &[f64]) -> Result<Vec<f64>, JsValue> {
 /// consume the *exact texel values* the GPU texture holds. Some stacks quantize float-texture
 /// uploads to half precision (measured on ANGLE/NVIDIA: fp16 quantum 0.0625 at |p| ≈ 65).
 #[wasm_bindgen]
-pub fn eval_core_with_param(doc_json: &str, param: &[f32], points: &[f64]) -> Result<Vec<f64>, JsValue> {
+pub fn eval_core_with_param(
+    doc_json: &str,
+    param: &[f32],
+    points: &[f64],
+) -> Result<Vec<f64>, JsValue> {
     let doc = doc_from(doc_json)?;
     let mut fx = fieldsmith_core::fill::preview_fill(&doc).map_err(js_err)?;
     let n = fx.param.dims[0] * fx.param.dims[1] * fx.param.dims[2];
@@ -745,6 +749,16 @@ impl AnalysisOut {
     pub fn vm_elem_envelope(&self) -> Float64Array {
         Float64Array::from(&self.a.envelope_elem[..])
     }
+
+    /// Nodal temperature of one case (°C) — empty when the case is mechanical, so the
+    /// caller checks `length` rather than a nullable handle.
+    pub fn temperature(&self, case: usize) -> Float64Array {
+        let t = match self.a.cases[case].temperature.as_deref() {
+            Some(t) => t,
+            None => &[],
+        };
+        Float64Array::from(t)
+    }
 }
 
 #[derive(Serialize)]
@@ -941,6 +955,14 @@ impl GradedOut {
     #[wasm_bindgen(js_name = vmElemEnvelope)]
     pub fn vm_elem_envelope(&self) -> Float64Array {
         Float64Array::from(&self.g.envelope_elem[..])
+    }
+
+    /// Nodal temperature of one case (°C) — always empty. The graded re-solve is mechanical
+    /// only (the `cases` here are those cases), so no thermal field exists at this mesh; the
+    /// caller checks `length` and treats an empty vector as "no temperature field in this
+    /// run". Indexing the solid reference's carriers would misalign with `metaJson().cases`.
+    pub fn temperature(&self, _case: usize) -> Float64Array {
+        Float64Array::from(&[][..])
     }
 
     /// Per-element class: 0 solid (skin, protected), 1 lattice, 2 void.

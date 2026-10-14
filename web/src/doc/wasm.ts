@@ -358,6 +358,9 @@ export interface Provenance {
   element_size: number;
   mesh_ms: number;
   solve_ms: number;
+  /** Thermal cases' conduction + expansion solve time; 0 for documents without
+   * temperature statements. Included in total_ms. */
+  thermal_ms?: number;
   total_ms: number;
   quality: Quality;
   iterations: number;
@@ -372,6 +375,10 @@ export interface CaseSummary {
   /** Applied-load provenance when the case has resolved loads (serde field of
    * fieldsmith_core::CaseResult; absent on older bundles). */
   load_reports?: LoadReport[];
+  /** Thermal case only (M14): the nodal °C field, and the conduction solve's own
+   * report (`solve` is the expansion solve's report). */
+  temperature?: number[];
+  conduction?: SolveReport;
 }
 
 /** What one labelled load applied at the solve (M11 provenance): resultant and moment
@@ -431,6 +438,8 @@ export interface AnalysisHandle {
   vmElem(ci: number): Float64Array;
   vmEnvelope(): Float64Array;
   vmElemEnvelope(): Float64Array;
+  /** Nodal temperature of one case (°C); empty when the case is mechanical. */
+  temperature(ci: number): Float64Array;
   free(): void;
 }
 
@@ -559,6 +568,8 @@ export interface LevelResult {
   u: Float64Array[];
   /** Element-centroid von Mises per case (MPa). */
   vmElem: Float64Array[];
+  /** Nodal °C per case; null for mechanical cases (M14). */
+  temperature: (Float64Array | null)[];
   /** Max over cases of element-centroid von Mises (MPa). */
   vmElemEnvelope: Float64Array;
   /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */

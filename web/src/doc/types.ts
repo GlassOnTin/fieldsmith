@@ -132,10 +132,21 @@ export interface Document {
   regions: Region[];
   supports: Support[];
   loads: Load[];
+  temperatures: Temperature[];
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
-  solve: { size: number | null; modes: number | null };
+  solve: { size: number | null; modes: number | null; t_ref: number | null };
+}
+
+/** A fixed boundary temperature (°C) on a labelled region, one thermal case (M14): the
+ * boundary condition of the conduction solve and the driver of thermal expansion from
+ * the solve's `t_ref` reference. */
+export interface Temperature {
+  id: string;
+  region: string;
+  celsius: number;
+  case: string;
 }
 
 export const FACE_LABEL: Record<Face, string> = {
@@ -158,10 +169,11 @@ export function emptyDocument(): Document {
     regions: [],
     supports: [],
     loads: [],
+    temperatures: [],
     material: 'petg',
     custom_materials: [],
     fill: null,
-    solve: { size: null, modes: null },
+    solve: { size: null, modes: null, t_ref: null },
   };
 }
 

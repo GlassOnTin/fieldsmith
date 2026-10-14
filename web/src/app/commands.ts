@@ -10,6 +10,7 @@ import type { ShapeType } from '../doc/ops';
 import { analysis } from './analysis';
 import { ui } from './ui';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
+import bracketThermalFsm from '../../../examples/bracket-thermal.fsm?raw';
 import boxCylFsm from '../../../examples/box-minus-cylinder.fsm?raw';
 
 export interface Command {
@@ -36,6 +37,7 @@ export const viewApi = {
 
 export const EXAMPLES: { id: string; label: string; text: string }[] = [
   { id: 'bracket', label: 'L-bracket (the bracket test)', text: bracketFsm },
+  { id: 'bracket-thermal', label: 'L-bracket heated mount (thermal case)', text: bracketThermalFsm },
   { id: 'box-minus-cylinder', label: 'Box minus cylinder', text: boxCylFsm },
 ];
 
@@ -257,15 +259,20 @@ function deleteSelection() {
       d.regions = d.regions.filter((r) => r.id !== s.id);
       d.supports = d.supports.filter((r) => r.region !== s.id);
       d.loads = d.loads.filter((r) => r.region !== s.id);
+      d.temperatures = d.temperatures.filter((r) => r.region !== s.id);
       if (d.fill) d.fill.protect = d.fill.protect.filter((r) => r !== s.id);
     });
   } else if (s.kind === 'support') {
     store.transact(`Delete ${s.id}`, (d) => {
       d.supports = d.supports.filter((r) => r.id !== s.id);
     });
-  } else {
+  } else if (s.kind === 'load') {
     store.transact(`Delete ${s.id}`, (d) => {
       d.loads = d.loads.filter((r) => r.id !== s.id);
+    });
+  } else if (s.kind === 'temperature') {
+    store.transact(`Delete ${s.id}`, (d) => {
+      d.temperatures = d.temperatures.filter((r) => r.id !== s.id);
     });
   }
   store.select(null);

@@ -1,0 +1,17 @@
+fieldsmith 1
+name "Bracket (thermal)"
+material petg
+
+box base size=(60, 40, 8) at=(30, 20, 4)
+box upright size=(60, 8, 40) at=(30, 4, 20) blend=8
+cylinder hole1 r=3.25 h=20 at=(15, 26, 4) subtract
+cylinder hole2 r=3.25 h=20 at=(45, 26, 4) subtract
+cylinder hole3 r=4.25 h=20 at=(30, 4, 28) rotate=(90, 0, 0) subtract
+
+region mount = hole1.side + hole2.side
+region pin = hole3.side
+support fixed mount fixed=xyz
+load pull pin force=(0, -103.53, -386.37) case="Load 1"
+temperature hot mount temp=80
+temperature cold pin temp=20
+solve tref=20
