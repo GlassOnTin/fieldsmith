@@ -15,5 +15,6 @@ fieldsmith-core = { workspace = true }
 fieldsmith-doc = { workspace = true }
 fieldsmith-field = { workspace = true }
 fieldsmith-mesh = { workspace = true }
+fieldsmith-worker = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

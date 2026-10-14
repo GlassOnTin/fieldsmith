@@ -8,6 +8,7 @@ members = [
     "crates/fieldsmith-core",
     "crates/fieldsmith-api",
     "crates/fieldsmith-mcp",
+    "crates/fieldsmith-worker",
     "crates/fieldsmith-wasm",
     "crates/fieldsmith-cli",
     "crates/fieldsmith-verify",
@@ -37,6 +38,7 @@ fieldsmith-solve = { path = "crates/fieldsmith-solve" }
 fieldsmith-core = { path = "crates/fieldsmith-core" }
 fieldsmith-api = { path = "crates/fieldsmith-api" }
 fieldsmith-mcp = { path = "crates/fieldsmith-mcp" }
+fieldsmith-worker = { path = "crates/fieldsmith-worker" }
 
 # Upstream finite element framework, consumed as a sibling checkout (not vendored).
 fenics-element = { path = "../fenics-rs/crates/fenics-element" }

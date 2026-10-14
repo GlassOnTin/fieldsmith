@@ -1,0 +1,16 @@
+[package]
+name = "fieldsmith-worker"
+description = "The enrolment-token, Noise channel, session host and worker loop (M15 slice 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+fieldsmith-api = { workspace = true }
+snow = "0.10"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+fieldsmith-core = { workspace = true }
+fieldsmith-doc = { workspace = true }

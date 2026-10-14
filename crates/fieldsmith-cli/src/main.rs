@@ -10,8 +10,10 @@
 //! fieldsmith export FILE.fsm --stl X [--3mf Y] [--h MM] [--solid] [--adaptive]
 //! ```
 
+use fieldsmith_api::b64;
 use fieldsmith_api::question;
 use fieldsmith_api::question::{clock, parse_budget, DEFAULT_RUNGS};
+use fieldsmith_api::schema::{APIV, QuestionSpec};
 use fieldsmith_api::store;
 use fieldsmith_core::import::{import_mesh, ImportOpts};
 use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
@@ -45,6 +47,29 @@ const USAGE: &str =
           the solver's same grammar: ladder (rungs/tolerance/budget),
           solve, modes. Reads the costs store for seeding; writes
           nothing.
+  session FILE [--bind A] [--port N] [--once] [--rate R]
+          host M15 jobs for a worker: bind (default 127.0.0.1),
+          print an enrolment token ONCE (the host's Noise static key
+          plus a pre-shared key — a credential), then take jobs over
+          the Noise channel and print each answer (the API envelope)
+          verbatim with the host wall time. Question flags are the
+          solve verb's (--rungs/--tolerance/--budget/--dofs/--h/
+          --modes) under the same mutual-exclusion rules; the request
+          carries the document as a .fsmz built at send time.
+          --rate R prices each rung: R (per hour) × measured rung
+          wall. --once serves a single job and exits.
+  worker  enrol T host:port — store the session's token (mode 0600,
+          ~/.config/fieldsmith/worker-token.json; FIELDSMITH_TOKEN_DIR
+          to move it). T is a credential and is never echoed back.
+  worker  [--once] [--artifacts DIR]
+          connect outbound only to the enrolled host (Noise_XXpsk3 via
+          snow; the worker listens on no port) and serve jobs: the
+          answer travels back through the encrypted channel. stdout
+          names sizes and times, never geometry or fields.
+          --artifacts DIR writes each response verbatim plus the
+          shape-only cost rows (platform \"worker\", this machine's own
+          identity) — the only directory anything is written to.
+          --once serves a single job and exits.
   solve   mesh and solve               [--h <mm> | --dofs <n>] [--report]
           [--modes <n>] first n natural frequencies instead of the
           static cases: loads are ignored (supports still apply) and
@@ -160,6 +185,10 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.first().map(|c| c.as_str()) == Some("api") {
         return api_cmd(args);
     }
+    // worker takes no document — the stored enrolment token carries the connection.
+    if args.first().map(|c| c.as_str()) == Some("worker") {
+        return worker_cmd(args);
+    }
     let (cmd, path) = match (args.first(), args.get(1)) {
         (Some(c), Some(p)) => (c.as_str(), p.as_str()),
         _ => return Err(USAGE.into()),
@@ -186,6 +215,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     match cmd {
+        "session" => session_cmd(&doc, args),
         "check" => {
             let problems = doc.validate();
             let thermal_cases: std::collections::BTreeSet<&str> =
@@ -873,24 +903,7 @@ fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
 
     let rungs: Vec<usize> = match opt(args, "--rungs") {
         None => DEFAULT_RUNGS.to_vec(),
-        Some(s) => {
-            let bad = || {
-                format!(
-                    "bad --rungs value: {s} — comma-separated increasing DOF targets, \
-                     e.g. 30000,150000 (a ladder needs at least two rungs: the change \
-                     estimate needs a baseline)"
-                )
-            };
-            let v: Vec<usize> = s
-                .split(',')
-                .map(|t| t.trim().parse::<usize>())
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| bad())?;
-            if v.len() < 2 || !v.windows(2).all(|w| w[0] < w[1]) {
-                return Err(bad());
-            }
-            v
-        }
+        Some(s) => parse_rung_list(&s)?,
     };
     let tol_raw: Option<String> = opt(args, "--tolerance");
     let tolerance: Option<Tolerance> = match &tol_raw {
@@ -1120,6 +1133,325 @@ fn api_cmd(args: &[String]) -> Result<(), String> {
         API_ERR.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// `session`: host jobs for an enrolled worker (M15 slice 3). Binds where the user
+/// says (default 127.0.0.1), prints the enrolment token ONCE, then — one job at a
+/// time — sends the API request (the document as a `.fsmz` built at send time, grids
+/// included) over the Noise channel and prints the worker's answer verbatim with the
+/// host-measured wall. `--rate R` prices each rung: R per hour × the rung's own
+/// measured wall (the worker's records, not the host's round trip). The question
+/// flags mirror the solve verb's grammar; the API inside the worker answers with the
+/// same envelope the `api` verb writes.
+fn session_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
+    let bind = opt(args, "--bind").unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = match opt(args, "--port") {
+        Some(s) => s
+            .parse::<u16>()
+            .map_err(|_| format!("bad --port value: {s}"))?,
+        None => 0,
+    };
+    let rate = match opt(args, "--rate") {
+        Some(s) => Some(
+            s.parse::<f64>()
+                .map_err(|_| format!("bad --rate value: {s} — expect a number, per hour"))?,
+        ),
+        None => None,
+    };
+    let once = args.iter().any(|a| a == "--once");
+    let question = session_question(doc, args)?;
+    for w in doc.material_warnings() {
+        eprintln!("warning: {w}");
+    }
+    let docz = fsmz::save(doc)?;
+    let request = serde_json::json!({
+        "apiv": APIV,
+        "docz": b64::encode(&docz),
+        "question": question,
+    })
+    .to_string();
+
+    let host = fieldsmith_worker::Host::bind(&bind, port)?;
+    // The token is a credential: printed here, once, to the operator who asked. A
+    // token in a shell history is the operator's disclosure, not this program's.
+    println!("session: serving on {}", host.local_addr()?);
+    println!("session token: {}", host.token().encode());
+    println!(
+        "session: enrol a worker with  fieldsmith worker enrol <token> <host:port>  \
+         (point host:port at this machine's address on the worker's network)"
+    );
+
+    let mut served = 0u64;
+    loop {
+        // A failed exchange — a mid-job death, or a worker whose token does not match
+        // (the psk mismatch surfaces here, see host.rs) — is logged and the loop
+        // continues; under --once there is nothing to wait for, so the error is fatal.
+        let outcome = match host.exchange(&request, &mut |l| println!("{l}")) {
+            Ok(o) => o,
+            Err(e) => {
+                println!("session: job failed: {e}");
+                if once {
+                    return Err(e);
+                }
+                continue;
+            }
+        };
+        served += 1;
+        print!("{}", outcome.response);
+        println!(); // the envelope ends without a newline of its own
+        let v: serde_json::Value = serde_json::from_str(&outcome.response)
+            .map_err(|e| format!("session: the answer did not parse as JSON: {e}"))?;
+        if v.get("status").and_then(serde_json::Value::as_str) == Some("error") {
+            API_ERR.store(true, Ordering::Relaxed);
+        }
+        if let (Some(rate), Some(records)) = (
+            rate,
+            v.pointer("/outcome/records").and_then(serde_json::Value::as_array),
+        ) {
+            let mut billed_ms = 0.0;
+            for (i, r) in records.iter().enumerate() {
+                if let Some(w) = r.get("wall_ms").and_then(serde_json::Value::as_f64) {
+                    billed_ms += w;
+                    let rung = r
+                        .get("rung")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|x| x.to_string())
+                        .unwrap_or_else(|| i.to_string());
+                    println!(
+                        "cost: rung {rung} {:.1} s at {rate:.2}/h → rate × time = {:.4}",
+                        w / 1000.0,
+                        rate * w / 3_600_000.0
+                    );
+                }
+            }
+            println!(
+                "session: host wall {:.1} s (handshake + transfer + solve); billed rung time {billed:.1} s",
+                outcome.wall_ms / 1000.0,
+                billed = billed_ms / 1000.0
+            );
+        }
+        if once {
+            break;
+        }
+    }
+    println!("session: {served} job(s) served, exiting");
+    Ok(())
+}
+
+/// The session's question: the solve verb's grammar, under the same mutual-exclusion
+/// rules. The API inside the worker re-parses tolerance/budget and validates values —
+/// one question grammar, one place (schema.rs), so the session only shapes the
+/// request.
+fn session_question(doc: &Document, args: &[String]) -> Result<QuestionSpec, String> {
+    let ladder = opt(args, "--rungs").is_some()
+        || opt(args, "--tolerance").is_some()
+        || opt(args, "--budget").is_some();
+    if ladder {
+        if opt(args, "--dofs").is_some() || opt(args, "--h").is_some() {
+            return Err(
+                "the ladder chooses its own resolutions — drop --dofs/--h, or drop the ladder flags"
+                    .into(),
+            );
+        }
+        if opt(args, "--modes").is_some() {
+            return Err(
+                "--modes and the ladder are separate questions — run them as separate solves"
+                    .into(),
+            );
+        }
+        if doc.fill.is_some() {
+            return Err(
+                "the ladder runs the solid path — remove the fill statement to use the \
+                 declared-question modes"
+                    .into(),
+            );
+        }
+        let rungs = match opt(args, "--rungs") {
+            None => None,
+            Some(s) => Some(parse_rung_list(&s)?),
+        };
+        return Ok(QuestionSpec::Ladder {
+            rungs,
+            tolerance: opt(args, "--tolerance"),
+            budget: opt(args, "--budget"),
+        });
+    }
+    let dofs = match opt(args, "--dofs") {
+        Some(s) => Some(s.parse::<usize>().map_err(|_| format!("bad --dofs value: {s}"))?),
+        None => None,
+    };
+    let h = match opt(args, "--h") {
+        Some(s) => Some(s.parse::<f64>().map_err(|_| format!("bad --h value: {s}"))?),
+        None => None,
+    };
+    if let Some(s) = opt(args, "--modes") {
+        let n = s
+            .parse::<usize>()
+            .map_err(|_| format!("bad --modes value: {s}"))?;
+        return Ok(QuestionSpec::Modes { n, dofs, h });
+    }
+    Ok(QuestionSpec::Solve { dofs, h })
+}
+
+/// The `--rungs` schedule from its CLI string form — the solve and session verbs'
+/// shared parse.
+fn parse_rung_list(s: &str) -> Result<Vec<usize>, String> {
+    let bad = || {
+        format!(
+            "bad --rungs value: {s} — comma-separated increasing DOF targets, \
+             e.g. 30000,150000 (a ladder needs at least two rungs: the change \
+             estimate needs a baseline)"
+        )
+    };
+    let v: Vec<usize> = s
+        .split(',')
+        .map(|t| t.trim().parse::<usize>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| bad())?;
+    if v.len() < 2 || !v.windows(2).all(|w| w[0] < w[1]) {
+        return Err(bad());
+    }
+    Ok(v)
+}
+
+/// `worker`: `enrol` stores the session's token; no subcommand serves jobs (outbound
+/// only — the worker listens on no port). Artifacts under `--artifacts DIR` are the
+/// only writes this verb makes; `--once` serves a single job and exits.
+fn worker_cmd(args: &[String]) -> Result<(), String> {
+    match args.get(1).map(String::as_str) {
+        None => worker_serve(args),
+        // Flags belong to serve mode (`worker --once --artifacts DIR`), not the
+        // subcommand column.
+        Some(f) if f.starts_with("--") => worker_serve(args),
+        Some("enrol") => worker_enrol(args),
+        Some(other) => Err(format!(
+            "worker: unknown subcommand {other:?} — `enrol T host:port` or a plain `worker`\n\n"
+        ) + USAGE),
+    }
+}
+
+/// The stored token's file, or the reason there isn't one.
+fn token_path() -> Result<std::path::PathBuf, String> {
+    match std::env::var("FIELDSMITH_TOKEN_DIR") {
+        Ok(d) => Ok(std::path::PathBuf::from(d).join("worker-token.json")),
+        Err(_) => std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".config/fieldsmith/worker-token.json"))
+            .map_err(|_| "worker: no HOME — set HOME or FIELDSMITH_TOKEN_DIR".to_string()),
+    }
+}
+
+/// `worker enrol T host:port`: parse, validate, store 0600. The token never echoes.
+fn worker_enrol(args: &[String]) -> Result<(), String> {
+    let token_raw = args
+        .get(2)
+        .ok_or("worker enrol: missing the token — copy the `session token:` line the host printed")?;
+    let addr = args
+        .get(3)
+        .ok_or("worker enrol: missing host:port — copy the address line the host printed")?;
+    // Validate the credential's form before anything is stored: a malformed token
+    // never lands on disk.
+    fieldsmith_worker::Token::parse(token_raw)?;
+    let (host, port) = addr
+        .split_once(':')
+        .ok_or_else(|| format!("worker enrol: {addr:?} is not host:port"))?;
+    let port: u16 = port
+        .parse()
+        .map_err(|e| format!("worker enrol: bad port in {addr:?}: {e}"))?;
+    let dir = match std::env::var("FIELDSMITH_TOKEN_DIR") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => match std::env::var("HOME") {
+            Ok(h) => std::path::PathBuf::from(h).join(".config/fieldsmith"),
+            Err(_) => {
+                return Err("worker enrol: no HOME for the token file — set HOME or FIELDSMITH_TOKEN_DIR".into())
+            }
+        },
+    };
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::create_dir_all(&dir)
+        .and_then(|_| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)))
+        .map_err(|e| format!("worker enrol: {dir:?}: {e}"))?;
+    let path = dir.join("worker-token.json");
+    let stored = serde_json::json!({
+        "v": 1,
+        "host": host,
+        "port": port,
+        "token": token_raw,
+    });
+    let mut f = std::fs::OpenOptions::new()
+        .mode(0o600)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|e| format!("worker enrol: {}: {e}", path.display()))?;
+    {
+        use std::io::Write;
+        f.write_all(stored.to_string().as_bytes())
+            .map_err(|e| format!("worker enrol: {}: {e}", path.display()))?;
+    }
+    println!(
+        "worker: token stored at {} for {host}:{port} — start with `fieldsmith worker`",
+        path.display()
+    );
+    Ok(())
+}
+
+/// The worker loop against the stored token. `--once` gets a tight retry budget (the
+/// host may still be binding); a serving worker retries at a slower cadence forever.
+fn worker_serve(args: &[String]) -> Result<(), String> {
+    let artifacts = opt(args, "--artifacts").map(std::path::PathBuf::from);
+    let once = args.iter().any(|a| a == "--once");
+    let path = token_path()?;
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "worker: no stored token at {} — run `fieldsmith worker enrol T host:port` first ({e})",
+            path.display()
+        )
+    })?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("worker: {}: {e}", path.display()))?;
+    let token_raw = v
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("worker: {} has no token field", path.display()))?;
+    let host = v
+        .get("host")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("worker: {} has no host field", path.display()))?
+        .to_string();
+    let port = v
+        .get("port")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("worker: {} has no port field", path.display()))?
+        as u16;
+    let token = fieldsmith_worker::Token::parse(token_raw)?;
+    let opts = fieldsmith_worker::RunOpts {
+        once,
+        artifacts,
+        reconnect_ms: if once { 500 } else { 5_000 },
+        max_attempts: if once { Some(30) } else { None },
+    };
+    let mut any_error = false;
+    let r = fieldsmith_worker::run(
+        &token,
+        &host,
+        port,
+        &opts,
+        &mut |l| println!("{l}"),
+        &mut |req| {
+            let reply = fieldsmith_api::respond(req);
+            if reply.is_error {
+                any_error = true;
+            }
+            reply.body
+        },
+    );
+    // An errored job is delivered as its envelope (the worker keeps answering) — but
+    // the process leaves exit 2 behind, the api verb's contract.
+    if any_error {
+        API_ERR.store(true, Ordering::Relaxed);
+    }
+    r
 }
 
 /// `costs`: the redaction preview. Prints the last run's rows exactly as the

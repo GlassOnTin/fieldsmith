@@ -18,4 +18,5 @@ miniz_oxide = { workspace = true }
 [dev-dependencies]
 fieldsmith-api = { workspace = true }
 fieldsmith-mcp = { workspace = true }
+fieldsmith-worker = { workspace = true }
 serde_json = { workspace = true }
