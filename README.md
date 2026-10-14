@@ -104,6 +104,7 @@ reproduced bit-identically and only wall time differed, by the machine ratio
 case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 
-Successor to the MorphoForge experiment. Built on [`fenics-rs`](../fenics-rs).
+Successor to the MorphoForge experiment. Built on
+[`fenics-rs`](https://github.com/GlassOnTin/fenics-rs), consumed as a submodule.
 
 License: AGPL-3.0-or-later.

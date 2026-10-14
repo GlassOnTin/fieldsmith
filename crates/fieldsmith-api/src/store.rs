@@ -84,9 +84,9 @@ fn quote(s: &str) -> String {
     }
 }
 
-/// fenics-rs workspace version (../fenics-rs/Cargo.toml — the sibling repo's version
-/// constant; Cargo cannot read it across the path dependency, so it is pinned here and
-/// a fenics-rs bump edits this line).
+/// fenics-rs workspace version (fenics-rs/Cargo.toml in the submodule — that repo's
+/// version constant; Cargo cannot read it across the path dependency, so it is pinned
+/// here and a fenics-rs bump edits this line).
 pub const FENICS_RS_VERSION: &str = "0.1.0";
 
 /// The engine identity rows are stamped with — the engine that solved, not the host

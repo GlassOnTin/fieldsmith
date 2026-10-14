@@ -13,6 +13,7 @@ members = [
     "crates/fieldsmith-cli",
     "crates/fieldsmith-verify",
 ]
+exclude = ["fenics-rs"]
 
 [workspace.package]
 version = "0.2.0"
@@ -40,11 +41,11 @@ fieldsmith-api = { path = "crates/fieldsmith-api" }
 fieldsmith-mcp = { path = "crates/fieldsmith-mcp" }
 fieldsmith-worker = { path = "crates/fieldsmith-worker" }
 
-# Upstream finite element framework, consumed as a sibling checkout (not vendored).
-fenics-element = { path = "../fenics-rs/crates/fenics-element" }
-fenics-mesh = { path = "../fenics-rs/crates/fenics-mesh" }
-fenics-assembly = { path = "../fenics-rs/crates/fenics-assembly" }
-fenics-solver = { path = "../fenics-rs/crates/fenics-solver" }
+# Upstream finite element framework, consumed as a submodule (pinned by rev, not vendored).
+fenics-element = { path = "fenics-rs/crates/fenics-element" }
+fenics-mesh = { path = "fenics-rs/crates/fenics-mesh" }
+fenics-assembly = { path = "fenics-rs/crates/fenics-assembly" }
+fenics-solver = { path = "fenics-rs/crates/fenics-solver" }
 
 # Numerical code is unusable at opt-level 0; keep debug builds fast enough for tests.
 [profile.dev]
