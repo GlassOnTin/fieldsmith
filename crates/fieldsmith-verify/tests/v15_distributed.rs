@@ -7,7 +7,11 @@
 //! the tip at +L/2); the traction direction is the frame's −n. The document goes through
 //! `fieldsmith_core::analyse` exactly as the app does.
 
-use fieldsmith_core::{analyse, probe::{probe, Locator}, Resolution};
+use fieldsmith_core::{
+    analyse,
+    probe::{probe, Locator},
+    Resolution,
+};
 use fieldsmith_verify::{doc, Check, Report};
 use std::time::Instant;
 
@@ -61,11 +65,7 @@ fn v15_distributed() {
 
     // --- case "Piecewise": w is 2.0 N/mm over the first 75 mm, 4.0 N/mm over the last 25.
     let wfn = |x: f64| if x <= 75.0 { 2.0 } else { 4.0 };
-    let r_pw: [f64; 3] = [
-        0.0,
-        0.0,
-        -(2.0 * 75.0 + 4.0 * 25.0),
-    ];
+    let r_pw: [f64; 3] = [0.0, 0.0, -(2.0 * 75.0 + 4.0 * 25.0)];
     // Closed form (u = distance from the tip, M(u) = 2u² for u ≤ 25, 2u² − (u−25)² above;
     // δ·EI = ∫ M(u)·u du over u ∈ [0, L]).
     let m_of_u = |u: f64| 2.0 * u * u - (u - 25.0).max(0.0) * (u - 25.0).max(0.0);
@@ -87,11 +87,7 @@ fn v15_distributed() {
     );
     // M_y = ∫ x·w(x) dx: band 1 carries 150 N at x̄ = 37.5, band 2 carries 100 N at x̄ = 87.5,
     // positive (M_y = +x·F_z for a pure −z force). M_x = y·F_z = −R·5.
-    let m_pw: [f64; 3] = [
-        r_pw[2] * 5.0,
-        150.0 * 37.5 + 100.0 * 87.5,
-        0.0,
-    ];
+    let m_pw: [f64; 3] = [r_pw[2] * 5.0, 150.0 * 37.5 + 100.0 * 87.5, 0.0];
 
     let mut rows = String::from(
         "| Element size | Tets | DOFs | Iterations | Mesh | Solve | δ tip (Triangle) | δ tip (Piecewise) | R_z (Triangle) | unscaled dR | fit RMS | extent |\n\
@@ -101,13 +97,19 @@ fn v15_distributed() {
     let mut last: Option<LastRow> = None;
     for h in [5.0, 2.5, 2.0] {
         let a = analyse(&d, Resolution::Size(h), clock).expect("analysis");
-        let ci_tri = a.cases.iter().position(|c| c.name == "Triangle").expect("tri case");
-        let ci_pw = a.cases.iter().position(|c| c.name == "Piecewise").expect("pw case");
+        let ci_tri = a
+            .cases
+            .iter()
+            .position(|c| c.name == "Triangle")
+            .expect("tri case");
+        let ci_pw = a
+            .cases
+            .iter()
+            .position(|c| c.name == "Piecewise")
+            .expect("pw case");
         let loc = Locator::new(&a);
-        let tip_tri =
-            probe(&a, &loc, Some(ci_tri), [l - 1e-6, 5.0, 5.0]).expect("tip inside mesh");
-        let tip_pw =
-            probe(&a, &loc, Some(ci_pw), [l - 1e-6, 5.0, 5.0]).expect("tip inside mesh");
+        let tip_tri = probe(&a, &loc, Some(ci_tri), [l - 1e-6, 5.0, 5.0]).expect("tip inside mesh");
+        let tip_pw = probe(&a, &loc, Some(ci_pw), [l - 1e-6, 5.0, 5.0]).expect("tip inside mesh");
         let dt = -tip_tri.displacement[2];
         let dp = -tip_pw.displacement[2];
         let rt = &a.cases[ci_tri].load_reports[0];
@@ -120,7 +122,16 @@ fn v15_distributed() {
             p.elements, p.dofs, p.iterations, p.mesh_ms, p.solve_ms, dt, dp,
             rt.resultant[2], rt.unscaled, rms, ext,
         );
-        last = Some((dt, dp, rt.resultant, rt.moment, rt.unscaled, rp.resultant[2], rp.moment[1], rp.moment[0]));
+        last = Some((
+            dt,
+            dp,
+            rt.resultant,
+            rt.moment,
+            rt.unscaled,
+            rp.resultant[2],
+            rp.moment[1],
+            rp.moment[0],
+        ));
     }
     let Some((dt, dp, r_t, m_t, u_t, r_pw_z, m_pw_y, m_pw_x)) = last else {
         unreachable!("the mesh loop ran at least once")
@@ -178,12 +189,48 @@ fn v15_distributed() {
         "mm",
         0.15,
     ));
-    r.check(Check::relative("R_z, Triangle (finest rung)", r_tri[2], r_t[2], "N", 0.02));
-    r.check(Check::relative("M_x, Triangle", m_tri[0], m_t[0], "N·mm", 0.02));
-    r.check(Check::relative("M_y, Triangle", m_tri[1], m_t[1], "N·mm", 0.02));
-    r.check(Check::relative("R_z, Piecewise", r_pw[2], r_pw_z, "N", 0.02));
-    r.check(Check::relative("M_x, Piecewise", m_pw[0], m_pw_x, "N·mm", 0.02));
-    r.check(Check::relative("M_y, Piecewise", m_pw[1], m_pw_y, "N·mm", 0.02));
+    r.check(Check::relative(
+        "R_z, Triangle (finest rung)",
+        r_tri[2],
+        r_t[2],
+        "N",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "M_x, Triangle",
+        m_tri[0],
+        m_t[0],
+        "N·mm",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "M_y, Triangle",
+        m_tri[1],
+        m_t[1],
+        "N·mm",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "R_z, Piecewise",
+        r_pw[2],
+        r_pw_z,
+        "N",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "M_x, Piecewise",
+        m_pw[0],
+        m_pw_x,
+        "N·mm",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "M_y, Piecewise",
+        m_pw[1],
+        m_pw_y,
+        "N·mm",
+        0.02,
+    ));
     r.check(Check::relative(
         "unscaled density resultant, Triangle",
         -r_tri[2],

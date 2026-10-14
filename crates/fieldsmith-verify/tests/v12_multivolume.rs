@@ -16,8 +16,8 @@ use fieldsmith_doc::{Document, Face, NodeKind, Op, Region, Selector, Transform};
 use fieldsmith_field::expr;
 use fieldsmith_mesh::export::{surface, write_3mf_volumes, TriMesh, Volume3mf};
 use fieldsmith_mesh::threemf::read_3mf;
-use fieldsmith_solve::P2Mesh;
 use fieldsmith_solve::p2::face_nodes;
+use fieldsmith_solve::P2Mesh;
 
 const SAMPLE: &[u8] = include_bytes!("fixtures/multiple_cylinders.3mf");
 const SAMPLE_SRC: &str = "multiple_cylinders.3mf";
@@ -41,7 +41,11 @@ fn the_foreign_sample_imports_as_six_placed_leaves() {
     for (i, n) in out.nodes.iter().enumerate() {
         // The sample names its object "Cylinder"; the id chooser numbers item 2+ as
         // Cylinder1, Cylinder2, … (case preserved).
-        let want = if i == 0 { "Cylinder".to_string() } else { format!("Cylinder{i}") };
+        let want = if i == 0 {
+            "Cylinder".to_string()
+        } else {
+            format!("Cylinder{i}")
+        };
         assert_eq!(n.id, want, "the id chooser numbers the instances");
         assert_eq!(n.material, None, "import does not adopt the file's ids");
     }
@@ -151,12 +155,7 @@ fn an_imported_leaves_patch_labels_face_regions() {
 
     let body = expr::compile_body(&doc);
     let b = expr::bounds(&body);
-    let (mut lin, _) = fieldsmith_mesh::stuff(
-        |p| expr::eval(&body, p).v,
-        b.lo,
-        b.hi,
-        1.0,
-    );
+    let (mut lin, _) = fieldsmith_mesh::stuff(|p| expr::eval(&body, p).v, b.lo, b.hi, 1.0);
     lin.compact();
     let mesh = P2Mesh::from_linear(&lin.verts, &lin.tets);
     let facets: Vec<Facet> = lin
@@ -177,13 +176,13 @@ fn an_imported_leaves_patch_labels_face_regions() {
         .collect();
     let hold = region_facets(&doc, "hold", &mesh, &facets, 1.0).expect("patch region resolves");
     let press = region_facets(&doc, "press", &mesh, &facets, 1.0).expect("face region resolves");
-    assert!(!hold.is_empty(), "the imported leaf's patch 1 claims facets");
+    assert!(
+        !hold.is_empty(),
+        "the imported leaf's patch 1 claims facets"
+    );
     assert!(!press.is_empty(), "the plate's +z face claims facets");
     for &a in &hold {
-        assert!(
-            !press.contains(&a),
-            "the two regions claim facet {a} twice"
-        );
+        assert!(!press.contains(&a), "the two regions claim facet {a} twice");
     }
 }
 
@@ -224,16 +223,8 @@ fn the_composed_part_exports_per_volume_and_reads_back_labelled() {
         let nb = expr::bounds(&fe);
         let tri = surface(
             |p| expr::eval(&fe, p).v,
-            [
-                nb.lo[0] - H,
-                nb.lo[1] - H,
-                nb.lo[2] - H,
-            ],
-            [
-                nb.hi[0] + H,
-                nb.hi[1] + H,
-                nb.hi[2] + H,
-            ],
+            [nb.lo[0] - H, nb.lo[1] - H, nb.lo[2] - H],
+            [nb.hi[0] + H, nb.hi[1] + H, nb.hi[2] + H],
             H,
         );
         // The mesher's own volume against its field reference, per volume.
@@ -260,8 +251,15 @@ fn the_composed_part_exports_per_volume_and_reads_back_labelled() {
     let bytes = write_3mf_volumes(&vols);
     let back = read_3mf(&bytes).expect("our own package reads back");
     assert_eq!(back.len(), 7, "one object per volume");
-    let mats: Vec<&str> = back.iter().map(|p| p.material.as_deref().unwrap_or("")).collect();
-    assert_eq!(mats[..6], ["petg"; 6], "unlabelled cylinders carry the document material");
+    let mats: Vec<&str> = back
+        .iter()
+        .map(|p| p.material.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        mats[..6],
+        ["petg"; 6],
+        "unlabelled cylinders carry the document material"
+    );
     assert_eq!(mats[6], "abs", "the plate carries its own label");
     for (p, (id, _, m)) in back.iter().zip(&meshes) {
         assert_eq!(p.name, *id);

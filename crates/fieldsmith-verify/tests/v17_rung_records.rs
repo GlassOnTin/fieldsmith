@@ -105,7 +105,10 @@ fn v17_rung_replay() {
     // Wall: record construction stores the driver's snapshot verbatim — feed a sentinel
     // and it must come back unchanged, proving the record cannot re-clock or clamp.
     let sentinel = RungRecord::of(1, TARGETS[1], 1234.5, Some(&rec0), &a1);
-    assert_eq!(sentinel.wall_ms, 1234.5, "record stores the driver's wall verbatim");
+    assert_eq!(
+        sentinel.wall_ms, 1234.5,
+        "record stores the driver's wall verbatim"
+    );
 
     // Shape fields are the engine's own provenance, bit-equal.
     assert_eq!(rec0.dofs, a0.provenance.dofs);
@@ -114,7 +117,10 @@ fn v17_rung_replay() {
     assert_eq!(rec1.dofs, a1.provenance.dofs);
     assert_eq!(rec1.elements, a1.provenance.elements);
     assert_eq!(rec1.element_size_mm, a1.provenance.element_size);
-    assert!(rec1.dofs > rec0.dofs && rec1.wall_ms > rec0.wall_ms, "refinement moves both");
+    assert!(
+        rec1.dofs > rec0.dofs && rec1.wall_ms > rec0.wall_ms,
+        "refinement moves both"
+    );
 
     // Tracked maxima are the floored envelope over cases, recomputed by hand and bit-equal.
     let (d0, v0) = envelope(&a0.cases);
@@ -126,8 +132,16 @@ fn v17_rung_replay() {
 
     // The change estimate is exactly the two-solve difference over the floored envelopes.
     let ch = rec1.change.as_ref().expect("rung 1 has a change");
-    assert_eq!(ch.deflection_rel, (d1 - d0) / d0, "deflection change = two-solve difference");
-    assert_eq!(ch.vm_rel, (v1 - v0) / v0, "von Mises change = two-solve difference");
+    assert_eq!(
+        ch.deflection_rel,
+        (d1 - d0) / d0,
+        "deflection change = two-solve difference"
+    );
+    assert_eq!(
+        ch.vm_rel,
+        (v1 - v0) / v0,
+        "von Mises change = two-solve difference"
+    );
     assert_eq!(ch.deflection_mm, d1 - d0);
     assert_eq!(ch.vm_mpa, v1 - v0);
     assert!(rec0.change.is_none(), "rung 0 has no baseline");
@@ -158,7 +172,9 @@ fn v17_cantilever_ladder() {
         .iter()
         .map(|(_, a)| {
             let loc = Locator::new(a);
-            probe(a, &loc, Some(0), [100.0 - 1e-6, 5.0, 5.0]).expect("tip inside mesh").displacement[2]
+            probe(a, &loc, Some(0), [100.0 - 1e-6, 5.0, 5.0])
+                .expect("tip inside mesh")
+                .displacement[2]
         })
         .collect();
 
@@ -170,7 +186,11 @@ fn v17_cantilever_ladder() {
         .collect();
     let mut ratios = Vec::new();
     for ri in 1..rungs.len() {
-        let ch = rungs[ri].0.change.as_ref().expect("rung > 0 carries a change");
+        let ch = rungs[ri]
+            .0
+            .change
+            .as_ref()
+            .expect("rung > 0 carries a change");
         ratios.push(errs[ri].abs() / ch.deflection_rel.abs());
     }
 
@@ -221,11 +241,24 @@ fn v17_cantilever_ladder() {
     // The ladder moved the beam away from the theory on the first pair: the coarse rung
     // sat under the reference, the refined one over it. Fp arithmetic both machines agree
     // on (bracket deltas re-measured to ~1e-11 relative), so the sign is stable.
-    assert!(errs[0] < 0.0 && errs[1] > 0.0, "sign flip coarse→fine: {:.5} → {:.5}", errs[0], errs[1]);
-    assert!(ch1.deflection_rel > 0.0, "softening direction: {:+.5}", ch1.deflection_rel);
+    assert!(
+        errs[0] < 0.0 && errs[1] > 0.0,
+        "sign flip coarse→fine: {:.5} → {:.5}",
+        errs[0],
+        errs[1]
+    );
+    assert!(
+        ch1.deflection_rel > 0.0,
+        "softening direction: {:+.5}",
+        ch1.deflection_rel
+    );
     // The tail movement is fp-level and the remaining offset holds at bias: the ladder
     // stalls; it will never close the last third of a percent.
-    assert!(ch2.deflection_rel.abs() < 1e-3, "tail movement is small: {:+.5}", ch2.deflection_rel);
+    assert!(
+        ch2.deflection_rel.abs() < 1e-3,
+        "tail movement is small: {:+.5}",
+        ch2.deflection_rel
+    );
     assert!(
         (errs[2] - errs[1]).abs() <= 0.15 * errs[1].abs(),
         "tail offset stable at bias level: {:.5} → {:.5}",
@@ -233,7 +266,10 @@ fn v17_cantilever_ladder() {
         errs[2],
     );
 
-    let mut r = Report::new("V17", "Rung records — one clock per rung, estimates not bounds");
+    let mut r = Report::new(
+        "V17",
+        "Rung records — one clock per rung, estimates not bounds",
+    );
     r.check(Check::relative(
         "Tip deflection (refined rung)",
         defl_ref,

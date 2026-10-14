@@ -77,7 +77,10 @@ fn analytic_nist_fixtures_import_voxelize_and_report_within_the_goal_bounds() {
         // The whole-chain tessellation and the direct entry point agree.
         let direct = tessellate(bytes, None).unwrap();
         let dp = &direct.parts[0];
-        assert_eq!(dp.tris, p.tris, "{src}: import_mesh tessellates identically");
+        assert_eq!(
+            dp.tris, p.tris,
+            "{src}: import_mesh tessellates identically"
+        );
         // The imported geometry's volume = signed divergence over the tessellated mesh;
         // the reference = the B-rep's analytic flux volume over the sampled boundary.
         // A B-spline face contributes no flux potential, so on the two fixtures carrying

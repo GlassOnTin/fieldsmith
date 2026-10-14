@@ -30,7 +30,12 @@ fn store_path(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("fieldsmith-ladder-test-{}-{}-{}", tag, std::process::id(), nanos));
+    let dir = std::env::temp_dir().join(format!(
+        "fieldsmith-ladder-test-{}-{}-{}",
+        tag,
+        std::process::id(),
+        nanos
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir.join("costs.jsonl")
 }
@@ -115,7 +120,11 @@ fn ladder_met_stops_and_records_both_rungs() {
 fn ladder_refusal_exits_3_and_still_stores() {
     let store = store_path("refusal");
     let (out, err, code) = run(ladder(&store).arg("--tolerance").arg("deflection:0.001mm"));
-    assert_eq!(code, Some(3), "unmet tolerance refuses with exit 3; err: {err}");
+    assert_eq!(
+        code,
+        Some(3),
+        "unmet tolerance refuses with exit 3; err: {err}"
+    );
     assert!(out.contains("refusal:"), "refusal named in: {out}");
     assert!(out.contains("the schedule ran to its cap"));
     assert!(out.contains("deflection:0.001mm"));
@@ -129,7 +138,10 @@ fn ladder_refusal_exits_3_and_still_stores() {
 #[test]
 fn ladder_no_store_writes_nothing() {
     let store = store_path("nostore");
-    let (out, err, code) = run(ladder(&store).arg("--tolerance").arg("deflection:50%").arg("--no-store"));
+    let (out, err, code) = run(ladder(&store)
+        .arg("--tolerance")
+        .arg("deflection:50%")
+        .arg("--no-store"));
     assert_eq!(code, Some(0), "err: {err}");
     assert!(out.contains("met:"));
     // The path the run would have written to does not exist.
@@ -151,10 +163,16 @@ fn ladder_budget_stops_before_overflowing() {
     assert_eq!(code2, Some(0), "budget stop is not an error: {err2}");
     assert!(out2.contains("budget:"), "budget line in: {out2}");
     assert!(out2.contains("does not fit — stopping"));
-    assert!(out2.contains("median of 1 local record"), "est from store: {out2}");
+    assert!(
+        out2.contains("median of 1 local record"),
+        "est from store: {out2}"
+    );
     assert!(out2.contains("rung 0: 30000 DOF aimed"));
     assert!(!out2.contains("rung 1:"), "stopped before rung 1: {out2}");
-    assert!(out2.contains("tolerance-free run"), "no tolerance declared: {out2}");
+    assert!(
+        out2.contains("tolerance-free run"),
+        "no tolerance declared: {out2}"
+    );
     // Three rows total: the first run's two plus the second run's rung-0.
     let rows = read_rows(&store);
     assert_eq!(rows.len(), 3);
@@ -193,13 +211,14 @@ fn costs_prints_last_run_as_csv() {
     assert!(
         out.contains("schema,month,platform,engine,cpu,cores,ram_gb,rung,target_dofs,dofs,elements,field_leaves,wall_ms,deflection_change_rel,vm_change_rel")
     );
-    let data: Vec<_> = out
-        .lines()
-        .filter(|l| l.starts_with("1,2026-10"))
-        .collect();
+    let data: Vec<_> = out.lines().filter(|l| l.starts_with("1,2026-10")).collect();
     assert_eq!(data.len(), 2, "both rows of the last run printed: {out}");
     assert_eq!(data[0].split(',').count(), 15, "no quoted fields here");
-    assert!(data[1].ends_with("-0.281,0.12"), "change carried: {}", data[1]);
+    assert!(
+        data[1].ends_with("-0.281,0.12"),
+        "change carried: {}",
+        data[1]
+    );
     assert!(out.contains("cost fit: wall ∝ DOF^"), "fit: {out}");
     assert!(out.contains("at a 5× refined rung"));
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
@@ -233,33 +252,45 @@ fn costs_empty_store_and_single_rung() {
 #[test]
 fn ladder_conflicts_refuse_by_name() {
     // --modes and the ladder are separate questions.
-    let (_out, err, code) = run(
-        fs().args(["solve", BRACKET, "--modes", "--tolerance", "deflection:50%"]),
-    );
+    let (_out, err, code) =
+        run(fs().args(["solve", BRACKET, "--modes", "--tolerance", "deflection:50%"]));
     assert_eq!(code, Some(1));
-    assert!(err.contains("--modes and the ladder are separate questions"), "{err}");
-    // The ladder runs the solid path: a fill document is refused alongside the flags.
-    let (_out, err, code) = run(
-        fs().args(["solve", BRACKET_FILLED, "--tolerance", "deflection:50%"]),
+    assert!(
+        err.contains("--modes and the ladder are separate questions"),
+        "{err}"
     );
+    // The ladder runs the solid path: a fill document is refused alongside the flags.
+    let (_out, err, code) =
+        run(fs().args(["solve", BRACKET_FILLED, "--tolerance", "deflection:50%"]));
     assert_eq!(code, Some(1));
     assert!(err.contains("the ladder runs the solid path"), "{err}");
     // --dofs/--h with the ladder flags.
-    let (_out, err, code) = run(
-        fs().args(["solve", BRACKET, "--dofs", "50000", "--tolerance", "deflection:50%"]),
-    );
+    let (_out, err, code) = run(fs().args([
+        "solve",
+        BRACKET,
+        "--dofs",
+        "50000",
+        "--tolerance",
+        "deflection:50%",
+    ]));
     assert_eq!(code, Some(1));
-    assert!(err.contains("the ladder chooses its own resolutions"), "{err}");
-    // Bad tolerance value.
-    let (_out, err, code) = run(
-        fs().args(["solve", BRACKET, "--tolerance", "deflection:0.1"]),
+    assert!(
+        err.contains("the ladder chooses its own resolutions"),
+        "{err}"
     );
+    // Bad tolerance value.
+    let (_out, err, code) = run(fs().args(["solve", BRACKET, "--tolerance", "deflection:0.1"]));
     assert_eq!(code, Some(1));
     assert!(err.contains("bad tolerance"), "{err}");
     // A one-rung schedule has no baseline to compare against.
-    let (_out, err, code) = run(
-        fs().args(["solve", BRACKET, "--rungs", "30000", "--tolerance", "deflection:50%"]),
-    );
+    let (_out, err, code) = run(fs().args([
+        "solve",
+        BRACKET,
+        "--rungs",
+        "30000",
+        "--tolerance",
+        "deflection:50%",
+    ]));
     assert_eq!(code, Some(1));
     assert!(err.contains("bad --rungs value"), "{err}");
 }

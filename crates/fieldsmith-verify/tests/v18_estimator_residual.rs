@@ -11,8 +11,9 @@
 //!    N100/referee wall factor (to 0.01 %); the extension rung's factor diverges +15 %.
 //!    Mechanism not verified; the consequence (per-machine-class rows and bands) is.
 //! 3. `data/costs/costs.csv` ties to these constants: every CLI wall and change value
-//!    parses back bit-equal, wasm rows tie to the budgets-doc constants with empty
-//!    field cells, 14 rows total.
+//!    parses back bit-equal, wasm rows tie to the budgets-doc constants (probe-harness
+//!    rows with empty field cells) and to the OnePlus 13 in-page walls (rows carrying
+//!    achieved DOF/element cells), 16 rows total.
 //! 4. The report carries the honest label: projections carry residuals, and the
 //!    first-pair fit is on the cheap side of the curve.
 
@@ -40,6 +41,7 @@ const SHIP_RESIDUAL_N100: (f64, f64) = (0.14, 0.26);
 /// Machine identity strings, as `data/costs/costs.csv` holds them.
 const CPU_REF: &str = "AMD Ryzen 9 9950X 16-Core Processor";
 const CPU_N100: &str = "Intel(R) N100";
+const CPU_ONEPLUS: &str = "SM8750";
 
 /// One CLI ladder row from the seed. `chd`/`chv` are the change-estimate columns
 /// (None on rung 0).
@@ -55,7 +57,14 @@ struct ShipRow {
 /// The six CLI rows of `data/costs/costs.csv`, verbatim. Change values are the
 /// envelope-to-envelope estimates the V17 replay proves are two-solve differences.
 const CLI_ROWS: [ShipRow; 6] = [
-    ShipRow { cpu: CPU_REF, target: 30_000, rung: 0, wall: 250.913718, chd: None, chv: None },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 250.913718,
+        chd: None,
+        chv: None,
+    },
     ShipRow {
         cpu: CPU_REF,
         target: 150_000,
@@ -72,7 +81,14 @@ const CLI_ROWS: [ShipRow; 6] = [
         chd: Some(-0.04126717503663446),
         chv: Some(0.0993936436864128),
     },
-    ShipRow { cpu: CPU_N100, target: 30_000, rung: 0, wall: 569.213065, chd: None, chv: None },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 569.213065,
+        chd: None,
+        chv: None,
+    },
     ShipRow {
         cpu: CPU_N100,
         target: 150_000,
@@ -91,17 +107,23 @@ const CLI_ROWS: [ShipRow; 6] = [
     },
 ];
 
-/// The eight wasm rows of `data/costs/costs.csv`, verbatim from the 2026-10-13 budgets
-/// documents: (cpu, target, rung, wall). Wasm rows carry no DOF/element/leaf/change cells.
-const WASM_ROWS: [(&str, usize, usize, f64); 8] = [
-    (CPU_REF, 30_000, 0, 1352.0),
-    (CPU_REF, 150_000, 1, 6025.0),
-    (CPU_REF, 30_000, 0, 1678.0),
-    (CPU_REF, 150_000, 1, 6494.0),
-    (CPU_N100, 30_000, 0, 9679.0),
-    (CPU_N100, 150_000, 1, 24967.0),
-    (CPU_N100, 30_000, 0, 2963.0),
-    (CPU_N100, 150_000, 1, 12670.0),
+/// The ten wasm rows of `data/costs/costs.csv`, verbatim: (cpu, target, rung, wall,
+/// achieved dofs, achieved elements). The eight 2026-10-13 budgets-document rows come
+/// from the probe harness (edit→level wall including document-UI overhead) and carry no
+/// achieved cells; the two OnePlus 13 rows are walls read in-page from the running app's
+/// analysis state (the worker's own per-level measurement, no document-UI overhead) and
+/// carry the achieved DOF/element three runs agree on.
+const WASM_ROWS: [(&str, usize, usize, f64, Option<usize>, Option<usize>); 10] = [
+    (CPU_REF, 30_000, 0, 1352.0, None, None),
+    (CPU_REF, 150_000, 1, 6025.0, None, None),
+    (CPU_REF, 30_000, 0, 1678.0, None, None),
+    (CPU_REF, 150_000, 1, 6494.0, None, None),
+    (CPU_N100, 30_000, 0, 9679.0, None, None),
+    (CPU_N100, 150_000, 1, 24967.0, None, None),
+    (CPU_N100, 30_000, 0, 2963.0, None, None),
+    (CPU_N100, 150_000, 1, 12670.0, None, None),
+    (CPU_ONEPLUS, 30_000, 0, 1270.0, Some(48822), Some(9588)),
+    (CPU_ONEPLUS, 150_000, 1, 7523.0, Some(190440), Some(40643)),
 ];
 
 /// The CSV fixture holds no commas inside fields, so a naive split is exact here;
@@ -145,8 +167,12 @@ fn v18_estimator_residual() {
         (DOFS[2], N100_WALLS[2]),
     ])
     .expect("three distinct positive points");
-    let res_ref = fit3_ref.residual.expect("three points measure the residual");
-    let res_n100 = fit3_n100.residual.expect("three points measure the residual");
+    let res_ref = fit3_ref
+        .residual
+        .expect("three points measure the residual");
+    let res_n100 = fit3_n100
+        .residual
+        .expect("three points measure the residual");
 
     // Cross-machine wall factors per rung: small rungs share one factor, the extension
     // rung diverges.
@@ -176,7 +202,10 @@ fn v18_estimator_residual() {
         fit3_n100.exponent,
         res_n100 * 100.0,
     );
-    println!("  cross-machine wall factors: rung0 {:.4}, rung1 {:.4}, rung2 {:.4}", f0, f1, f2);
+    println!(
+        "  cross-machine wall factors: rung0 {:.4}, rung1 {:.4}, rung2 {:.4}",
+        f0, f1, f2
+    );
 
     assert!(
         ratio_ref >= SHIP_PRED_RATIO_REF.0 && ratio_ref <= SHIP_PRED_RATIO_REF.1,
@@ -238,7 +267,10 @@ fn v18_estimator_residual() {
         f0,
     );
 
-    let mut r = Report::new("V18", "Cost estimator residual — projections carry their own error");
+    let mut r = Report::new(
+        "V18",
+        "Cost estimator residual — projections carry their own error",
+    );
     r.check(Check::relative(
         "Rung-2 projection from the first-pair fit (referee)",
         REF_WALLS[2],
@@ -295,8 +327,10 @@ fn v18_estimator_residual() {
              (b) when a rung has fewer than two local points, the CLI's budget/tolerance \
              projections fall back to `seed_median` — the median wall of same machine-class \
              rows — a level, never a claim about slope (`crates/fieldsmith-cli/src/main.rs`).",
-            rp0 = pred_ref, np0 = pred_n100,
-            rm = REF_WALLS[2], nm = N100_WALLS[2],
+            rp0 = pred_ref,
+            np0 = pred_n100,
+            rm = REF_WALLS[2],
+            nm = N100_WALLS[2],
             rur = (1.0 - pred_ref / REF_WALLS[2]) * 100.0,
             nun = (1.0 - pred_n100 / N100_WALLS[2]) * 100.0,
         ),
@@ -312,7 +346,9 @@ fn v18_estimator_residual() {
              effect is the plausible reading; nothing in this test measures it) — the recorded \
              consequence is: `data/costs/costs.csv` and every seeded projection key rows by \
              machine class, and cost bands are recorded per class, not assumed transferable.",
-            f0 = f0, f1 = f1, f2 = f2,
+            f0 = f0,
+            f1 = f1,
+            f2 = f2,
             fd = (f1 / f0 - 1.0).abs() * 100.0,
             fdp = (f2 / f0 - 1.0) * 100.0,
         ),
@@ -323,13 +359,23 @@ fn v18_estimator_residual() {
             "`v18_costs_csv_ties_to_ship_data` parses `data/costs/costs.csv` and checks: \
              {nrows} rows, every row schema 1, month 2026-10; the six CLI rows' walls and \
              change-estimate cells parse back EXACTLY to the constants this test embeds; the \
-             eight wasm rows tie to the budgets-document walls ({w0}, {w1}, {w2}, {w3}, \
-             {w4}, {w5}, {w6}, {w7}) with empty DOF/element/leaf/change cells, engine \
-             \"fieldsmith wasm\". The CSV is the single seed source; this test fails if the \
-             file and the ship data drift apart.",
+             eight wasm probe-harness rows tie to the budgets-document walls ({w0}, {w1}, \
+             {w2}, {w3}, {w4}, {w5}, {w6}, {w7}) with empty DOF/element/leaf/change cells; \
+             the two OnePlus 13 rows tie to the in-page walls ({w8}, {w9}) and carry achieved \
+             DOF/element cells (the worker reads them from its own analysis state) with empty \
+             leaf/change cells; engine \"fieldsmith wasm\". The CSV is the single seed \
+             source; this test fails if the file and the ship data drift apart.",
             nrows = CLI_ROWS.len() + WASM_ROWS.len(),
-            w0 = WASM_ROWS[0].3, w1 = WASM_ROWS[1].3, w2 = WASM_ROWS[2].3, w3 = WASM_ROWS[3].3,
-            w4 = WASM_ROWS[4].3, w5 = WASM_ROWS[5].3, w6 = WASM_ROWS[6].3, w7 = WASM_ROWS[7].3,
+            w0 = WASM_ROWS[0].3,
+            w1 = WASM_ROWS[1].3,
+            w2 = WASM_ROWS[2].3,
+            w3 = WASM_ROWS[3].3,
+            w4 = WASM_ROWS[4].3,
+            w5 = WASM_ROWS[5].3,
+            w6 = WASM_ROWS[6].3,
+            w7 = WASM_ROWS[7].3,
+            w8 = WASM_ROWS[8].3,
+            w9 = WASM_ROWS[9].3,
         ),
     );
     r.write();
@@ -355,7 +401,10 @@ fn v18_costs_csv_ties_to_ship_data() {
                     .iter()
                     .find(|s| s.cpu == row[4] && s.target == target && s.rung == rung)
                     .unwrap_or_else(|| {
-                        panic!("no ship CLI row matches cpu={:?} rung={rung} target={target}", row[4])
+                        panic!(
+                            "no ship CLI row matches cpu={:?} rung={rung} target={target}",
+                            row[4]
+                        )
                     });
                 assert_eq!(row[3], "fieldsmith 0.2.0 / fenics-rs 0.1.0", "cli engine");
                 assert_eq!(
@@ -392,19 +441,55 @@ fn v18_costs_csv_ties_to_ship_data() {
                 let target: usize = row[8].parse().expect("wasm target_dofs");
                 let wall: f64 = row[12].parse().expect("wasm wall_ms");
                 assert_eq!(row[3], "fieldsmith wasm", "wasm engine");
-                assert!(
-                    WASM_ROWS.iter().any(|&(cpu, t, g, w)| {
-                        cpu == row[4] && t == target && g == rung && w == wall
-                    }),
-                    "wasm row (cpu={:?}, rung={rung}, target={target}, wall={wall}) does not \
-                     tie to a budgets-doc constant",
-                    row[4],
-                );
-                for ci in [9usize, 10, 11, 13, 14] {
+                let ships: Vec<_> = WASM_ROWS
+                    .iter()
+                    .filter(|&&(cpu, t, g, ..)| cpu == row[4] && t == target && g == rung)
+                    .collect();
+                // Browser and harness block live only in the CSV's provenance comments, so
+                // two ship rows may share (cpu, target, rung); the row must tie wall and
+                // achieved cells to the SAME constant, whichever of the tied block it is.
+                let ship = ships
+                    .iter()
+                    .find(|&&(_, _, _, w, _, _)| *w == wall)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "wasm wall for cpu={:?} rung={rung} must tie to a ship measurement \
+                             (have {:?})",
+                            row[4],
+                            ships.iter().map(|s| s.3).collect::<Vec<_>>(),
+                        )
+                    });
+                for ci in [11usize, 13, 14] {
                     assert!(
                         row[ci].is_empty(),
-                        "wasm rows carry no DOF/element/leaf/change cells (column {ci})",
+                        "wasm rows carry no field-leaf/change cells (column {ci})",
                     );
+                }
+                match (ship.4, ship.5) {
+                    // Probe-harness rows: the harness records only the wall.
+                    (None, None) => {
+                        for ci in [9usize, 10] {
+                            assert!(
+                                row[ci].is_empty(),
+                                "probe-harness wasm rows carry no DOF/element cells (column \
+                                 {ci})",
+                            );
+                        }
+                    }
+                    // In-page rows: the worker reads its own achieved sizes.
+                    (Some(d), Some(e)) => {
+                        assert_eq!(
+                            row[9].parse::<usize>().expect("wasm achieved dofs"),
+                            d,
+                            "in-page wasm rows tie achieved DOF to the ship measurement",
+                        );
+                        assert_eq!(
+                            row[10].parse::<usize>().expect("wasm achieved elements"),
+                            e,
+                            "in-page wasm rows tie achieved elements to the ship measurement",
+                        );
+                    }
+                    _ => unreachable!("ship wasm rows carry both achieved cells or neither"),
                 }
             }
             other => panic!("unexpected platform {other:?} in the seed CSV"),

@@ -62,10 +62,13 @@ pub fn solve_modes(
     opts: &ModeOptions,
 ) -> Result<ModalResult, String> {
     faer::set_global_parallelism(faer::Parallelism::None);
-    let mut bsr = assemble(mesh, &Material {
-        young: young.to_vec(),
-        poisson,
-    });
+    let mut bsr = assemble(
+        mesh,
+        &Material {
+            young: young.to_vec(),
+            poisson,
+        },
+    );
     pcg::apply_dirichlet(&mut bsr, fixed);
     let n_total = mesh.nodes.len() * 3;
     let mut triplets = Vec::with_capacity(bsr.nnz_blocks() * 9);
@@ -81,12 +84,8 @@ pub fn solve_modes(
             }
         }
     }
-    let k = SparseColMat::<usize, f64>::try_new_from_triplets(
-        n_total,
-        n_total,
-        &triplets,
-    )
-    .map_err(|e| format!("stiffness matrix: {e}"))?;
+    let k = SparseColMat::<usize, f64>::try_new_from_triplets(n_total, n_total, &triplets)
+        .map_err(|e| format!("stiffness matrix: {e}"))?;
 
     let cells: Vec<[usize; 10]> = mesh.tets.iter().map(|t| t.map(|n| n as usize)).collect();
     let m = fenics_assembly::assemble_elasticity_mass_p2_3d(&mesh.nodes, &cells, density_modal);
@@ -198,8 +197,8 @@ mod tests {
         let fixed = vec![0b111u8; mesh.nodes.len()];
         let young = vec![200_000.0; mesh.tets.len()];
         let opts = ModeOptions::default();
-        let err = solve_modes(&mesh, &young, 0.3, 7.85e-9, &fixed, &opts)
-            .expect_err("no free DOFs");
+        let err =
+            solve_modes(&mesh, &young, 0.3, 7.85e-9, &fixed, &opts).expect_err("no free DOFs");
         assert!(err.contains("No free degrees of freedom"), "{err}");
     }
 }

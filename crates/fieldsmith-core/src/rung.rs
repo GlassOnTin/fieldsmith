@@ -264,15 +264,27 @@ load push tip force=(0, 0, -100)
 
     #[test]
     fn change_is_the_badge_math_on_floored_values() {
-        let prev = TrackedValues { deflection_mm: 2.0, vm_mpa: 100.0 };
-        let cur = TrackedValues { deflection_mm: 2.02, vm_mpa: 98.0 };
+        let prev = TrackedValues {
+            deflection_mm: 2.0,
+            vm_mpa: 100.0,
+        };
+        let cur = TrackedValues {
+            deflection_mm: 2.02,
+            vm_mpa: 98.0,
+        };
         let ch = RungChange::of(prev, cur);
         assert!((ch.deflection_rel - 0.01).abs() < 1e-9);
         assert!((ch.vm_rel + 0.02).abs() < 1e-9);
         assert!((ch.deflection_mm - 0.02).abs() < 1e-9);
         assert!((ch.vm_mpa + 2.0).abs() < 1e-9);
         // Zero floor: the badge's 1e-9 keeps % defined where a raw 0 would divide by zero.
-        let zero = RungChange::of(TrackedValues { deflection_mm: 1e-9, vm_mpa: 1e-9 }, cur);
+        let zero = RungChange::of(
+            TrackedValues {
+                deflection_mm: 1e-9,
+                vm_mpa: 1e-9,
+            },
+            cur,
+        );
         assert!(zero.deflection_rel > 2_000_000.0);
     }
 
@@ -300,20 +312,32 @@ load push tip force=(0, 0, -100)
 
     #[test]
     fn tolerance_parse_and_met() {
-        assert_eq!(Tolerance::parse("deflection:0.1mm"), Ok(Tolerance::DeflectionMm(0.1)));
+        assert_eq!(
+            Tolerance::parse("deflection:0.1mm"),
+            Ok(Tolerance::DeflectionMm(0.1))
+        );
         assert_eq!(
             Tolerance::parse("deflection:1%"),
             Ok(Tolerance::DeflectionRel(0.01))
         );
-        assert_eq!(Tolerance::parse("vm:2.5mpa"), Ok(Tolerance::VonMisesMpa(2.5)));
+        assert_eq!(
+            Tolerance::parse("vm:2.5mpa"),
+            Ok(Tolerance::VonMisesMpa(2.5))
+        );
         assert_eq!(Tolerance::parse("VM:2 %"), Ok(Tolerance::VonMisesRel(0.02)));
         assert!(Tolerance::parse("deflection:1").is_err()); // unit required
         assert!(Tolerance::parse("vm:0.5mm").is_err()); // mm is deflection-only
         assert!(Tolerance::parse("bogus:1%").is_err());
         assert!(Tolerance::parse("deflection:-1mm").is_err());
         let ch = RungChange::of(
-            TrackedValues { deflection_mm: 2.0, vm_mpa: 100.0 },
-            TrackedValues { deflection_mm: 2.04, vm_mpa: 101.5 },
+            TrackedValues {
+                deflection_mm: 2.0,
+                vm_mpa: 100.0,
+            },
+            TrackedValues {
+                deflection_mm: 2.04,
+                vm_mpa: 101.5,
+            },
         );
         assert!(Tolerance::DeflectionRel(0.05).met(&ch)); // |2 %| inside 5 %
         assert!(!Tolerance::DeflectionRel(0.01).met(&ch));

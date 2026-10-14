@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::steptess::{
     add3, assemble_ring, cross3, dist3, dot3, len3, sample_edge, scale3, sub, tess_face, unit_or,
-    EdgePoly, Frame, P2, P3, Ring, RingPart, Surf, VertexPool,
+    EdgePoly, Frame, Ring, RingPart, Surf, VertexPool, P2, P3,
 };
 use fieldsmith_mesh::export::TriMesh;
 use step_io::generated::model::EntityKey;
@@ -103,8 +103,7 @@ pub struct StepReport {
 /// non-positive or non-finite value the call fails by name.
 pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
     let t0 = crate::now_ms();
-    let (model, _report) =
-        step_io::read(bytes).map_err(|e| format!("STEP parse failed: {e}"))?;
+    let (model, _report) = step_io::read(bytes).map_err(|e| format!("STEP parse failed: {e}"))?;
     let parse_ms = (crate::now_ms() - t0) as u64;
     let scene = model.scene();
 
@@ -135,7 +134,10 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
     // name map: solid key → owning product name (empty names fall back below)
     let mut names: HashMap<EntityKey, String> = HashMap::new();
     for def in scene.all_product_definitions() {
-        let pname = def.product().map(|p| p.name().to_owned()).unwrap_or_default();
+        let pname = def
+            .product()
+            .map(|p| p.name().to_owned())
+            .unwrap_or_default();
         if pname.is_empty() {
             continue;
         }
@@ -157,7 +159,10 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
     let t1 = crate::now_ms();
     for s in &solids {
         let raw_name = s.name();
-        let name = match (!raw_name.trim().is_empty(), names.get(&s.key()).map(String::as_str)) {
+        let name = match (
+            !raw_name.trim().is_empty(),
+            names.get(&s.key()).map(String::as_str),
+        ) {
             (true, _) => raw_name.to_owned(),
             (false, Some(p)) if !p.trim().is_empty() => p.to_owned(),
             _ => {
@@ -237,10 +242,7 @@ fn placement(
     };
     let coords = &model.cartesian_point_arena.items[loc.0].coordinates;
     if coords.len() != 3 {
-        return Err(format!(
-            "placement origin has {} coordinates",
-            coords.len()
-        ));
+        return Err(format!("placement origin has {} coordinates", coords.len()));
     }
     let dir = |d: &Option<DirectionRef>| -> Result<Option<P3>, String> {
         match d {
@@ -259,11 +261,7 @@ fn placement(
     };
     let axis = dir(&ap.axis)?;
     let ref_dir = dir(&ap.ref_direction)?;
-    Ok((
-        [coords[0], coords[1], coords[2]],
-        axis,
-        ref_dir,
-    ))
+    Ok(([coords[0], coords[1], coords[2]], axis, ref_dir))
 }
 
 /// Scale a file-space point to millimetres.
@@ -285,11 +283,7 @@ fn surf_of(
     match face.surface().kind() {
         SurfaceKind::Plane(p) => {
             let (o, axis, rf) = placement(model, &p.position)?;
-            let f = Frame::build(
-                mm(o, to_mm),
-                axis.unwrap_or([0.0, 0.0, 1.0]),
-                rf,
-            )?;
+            let f = Frame::build(mm(o, to_mm), axis.unwrap_or([0.0, 0.0, 1.0]), rf)?;
             Ok(Surf::Plane(f))
         }
         SurfaceKind::Cylindrical(c) => {
@@ -338,9 +332,14 @@ fn surf_of(
                 r: c.minor_radius * to_mm,
             })
         }
-        SurfaceKind::LinearExtrusion(_) | SurfaceKind::Revolution(_) | SurfaceKind::BSpline(_)
-        | SurfaceKind::BSplineWithKnots(_) | SurfaceKind::QuasiUniform(_)
-        | SurfaceKind::Uniform(_) | SurfaceKind::Bezier(_) | SurfaceKind::Other(_) => {
+        SurfaceKind::LinearExtrusion(_)
+        | SurfaceKind::Revolution(_)
+        | SurfaceKind::BSpline(_)
+        | SurfaceKind::BSplineWithKnots(_)
+        | SurfaceKind::QuasiUniform(_)
+        | SurfaceKind::Uniform(_)
+        | SurfaceKind::Bezier(_)
+        | SurfaceKind::Other(_) => {
             if let Some(n) = face.surface().to_nurbs() {
                 return Ok(Surf::Nurbs(Box::new(scale_nurbs(n, to_mm))));
             }
@@ -377,10 +376,7 @@ fn surf_label(k: SurfaceKind<'_>) -> String {
 
 /// Scale a B-spline surface's control points from file units to millimetres
 /// (weights untouched — the projective weight only re-normalises).
-fn scale_nurbs(
-    mut n: step_io::scene::NurbsSurface,
-    to_mm: f64,
-) -> step_io::scene::NurbsSurface {
+fn scale_nurbs(mut n: step_io::scene::NurbsSurface, to_mm: f64) -> step_io::scene::NurbsSurface {
     if to_mm != 1.0 {
         for row in n.control_points.iter_mut() {
             for p in row.iter_mut() {
@@ -560,8 +556,18 @@ fn sign_fix(v: P3) -> P3 {
 /// frame does not group and keeps its per-entity sampling).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum GeoKey {
-    Circle { c: [u64; 3], r: u64, ax: [u64; 3] },
-    Ellipse { c: [u64; 3], a: u64, b: u64, ax: [u64; 3], ex: [u64; 3] },
+    Circle {
+        c: [u64; 3],
+        r: u64,
+        ax: [u64; 3],
+    },
+    Ellipse {
+        c: [u64; 3],
+        a: u64,
+        b: u64,
+        ax: [u64; 3],
+        ex: [u64; 3],
+    },
 }
 
 impl GeoKey {
@@ -817,7 +823,11 @@ impl ConicMaster {
         for c in 0..k {
             m.cons_idx.push(m.pts.len());
             let cur = m.cons[c];
-            let nxt = if c + 1 == k { ang0 + std::f64::consts::TAU } else { m.cons[c + 1] };
+            let nxt = if c + 1 == k {
+                ang0 + std::f64::consts::TAU
+            } else {
+                m.cons[c + 1]
+            };
             let span = nxt - cur;
             let nsteps = ((span / dmax).ceil() as usize).max(1);
             let dth = span / nsteps as f64;
@@ -836,7 +846,11 @@ impl ConicMaster {
         // the edge sweeps its curve's parameter direction (same_sense) around
         // its own entity axis; the master's frame is sign-canonicalised, so
         // the two compose by the axis hands' agreement
-        let hand = if dot3(self.n, reg.axis_file) >= 0.0 { 1.0 } else { -1.0 };
+        let hand = if dot3(self.n, reg.axis_file) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
         let sgn = (if reg.same_sense { 1.0 } else { -1.0 }) * hand;
         let cons_of = |q: f64| self.cons.iter().position(|&c| (c - q).abs() <= 1e-9);
         // constraints index their own array; slices walk the samples, through
@@ -946,7 +960,10 @@ fn tess_solid(
                         continue;
                     }
                     if let Some(reg) = register_conic_edge(model, &e, to_mm) {
-                        groups.entry(GeoKey::of(&reg.geo)).or_default().push(regs.len());
+                        groups
+                            .entry(GeoKey::of(&reg.geo))
+                            .or_default()
+                            .push(regs.len());
                         regs.push((e.key(), reg));
                     }
                 }
@@ -962,9 +979,9 @@ fn tess_solid(
         match ConicMaster::build(&reps, chord) {
             Ok(master) => {
                 for (i, reg) in reps.iter().enumerate() {
-                    let poly = master.slice(reg).map_err(|e| {
-                        format!("shared {} trim: {e}", conic_kind_name(&reg.geo))
-                    });
+                    let poly = master
+                        .slice(reg)
+                        .map_err(|e| format!("shared {} trim: {e}", conic_kind_name(&reg.geo)));
                     masters.insert(regs[members[i]].0, poly);
                 }
             }
@@ -1074,7 +1091,13 @@ fn tess_solid(
                     pts_all.extend_from_slice(&poly.pts);
                     parts.push(RingPart { poly, fwd, occ });
                 }
-                rings.push(assemble_ring(&surf, &parts, b.is_outer(), join_tol, inv_tol)?);
+                rings.push(assemble_ring(
+                    &surf,
+                    &parts,
+                    b.is_outer(),
+                    join_tol,
+                    inv_tol,
+                )?);
             }
             // STEP lets a face's outer bound be left unlabelled (every bound a
             // FACE_BOUND — NIST CTC-01's plate faces); the outer loop is then
@@ -1207,10 +1230,7 @@ fn orient_solid(verts: &[P3], tris: &mut [[u32; 3]], flux_volume: Option<f64>) {
         while let Some(t) = stack.pop() {
             let ta = t as usize;
             for k in 0..3u8 {
-                let (a, b) = (
-                    tris[ta][k as usize],
-                    tris[ta][((k as usize) + 1) % 3],
-                );
+                let (a, b) = (tris[ta][k as usize], tris[ta][((k as usize) + 1) % 3]);
                 let key = [a.min(b), a.max(b)];
                 for &(p, s) in by_edge.get(&key).into_iter().flatten() {
                     let pi = p as usize;
@@ -1220,10 +1240,7 @@ fn orient_solid(verts: &[P3], tris: &mut [[u32; 3]], flux_volume: Option<f64>) {
                     if !visited[pi] {
                         visited[pi] = true;
                         stack.push(p);
-                        let (pa, pb) = (
-                            tris[pi][s as usize],
-                            tris[pi][(s as usize + 1) % 3],
-                        );
+                        let (pa, pb) = (tris[pi][s as usize], tris[pi][(s as usize + 1) % 3]);
                         if (pa, pb) == (a, b) {
                             tris[pi].reverse();
                         }
@@ -1265,7 +1282,11 @@ fn orient_solid(verts: &[P3], tris: &mut [[u32; 3]], flux_volume: Option<f64>) {
     // analytic flux. Zero divergence (nothing enclosed) keeps the mesh as is.
     let mut div = 0.0f64;
     for t in tris.iter() {
-        let (a, b, c) = (verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]);
+        let (a, b, c) = (
+            verts[t[0] as usize],
+            verts[t[1] as usize],
+            verts[t[2] as usize],
+        );
         div += (a[0] * (b[1] * c[2] - c[1] * b[2]) - a[1] * (b[0] * c[2] - c[0] * b[2])
             + a[2] * (b[0] * c[1] - c[0] * b[1]))
             / 6.0;
@@ -1405,12 +1426,11 @@ fn band_ring(surf: &Surf, rings: &[Ring], t_u: f64, t_v: f64) -> Option<Ring> {
         // point's far-branch start), so walk by wrapped deltas, not values
         let mut sweeps: Vec<(Vec<P3>, Vec<f64>, f64)> = Vec::new(); // (pts, unwrapped u, signed total)
         for r in rings {
-            let fspan = r
-                .uv
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
-                    (lo.min(q[fixed]), hi.max(q[fixed]))
-                });
+            let fspan =
+                r.uv.iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
+                        (lo.min(q[fixed]), hi.max(q[fixed]))
+                    });
             if fspan.1 - fspan.0 > period * 1e-3 {
                 return None;
             }
@@ -1498,10 +1518,18 @@ fn band_ring(surf: &Surf, rings: &[Ring], t_u: f64, t_v: f64) -> Option<Ring> {
         // bottom's closure corner (same 3D as its first sample, one period over)
         let b_close = bot.1[0] + bot.2;
         pts.push(bot.0[0]);
-        uv.push(if axis == 0 { [b_close, v_lo] } else { [v_lo, b_close] });
+        uv.push(if axis == 0 {
+            [b_close, v_lo]
+        } else {
+            [v_lo, b_close]
+        });
         // top's corner above it
         pts.push(band_pt(b_close));
-        uv.push(if axis == 0 { [b_close, v_hi] } else { [v_hi, b_close] });
+        uv.push(if axis == 0 {
+            [b_close, v_hi]
+        } else {
+            [v_hi, b_close]
+        });
         for i in (0..bot.0.len()).rev() {
             let u = bot.1[i];
             pts.push(band_pt(u));
@@ -1567,7 +1595,11 @@ mod tests {
             let c = m.verts[t[2] as usize];
             let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-            let x = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+            let x = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
             v += (a[0] * x[0] + a[1] * x[1] + a[2] * x[2]) / 6.0;
         }
         v
@@ -1622,15 +1654,45 @@ mod tests {
             axis,
             ref_dir: rf,
         };
-        let mut face = |surface: SurfaceInput, same_sense: bool, edges: &[(m::EdgeCurveId, bool)]| {
-            b.face(surface, same_sense, vec![FaceBoundInput::outer(edges.to_vec())]).unwrap()
-        };
-        let f = face(SurfaceInput::Plane(fr([0.0, 0.0, z], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])), true, &top);
-        let g = face(SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])), false, &bottom);
-        let h = face(SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])), false, &side_x0);
-        let i = face(SurfaceInput::Plane(fr([x, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])), true, &side_x1);
-        let j = face(SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])), false, &side_y0);
-        let k = face(SurfaceInput::Plane(fr([0.0, y, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])), true, &side_y1);
+        let mut face =
+            |surface: SurfaceInput, same_sense: bool, edges: &[(m::EdgeCurveId, bool)]| {
+                b.face(
+                    surface,
+                    same_sense,
+                    vec![FaceBoundInput::outer(edges.to_vec())],
+                )
+                .unwrap()
+            };
+        let f = face(
+            SurfaceInput::Plane(fr([0.0, 0.0, z], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])),
+            true,
+            &top,
+        );
+        let g = face(
+            SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])),
+            false,
+            &bottom,
+        );
+        let h = face(
+            SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])),
+            false,
+            &side_x0,
+        );
+        let i = face(
+            SurfaceInput::Plane(fr([x, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])),
+            true,
+            &side_x1,
+        );
+        let j = face(
+            SurfaceInput::Plane(fr([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])),
+            false,
+            &side_y0,
+        );
+        let k = face(
+            SurfaceInput::Plane(fr([0.0, y, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])),
+            true,
+            &side_y1,
+        );
         let part = b.part("box").unwrap();
         b.solid(part, "box", vec![f, g, h, i, j, k]).unwrap();
     }
@@ -1647,7 +1709,10 @@ mod tests {
         let v = p.volume.expect("all-planar faces have flux");
         assert!((v - 24.0).abs() < 1e-6, "flux volume {v} vs 24");
         let mv = mesh_volume(&p.mesh);
-        assert!((mv - 24.0).abs() < 1e-6, "mesh divergence volume {mv} vs 24");
+        assert!(
+            (mv - 24.0).abs() < 1e-6,
+            "mesh divergence volume {mv} vs 24"
+        );
         assert_eq!(p.tris, 12);
     }
 
@@ -1667,7 +1732,8 @@ mod tests {
         let expect_chord = (140_000.0f64.sqrt()) * 3e-4;
         assert!(
             (doc.chord - expect_chord).abs() < 0.01,
-            "chord {} vs diagonal·3e-4 = {expect_chord}", doc.chord,
+            "chord {} vs diagonal·3e-4 = {expect_chord}",
+            doc.chord,
         );
     }
 
@@ -1680,15 +1746,28 @@ mod tests {
             let (r, h) = (5.0_f64, 10.0);
             let v_bot = b.vertex([r, 0.0, 0.0]).unwrap();
             let v_top = b.vertex([r, 0.0, h]).unwrap();
-            let f_circ = |origin: [f64; 3]| BFrame { origin, axis: [0.0, 0.0, 1.0], ref_dir: [1.0, 0.0, 0.0] };
-            let c_bot = b.edge(v_bot, v_bot, CurveInput::Circle(f_circ([0.0, 0.0, 0.0]), r)).unwrap();
-            let c_top = b.edge(v_top, v_top, CurveInput::Circle(f_circ([0.0, 0.0, h]), r)).unwrap();
+            let f_circ = |origin: [f64; 3]| BFrame {
+                origin,
+                axis: [0.0, 0.0, 1.0],
+                ref_dir: [1.0, 0.0, 0.0],
+            };
+            let c_bot = b
+                .edge(v_bot, v_bot, CurveInput::Circle(f_circ([0.0, 0.0, 0.0]), r))
+                .unwrap();
+            let c_top = b
+                .edge(v_top, v_top, CurveInput::Circle(f_circ([0.0, 0.0, h]), r))
+                .unwrap();
             let seam = b.edge(v_bot, v_top, CurveInput::Line).unwrap();
             let wall = b
                 .face(
                     SurfaceInput::Cylinder(f_circ([0.0, 0.0, 0.0]), r),
                     true,
-                    vec![FaceBoundInput::outer(vec![(c_bot, true), (seam, true), (c_top, false), (seam, false)])],
+                    vec![FaceBoundInput::outer(vec![
+                        (c_bot, true),
+                        (seam, true),
+                        (c_top, false),
+                        (seam, false),
+                    ])],
                 )
                 .unwrap();
             let cap_bot = b
@@ -1721,7 +1800,10 @@ mod tests {
             "volume {v} vs {expect} at chord 0.01"
         );
         let mv = mesh_volume(&p.mesh);
-        assert!((mv - expect).abs() / expect < 2e-3, "mesh divergence {mv} vs {expect}");
+        assert!(
+            (mv - expect).abs() / expect < 2e-3,
+            "mesh divergence {mv} vs {expect}"
+        );
         assert!(p.tris >= 3, "got {} tris", p.tris);
         assert!(
             p.mesh_area / p.quad_area > 0.999,
@@ -1760,7 +1842,8 @@ mod tests {
             .iter()
             .map(|p| b.vertex(*p).unwrap())
             .collect();
-            let mut e = |from: usize, to: usize| b.edge(vs[from], vs[to], CurveInput::Line).unwrap();
+            let mut e =
+                |from: usize, to: usize| b.edge(vs[from], vs[to], CurveInput::Line).unwrap();
             let e01 = e(0, 1);
             let e12 = e(1, 2);
             let e23 = e(2, 3);
@@ -1792,12 +1875,48 @@ mod tests {
             // P0+P3 = P1+P2; the patch's natural normal is b×a, so each face's
             // cps are ordered to point the encoded side (n_nat outward where
             // same_sense = true, inward where false)
-            let f = b.face(SurfaceInput::Nurbs(q([p(0, 0, 1), p(0, 1, 1), p(1, 0, 1), p(1, 1, 1)])), true, vec![FaceBoundInput::outer(top.to_vec())]).unwrap();
-            let g = b.face(SurfaceInput::Nurbs(q([p(0, 0, 0), p(0, 1, 0), p(1, 0, 0), p(1, 1, 0)])), false, vec![FaceBoundInput::outer(bottom.to_vec())]).unwrap();
-            let h = b.face(SurfaceInput::Nurbs(q([p(0, 0, 0), p(0, 0, 1), p(0, 1, 0), p(0, 1, 1)])), false, vec![FaceBoundInput::outer(side_x0.to_vec())]).unwrap();
-            let i = b.face(SurfaceInput::Nurbs(q([p(1, 0, 0), p(1, 0, 1), p(1, 1, 0), p(1, 1, 1)])), true, vec![FaceBoundInput::outer(side_x1.to_vec())]).unwrap();
-            let j = b.face(SurfaceInput::Nurbs(q([p(0, 0, 0), p(1, 0, 0), p(0, 0, 1), p(1, 0, 1)])), false, vec![FaceBoundInput::outer(side_y0.to_vec())]).unwrap();
-            let k3 = b.face(SurfaceInput::Nurbs(q([p(0, 1, 0), p(1, 1, 0), p(0, 1, 1), p(1, 1, 1)])), true, vec![FaceBoundInput::outer(side_y1.to_vec())]).unwrap();
+            let f = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(0, 0, 1), p(0, 1, 1), p(1, 0, 1), p(1, 1, 1)])),
+                    true,
+                    vec![FaceBoundInput::outer(top.to_vec())],
+                )
+                .unwrap();
+            let g = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(0, 0, 0), p(0, 1, 0), p(1, 0, 0), p(1, 1, 0)])),
+                    false,
+                    vec![FaceBoundInput::outer(bottom.to_vec())],
+                )
+                .unwrap();
+            let h = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(0, 0, 0), p(0, 0, 1), p(0, 1, 0), p(0, 1, 1)])),
+                    false,
+                    vec![FaceBoundInput::outer(side_x0.to_vec())],
+                )
+                .unwrap();
+            let i = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(1, 0, 0), p(1, 0, 1), p(1, 1, 0), p(1, 1, 1)])),
+                    true,
+                    vec![FaceBoundInput::outer(side_x1.to_vec())],
+                )
+                .unwrap();
+            let j = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(0, 0, 0), p(1, 0, 0), p(0, 0, 1), p(1, 0, 1)])),
+                    false,
+                    vec![FaceBoundInput::outer(side_y0.to_vec())],
+                )
+                .unwrap();
+            let k3 = b
+                .face(
+                    SurfaceInput::Nurbs(q([p(0, 1, 0), p(1, 1, 0), p(0, 1, 1), p(1, 1, 1)])),
+                    true,
+                    vec![FaceBoundInput::outer(side_y1.to_vec())],
+                )
+                .unwrap();
             let part = b.part("nbox").unwrap();
             b.solid(part, "nbox", vec![f, g, h, i, j, k3]).unwrap();
         });
@@ -1805,7 +1924,11 @@ mod tests {
         assert_eq!(doc.parts.len(), 1);
         let p = &doc.parts[0];
         assert!(p.volume.is_none(), "NURBS faces have no flux potential");
-        assert!((p.quad_area - 52.0).abs() < 1e-6, "2(2·3+2·4+3·4) = 52, got {}", p.quad_area);
+        assert!(
+            (p.quad_area - 52.0).abs() < 1e-6,
+            "2(2·3+2·4+3·4) = 52, got {}",
+            p.quad_area
+        );
         let mv = mesh_volume(&p.mesh);
         assert!((mv - 24.0).abs() < 1e-6, "mesh divergence {mv} vs 24");
         assert_eq!(p.tris, 12);

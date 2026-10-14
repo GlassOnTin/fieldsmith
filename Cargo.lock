@@ -394,6 +394,7 @@ dependencies = [
 name = "fieldsmith-verify"
 version = "0.2.0"
 dependencies = [
+ "fenics-assembly",
  "fenics-element",
  "fieldsmith-core",
  "fieldsmith-doc",

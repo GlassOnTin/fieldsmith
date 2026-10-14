@@ -919,6 +919,149 @@ pub fn eval_face(e: &Expr, p: V3) -> (f64, Face) {
     }
 }
 
+/// Whether the world point `p` lies on the carrier surface of `face` of the placed
+/// shape, within `tol`. The membership test behind a `shape.face` region selector:
+/// every point of a facet claimed for a named face must sit on that face's own
+/// surface — a cap plane for `bottom`, the wall cylinder for `side`, a box plane for
+/// the axis faces — rather than merely being nearest to it. Rim points where two
+/// named faces meet pass both carriers; a point a wall chord up from the cap is a
+/// wall point, and its distance to the cap plane is its height, so `bottom` claims
+/// never pick it up (V20's sliver defect — the nearest-face test at the centroid did).
+/// Placement wrappers recurse over every copy; a composite accepts either operand's
+/// carrier and the caller's SDF corner test discards interior carriers. Face-less
+/// kinds (mesh leaves, shell, offset, fills) keep the nearest-face classification.
+pub fn on_face(e: &Expr, p: V3, face: Face, tol: f64) -> bool {
+    match e {
+        Expr::Prim(prim) => match face_carrier(prim, p, face) {
+            Some(d) => d.abs() <= tol,
+            None => classify_face(prim, p) == face,
+        },
+        Expr::Xform { m, e } => on_face(e, m.to_local(p), face, tol),
+        Expr::Mirror { axis, e } => {
+            on_face(e, p, face, tol) || on_face(e, reflect(p, *axis), face, tol)
+        }
+        Expr::Linear { count, step, e } => {
+            (0..*count).any(|i| on_face(e, sub(p, scale(*step, i as f64)), face, tol))
+        }
+        Expr::Circular {
+            count,
+            axis,
+            step_deg,
+            e,
+        } => (0..*count).any(|i| {
+            on_face(
+                e,
+                mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p),
+                face,
+                tol,
+            )
+        }),
+        Expr::Combine { a, b, .. } => on_face(a, p, face, tol) || on_face(b, p, face, tol),
+        other => eval_face(other, p).1 == face,
+    }
+}
+
+/// Least |carrier distance| for `face` across a placed shape's leaves — the nearest a point
+/// comes to the carrier surface (wall cylinder, cap plane, box face plane) of any leaf holding
+/// that face. `None` when no leaf has a carrier under that name; a composite takes the nearer
+/// operand; placement wrappers recurse over every copy, mirroring [`on_face`]. The
+/// nearest-carrier sort behind `region_facets`' second pass: a boundary facet the exact chain
+/// refuses (V20's rim chamfer faces between two named faces, and wall facets whose outward
+/// corner is an interior lattice point) belongs to whichever named carrier its centroid rides
+/// closest to. Carrier distance, not the bounded face: a rim point is near both its faces'
+/// carriers by construction.
+pub fn face_carrier_gap(e: &Expr, face: Face, p: V3) -> Option<f64> {
+    match e {
+        Expr::Prim(prim) => face_carrier(prim, p, face).map(f64::abs),
+        Expr::Xform { m, e } => face_carrier_gap(e, face, m.to_local(p)),
+        Expr::Mirror { axis, e } => min_gap(
+            face_carrier_gap(e, face, p),
+            face_carrier_gap(e, face, reflect(p, *axis)),
+        ),
+        Expr::Linear { count, step, e } => (0..*count).fold(None, |acc, i| {
+            min_gap(
+                acc,
+                face_carrier_gap(e, face, sub(p, scale(*step, i as f64))),
+            )
+        }),
+        Expr::Circular {
+            count,
+            axis,
+            step_deg,
+            e,
+        } => (0..*count).fold(None, |acc, i| {
+            min_gap(
+                acc,
+                face_carrier_gap(
+                    e,
+                    face,
+                    mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p),
+                ),
+            )
+        }),
+        Expr::Combine { a, b, .. } => {
+            min_gap(face_carrier_gap(a, face, p), face_carrier_gap(b, face, p))
+        }
+        _ => None,
+    }
+}
+
+fn min_gap(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Signed carrier distance for `face` across a placed shape's copies — [`face_carrier_gap`]
+/// with the sign kept (negative inside the solid), so the carrier's outward normal is
+/// recoverable by differencing. [`face_carrier`] holds that sign on every carrier; the
+/// wrappers pick the copy whose carrier is nearest in magnitude, matching the gap's
+/// nearest-copy pick.
+pub fn face_carrier_signed(e: &Expr, face: Face, p: V3) -> Option<f64> {
+    match e {
+        Expr::Prim(prim) => face_carrier(prim, p, face),
+        Expr::Xform { m, e } => face_carrier_signed(e, face, m.to_local(p)),
+        Expr::Mirror { axis, e } => min_signed(
+            face_carrier_signed(e, face, p),
+            face_carrier_signed(e, face, reflect(p, *axis)),
+        ),
+        Expr::Linear { count, step, e } => (0..*count).fold(None, |acc, i| {
+            min_signed(
+                acc,
+                face_carrier_signed(e, face, sub(p, scale(*step, i as f64))),
+            )
+        }),
+        Expr::Circular {
+            count,
+            axis,
+            step_deg,
+            e,
+        } => (0..*count).fold(None, |acc, i| {
+            min_signed(
+                acc,
+                face_carrier_signed(
+                    e,
+                    face,
+                    mat_t_vec(&rotation_axis_deg(*axis, step_deg * i as f64), p),
+                ),
+            )
+        }),
+        Expr::Combine { a, b, .. } => min_signed(
+            face_carrier_signed(a, face, p),
+            face_carrier_signed(b, face, p),
+        ),
+        _ => None,
+    }
+}
+
+fn min_signed(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a.abs() <= b.abs() { a } else { b }),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Evaluate which surface patch of a placed shape's mesh covers `p` — the patch of whichever
 /// per-copy leaf surface [`eval_face`] would pick. `None` unless the nearest surface belongs
 /// to a mesh leaf's claimed patches (primitive faces carry no patches).

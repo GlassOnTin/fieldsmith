@@ -367,7 +367,12 @@ mod tests {
             for a in [5.0, 6.0] {
                 for (off, shift) in [([70.3, -33.7, 21.9], [-60.0, 30.0, -30.0])] {
                     let base = tpms(fam, a, off).v;
-                    let moved = tpms(fam, a, [off[0] - shift[0], off[1] - shift[1], off[2] - shift[2]]).v;
+                    let moved = tpms(
+                        fam,
+                        a,
+                        [off[0] - shift[0], off[1] - shift[1], off[2] - shift[2]],
+                    )
+                    .v;
                     assert!(
                         shift.iter().all(|&d| d % a == 0.0),
                         "shift {shift:?} must be whole cells of {a}"
@@ -410,7 +415,9 @@ mod tests {
             for _ in 0..4000 {
                 let mut p = [0.0; 3];
                 for a in p.iter_mut() {
-                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     *a = ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0;
                 }
                 p[0] *= 34.0;

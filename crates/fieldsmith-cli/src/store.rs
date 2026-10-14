@@ -218,9 +218,7 @@ pub fn append(path: &std::path::Path, rows: &[Row]) -> Result<(), String> {
     }
     let mut body = String::new();
     for r in &all {
-        body.push_str(
-            &serde_json::to_string(r).map_err(|e| format!("costs store row: {e}"))?,
-        );
+        body.push_str(&serde_json::to_string(r).map_err(|e| format!("costs store row: {e}"))?);
         body.push('\n');
     }
     std::fs::write(path, body).map_err(|e| format!("costs store {}: {e}", path.display()))
@@ -308,12 +306,18 @@ mod tests {
     #[test]
     fn csv_round_trip_and_escaping() {
         let r = row(1, 150_000, 1234.5);
-        assert_eq!(Row::csv(&r).split(',').count(), CSV_HEADER.split(',').count());
+        assert_eq!(
+            Row::csv(&r).split(',').count(),
+            CSV_HEADER.split(',').count()
+        );
         let mut c = row(0, 30_000, 100.0);
         c.cpu = "AMD Ryzen 7, 8 cores".into();
         assert!(Row::csv(&c).contains("\"AMD Ryzen 7, 8 cores\""));
         // A quoted header split would miscount; the shape promise is column-count parity.
-        assert_eq!(Row::csv(&c).split(',').count(), CSV_HEADER.split(',').count() + 1);
+        assert_eq!(
+            Row::csv(&c).split(',').count(),
+            CSV_HEADER.split(',').count() + 1
+        );
     }
 
     #[test]
@@ -328,7 +332,9 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("costs.jsonl");
-        let many: Vec<Row> = (0..600).map(|i| row(i % 3, 30_000, 100.0 + i as f64)).collect();
+        let many: Vec<Row> = (0..600)
+            .map(|i| row(i % 3, 30_000, 100.0 + i as f64))
+            .collect();
         append(&path, &many).unwrap();
         let read = read_all(&path);
         assert_eq!(read.len(), MAX_ROWS);
@@ -354,7 +360,11 @@ mod tests {
         off.cpu = "Other CPU".into();
         off.target_dofs = 750_000;
         rows.push(off);
-        let m = Machine { cpu: "Test CPU".into(), cores: 8, ram_gb: 16 };
+        let m = Machine {
+            cpu: "Test CPU".into(),
+            cores: 8,
+            ram_gb: 16,
+        };
         let (med, n) = seed_median(&rows, &m, 150_000).unwrap();
         assert_eq!(n, 3);
         assert_eq!(med, 200.0);
@@ -377,7 +387,10 @@ mod tests {
         let path = dir.join("torn.jsonl");
         std::fs::write(
             &path,
-            format!("{}\n{{\"schema\":1,\"trunc", serde_json::to_string(&row(0, 30_000, 1.0)).unwrap()),
+            format!(
+                "{}\n{{\"schema\":1,\"trunc",
+                serde_json::to_string(&row(0, 30_000, 1.0)).unwrap()
+            ),
         )
         .unwrap();
         assert_eq!(read_all(&path).len(), 1);

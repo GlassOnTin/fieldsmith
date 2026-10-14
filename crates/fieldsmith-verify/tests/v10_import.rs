@@ -11,8 +11,8 @@
 use fieldsmith_core::import::{import_mesh, ImportOpts};
 use fieldsmith_core::{region_facets, Facet};
 use fieldsmith_doc::{Document, Face, NodeKind, Region, Selector};
-use fieldsmith_field::volume::volume_auto;
 use fieldsmith_field::expr;
+use fieldsmith_field::volume::volume_auto;
 use fieldsmith_mesh::export::{surface, TriMesh};
 use fieldsmith_mesh::{stuff, V3};
 use fieldsmith_solve::p2::face_nodes;
@@ -319,12 +319,18 @@ fn glb_cube_imports_and_volume_comes_through_the_document() {
 fn sphere_through_the_stl_chain_matches_the_closed_form() {
     let bytes = binary_stl(&uv_sphere(5.0, [5.0, 5.0, 5.0], 64, 32));
     let out = import_mesh("stl", &bytes, &opts(None, None, None, "sphere.stl")).unwrap();
-    assert_eq!(out.nodes[0].id, "mesh1", "an anonymous STL part numbers mesh1");
+    assert_eq!(
+        out.nodes[0].id, "mesh1",
+        "an anonymous STL part numbers mesh1"
+    );
     let p = &out.parts[0];
     assert_eq!(p.open_edges, 0);
     // A smooth closed surface is one 30°-smooth patch — measured 1 here, the same
     // measurement the real Meshy STL gives (one patch, no plane cut in it works).
-    assert_eq!(p.patches, 1, "a 64×32 sphere at 30° dihedral is one smooth patch");
+    assert_eq!(
+        p.patches, 1,
+        "a 64×32 sphere at 30° dihedral is one smooth patch"
+    );
 
     let doc = part_doc(&out.nodes, &[], "STL sphere");
     let (vol, err, spacing) = doc_volume_all(&doc);
@@ -353,7 +359,10 @@ fn concave_obj_with_a_hole_measures_the_closed_form() {
     let out = import_mesh("obj", &hole_obj(), &opts(None, None, None, "hole.obj")).unwrap();
     let p = &out.parts[0];
     assert_eq!(p.tris, 32);
-    assert_eq!(p.patches, 10, "two slabs, four outer walls, four hole walls");
+    assert_eq!(
+        p.patches, 10,
+        "two slabs, four outer walls, four hole walls"
+    );
     assert_eq!(p.open_edges, 0);
 
     let doc = part_doc(&out.nodes, &[], "OBJ hole");
@@ -380,7 +389,12 @@ fn concave_obj_with_a_hole_measures_the_closed_form() {
 /// rule is exact on the same fixture: all 1600 bottom-face facets, every one −z-facing.
 #[test]
 fn patch_selectors_and_the_face_rule_claim_one_cube_face_each() {
-    let out = import_mesh("stl", &cube_stl_bytes(), &opts(None, None, None, "cube.stl")).unwrap();
+    let out = import_mesh(
+        "stl",
+        &cube_stl_bytes(),
+        &opts(None, None, None, "cube.stl"),
+    )
+    .unwrap();
     let node_id = out.nodes[0].id.clone();
     let patches = match &out.nodes[0].kind {
         NodeKind::Mesh { patches, .. } => *patches as usize,
@@ -436,7 +450,9 @@ fn patch_selectors_and_the_face_rule_claim_one_cube_face_each() {
     for (k, s) in sets.iter().enumerate().skip(1) {
         let mut hist: Vec<([i64; 3], usize)> = Vec::new();
         for &fi in s {
-            let key = facets[fi].normal(&mesh).map(|c| (c * 1000.0).round() as i64);
+            let key = facets[fi]
+                .normal(&mesh)
+                .map(|c| (c * 1000.0).round() as i64);
             match hist.iter_mut().find(|(k2, _)| *k2 == key) {
                 Some((_, c)) => *c += 1,
                 None => hist.push((key, 1)),
@@ -510,7 +526,12 @@ fn cube_stl_bytes() -> Vec<u8> {
             10.0 * k as f64
         )
     };
-    type Quad = ((usize, usize, usize), (usize, usize, usize), (usize, usize, usize), (usize, usize, usize));
+    type Quad = (
+        (usize, usize, usize),
+        (usize, usize, usize),
+        (usize, usize, usize),
+        (usize, usize, usize),
+    );
     let quads: [Quad; 6] = [
         ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)), // x−
         ((1, 1, 0), (1, 1, 1), (1, 0, 1), (1, 0, 0)), // x+
@@ -585,9 +606,7 @@ fn threemf_exports_and_reimports_with_the_volume_intact() {
 
     let doc = part_doc(&out.nodes, &[], "3MF round trip");
     let (vol, err, spacing) = doc_volume_all(&doc);
-    println!(
-        "reimported volume {vol:.1} ± {err:.1} at h {spacing} vs export {v_export:.1}"
-    );
+    println!("reimported volume {vol:.1} ± {err:.1} at h {spacing} vs export {v_export:.1}");
     assert!(
         (vol - v_export).abs() / v_export < 0.01,
         "volume {vol} ± {err} vs export {v_export}"
@@ -595,5 +614,8 @@ fn threemf_exports_and_reimports_with_the_volume_intact() {
     // The re-imported part is a field leaf: solid inside, vacuum outside. The writer
     // shifts vertices into the positive octant, so the cube spans [0, 20]³.
     assert!(sample(&doc, [10.0, 10.0, 10.0]) < 0.0, "interior is solid");
-    assert!(sample(&doc, [10.0, 10.0, 21.0]) > 0.0, "just outside the +z face is air");
+    assert!(
+        sample(&doc, [10.0, 10.0, 21.0]) > 0.0,
+        "just outside the +z face is air"
+    );
 }

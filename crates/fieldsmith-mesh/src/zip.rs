@@ -297,10 +297,7 @@ pub fn read_zip(bytes: &[u8]) -> Result<Vec<ZipEntry>, String> {
         }
         let name = String::from_utf8(bytes[cd + 46..cd + 46 + nlen].to_vec())
             .map_err(|_| format!("central entry {n}'s name is not UTF-8"))?;
-        if csize == 0xFFFF_FFFF
-            || uncomp == 0xFFFF_FFFF
-            || local_off == 0xFFFF_FFFF
-        {
+        if csize == 0xFFFF_FFFF || uncomp == 0xFFFF_FFFF || local_off == 0xFFFF_FFFF {
             return Err(format!(
                 "entry '{name}' is a zip64 entry (0xFFFFFFFF size field), not supported"
             ));

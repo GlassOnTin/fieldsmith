@@ -67,8 +67,14 @@ fn v13_modal() {
         );
     }
 
-    let (c1, c2) = (pair(&coarse.modal.frequencies, 0), pair(&coarse.modal.frequencies, 1));
-    let (f1, f2) = (pair(&fine.modal.frequencies, 0), pair(&fine.modal.frequencies, 1));
+    let (c1, c2) = (
+        pair(&coarse.modal.frequencies, 0),
+        pair(&coarse.modal.frequencies, 1),
+    );
+    let (f1, f2) = (
+        pair(&fine.modal.frequencies, 0),
+        pair(&fine.modal.frequencies, 1),
+    );
 
     let mut r = Report::new(
         "V13",
@@ -105,15 +111,75 @@ fn v13_modal() {
          absolute threshold in disguise; the criterion now compares consecutive quotients \
          to each other.",
     );
-    r.check(Check::relative("pair 1 mean, coarse rung", f1_ref, c1, "Hz", 0.02));
-    r.check(Check::relative("pair 2 mean, coarse rung", f2_ref, c2, "Hz", 0.07));
-    r.check(Check::relative("pair 1 mean, fine rung", f1_ref, f1, "Hz", 0.02));
-    r.check(Check::relative("pair 2 mean, fine rung", f2_ref, f2, "Hz", 0.07));
-    r.check(Check::absolute("pair 1 split, coarse rung", 0.0, split(&coarse.modal.frequencies, 0), "Hz", 5.0));
-    r.check(Check::absolute("pair 2 split, coarse rung", 0.0, split(&coarse.modal.frequencies, 1), "Hz", 5.0));
-    r.check(Check::absolute("pair 1 split, fine rung", 0.0, split(&fine.modal.frequencies, 0), "Hz", 5.0));
-    r.check(Check::absolute("pair 2 split, fine rung", 0.0, split(&fine.modal.frequencies, 1), "Hz", 5.0));
-    r.check(Check::relative("pair 1 rung change (5 → 2.5 mm)", c1, f1, "Hz", 0.02));
-    r.check(Check::relative("pair 2 rung change (5 → 2.5 mm)", c2, f2, "Hz", 0.02));
+    r.check(Check::relative(
+        "pair 1 mean, coarse rung",
+        f1_ref,
+        c1,
+        "Hz",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "pair 2 mean, coarse rung",
+        f2_ref,
+        c2,
+        "Hz",
+        0.07,
+    ));
+    r.check(Check::relative(
+        "pair 1 mean, fine rung",
+        f1_ref,
+        f1,
+        "Hz",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "pair 2 mean, fine rung",
+        f2_ref,
+        f2,
+        "Hz",
+        0.07,
+    ));
+    r.check(Check::absolute(
+        "pair 1 split, coarse rung",
+        0.0,
+        split(&coarse.modal.frequencies, 0),
+        "Hz",
+        5.0,
+    ));
+    r.check(Check::absolute(
+        "pair 2 split, coarse rung",
+        0.0,
+        split(&coarse.modal.frequencies, 1),
+        "Hz",
+        5.0,
+    ));
+    r.check(Check::absolute(
+        "pair 1 split, fine rung",
+        0.0,
+        split(&fine.modal.frequencies, 0),
+        "Hz",
+        5.0,
+    ));
+    r.check(Check::absolute(
+        "pair 2 split, fine rung",
+        0.0,
+        split(&fine.modal.frequencies, 1),
+        "Hz",
+        5.0,
+    ));
+    r.check(Check::relative(
+        "pair 1 rung change (5 → 2.5 mm)",
+        c1,
+        f1,
+        "Hz",
+        0.02,
+    ));
+    r.check(Check::relative(
+        "pair 2 rung change (5 → 2.5 mm)",
+        c2,
+        f2,
+        "Hz",
+        0.02,
+    ));
     r.finish();
 }

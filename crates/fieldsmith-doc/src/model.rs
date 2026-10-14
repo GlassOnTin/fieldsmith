@@ -773,7 +773,10 @@ impl Document {
                 ));
             }
             if !t.celsius.is_finite() {
-                errs.push(format!("Temperature '{}' value is not a finite number", t.id));
+                errs.push(format!(
+                    "Temperature '{}' value is not a finite number",
+                    t.id
+                ));
             }
             for l in &self.loads {
                 if l.case == t.case {

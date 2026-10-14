@@ -255,7 +255,9 @@ fn read_any(
                 .unzip();
             Ok((parts, Some(info), infos))
         }
-        _ => Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf, step")),
+        _ => Err(format!(
+            "kind '{kind}' is not one of glb, stl, obj, 3mf, step"
+        )),
     }
 }
 
@@ -266,7 +268,9 @@ fn read_any(
 pub fn import_mesh(kind: &str, bytes: &[u8], opts: &ImportOpts) -> Result<ImportOut, String> {
     let t0 = now_ms();
     if !matches!(kind, "glb" | "stl" | "obj" | "3mf" | "step") {
-        return Err(format!("kind '{kind}' is not one of glb, stl, obj, 3mf, step"));
+        return Err(format!(
+            "kind '{kind}' is not one of glb, stl, obj, 3mf, step"
+        ));
     }
     let (parts, step_file, step_parts) =
         read_any(kind, bytes, opts.step_chord).map_err(|e| format!("{kind} import failed: {e}"))?;
@@ -724,9 +728,22 @@ transform=\"1 0 0 0 1 0 0 0 1 40 0 0\"/></build></model>"
         .unwrap();
         assert_eq!(out.nodes.len(), 2, "one node per build item");
         assert_eq!(out.nodes[0].id, "peg");
-        assert_eq!(out.nodes[1].id, "peg1", "the id chooser numbers the duplicate");
-        let size = |p: &ImportReport| [p.bbox[3] - p.bbox[0], p.bbox[4] - p.bbox[1], p.bbox[5] - p.bbox[2]];
-        assert_eq!(size(&out.parts[0]), size(&out.parts[1]), "shape is identical");
+        assert_eq!(
+            out.nodes[1].id, "peg1",
+            "the id chooser numbers the duplicate"
+        );
+        let size = |p: &ImportReport| {
+            [
+                p.bbox[3] - p.bbox[0],
+                p.bbox[4] - p.bbox[1],
+                p.bbox[5] - p.bbox[2],
+            ]
+        };
+        assert_eq!(
+            size(&out.parts[0]),
+            size(&out.parts[1]),
+            "shape is identical"
+        );
         assert_eq!(out.parts[0].bbox[0], 0.0);
         assert_eq!(out.parts[1].bbox[0], 40.0, "the item translation is baked");
     }

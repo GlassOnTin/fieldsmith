@@ -238,6 +238,57 @@ pub fn profile_sd(segs: &[ArcSeg], p: [f64; 2]) -> (f64, [f64; 2]) {
     }
 }
 
+/// Signed distance from the local point to the carrier surface of the named face —
+/// 0 on the surface, negative inside the solid. `None` when the primitive has no face
+/// under that name (a box has no `side`). This is the membership test for face regions:
+/// a point sits on `bottom` exactly when its distance to the bottom plane is zero,
+/// including rim points where the side wall meets the cap — points the nearest-face
+/// classifier labels by whichever wall is closer (region_facets' sliver defect, V20).
+/// Rounded corners leave the flat carriers in place; fillet-band points sit off every
+/// flat carrier and so belong to no named face — stricter than the classifier, and
+/// correct for a region selector.
+pub fn face_carrier(prim: &Prim, p: V3, face: Face) -> Option<f64> {
+    match prim {
+        // Negative faces measure inward-positive in the naive reading, so they flip
+        // here to keep the documented sign: the gradient of the returned value is the
+        // face's outward normal, which is what `face_carrier_signed`'s differencing
+        // consumes.
+        Prim::Box { half, .. } => match face {
+            Face::Px => Some(p[0] - half[0]),
+            Face::Nx => Some(-(p[0] + half[0])),
+            Face::Py => Some(p[1] - half[1]),
+            Face::Ny => Some(-(p[1] + half[1])),
+            Face::Pz => Some(p[2] - half[2]),
+            Face::Nz => Some(-(p[2] + half[2])),
+            _ => None,
+        },
+        Prim::Cylinder { radius, half_h, .. } => match face {
+            Face::Side => Some((p[0] * p[0] + p[1] * p[1]).sqrt() - radius),
+            Face::Top => Some(p[2] - half_h),
+            Face::Bottom => Some(-(p[2] + half_h)),
+            _ => None,
+        },
+        // The side wall is the profile curve swept along z: inside the cap range the
+        // distance to the ruled surface is the signed in-plane profile distance (the
+        // wall's outward normal is the profile's outward gradient). Beyond the caps the
+        // rim-corner distance is positive — the point is already outside the solid.
+        Prim::Extrude { segs, half_h } => match face {
+            Face::Side => {
+                let inplane = profile_sd(segs, [p[0], p[1]]).0;
+                Some(if p[2].abs() <= *half_h {
+                    inplane
+                } else {
+                    (inplane.abs() * inplane.abs() + (p[2].abs() - half_h).powi(2)).sqrt()
+                })
+            }
+            Face::Top => Some(p[2] - half_h),
+            Face::Bottom => Some(-(p[2] + half_h)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Which face of the primitive the local point `p` is closest to.
 pub fn classify_face(prim: &Prim, p: V3) -> Face {
     match prim {
@@ -467,5 +518,96 @@ mod tests {
         assert!((d + 0.5).abs() < 1e-12, "inside the bulge: {d}");
         let (d, _) = profile_sd(&segs, [1.0, 1.0]);
         assert!((d + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn carrier_distance_signs_honor_the_outward_normal() {
+        // The contract behind `face_carrier_signed`'s differencing: the carrier distance is
+        // 0 on the surface and negative inside the solid, so its gradient — checked here by
+        // central differences — is the named face's outward normal everywhere.
+        let grad = |prim: &Prim, face: Face, p: V3| -> [f64; 3] {
+            const EPS: f64 = 1e-5;
+            let d = |q: V3| face_carrier(prim, q, face).expect("face has a carrier");
+            let mut g = [0.0; 3];
+            for k in 0..3 {
+                let mut pp = p;
+                pp[k] += EPS;
+                let mut pm = p;
+                pm[k] -= EPS;
+                g[k] = (d(pp) - d(pm)) / (2.0 * EPS);
+            }
+            g
+        };
+        let near = |g: [f64; 3], want: [f64; 3]| {
+            for k in 0..3 {
+                assert!((g[k] - want[k]).abs() < 1e-6, "{g:?} vs {want:?}");
+            }
+        };
+
+        let box_ = Prim::Box {
+            half: [20.0, 10.0, 10.0],
+            round: 0.0,
+        };
+        // Inside on every face: negative distance; gradient is the face's outward normal.
+        let inside = [-19.0, -9.0, -9.0];
+        assert!(face_carrier(&box_, inside, Face::Nx).unwrap() < 0.0);
+        near(grad(&box_, Face::Nx, inside), [-1.0, 0.0, 0.0]);
+        near(grad(&box_, Face::Px, inside), [1.0, 0.0, 0.0]);
+        near(grad(&box_, Face::Ny, inside), [0.0, -1.0, 0.0]);
+        near(grad(&box_, Face::Pz, inside), [0.0, 0.0, 1.0]);
+        // Just outside Nx: positive, same normal.
+        assert!(face_carrier(&box_, [-21.0, 0.0, 0.0], Face::Nx).unwrap() > 0.0);
+        near(grad(&box_, Face::Nx, [-21.0, 0.0, 0.0]), [-1.0, 0.0, 0.0]);
+
+        let cyl = Prim::Cylinder {
+            radius: 10.0,
+            half_h: 60.0,
+            round: 0.0,
+        };
+        let wall = [10.0, 0.0, 0.0];
+        assert!(face_carrier(&cyl, wall, Face::Side).unwrap().abs() < 1e-12);
+        near(grad(&cyl, Face::Side, [12.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+        near(grad(&cyl, Face::Top, [0.0, 0.0, 30.0]), [0.0, 0.0, 1.0]);
+        // The bottom cap: negative inside, outward gradient points −z.
+        assert!(face_carrier(&cyl, [0.0, 0.0, -30.0], Face::Bottom).unwrap() < 0.0);
+        near(
+            grad(&cyl, Face::Bottom, [0.0, 0.0, -70.0]),
+            [0.0, 0.0, -1.0],
+        );
+
+        let prof = vec![
+            ArcSeg {
+                a: [0.0, 0.0],
+                b: [2.0, 0.0],
+                bulge: 0.0,
+            },
+            ArcSeg {
+                a: [2.0, 0.0],
+                b: [2.0, 2.0],
+                bulge: 0.0,
+            },
+            ArcSeg {
+                a: [2.0, 2.0],
+                b: [0.0, 2.0],
+                bulge: 0.0,
+            },
+            ArcSeg {
+                a: [0.0, 2.0],
+                b: [0.0, 0.0],
+                bulge: 0.0,
+            },
+        ];
+        let ext = Prim::Extrude {
+            segs: prof,
+            half_h: 5.0,
+        };
+        // In-cap, inside the solid 0.5 off the x=2 wall: negative, outward normal +x.
+        assert!(face_carrier(&ext, [1.5, 1.0, 0.0], Face::Side).unwrap() < 0.0);
+        near(grad(&ext, Face::Side, [1.5, 1.0, 0.0]), [1.0, 0.0, 0.0]);
+        // Outside the profile, still in cap: positive.
+        assert!(face_carrier(&ext, [2.5, 1.0, 0.0], Face::Side).unwrap() > 0.0);
+        near(grad(&ext, Face::Bottom, [1.0, 1.0, -3.0]), [0.0, 0.0, -1.0]);
+        assert!(face_carrier(&ext, [1.0, 1.0, -3.0], Face::Bottom).unwrap() < 0.0);
+        assert!(face_carrier(&ext, [1.0, 1.0, -7.0], Face::Bottom).unwrap() > 0.0);
     }
 }

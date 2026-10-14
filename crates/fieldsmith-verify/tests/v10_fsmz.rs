@@ -23,7 +23,12 @@ fn box_stl(lo: [f64; 3], hi: [f64; 3]) -> Vec<u8> {
             if k == 0 { lo[2] } else { hi[2] }
         )
     };
-    type Quad = ((usize, usize, usize), (usize, usize, usize), (usize, usize, usize), (usize, usize, usize));
+    type Quad = (
+        (usize, usize, usize),
+        (usize, usize, usize),
+        (usize, usize, usize),
+        (usize, usize, usize),
+    );
     let quads: [Quad; 6] = [
         ((0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0)), // x−
         ((1, 1, 0), (1, 1, 1), (1, 0, 1), (1, 0, 0)), // x+
@@ -185,7 +190,9 @@ fn mesh_node_without_manifest_record_is_refused() {
     let entries = read_zip(&bytes).expect("reads");
     let kept: Vec<_> = entries
         .iter()
-        .filter(|e| e.name != "manifest.json" && !e.name.ends_with(".dist") && !e.name.ends_with(".patch"))
+        .filter(|e| {
+            e.name != "manifest.json" && !e.name.ends_with(".dist") && !e.name.ends_with(".patch")
+        })
         .collect();
     let mut z = ZipWriter::new();
     for e in kept {
@@ -299,15 +306,28 @@ fn face_and_patch_arm_extends_round_trip() {
         Some([0.0, 0.0, -1.0]),
         "an identity transform maps the doc-frame bottom axis verbatim"
     );
-    assert!(face.patch_ids.is_empty(), "the face arm records an axis, not patch ids");
+    assert!(
+        face.patch_ids.is_empty(),
+        "the face arm records an axis, not patch ids"
+    );
     assert_eq!(face.region, "bottomish");
-    assert_eq!(face.parent_hash, patch.parent_hash, "both arms name the same parent");
+    assert_eq!(
+        face.parent_hash, patch.parent_hash,
+        "both arms name the same parent"
+    );
     assert_eq!(face.parent_hash, hash);
-    assert_eq!(patch.patch_ids, vec![1], "the x− face is patch 1 of the six");
+    assert_eq!(
+        patch.patch_ids,
+        vec![1],
+        "the x− face is patch 1 of the six"
+    );
     assert!(patch.face_axis.is_none());
 
     let bytes2 = fsmz::save(&out.doc).expect("re-save");
-    assert_eq!(bytes1, bytes2, "multi-arm extends round-trip byte-identical");
+    assert_eq!(
+        bytes1, bytes2,
+        "multi-arm extends round-trip byte-identical"
+    );
 }
 
 /// With the mesh node rotated, the sweep key must use the doc-frame dir mapped through the
@@ -346,7 +366,12 @@ fn rotated_mesh_face_extend_round_trips() {
 
     let bytes1 = fsmz::save(&doc).expect("save");
     let out = fsmz::load(&bytes1).expect("load");
-    let face = out.manifest.extends.iter().find(|x| x.id == "ext1").expect("record");
+    let face = out
+        .manifest
+        .extends
+        .iter()
+        .find(|x| x.id == "ext1")
+        .expect("record");
     let a = face.face_axis.expect("the face arm records its axis");
     for (got, want) in a.iter().zip([0.0, -1.0, 0.0]) {
         assert!(
@@ -356,5 +381,8 @@ fn rotated_mesh_face_extend_round_trips() {
     }
 
     let bytes2 = fsmz::save(&out.doc).expect("re-save");
-    assert_eq!(bytes1, bytes2, "the frame-mapped extend round-trips byte-identical");
+    assert_eq!(
+        bytes1, bytes2,
+        "the frame-mapped extend round-trips byte-identical"
+    );
 }

@@ -275,6 +275,36 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
         }
     }
 
+    // ---- drop coincident-surface vertices ------------------------------------------------------
+    // Where two primitive surfaces coincide on a flat region — a subtracted cylinder whose cap
+    // disc sits in the parent's cap plane — the composite evaluates max(0, -0) = 0 across the
+    // whole shared plane, so lattice vertices there read as surface even though the true
+    // surface is only a rim or part of the annulus. The composite's sign is exact off those
+    // planes, so probe the eight diagonals a small offset away: a real surface vertex has
+    // material in at least one inward direction; the rest are treated as outside. Vertices
+    // within the offset of true material are kept — their position error is the offset.
+    let max_h = lat.h[0].max(lat.h[1]).max(lat.h[2]);
+    let eps = 0.05 * max_h;
+    let e = eps / 3.0f64.sqrt();
+    let spur: Vec<usize> = (0..nv)
+        .filter(|&i| {
+            if val[i] != 0.0 {
+                return false;
+            }
+            let p = pos(i);
+            ![-1.0f64, 1.0].iter().any(|&sx| {
+                [-1.0f64, 1.0].iter().any(|&sy| {
+                    [-1.0f64, 1.0]
+                        .iter()
+                        .any(|&sz| f([p[0] + sx * e, p[1] + sy * e, p[2] + sz * e]) < 0.0)
+                })
+            })
+        })
+        .collect();
+    for &i in &spur {
+        val[i] = eps;
+    }
+
     // ---- warp vertices that lie too close to a crossing --------------------------------------
     // For each violated vertex keep the nearest violating cut point (as an edge fraction); the
     // cut point becomes the vertex's emitted position (a handful of vertices, so a map, not a

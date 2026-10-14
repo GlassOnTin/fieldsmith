@@ -466,7 +466,8 @@ pub fn write_3mf_volumes(volumes: &[Volume3mf<'_>]) -> Vec<u8> {
     let mut mats: Vec<(&str, String)> = Vec::new();
     for v in volumes {
         if !v.material.is_empty() && !mats.iter().any(|(m, _)| *m == v.material) {
-            let display = display_color(v.color).unwrap_or_else(|| APP_DEFAULT_DISPLAY_COLOR.into());
+            let display =
+                display_color(v.color).unwrap_or_else(|| APP_DEFAULT_DISPLAY_COLOR.into());
             mats.push((v.material, display));
         }
     }

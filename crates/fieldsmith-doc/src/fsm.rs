@@ -436,11 +436,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 // in the text form; the document stores it canonical `#RRGGBB[AA]`.
                 let raw = match c.next() {
                     Some(Tok::Str(s)) => s,
-                    _ => {
-                        return Err(err(
-                            "expected a quoted colour like \"#21BB4C\"".into()
-                        ))
-                    }
+                    _ => return Err(err("expected a quoted colour like \"#21BB4C\"".into())),
                 };
                 let col = canonical_color(&raw).ok_or_else(|| {
                     err(format!(
@@ -1376,7 +1372,8 @@ color "#b5432a" on body
         let d = parse(text).unwrap();
         let canon = print(&d);
         assert!(
-            canon.contains("color \"#21BB4C\" on inner") && canon.contains("color \"#B5432A\" on body"),
+            canon.contains("color \"#21BB4C\" on inner")
+                && canon.contains("color \"#B5432A\" on body"),
             "{canon}"
         );
         assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
@@ -1391,10 +1388,8 @@ color "#b5432a" on body
 
     #[test]
     fn colour_accepts_the_alpha_form() {
-        let d = parse(
-            "fieldsmith 1\nname \"t\"\nbox b size=(1, 1, 1)\ncolor \"#11223344\" on b\n",
-        )
-        .unwrap();
+        let d = parse("fieldsmith 1\nname \"t\"\nbox b size=(1, 1, 1)\ncolor \"#11223344\" on b\n")
+            .unwrap();
         assert_eq!(d.find("b").unwrap().color.as_deref(), Some("#11223344"));
         // The .fsmz JSON side carries the canonical string, absent on colourless nodes.
         let jsoned = serde_json::to_value(&d).unwrap();
@@ -1406,7 +1401,13 @@ color "#b5432a" on body
         assert_eq!(b, Some("#11223344"));
         let plain = parse("fieldsmith 1\nname \"t\"\nbox b size=(1, 1, 1)\n").unwrap();
         let jsoned = serde_json::to_value(&plain).unwrap();
-        assert!(jsoned.get("root").unwrap().get(0).unwrap().get("color").is_none());
+        assert!(jsoned
+            .get("root")
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .get("color")
+            .is_none());
     }
 
     #[test]
@@ -1430,7 +1431,10 @@ color "#b5432a" on body
         let mut d = parse("fieldsmith 1\nbox b size=(1, 1, 1)\nmaterial petg\n").unwrap();
         d.set_node_color("b", Some("red".into()));
         let errs = d.validate();
-        assert!(errs.iter().any(|e| e.contains("not a hex colour")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("not a hex colour")),
+            "{errs:?}"
+        );
         d.set_node_color("b", Some("#21BB4C".into()));
         assert!(d.validate().is_empty(), "{:?}", d.validate());
         d.set_node_color("b", None);
@@ -1577,17 +1581,17 @@ region face = b.px
         assert!(e.contains("refers to missing region 'ghost'"), "{e}");
 
         // Two unequal values on one region in one case fight over the same nodes.
-        let e = base(
-            "temperature hot face temp=80\ntemperature cold face temp=60",
-        )
-        .validate()
-        .join(" | ");
+        let e = base("temperature hot face temp=80\ntemperature cold face temp=60")
+            .validate()
+            .join(" | ");
         assert!(e.contains("conflicting values"), "{e}");
 
         // Two equal values on one region are allowed — the nodes agree, so nothing fights.
-        assert!(base("temperature hot face temp=80\ntemperature warm face temp=80")
-            .validate()
-            .is_empty());
+        assert!(
+            base("temperature hot face temp=80\ntemperature warm face temp=80")
+                .validate()
+                .is_empty()
+        );
 
         // A case name claimed by both a load and a temperature cannot be solved honestly.
         let e = base(

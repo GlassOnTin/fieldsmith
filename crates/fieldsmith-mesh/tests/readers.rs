@@ -971,7 +971,9 @@ fn threemf_writer_dedups_materials_and_skips_empty_labels() {
     assert_eq!(parts[2].material.as_deref(), Some("ABS"));
     let model = model_text(&bytes);
     assert!(
-        model.contains("<basematerials id=\"1\"><base name=\"ABS\" displaycolor=\"#DFDEDA\"/></basematerials>"),
+        model.contains(
+            "<basematerials id=\"1\"><base name=\"ABS\" displaycolor=\"#DFDEDA\"/></basematerials>"
+        ),
         "one base per unique label: {model}"
     );
     assert!(
@@ -1093,21 +1095,24 @@ fn threemf_reader_expands_build_items() {
     assert_eq!(parts.len(), 4, "one part per build item");
     assert_eq!(parts[0].name, "cyl");
     for p in &parts {
-        assert_eq!(p.name, "cyl", "the part keeps the object's name (import dedupes)");
+        assert_eq!(
+            p.name, "cyl",
+            "the part keeps the object's name (import dedupes)"
+        );
         assert_eq!(p.mesh.tris.len(), 1);
     }
     assert_eq!(parts[0].mesh.verts[0], [1.0, 0.0, 0.0]);
-    assert_eq!(parts[1].mesh.verts[0], [5.0, 0.0, 0.0], "translation baked in");
+    assert_eq!(
+        parts[1].mesh.verts[0],
+        [5.0, 0.0, 0.0],
+        "translation baked in"
+    );
     assert_eq!(
         parts[2].mesh.verts[0],
         [0.0, 1.0, 0.0],
         "90° rotation about +z baked in"
     );
-    assert_eq!(
-        parts[3].mesh.verts[0],
-        [-1.0, 0.0, 0.0],
-        "mirror baked in"
-    );
+    assert_eq!(parts[3].mesh.verts[0], [-1.0, 0.0, 0.0], "mirror baked in");
     assert!(
         parts[3].mesh.tris[0] == [0, 2, 1],
         "negative-determinant transform reverses the winding: {:?}",
@@ -1129,7 +1134,11 @@ fn threemf_reader_scales_item_translations_by_the_model_unit() {
 </mesh></object></resources>\
 <build><item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 2 0 0\"/></build></model>";
     let parts = read_3mf(&raw_model(model)).expect("reads");
-    assert_eq!(parts[0].mesh.verts[0], [20.0, 0.0, 0.0], "2 cm → 20 mm move");
+    assert_eq!(
+        parts[0].mesh.verts[0],
+        [20.0, 0.0, 0.0],
+        "2 cm → 20 mm move"
+    );
 }
 
 #[test]

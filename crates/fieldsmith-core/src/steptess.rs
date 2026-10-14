@@ -93,7 +93,12 @@ impl Frame {
             Some(rd) if proj_len_perp(rd, z) > 1e-12 => unit_or(sub(rd, scale3(z, dot3(rd, z))), z),
             _ => stepio_fallback_x(z),
         };
-        Ok(Frame { o: origin, x, y: cross3(z, x), z })
+        Ok(Frame {
+            o: origin,
+            x,
+            y: cross3(z, x),
+            z,
+        })
     }
 }
 
@@ -149,9 +154,10 @@ impl Surf {
         match self {
             Surf::Plane(fr) => add3(add3(fr.o, f(fr.x, u)), f(fr.y, v)),
             Surf::Cyl { f: fr, r } => add3(add3(fr.o, f(rhat(fr, u), *r)), f(fr.z, v)),
-            Surf::Sphere { f: fr, r } => {
-                add3(add3(fr.o, f(rhat(fr, u), r * v.cos())), f(fr.z, r * v.sin()))
-            }
+            Surf::Sphere { f: fr, r } => add3(
+                add3(fr.o, f(rhat(fr, u), r * v.cos())),
+                f(fr.z, r * v.sin()),
+            ),
             Surf::Cone { f: fr, r, k } => {
                 let rho = r + k * v;
                 add3(add3(fr.o, f(rhat(fr, u), rho)), f(fr.z, v))
@@ -185,7 +191,10 @@ impl Surf {
                 let (u, v) = clamp_nurbs_domain(ns, u, v);
                 let h = nurbs_step(ns);
                 let p = |du: f64, dv: f64| nurbs_eval(ns, u + du, v + dv);
-                unit_or(cross3(sub(p(h, 0.0), p(-h, 0.0)), sub(p(0.0, h), p(0.0, -h))), [0.0, 0.0, 1.0])
+                unit_or(
+                    cross3(sub(p(h, 0.0), p(-h, 0.0)), sub(p(0.0, h), p(0.0, -h))),
+                    [0.0, 0.0, 1.0],
+                )
             }
         }
     }
@@ -203,8 +212,14 @@ impl Surf {
                 let h = nurbs_step(ns);
                 // fd differences ÷ (2h) each: true partials, so the cross
                 // magnitude is |x_u × x_v| and not 4h² times it
-                let x_u = scale3(sub(nurbs_eval(ns, u + h, v), nurbs_eval(ns, u - h, v)), 0.5 / h);
-                let x_v = scale3(sub(nurbs_eval(ns, u, v + h), nurbs_eval(ns, u, v - h)), 0.5 / h);
+                let x_u = scale3(
+                    sub(nurbs_eval(ns, u + h, v), nurbs_eval(ns, u - h, v)),
+                    0.5 / h,
+                );
+                let x_v = scale3(
+                    sub(nurbs_eval(ns, u, v + h), nurbs_eval(ns, u, v - h)),
+                    0.5 / h,
+                );
                 len3(cross3(x_u, x_v))
             }
         }
@@ -213,8 +228,9 @@ impl Surf {
     /// u period (radians for the surfaces of revolution; 0 = not periodic).
     pub fn period_u(&self) -> f64 {
         match self {
-            Surf::Cyl { .. } | Surf::Sphere { .. } | Surf::Torus { .. }
-            | Surf::Cone { .. } => std::f64::consts::TAU,
+            Surf::Cyl { .. } | Surf::Sphere { .. } | Surf::Torus { .. } | Surf::Cone { .. } => {
+                std::f64::consts::TAU
+            }
             _ => 0.0,
         }
     }
@@ -259,9 +275,7 @@ impl Surf {
             Surf::Sphere { f: fr, r } => {
                 let (cv, sv) = (v.cos(), v.sin());
                 let (ax, ay, az) = (dot3(fr.o, fr.x), dot3(fr.o, fr.y), dot3(fr.o, fr.z));
-                Some(
-                    r * r * (cv * cv * (ax * su - ay * cu) + u * az * sv * cv + u * r * cv),
-                )
+                Some(r * r * (cv * cv * (ax * su - ay * cu) + u * az * sv * cv + u * r * cv))
             }
             Surf::Torus { f: fr, big_r, r } => {
                 let w = *big_r + *r * v.cos();
@@ -513,8 +527,14 @@ fn newton(
     for _ in 0..12 {
         // central differences ÷ (2h): true partials, so Δ below is a
         // parameter-space step and an affine patch solves in one iteration
-        let x_u = scale3(sub(nurbs_eval(ns, u + h, v), nurbs_eval(ns, u - h, v)), 0.5 / h);
-        let x_v = scale3(sub(nurbs_eval(ns, u, v + h), nurbs_eval(ns, u, v - h)), 0.5 / h);
+        let x_u = scale3(
+            sub(nurbs_eval(ns, u + h, v), nurbs_eval(ns, u - h, v)),
+            0.5 / h,
+        );
+        let x_v = scale3(
+            sub(nurbs_eval(ns, u, v + h), nurbs_eval(ns, u, v - h)),
+            0.5 / h,
+        );
         let fvec = sub(nurbs_eval(ns, u, v), p);
         let (a, b, c, d) = (
             dot3(x_u, x_u) + 1e-30,
@@ -556,7 +576,9 @@ pub struct EdgePoly {
 /// shallow S-shapes.
 pub fn sample_edge(curve: &NurbsCurve, tgt: f64) -> Result<EdgePoly, String> {
     let deg = curve.degree;
-    if curve.control_points.len() < deg + 1 || curve.knots.len() != curve.control_points.len() + deg + 1 {
+    if curve.control_points.len() < deg + 1
+        || curve.knots.len() != curve.control_points.len() + deg + 1
+    {
         return Err(format!(
             "edge curve inconsistent ({} control points, degree {}, {} knots)",
             curve.control_points.len(),
@@ -565,7 +587,10 @@ pub fn sample_edge(curve: &NurbsCurve, tgt: f64) -> Result<EdgePoly, String> {
         ));
     }
     if deg > 20 {
-        return Err(format!("edge curve degree {} is beyond support (max 20)", deg));
+        return Err(format!(
+            "edge curve degree {} is beyond support (max 20)",
+            deg
+        ));
     }
     if curve.knots.windows(2).any(|w| w[1] < w[0] - 1e-12) {
         return Err("edge curve knots are not non-decreasing".to_owned());
@@ -630,7 +655,9 @@ fn subdivide(
     let dev = dist3(pm, scale3(add3(pa, pb), 0.5));
     let d1 = sub(pm, pa);
     let d2 = sub(pb, pm);
-    let turn = (dot3(d1, d2) / (len3(d1) * len3(d2) + 1e-300)).clamp(-1.0, 1.0).acos();
+    let turn = (dot3(d1, d2) / (len3(d1) * len3(d2) + 1e-300))
+        .clamp(-1.0, 1.0)
+        .acos();
     if dev <= tgt && turn <= 0.35 {
         return Ok(());
     }
@@ -645,7 +672,12 @@ fn subdivide(
 pub fn curve_eval(curve: &NurbsCurve, t: f64) -> [f64; 3] {
     let n = curve.control_points.len();
     let deg = curve.degree;
-    deboor_3(&curve.control_points, &curve.knots, deg.min(n.saturating_sub(1)), t)
+    deboor_3(
+        &curve.control_points,
+        &curve.knots,
+        deg.min(n.saturating_sub(1)),
+        t,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +819,11 @@ pub fn assemble_ring(
                 } else {
                     r[0]
                 },
-                if pv > 0.0 { short(prev[1], r[1], pv) } else { r[1] },
+                if pv > 0.0 {
+                    short(prev[1], r[1], pv)
+                } else {
+                    r[1]
+                },
             ]
         };
         if !surf.singular_pt(*r) {
@@ -863,14 +899,18 @@ pub fn assemble_ring(
         };
         let full_u = span_full(0, surf.period_u());
         let full_v = span_full(1, surf.period_v());
-        let periods = [(0usize, surf.period_u(), full_u), (1usize, surf.period_v(), full_v)];
+        let periods = [
+            (0usize, surf.period_u(), full_u),
+            (1usize, surf.period_v(), full_v),
+        ];
         for (k, p, full) in periods {
             if p <= 0.0 || full {
                 continue;
             }
             let delta = uv[uv.len() - 1][k] - uv[0][k];
             let n = (delta / p).round();
-            if n != 0.0 && (delta - n * p).abs() <= 1e-6
+            if n != 0.0
+                && (delta - n * p).abs() <= 1e-6
                 && pts.len() >= 2
                 && dist3(*pts.last().unwrap(), pts[0]) <= join_tol
             {
@@ -1047,7 +1087,11 @@ pub fn assemble_ring(
     }
     let fpts: Vec<P3> = kept_i.iter().map(|&i| pts[i]).collect();
     let fuv: Vec<P2> = kept_i.iter().map(|&i| uv[i]).collect();
-    Ok(Ring { pts: fpts, uv: fuv, is_outer })
+    Ok(Ring {
+        pts: fpts,
+        uv: fuv,
+        is_outer,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,9 +1232,7 @@ pub fn tess_face(
     // triangulator can consume.
     for r in rings {
         if r.uv.len() < 3 {
-            return Err(
-                "boundary loop degenerates to fewer than 3 distinct points".to_owned(),
-            );
+            return Err("boundary loop degenerates to fewer than 3 distinct points".to_owned());
         }
     }
     let outers: Vec<&Ring> = rings.iter().filter(|r| r.is_outer).collect();
@@ -1338,10 +1380,12 @@ fn tess_unbounded(
             let north = pool.insert(add3(f.o, scale3(f.z, r)));
             let south = pool.insert(add3(f.o, scale3(f.z, -r)));
             let quad_area = 4.0 * std::f64::consts::PI * r * r;
-            let volume_face = Some(vol_sign(same_sense) * (4.0 / 3.0) * std::f64::consts::PI * r * r * r);
+            let volume_face =
+                Some(vol_sign(same_sense) * (4.0 / 3.0) * std::f64::consts::PI * r * r * r);
             let mut row_idx: Vec<Vec<u32>> = Vec::new();
             for i in 0..=rows {
-                let v = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * (i as f64) / rows as f64;
+                let v =
+                    -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * (i as f64) / rows as f64;
                 if i == 0 {
                     row_idx.push(vec![north]);
                     continue;
@@ -1360,7 +1404,11 @@ fn tess_unbounded(
             let mut tris: Vec<[u32; 3]> = Vec::new();
             for j in 0..cols {
                 tris.push([north, row_idx[1][j], row_idx[1][(j + 1) % cols]]);
-                tris.push([south, row_idx[rows - 1][(j + 1) % cols], row_idx[rows - 1][j]]);
+                tris.push([
+                    south,
+                    row_idx[rows - 1][(j + 1) % cols],
+                    row_idx[rows - 1][j],
+                ]);
             }
             let mut mesh_area = 0.0f64;
             for i in 1..rows - 1 {
@@ -1369,12 +1417,7 @@ fn tess_unbounded(
                     let b = row_idx[i + 1][j];
                     let c = row_idx[i + 1][(j + 1) % cols];
                     let d = row_idx[i][(j + 1) % cols];
-                    emit_nonzero(
-                        &mut tris,
-                        &mut mesh_area,
-                        &pool.verts,
-                        [a, b, c],
-                    );
+                    emit_nonzero(&mut tris, &mut mesh_area, &pool.verts, [a, b, c]);
                     emit_nonzero(&mut tris, &mut mesh_area, &pool.verts, [a, c, d]);
                 }
             }
@@ -1382,7 +1425,11 @@ fn tess_unbounded(
             mesh_area = tris
                 .iter()
                 .map(|t| {
-                    let (a, b, c) = (pool.verts[t[0] as usize], pool.verts[t[1] as usize], pool.verts[t[2] as usize]);
+                    let (a, b, c) = (
+                        pool.verts[t[0] as usize],
+                        pool.verts[t[1] as usize],
+                        pool.verts[t[2] as usize],
+                    );
                     0.5 * len3(cross3(sub(b, a), sub(c, a)))
                 })
                 .sum();
@@ -1406,7 +1453,15 @@ fn tess_unbounded(
             bounded_checks(rows, cols)?;
             let mut tris = Vec::new();
             let quad_area = 4.0 * std::f64::consts::PI * std::f64::consts::PI * big_r * r;
-            let volume_face = Some(vol_sign(same_sense) * 2.0 * std::f64::consts::PI * std::f64::consts::PI * big_r * r * r);
+            let volume_face = Some(
+                vol_sign(same_sense)
+                    * 2.0
+                    * std::f64::consts::PI
+                    * std::f64::consts::PI
+                    * big_r
+                    * r
+                    * r,
+            );
             let mut row_idx: Vec<Vec<u32>> = Vec::new();
             for i in 0..=rows {
                 let v = -std::f64::consts::PI + std::f64::consts::TAU * (i as f64) / rows as f64;
@@ -1582,7 +1637,15 @@ fn tess_structured(
     let volume_face = if full_u && full_v && matches!(surf, Surf::Torus { .. }) {
         // the single seam line cannot serve as a planar boundary; closed form
         if let Surf::Torus { big_r, r, .. } = surf {
-            Some(vol_sign(same_sense) * 2.0 * std::f64::consts::PI * std::f64::consts::PI * big_r * r * r)
+            Some(
+                vol_sign(same_sense)
+                    * 2.0
+                    * std::f64::consts::PI
+                    * std::f64::consts::PI
+                    * big_r
+                    * r
+                    * r,
+            )
         } else {
             unreachable!()
         }
@@ -1708,12 +1771,7 @@ fn ring_skips_between(
 
 /// the ring samples a chord (a, b) skips over, from whichever ring's samples
 /// lie on the chord's own parameter line
-fn row_chord_skips(
-    uv: &[P2],
-    ranges: &[(usize, usize)],
-    a: usize,
-    b: usize,
-) -> Vec<u32> {
+fn row_chord_skips(uv: &[P2], ranges: &[(usize, usize)], a: usize, b: usize) -> Vec<u32> {
     for &(lim_lo, lim_hi) in ranges {
         let sk = ring_skips_between(uv, lim_lo, lim_hi, a, b);
         if !sk.is_empty() {
@@ -1786,10 +1844,12 @@ fn tess_earcut(
     // is roundoff relative to their own edge lengths, not the face's
     let mut seed: Vec<u32> = Vec::with_capacity(out.len());
     for t in out.chunks_exact(3) {
-        let (p0, p1, p2) =
-            (data[t[0] as usize], data[t[1] as usize], data[t[2] as usize]);
-        let a = (p1[0] - p0[0]) * (p2[1] - p0[1])
-            - (p1[1] - p0[1]) * (p2[0] - p0[0]);
+        let (p0, p1, p2) = (
+            data[t[0] as usize],
+            data[t[1] as usize],
+            data[t[2] as usize],
+        );
+        let a = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
         let e01 = (p1[0] - p0[0]).hypot(p1[1] - p0[1]);
         let e12 = (p2[0] - p1[0]).hypot(p2[1] - p1[1]);
         let e20 = (p0[0] - p2[0]).hypot(p0[1] - p2[1]);
@@ -1877,7 +1937,9 @@ fn tess_earcut(
     for p in data_pts.iter() {
         let _ = pool.insert(*p);
     }
-    let all_rings: Vec<&Ring> = std::iter::once(outer).chain(holes.iter().copied()).collect();
+    let all_rings: Vec<&Ring> = std::iter::once(outer)
+        .chain(holes.iter().copied())
+        .collect();
     // No boundary-deviation check here: every ring segment IS the mesh's
     // boundary edge (locked, never split), so its ends and interior follow the
     // caller's samples of the true edge exactly. An exact straight edge across
@@ -1895,11 +1957,24 @@ fn tess_earcut(
         }
     }
     // parameter-space polygon triangulation with refinement
-    let (tris_p, quad_area) = refine_eearcut(surf, &data, &data_pts, &out, &locked, &ring_limits, chord, pool)?;
+    let (tris_p, quad_area) = refine_eearcut(
+        surf,
+        &data,
+        &data_pts,
+        &out,
+        &locked,
+        &ring_limits,
+        chord,
+        pool,
+    )?;
     let mut tris: Vec<[u32; 3]> = Vec::new();
     let mut mesh_area = 0.0f64;
     for t in tris_p.iter() {
-        let (a, b, c) = (pool.verts[t[0] as usize], pool.verts[t[1] as usize], pool.verts[t[2] as usize]);
+        let (a, b, c) = (
+            pool.verts[t[0] as usize],
+            pool.verts[t[1] as usize],
+            pool.verts[t[2] as usize],
+        );
         let area = 0.5 * len3(cross3(sub(b, a), sub(c, a)));
         if area <= 0.0 {
             continue;
@@ -1914,7 +1989,11 @@ fn tess_earcut(
         // CCW or CW) — so the holes are ADDED, not subtracted; subtracting
         // them double-counts each hole region and inflated every holed
         // face's volume (NIST CTC-01's plate faces by 2·c·A_holes/3 each).
-        let g = green_ring(surf, outer, true) + holes.iter().map(|h| green_ring(surf, h, false)).sum::<f64>();
+        let g = green_ring(surf, outer, true)
+            + holes
+                .iter()
+                .map(|h| green_ring(surf, h, false))
+                .sum::<f64>();
         Some(vol_sign(same_sense) * g / 3.0)
     } else {
         None
@@ -2010,13 +2089,21 @@ fn refine_mid(
     if period_u > 0.0 {
         let d = ub[0] - ua[0];
         if d.abs() > period_u * 0.5 {
-            push('u', &mut us, ua[0] + (d - (d / period_u).round() * period_u) * 0.5);
+            push(
+                'u',
+                &mut us,
+                ua[0] + (d - (d / period_u).round() * period_u) * 0.5,
+            );
         }
     }
     if period_v > 0.0 {
         let d = ub[1] - ua[1];
         if d.abs() > period_v * 0.5 {
-            push('v', &mut vs, ua[1] + (d - (d / period_v).round() * period_v) * 0.5);
+            push(
+                'v',
+                &mut vs,
+                ua[1] + (d - (d / period_v).round() * period_v) * 0.5,
+            );
         }
     }
     let (sing_a, sing_b) = (surf.singular_pt(ua), surf.singular_pt(ub));
@@ -2083,10 +2170,7 @@ fn refine_eearcut(
         wv_hi = wv_hi.max(p[1]);
     }
     let windows = ((wu_lo, wu_hi), (wv_lo, wv_hi));
-    let mut tris: Vec<[u32; 3]> = seed
-        .chunks_exact(3)
-        .map(|t| [t[0], t[1], t[2]])
-        .collect();
+    let mut tris: Vec<[u32; 3]> = seed.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
     let mut rounds = 0;
     loop {
         rounds += 1;
@@ -2103,16 +2187,19 @@ fn refine_eearcut(
             for k in 0..3 {
                 let (a, b) = (t[k], t[(k + 1) % 3]);
                 let key = sort2(a, b);
-                if locked.contains(&key)
-                    || marked.contains(&key)
-                    || row_marked.contains(&key)
-                {
+                if locked.contains(&key) || marked.contains(&key) || row_marked.contains(&key) {
                     continue;
                 }
                 let (pa, pb) = (verts[a as usize], verts[b as usize]);
                 let (pua, pub_) = (params[a as usize], params[b as usize]);
-                let (_, dev) =
-                    refine_mid(surf, windows.0, windows.1, pua, pub_, scale3(add3(pa, pb), 0.5));
+                let (_, dev) = refine_mid(
+                    surf,
+                    windows.0,
+                    windows.1,
+                    pua,
+                    pub_,
+                    scale3(add3(pa, pb), 0.5),
+                );
                 if dev > chord {
                     if !row_chord_skips(&params, ranges, a as usize, b as usize).is_empty() {
                         row_marked.insert(key);
@@ -2155,8 +2242,14 @@ fn refine_eearcut(
             // samples are the strip's own tiling. No midpoint class.
             let (pua, pub_) = (params[a as usize], params[b as usize]);
             let (pa, pb) = (verts[a as usize], verts[b as usize]);
-            let (midp, dev) =
-                refine_mid(surf, windows.0, windows.1, pua, pub_, scale3(add3(pa, pb), 0.5));
+            let (midp, dev) = refine_mid(
+                surf,
+                windows.0,
+                windows.1,
+                pua,
+                pub_,
+                scale3(add3(pa, pb), 0.5),
+            );
             let _ = dev;
             let midvert = surf.eval(midp[0], midp[1]);
             // The evaluated midpoint often re-derives a point the boundary
@@ -2244,10 +2337,10 @@ fn refine_eearcut(
             );
             let (u1, v1, w1) = (vb[0] - va[0], vb[1] - va[1], vb[2] - va[2]);
             let (u2, v2, w2) = (vc[0] - va[0], vc[1] - va[1], vc[2] - va[2]);
-            let area3abs =
-                ((v1 * w2 - w1 * v2).powi(2) + (w1 * u2 - u1 * w2).powi(2)
-                    + (u1 * v2 - v1 * u2).powi(2))
-                    .sqrt();
+            let area3abs = ((v1 * w2 - w1 * v2).powi(2)
+                + (w1 * u2 - u1 * w2).powi(2)
+                + (u1 * v2 - v1 * u2).powi(2))
+            .sqrt();
             let e3 = u1 * u1 + v1 * v1 + w1 * w1;
             let e3max = e3
                 .max(u2 * u2 + v2 * v2 + w2 * w2)
@@ -2275,8 +2368,7 @@ fn refine_eearcut(
                 if !row_marked.contains(&key) {
                     continue;
                 }
-                let sk =
-                    row_chord_skips(&params, ranges, t[k] as usize, t[(k + 1) % 3] as usize);
+                let sk = row_chord_skips(&params, ranges, t[k] as usize, t[(k + 1) % 3] as usize);
                 if !sk.is_empty() {
                     rowfan = Some((k, sk));
                     break;
@@ -2360,7 +2452,11 @@ fn refine_eearcut(
     // 3-midpoint √g rule; the seed's corners are `data` points)
     let mut quad_area = 0.0f64;
     for t in seed.chunks_exact(3) {
-        let (p0, p1, p2) = (data[t[0] as usize], data[t[1] as usize], data[t[2] as usize]);
+        let (p0, p1, p2) = (
+            data[t[0] as usize],
+            data[t[1] as usize],
+            data[t[2] as usize],
+        );
         quad_area += param_tri_area(surf, p0, p1, p2);
     }
     Ok((mapped, quad_area))
@@ -2380,7 +2476,11 @@ fn param_tri_area(surf: &Surf, a: P2, b: P2, c: P2) -> f64 {
 
 /// Emitted triangle with a positive area (degenerates dropped).
 fn emit_nonzero(tris: &mut Vec<[u32; 3]>, mesh_area: &mut f64, verts: &[P3], t: [u32; 3]) {
-    let (a, b, c) = (verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]);
+    let (a, b, c) = (
+        verts[t[0] as usize],
+        verts[t[1] as usize],
+        verts[t[2] as usize],
+    );
     let area = 0.5 * len3(cross3(sub(b, a), sub(c, a)));
     if area > 0.0 {
         tris.push(t);
@@ -2476,15 +2576,13 @@ mod tests {
     }
 
     fn lin_ring(surf: &Surf, samples: &[(f64, f64)]) -> Ring {
-        let pts: Vec<P3> = samples
-            .iter()
-            .map(|(u, v)| surf.eval(*u, *v))
-            .collect();
-        let uv: Vec<P2> = samples
-            .iter()
-            .map(|(u, v)| [*u, *v])
-            .collect();
-        Ring { pts, uv, is_outer: true }
+        let pts: Vec<P3> = samples.iter().map(|(u, v)| surf.eval(*u, *v)).collect();
+        let uv: Vec<P2> = samples.iter().map(|(u, v)| [*u, *v]).collect();
+        Ring {
+            pts,
+            uv,
+            is_outer: true,
+        }
     }
 
     fn quad_frame() -> Frame {
@@ -2512,7 +2610,10 @@ mod tests {
 
     #[test]
     fn cyl_eval_invert_roundtrip() {
-        let s = Surf::Cyl { f: frame_at_origin(), r: 2.0 };
+        let s = Surf::Cyl {
+            f: frame_at_origin(),
+            r: 2.0,
+        };
         for u in [-1.5, 0.3, 1.2, 2.5, 3.3] {
             for v in [-1.0, 0.5, 4.0] {
                 let p = s.eval(u, v);
@@ -2527,7 +2628,11 @@ mod tests {
 
     #[test]
     fn torus_eval_invert_roundtrip() {
-        let s = Surf::Torus { f: frame_at_origin(), big_r: 5.0, r: 1.0 };
+        let s = Surf::Torus {
+            f: frame_at_origin(),
+            big_r: 5.0,
+            r: 1.0,
+        };
         for u in [0.2, 1.4, 3.0, 4.7] {
             for v in [-2.5, -0.3, 0.0, 1.0, 2.9] {
                 let p = s.eval(u, v);
@@ -2602,7 +2707,10 @@ mod tests {
     fn green_ring_full_cylinder_lateral() {
         // a ring wrapping u fully (the seam staircase) must still give
         // 2π·r²·Δv for the cylinder lateral flux
-        let s = Surf::Cyl { f: frame_at_origin(), r: 3.0 };
+        let s = Surf::Cyl {
+            f: frame_at_origin(),
+            r: 3.0,
+        };
         // the ring: wrap u from 0.37 to 0.37+2π at v=1, seam up/down
         let mut samples: Vec<(f64, f64)> = Vec::new();
         let (u0, v0, v1) = (0.37, 1.0, 5.0);
@@ -2654,15 +2762,10 @@ mod tests {
         let s = Surf::Plane(quad_frame());
         let outer = lin_ring(&s, &[(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]);
         let hole_cw = Ring {
-            pts: [
-                (-1.0, -1.0),
-                (-1.0, 1.0),
-                (1.0, 1.0),
-                (1.0, -1.0),
-            ]
-            .iter()
-            .map(|&(u, v)| s.eval(u, v))
-            .collect(),
+            pts: [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)]
+                .iter()
+                .map(|&(u, v)| s.eval(u, v))
+                .collect(),
             uv: vec![[-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, -1.0]],
             is_outer: false,
         };
@@ -2677,8 +2780,15 @@ mod tests {
         // (A_outer − A_hole)/3 with c = 1: 12/3 = 4, vs 20/3 for the old bug
         for (_tag, hole) in [("cw", &hole_cw), ("ccw", &hole_ccw)] {
             let mut pool = VertexPool::new(5.0);
-            let tess = tess_face(&s, true, &[outer.clone(), hole.clone()], &mut pool, 0.5, 1e-6)
-                .unwrap();
+            let tess = tess_face(
+                &s,
+                true,
+                &[outer.clone(), hole.clone()],
+                &mut pool,
+                0.5,
+                1e-6,
+            )
+            .unwrap();
             let vf = tess.volume_face.expect("plane face has a flux potential");
             assert!(
                 (vf * 3.0 - 12.0).abs() < 1e-9,
@@ -2703,8 +2813,14 @@ mod tests {
     fn earcut_raw_winding_convention() {
         let s = Surf::Plane(quad_frame());
         for (tag, samples) in [
-            ("ccw", [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].as_slice()),
-            ("cw", [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)].as_slice()),
+            (
+                "ccw",
+                [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].as_slice(),
+            ),
+            (
+                "cw",
+                [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)].as_slice(),
+            ),
         ] {
             let ring = lin_ring(&s, samples);
             let mut pool = VertexPool::new(3.0);
@@ -2732,7 +2848,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn quad_face_via_earcut() {
         let s = Surf::Plane(quad_frame());
@@ -2751,7 +2866,10 @@ mod tests {
         // a sphere patch with a chord-fine ring: the boundary sits within the
         // chord, but the earcut seed tris span the patch and deviate — rounds
         // must bring every interior edge inside the chord
-        let s = Surf::Sphere { f: frame_at_origin(), r: 10.0 };
+        let s = Surf::Sphere {
+            f: frame_at_origin(),
+            r: 10.0,
+        };
         let samples: Vec<(f64, f64)> = {
             let mut v = Vec::new();
             for i in 0..=6 {
@@ -2773,11 +2891,18 @@ mod tests {
         let chord = 0.05f64;
         let tess = tess_face(&s, true, &[ring], &mut pool, chord, 1e-6).unwrap();
         assert_eq!(tess.path, "earcut");
-        assert!(tess.tris.len() > 64, "no real refinement: {} tris", tess.tris.len());
+        assert!(
+            tess.tris.len() > 64,
+            "no real refinement: {} tris",
+            tess.tris.len()
+        );
         // flux: f = r³·cos v (u-independent) → r³·Δu·(sin v1 − sin v0)
         let expect = 1000.0 * 1.2 * (0.6f64.sin() - (-0.6f64).sin());
         let flux = tess.volume_face.unwrap() * 3.0;
-        assert!((flux - expect).abs() / expect < 1e-4, "flux {flux} vs {expect}");
+        assert!(
+            (flux - expect).abs() / expect < 1e-4,
+            "flux {flux} vs {expect}"
+        );
         // area reference: √g = r²·cos v → area = r²·Δu·(sin v1 − sin v0)
         let expect_area = 100.0 * 1.2 * (0.6f64.sin() - (-0.6f64).sin());
         assert!((tess.quad_area - expect_area).abs() / expect_area < 1e-3);
@@ -2789,7 +2914,10 @@ mod tests {
     fn structured_grid_full_cylinder() {
         // rings: bottom circle (full u wrap), seam pairs, top circle — build
         // the realistic trimmed-tube ring for the triangulator
-        let s = Surf::Cyl { f: frame_at_origin(), r: 3.0 };
+        let s = Surf::Cyl {
+            f: frame_at_origin(),
+            r: 3.0,
+        };
         let mut samples: Vec<(f64, f64)> = Vec::new();
         let (v0, v1) = (2.0, 9.0);
         for i in 0..=32 {
@@ -2812,14 +2940,20 @@ mod tests {
         assert_eq!(tess.path, "structured grid");
         let flux = tess.volume_face.unwrap() * 3.0;
         let expect = 9.0 * std::f64::consts::TAU * 7.0;
-        assert!((flux - expect).abs() / expect < 1e-6, "flux {flux} vs {expect}");
+        assert!(
+            (flux - expect).abs() / expect < 1e-6,
+            "flux {flux} vs {expect}"
+        );
         let coverage = tess.mesh_area / tess.quad_area;
         assert!(coverage > 0.98, "coverage {coverage}");
     }
 
     #[test]
     fn whole_sphere_grid_volume() {
-        let s = Surf::Sphere { f: frame_at_origin(), r: 4.0 };
+        let s = Surf::Sphere {
+            f: frame_at_origin(),
+            r: 4.0,
+        };
         let mut pool = VertexPool::new(5.0);
         let tess = tess_face(&s, true, &[], &mut pool, 0.2, 1e-6).unwrap();
         let v = tess.volume_face.unwrap();
@@ -2832,7 +2966,11 @@ mod tests {
 
     #[test]
     fn whole_torus_grid_volume() {
-        let s = Surf::Torus { f: frame_at_origin(), big_r: 5.0, r: 1.0 };
+        let s = Surf::Torus {
+            f: frame_at_origin(),
+            big_r: 5.0,
+            r: 1.0,
+        };
         let mut pool = VertexPool::new(10.0);
         // a radius-1 tube needs a fine chord for the flat-mesh area to sit
         // within 2 % of the analytic area: coverage sin(dθ/2)/(dθ/2) at
@@ -2849,26 +2987,53 @@ mod tests {
 
     /// An open seam edge of a full cylinder: constant u, v from `a` to `b`.
     fn seam_poly(s: &Surf, alpha: f64, v: f64, w: f64) -> EdgePoly {
-        let pts: Vec<P3> = (0..=32).map(|i| s.eval(alpha, v + (w - v) * i as f64 / 32.0)).collect();
-        EdgePoly { pts, entity_closed: false }
+        let pts: Vec<P3> = (0..=32)
+            .map(|i| s.eval(alpha, v + (w - v) * i as f64 / 32.0))
+            .collect();
+        EdgePoly {
+            pts,
+            entity_closed: false,
+        }
     }
 
     #[test]
     fn assemble_ring_two_seam_occurrences_give_full_tube() {
-        let s = Surf::Cyl { f: frame_at_origin(), r: 3.0 };
+        let s = Surf::Cyl {
+            f: frame_at_origin(),
+            r: 3.0,
+        };
         let (v_b, v_t, alpha) = (2.0, 9.0, 0.6);
         let p = seam_poly(&s, alpha, v_b, v_t);
         let parts = vec![
-            RingPart { poly: p.clone(), fwd: true, occ: 0 },
-            RingPart { poly: p, fwd: false, occ: 1 },
+            RingPart {
+                poly: p.clone(),
+                fwd: true,
+                occ: 0,
+            },
+            RingPart {
+                poly: p,
+                fwd: false,
+                occ: 1,
+            },
         ];
         let ring = assemble_ring(&s, &parts, true, 1e-6, 1e-6).unwrap();
         let w_u = ring.uv.iter().map(|q| q[0]).fold(f64::INFINITY, f64::min)
-            - ring.uv.iter().map(|q| -q[0]).fold(f64::NEG_INFINITY, f64::max);
+            - ring
+                .uv
+                .iter()
+                .map(|q| -q[0])
+                .fold(f64::NEG_INFINITY, f64::max);
         // span = max − min
         let lo = ring.uv.iter().map(|q| q[0]).fold(f64::INFINITY, f64::min);
-        let hi = ring.uv.iter().map(|q| q[0]).fold(f64::NEG_INFINITY, f64::max);
-        assert!((hi - lo - std::f64::consts::TAU).abs() < 1e-5, "u span {hi}−{lo}");
+        let hi = ring
+            .uv
+            .iter()
+            .map(|q| q[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (hi - lo - std::f64::consts::TAU).abs() < 1e-5,
+            "u span {hi}−{lo}"
+        );
         let _ = w_u;
         // 3D continuity: the ring walks up one copy and down the other
         let mut pool = VertexPool::new(10.0);
@@ -2876,26 +3041,59 @@ mod tests {
         assert_eq!(tess.path, "structured grid");
         let flux = tess.volume_face.unwrap() * 3.0;
         let expect = 9.0 * std::f64::consts::TAU * (v_t - v_b);
-        assert!((flux - expect).abs() / expect < 1e-6, "flux {flux} vs {expect}");
+        assert!(
+            (flux - expect).abs() / expect < 1e-6,
+            "flux {flux} vs {expect}"
+        );
     }
 
     #[test]
     fn assemble_ring_four_part_full_torus() {
-        let s = Surf::Torus { f: frame_at_origin(), big_r: 5.0, r: 1.0 };
+        let s = Surf::Torus {
+            f: frame_at_origin(),
+            big_r: 5.0,
+            r: 1.0,
+        };
         let t = std::f64::consts::TAU;
         let (alpha, gamma) = (0.7, -1.9);
         // entity A: constant-u seam circle (wraps v), closed; entity B:
         // constant-v seam circle (wraps u), closed. Both share the vertex at
         // (alpha, gamma).
-        let a_pts: Vec<P3> = (0..=90).map(|i| s.eval(alpha, gamma + t * i as f64 / 90.0)).collect();
-        let b_pts: Vec<P3> = (0..=90).map(|i| s.eval(alpha + t * i as f64 / 90.0, gamma)).collect();
-        let a = EdgePoly { pts: a_pts, entity_closed: true };
-        let b = EdgePoly { pts: b_pts, entity_closed: true };
+        let a_pts: Vec<P3> = (0..=90)
+            .map(|i| s.eval(alpha, gamma + t * i as f64 / 90.0))
+            .collect();
+        let b_pts: Vec<P3> = (0..=90)
+            .map(|i| s.eval(alpha + t * i as f64 / 90.0, gamma))
+            .collect();
+        let a = EdgePoly {
+            pts: a_pts,
+            entity_closed: true,
+        };
+        let b = EdgePoly {
+            pts: b_pts,
+            entity_closed: true,
+        };
         let parts = vec![
-            RingPart { poly: a.clone(), fwd: true, occ: 0 },
-            RingPart { poly: b.clone(), fwd: true, occ: 0 },
-            RingPart { poly: a, fwd: false, occ: 1 },
-            RingPart { poly: b, fwd: false, occ: 1 },
+            RingPart {
+                poly: a.clone(),
+                fwd: true,
+                occ: 0,
+            },
+            RingPart {
+                poly: b.clone(),
+                fwd: true,
+                occ: 0,
+            },
+            RingPart {
+                poly: a,
+                fwd: false,
+                occ: 1,
+            },
+            RingPart {
+                poly: b,
+                fwd: false,
+                occ: 1,
+            },
         ];
         let ring = assemble_ring(&s, &parts, true, 1e-2, 1e-2).unwrap();
         let mut pool = VertexPool::new(10.0);
@@ -2908,20 +3106,44 @@ mod tests {
 
     #[test]
     fn assemble_ring_two_seam_occurrences_give_full_v_wedge() {
-        let s = Surf::Torus { f: frame_at_origin(), big_r: 5.0, r: 1.0 };
+        let s = Surf::Torus {
+            f: frame_at_origin(),
+            big_r: 5.0,
+            r: 1.0,
+        };
         // constant-v ruled edge from u=0.2 to u=1.7, used twice: the trimmed
         // region is the full-v wedge
         let (u_a, u_b, gamma) = (0.2, 1.7, -0.4);
-        let pts: Vec<P3> = (0..=24).map(|i| s.eval(u_a + (u_b - u_a) * i as f64 / 24.0, gamma)).collect();
-        let poly = EdgePoly { pts, entity_closed: false };
+        let pts: Vec<P3> = (0..=24)
+            .map(|i| s.eval(u_a + (u_b - u_a) * i as f64 / 24.0, gamma))
+            .collect();
+        let poly = EdgePoly {
+            pts,
+            entity_closed: false,
+        };
         let parts = vec![
-            RingPart { poly: poly.clone(), fwd: true, occ: 0 },
-            RingPart { poly, fwd: false, occ: 1 },
+            RingPart {
+                poly: poly.clone(),
+                fwd: true,
+                occ: 0,
+            },
+            RingPart {
+                poly,
+                fwd: false,
+                occ: 1,
+            },
         ];
         let ring = assemble_ring(&s, &parts, true, 1e-6, 1e-6).unwrap();
         let lo = ring.uv.iter().map(|q| q[1]).fold(f64::INFINITY, f64::min);
-        let hi = ring.uv.iter().map(|q| q[1]).fold(f64::NEG_INFINITY, f64::max);
-        assert!((hi - lo - std::f64::consts::TAU).abs() < 1e-5, "v span {hi}−{lo}");
+        let hi = ring
+            .uv
+            .iter()
+            .map(|q| q[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (hi - lo - std::f64::consts::TAU).abs() < 1e-5,
+            "v span {hi}−{lo}"
+        );
         let mut pool = VertexPool::new(10.0);
         let tess = tess_face(&s, true, &[ring], &mut pool, 0.2, 1e-6).unwrap();
         assert_eq!(tess.path, "structured grid");
@@ -2929,12 +3151,18 @@ mod tests {
         // with the frame at the origin the closed form over the wedge is
         // 3·R·r²·π·(u_b − u_a)
         let expect = 3.0 * 5.0 * 1.0 * std::f64::consts::PI * (u_b - u_a);
-        assert!((flux - expect).abs() / expect < 1e-6, "flux {flux} vs {expect}");
+        assert!(
+            (flux - expect).abs() / expect < 1e-6,
+            "flux {flux} vs {expect}"
+        );
     }
 
     #[test]
     fn assemble_ring_discontinuous_rejected() {
-        let s = Surf::Cyl { f: frame_at_origin(), r: 3.0 };
+        let s = Surf::Cyl {
+            f: frame_at_origin(),
+            r: 3.0,
+        };
         let p = seam_poly(&s, 0.0, 0.0, 1.0);
         // second part starts 4 mm away from the first part's end
         let shifted = EdgePoly {
@@ -2942,8 +3170,16 @@ mod tests {
             entity_closed: false,
         };
         let parts = vec![
-            RingPart { poly: p, fwd: true, occ: 0 },
-            RingPart { poly: shifted, fwd: true, occ: 0 },
+            RingPart {
+                poly: p,
+                fwd: true,
+                occ: 0,
+            },
+            RingPart {
+                poly: shifted,
+                fwd: true,
+                occ: 0,
+            },
         ];
         assert!(assemble_ring(&s, &parts, true, 1e-6, 1e-6).is_err());
     }
@@ -2978,14 +3214,15 @@ mod tests {
         assert_eq!(ring.uv.len(), 34);
         let mut pool = VertexPool::new(100.0);
         let tess = tess_earcut(&s, &ring, &[], &mut pool, chord, 1e-6, true).unwrap();
-        let mesh =
-            fieldsmith_mesh::export::TriMesh { verts: pool.verts.clone(), tris: tess.tris };
+        let mesh = fieldsmith_mesh::export::TriMesh {
+            verts: pool.verts.clone(),
+            tris: tess.tris,
+        };
         let adj = fieldsmith_mesh::weld::edge_adjacency(&mesh);
         // the face's own ring edges have their partners on the neighbouring
         // faces of the solid; any open edge NOT on the ring is a tiling hole
         const UNSET: u32 = u32::MAX;
-        let boundary: HashSet<(u32, u32)> =
-            (0..34u32).map(|k| sort2(k, (k + 1) % 34)).collect();
+        let boundary: HashSet<(u32, u32)> = (0..34u32).map(|k| sort2(k, (k + 1) % 34)).collect();
         let mut interior_open = 0usize;
         for ti in 0..mesh.tris.len() {
             for k in 0..3 {
@@ -2998,7 +3235,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(interior_open, 0, "refined window has {interior_open} interior open edge sides");
+        assert_eq!(
+            interior_open, 0,
+            "refined window has {interior_open} interior open edge sides"
+        );
         let expect = 10.0 * (u1 - u0) * (v1 - v0);
         assert!(
             (tess.mesh_area - expect).abs() / expect < 0.01,

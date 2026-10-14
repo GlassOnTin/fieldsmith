@@ -960,7 +960,11 @@ mod tests {
         ] {
             let (body, fx) = filled_expr(mode, keep);
             let g = generate_viewport(&body, Some(&fx));
-            for plain_line in generate(&body).source.lines().filter(|l| !l.trim().is_empty()) {
+            for plain_line in generate(&body)
+                .source
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+            {
                 assert!(
                     g.source.contains(plain_line),
                     "{mode:?}: body line missing from the shared program: {plain_line}"
@@ -988,7 +992,10 @@ mod tests {
         let (body, mut fx) = filled_expr(FillMode::Sheet, Expr::Empty);
         let graded = generate_viewport(&body, Some(&fx));
         assert_eq!(
-            graded.source.matches("uniform highp sampler3D u_param;").count(),
+            graded
+                .source
+                .matches("uniform highp sampler3D u_param;")
+                .count(),
             1,
             "one declaration in the shared program"
         );
@@ -1007,7 +1014,10 @@ mod tests {
         fx.param.data = vec![0.45];
         let constant = generate_viewport(&body, Some(&fx));
         assert_eq!(
-            constant.source.matches("uniform highp sampler3D u_param;").count(),
+            constant
+                .source
+                .matches("uniform highp sampler3D u_param;")
+                .count(),
             0,
             "a single-node grid is a literal"
         );

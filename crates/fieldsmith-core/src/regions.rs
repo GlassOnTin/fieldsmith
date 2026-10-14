@@ -2,7 +2,7 @@
 
 use crate::SetupError;
 use fieldsmith_doc::{Document, Face, NodeKind};
-use fieldsmith_field::expr::{self, eval_face, placed_shape, Rigid};
+use fieldsmith_field::expr::{self, placed_shape, Rigid};
 use fieldsmith_field::meshfield::FACE_CONE_COS;
 use fieldsmith_solve::P2Mesh;
 
@@ -208,30 +208,15 @@ struct Rule {
     axis: Option<[f64; 3]>,
 }
 
-/// Indices of the facets that belong to region `id`.
-///
-/// A facet belongs to a selector `shape.face` when its corners lie on that shape's placed surface,
-/// its normal is parallel to the shape's surface normal, and the nearest face of the shape at its
-/// centroid is the selected face. A `.p3` selector (`patch`, with face `All`) further requires the
-/// facet's centroid to sit on that surface patch of the named mesh; primitive faces carry no
-/// patches and never claim one. Corners of boundary facets are on the zero set to root-finding
-/// precision, so the corner test can be tight; the centroid sits inside the chord of curved faces.
-pub fn region_facets(
-    doc: &Document,
-    id: &str,
-    mesh: &P2Mesh,
-    facets: &[Facet],
-    h: f64,
-) -> Result<Vec<usize>, SetupError> {
+/// Compile one region's selectors into rules, mapping axis faces through the shape node's
+/// placement (mismatched shapes are the caller's error to report with the region's name).
+fn rules_for(doc: &Document, id: &str) -> Result<Vec<Rule>, SetupError> {
     let region = doc
         .regions
         .iter()
         .find(|r| r.id == id)
         .ok_or_else(|| SetupError(format!("unknown region '{id}'")))?;
-    let tol_corner = 1e-6 * h.max(1.0);
-    let tol_centroid = 0.25 * h;
-    let mut out = Vec::new();
-    let shapes: Vec<Rule> = region
+    region
         .selectors
         .iter()
         .map(|s| {
@@ -263,51 +248,211 @@ pub fn region_facets(
                     ))
                 })
         })
-        .collect::<Result<_, _>>()?;
+        .collect()
+}
+
+/// Whether region rules claim facet `f` by the exact chain. This is the per-selector test
+/// as documented on [`region_facets_exact`], factored out so the second pass can find the
+/// facets no region wants.
+fn chain_hit(
+    shapes: &[Rule],
+    f: &Facet,
+    mesh: &P2Mesh,
+    tol_corner: f64,
+    tol_centroid: f64,
+) -> bool {
+    let corners = f.corners(mesh);
+    let c = f.centroid(mesh);
+    let n = f.normal(mesh);
+    shapes.iter().any(|r: &Rule| {
+        if corners
+            .iter()
+            .any(|&p| expr::eval(&r.e, p).v.abs() > tol_corner)
+        {
+            return false;
+        }
+        let d = expr::eval(&r.e, c);
+        if d.v.abs() > tol_centroid {
+            return false;
+        }
+        let gl = (d.g[0] * d.g[0] + d.g[1] * d.g[1] + d.g[2] * d.g[2]).sqrt();
+        if gl == 0.0 || ((d.g[0] * n[0] + d.g[1] * n[1] + d.g[2] * n[2]) / gl).abs() < 0.7 {
+            return false;
+        }
+        match r.axis {
+            // Mesh face rule: the facet's outward normal within the face cone (same
+            // 45° threshold as the sweep mask — a labelled support and a swept skirt
+            // agree). Primitives never land here.
+            Some(ax) => {
+                if n[0] * ax[0] + n[1] * ax[1] + n[2] * ax[2] < FACE_CONE_COS {
+                    return false;
+                }
+            }
+            None => {
+                if r.face != Face::All
+                    && !corners
+                        .iter()
+                        .all(|&pt| expr::on_face(&r.e, pt, r.face, tol_corner))
+                {
+                    return false;
+                }
+            }
+        }
+        match r.patch {
+            None => true,
+            Some(p) => expr::eval_mesh_patch(&r.e, c)
+                .map(|q| q == p as u16)
+                .unwrap_or(false),
+        }
+    })
+}
+
+/// Indices of the facets that belong to region `id` by the exact chain only. A facet
+/// belongs to a selector `shape.face` when its corners lie on that shape's placed surface,
+/// its normal is parallel to the shape's surface normal, and every corner sits on the selected
+/// face's own carrier surface (`.bottom` = the cap plane, `.side` = the wall cylinder, a box axis
+/// face = its plane) — not merely nearest to it. The carrier test is what keeps a facet that
+/// straddles the edge between two named faces from being claimed by either: a wall facet whose
+/// centroid sits one chord-sag above a cylinder's cap classifies Bottom at the centroid, but its
+/// wall corners stand 0.1–1.5 mm off the cap plane and fail the carrier test (V20). A `.p3`
+/// selector (`patch`, with face `All`) further requires the facet's centroid to sit on that
+/// surface patch of the named mesh; primitive faces carry no patches and never claim one. Corners
+/// of boundary facets are on the zero set to root-finding precision, so the corner and carrier
+/// tests can be tight; the centroid sits inside the chord of curved faces.
+///
+/// This is the whole contract for supports and loads ([`crate::fixed_mask`],
+/// [`crate::case_force_report`]): a support must fix only nodes standing exactly on its carrier.
+/// Pinning a node the mesh put off the plane contradicts any exact solution with nonzero
+/// displacement there — measured in V20's anchor, where second-pass claims on support regions
+/// turned a free-expansion field (σ ≡ 0) into a 34 MPa one.
+pub fn region_facets_exact(
+    doc: &Document,
+    id: &str,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    h: f64,
+) -> Result<Vec<usize>, SetupError> {
+    let tol_corner = 1e-6 * h.max(1.0);
+    let tol_centroid = 0.25 * h;
+    let rules = rules_for(doc, id)?;
+    Ok((0..facets.len())
+        .filter(|&i| chain_hit(&rules, &facets[i], mesh, tol_corner, tol_centroid))
+        .collect())
+}
+
+/// Indices of the facets that belong to region `id`, exact chain plus the second pass.
+///
+/// The exact chain ([`region_facets_exact`]) refuses boundary facets that approximate a named
+/// surface while carrying a corner off its carrier (rim "chamfer" faces whose cap corner is one
+/// lattice point onto the cap plane; wall facets whose outward corner is an interior lattice
+/// point). For boundary DATA that refusal leaves a hole: a temperature region's chime facet
+/// would take a free node, and with |∇T| ≈ 10 K/mm at V20's bore wall the free corner sags
+/// 5–12 K off the prescribed profile. The second pass claims such a facet for the region whose
+/// carrier is nearest its centroid, within the centroid tolerance, when the facet's outward
+/// normal stays inside that carrier's own cone ([`carrier_normal`] — not the SDF gradient at
+/// the centroid, which points through whichever surface is nearest there and on a plain box
+/// aliases the named carrier through an unnamed neighbouring face). A cap-plane facet's normal
+/// is square to a wall carrier and can never be stolen by it. Boundary data there is the exact
+/// data at the carrier,
+/// so claiming trades a hole in the region's Dirichlet for the mesh's own chord deviation from
+/// the surface.
+///
+/// Regions referenced by a `support` statement are excluded from the second-pass race: their
+/// facets stay exactly as the chain computes them ([`region_facets_exact`]). Support pins are
+/// constraints, not data — a pin at a node the exact field moves (off the support plane) makes
+/// the pipeline contradict its own exact solution, which is V20's measured anchor failure.
+/// Loads likewise take the exact set. So the second pass fills Dirichlet-data holes only:
+/// temperature regions, and the surface-region attribution pass in `prepare` (labelling, not
+/// physics). Carriers of every other racing region are in the same race, in document order on
+/// ties, so no region can steal a facet another region's carrier rides closer to.
+pub fn region_facets(
+    doc: &Document,
+    id: &str,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    h: f64,
+) -> Result<Vec<usize>, SetupError> {
+    let mut out = region_facets_exact(doc, id, mesh, facets, h)?;
+    let tol_corner = 1e-6 * h.max(1.0);
+    let tol_centroid = 0.25 * h;
+    let id_index = doc.regions.iter().position(|r| r.id == id);
+
+    // Regions pinned by a support statement never race: their chime facets stay free.
+    let no_race: Vec<&str> = doc.supports.iter().map(|s| s.region.as_str()).collect();
+    let region_rules: Vec<Result<Vec<Rule>, SetupError>> =
+        doc.regions.iter().map(|r| rules_for(doc, &r.id)).collect();
+    let mut claimed_elsewhere = vec![false; facets.len()];
+    for result in &region_rules {
+        if let Ok(shapes) = result {
+            for (i, f) in facets.iter().enumerate() {
+                if !claimed_elsewhere[i] && chain_hit(shapes, f, mesh, tol_corner, tol_centroid) {
+                    claimed_elsewhere[i] = true;
+                }
+            }
+        }
+    }
     for (i, f) in facets.iter().enumerate() {
-        let corners = f.corners(mesh);
+        if claimed_elsewhere[i] {
+            continue;
+        }
         let c = f.centroid(mesh);
         let n = f.normal(mesh);
-        let hit = shapes.iter().any(|r: &Rule| {
-            if corners
-                .iter()
-                .any(|&p| expr::eval(&r.e, p).v.abs() > tol_corner)
-            {
-                return false;
+        let mut best: Option<(usize, f64)> = None;
+        for (ri, result) in region_rules.iter().enumerate() {
+            if no_race.contains(&doc.regions[ri].id.as_str()) {
+                continue;
             }
-            let d = expr::eval(&r.e, c);
-            if d.v.abs() > tol_centroid {
-                return false;
-            }
-            let gl = (d.g[0] * d.g[0] + d.g[1] * d.g[1] + d.g[2] * d.g[2]).sqrt();
-            if gl == 0.0 || ((d.g[0] * n[0] + d.g[1] * n[1] + d.g[2] * n[2]) / gl).abs() < 0.7 {
-                return false;
-            }
-            match r.axis {
-                // Mesh face rule: the facet's outward normal within the face cone (same
-                // 45° threshold as the sweep mask — a labelled support and a swept skirt
-                // agree). Primitives never land here.
-                Some(ax) => {
-                    if n[0] * ax[0] + n[1] * ax[1] + n[2] * ax[2] < FACE_CONE_COS {
-                        return false;
-                    }
+            let shapes = match result {
+                Ok(shapes) => shapes,
+                Err(_) => continue,
+            };
+            for r in shapes {
+                let Some(gap) = expr::face_carrier_gap(&r.e, r.face, c) else {
+                    continue;
+                };
+                if gap > tol_centroid {
+                    continue;
                 }
-                None => {
-                    if !(r.face == Face::All || eval_face(&r.e, c).1 == r.face) {
-                        return false;
-                    }
+                let Some(cn) = carrier_normal(&r.e, r.face, c) else {
+                    continue;
+                };
+                if cn[0] * n[0] + cn[1] * n[1] + cn[2] * n[2] < 0.7 {
+                    continue;
+                }
+                if best.map_or(true, |(_, bg)| gap < bg) {
+                    best = Some((ri, gap));
                 }
             }
-            match r.patch {
-                None => true,
-                Some(p) => expr::eval_mesh_patch(&r.e, c)
-                    .map(|q| q == p as u16)
-                    .unwrap_or(false),
+        }
+        if let Some((ri, _)) = best {
+            if Some(ri) == id_index {
+                out.push(i);
             }
-        });
-        if hit {
-            out.push(i);
         }
     }
     Ok(out)
+}
+
+/// Numeric unit outward normal of the named-face carrier at `p`, by central differences of
+/// [`expr::face_carrier_signed`] across the placed shape's copies. The carriers are exact
+/// planes and cylinders (a ruled wall inside the cap range), smooth where a claimed facet's
+/// centroid rides them, so the difference error at eps = 1e-4 mm is negligible; the whole
+/// evaluation recurses inside each placement's local frame, so no direction transform is
+/// needed. Beyond an extrude's caps the rim-corner distance is kinked along the seam —
+/// there the difference can come out wrong and the cone simply refuses the claim, which
+/// leaves the facet free rather than mis-claimed.
+fn carrier_normal(e: &fieldsmith_field::expr::Expr, face: Face, p: [f64; 3]) -> Option<[f64; 3]> {
+    const EPS: f64 = 1e-4;
+    expr::face_carrier_signed(e, face, p)?;
+    let mut g = [0.0f64; 3];
+    for k in 0..3 {
+        let mut pp = p;
+        pp[k] += EPS;
+        let mut pm = p;
+        pm[k] -= EPS;
+        g[k] = (expr::face_carrier_signed(e, face, pp)? - expr::face_carrier_signed(e, face, pm)?)
+            / (2.0 * EPS);
+    }
+    let l = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+    (l > 0.0).then_some([g[0] / l, g[1] / l, g[2] / l])
 }

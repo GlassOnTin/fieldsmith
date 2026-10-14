@@ -22,7 +22,7 @@ use fieldsmith_solve::{
 };
 use serde::Serialize;
 
-pub use regions::{face_frame, region_facets, FaceFrame, Facet};
+pub use regions::{face_frame, region_facets, region_facets_exact, FaceFrame, Facet};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
 pub type Clock = fn() -> f64;
@@ -214,7 +214,9 @@ pub fn fixed_mask(
 ) -> Result<Vec<u8>, SetupError> {
     let mut fixed = vec![0u8; mesh.nodes.len()];
     for s in &doc.supports {
-        let fs = region_facets(doc, &s.region, mesh, facets, h)?;
+        // Exact-only: a support pin must land on nodes the field agrees are immovable; the
+        // second pass pins off-carrier chime nodes and contradicts the exact solution (V20).
+        let fs = region_facets_exact(doc, &s.region, mesh, facets, h)?;
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "support '{}': region '{}' does not touch the part's surface",
@@ -264,7 +266,10 @@ pub fn case_force_report(
     let mut force = vec![0.0; mesh.nodes.len() * 3];
     let mut reports = Vec::new();
     for l in doc.loads.iter().filter(|l| l.case == name) {
-        let fs = region_facets(doc, &l.region, mesh, facets, h)?;
+        // Exact-only: traction integrates over the claimed facets' real area, and chime
+        // facets the second pass would add (with their mesh-chord area) belong to no
+        // carrier the load names; loads are data at exact carriers like constraints are.
+        let fs = region_facets_exact(doc, &l.region, mesh, facets, h)?;
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "load '{}': region '{}' does not touch the part's surface",
@@ -301,13 +306,11 @@ pub fn case_force_report(
                 }
                 let d = match dir {
                     LoadDir::Global { v } => *v,
-                    LoadDir::Local { v } => {
-                        [
-                            v[0] * frame.x[0] + v[1] * frame.y[0] + v[2] * frame.n[0],
-                            v[0] * frame.x[1] + v[1] * frame.y[1] + v[2] * frame.n[1],
-                            v[0] * frame.x[2] + v[1] * frame.y[2] + v[2] * frame.n[2],
-                        ]
-                    }
+                    LoadDir::Local { v } => [
+                        v[0] * frame.x[0] + v[1] * frame.y[0] + v[2] * frame.n[0],
+                        v[0] * frame.x[1] + v[1] * frame.y[1] + v[2] * frame.n[1],
+                        v[0] * frame.x[2] + v[1] * frame.y[2] + v[2] * frame.n[2],
+                    ],
                 };
                 let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                 if len == 0.0 {

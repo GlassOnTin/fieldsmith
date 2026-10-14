@@ -46,8 +46,8 @@ fn parse_model(text: &str) -> Result<Vec<NamedPart>, String> {
     let mats = collect_material_groups(text)?;
     let mut s = Scanner { text, pos: 0 };
     let mut unit_scale = 1.0f64; // millimetre is the spec default
-    // Resource objects by id, in file order; `None` is an object without a `<mesh>`
-    // (e.g. a component container, whose subtree is walked through).
+                                 // Resource objects by id, in file order; `None` is an object without a `<mesh>`
+                                 // (e.g. a component container, whose subtree is walked through).
     let mut objs: Vec<(u64, Option<NamedPart>)> = Vec::new();
     let mut saw_build = false;
     let mut parts = Vec::new();
@@ -62,7 +62,9 @@ fn parse_model(text: &str) -> Result<Vec<NamedPart>, String> {
             // re-used resource id is a spec violation regardless of what follows.
             let id = match tag.attr("id") {
                 Some(i) => i.parse::<u64>().map_err(|_| {
-                    format!("3MF object with name \"{name}\" has id \"{i}\", which is not an integer")
+                    format!(
+                        "3MF object with name \"{name}\" has id \"{i}\", which is not an integer"
+                    )
                 })?,
                 None => {
                     return Err(format!("3MF object \"{name}\" has no id attribute"));

@@ -507,9 +507,9 @@ pub fn voxelize(
         .iter()
         .enumerate()
         .flat_map(|(ti, t)| {
-            t.iter()
-                .enumerate()
-                .filter(move |&(k, &e)| e == u32::MAX && mesh.tris[ti][k] != mesh.tris[ti][(k + 1) % 3])
+            t.iter().enumerate().filter(move |&(k, &e)| {
+                e == u32::MAX && mesh.tris[ti][k] != mesh.tris[ti][(k + 1) % 3]
+            })
         })
         .count() as u32;
     let patches_count = segs.map_or(0, |s| s.iter().max().copied().unwrap_or(0));
