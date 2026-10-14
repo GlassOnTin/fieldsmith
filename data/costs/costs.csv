@@ -3,7 +3,9 @@
 # One row per (machine, engine, rung) within one ladder run. Every field:
 #   schema                 row-format version (1)
 #   month                  year-month of the run ("YYYY-MM") — the coarsest timestamp kept
-#   platform               "cli" (fieldsmith binary) or "wasm" (fieldsmith web worker)
+#   platform               "cli" (fieldsmith binary), "worker" (the same engine on
+#                          a machine the user owns, solved over the session channel)
+#                          or "wasm" (fieldsmith web worker)
 #   engine                 engine identity: "fieldsmith <ver> / fenics-rs <ver>", or the
 #                          constant "fieldsmith wasm" (no version — a version claim that
 #                          could be wrong is worse than none)
@@ -15,8 +17,9 @@
 #                          (30000 coarse / 150000 refined)
 #   dofs                   achieved DOF (a row carries it when its source records one)
 #   elements               achieved element count (same rule)
-#   field_leaves           count of field-bearing leaves in the document (cli rows only)
-#   wall_ms                the rung's wall time. CLI rows are the host's single per-rung
+#   field_leaves           count of field-bearing leaves in the document (cli and
+#                          worker rows)
+#   wall_ms                the rung's wall time. CLI and worker rows are the host's single per-rung
 #                          measurement over mesh+solve (V17). wasm rows are level walls:
 #                          the probe-harness rows are the edit→level wall and INCLUDE
 #                          document-UI overhead; blocks read in-page from a running app are
@@ -106,3 +109,35 @@
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,190440,40643,5,2472,,
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,1092,,
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,5356,,
+
+# ---- M15 connection rows 2026-10-14, same engine string, examples/bracket.fsm, rungs 30000,150000 (worker round-trip vs local CLI; the cross-machine record set) ----
+# `fieldsmith session` on the referee served the ladder question over LAN; `fieldsmith
+# worker` on the N100 connected outbound per job (Noise_XXpsk3, fresh TCP + handshake
+# each time) and solved with the same engine string. Cli rows: the N100's three
+# same-day local runs of the same ladder spanned 558.747089–564.511401 /
+# 2607.72829–2617.657443 ms (rows take the third run, the store's convention) — within
+# 1.8 %/1.0 % of the 2026-10-13 N100 rows above; the referee's rows are the api-verb
+# one-shot run (within 2.8 %/0.2 % of its 2026-10-13 rows).
+# Worker round trip: nine paired jobs in the worker stores (one manual pairing, eight
+# scripted). One session served seven jobs with the host wall timed: the first after
+# the worker's spawn measured 10.0 s — that wall contains spawn, enrolment and first
+# connect (the unscripted manual pairing measured 82.9 s the same way) — and the six
+# setup-free jobs measured 3.1–3.2 s host walls against billed rung totals of
+# 3.140–3.169 s from the worker's own records: the mechanism overhead (handshake,
+# framing, LAN transfer of the 799-byte request and ≤991-byte answer) is bounded by
+# the host print's 0.1 s granularity to ≤ ~100 ms per job, ≤ ~3 % — inside the ≤ 20 %
+# GOAL target. The worker rows below are the last timed job; the nine stored jobs span
+# rung 0 539.873693–568.963282 ms and rung 1 2597.09215–2619.822615 ms.
+# Cross-machine divergence: the same request solved locally on the referee (api verb)
+# and on the N100 (worker) — both x86_64, same engine string — returned bit-identical
+# tracked values (rung 0 deflection 2.330609765727498 mm, von Mises 41.97761660839724
+# MPa; rung 1 1.6762950333172848 mm / 47.02818468117891 MPa) and identical rung-1
+# change values; divergence is wall time only, at the ~2.2× machine ratio
+# (558.7/257.8, 2617.7/1167.2). Session cost print (rate 12/h): rung 0 0.6 s → 0.0019,
+# rung 1 2.6 s → 0.0087 (rate × measured time per rung).
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,48822,9588,5,257.81440100000003,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,190440,40643,5,1167.171564,-0.2807483011665701,0.12031574159861531
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,558.7470890000001,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,2617.657443,-0.2807483011665701,0.12031574159861531
+1,2026-10,worker,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,549.450832,,
+1,2026-10,worker,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,2619.822615,-0.2807483011665701,0.12031574159861531

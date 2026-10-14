@@ -10,9 +10,14 @@ verified by the cases in [docs/verification/](docs/verification/); imported mesh
 (GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
 with labelled faces and region-driven extension (V10); a multi-object 3MF imports as
 one field leaf per placed object (build items expand), with the file's base-material
-names recorded on the leaves.
-pass in the headed Chromium referee on a workstation — [budgets.md](docs/verification/budgets.md); the
-budgets' stated mid-range laptop and Firefox measurements have not been run.
+names recorded on the leaves. The GOAL.md performance budgets are measured in the headed
+Chromium referee on the workstation and on the mid-range N100 box ([budgets.md](docs/verification/budgets.md)
+and the budgets-* reports beside it); every run's walls live in
+[data/costs/costs.csv](data/costs/costs.csv). The same verified crates also reach other
+programs: the `api` CLI verb takes one JSON request on stdin and writes one envelope on
+stdout, `fieldsmith-mcp` is an stdio MCP server over that API, and `fieldsmith session`
+/ `fieldsmith worker` host and serve jobs between machines the user owns over
+Noise-encrypted connections — usage in each binary's help text.
 
 ## Building and running
 
@@ -91,7 +96,11 @@ radiation, transient heat and per-region conductivity are not modelled. The grad
 fill lens has no temperature field. Rung-to-rung changes on the refinement ladder are estimates, not
 bounds: on the V1 cantilever the ratio of remaining error to change spans 13× between
 regimes (V17), and the wall-time estimator reports its own residual instead of none
-(V18). One load
+(V18). Solving the same document on another
+machine over the worker channel is not promised bit-identical, and the divergence is
+measured rather than assumed: on the two measured x86_64 hosts the tracked values
+reproduced bit-identically and only wall time differed, by the machine ratio
+(data/costs/costs.csv); any other machine class carries that claim only once measured. One load
 case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 
