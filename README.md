@@ -21,7 +21,8 @@ Noise-encrypted connections — usage in each binary's help text.
 
 ## Building and running
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V10)
+    git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
+    cargo test -p fieldsmith-verify           # verification cases (V1–V23)
     npm --prefix web install                  # once
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist

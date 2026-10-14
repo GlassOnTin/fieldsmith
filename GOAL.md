@@ -60,16 +60,24 @@ appendix names its outcome.
 - [x] Annotated tag `v0.4.0` at the v0.4 close `295e80e`, honesty body in the v0.2.0
       tag's format. (Done at drafting: the tag names what v0.4 measured and what it
       did not verify.)
-- [ ] The build stops depending on an invisible sibling: fenics-rs becomes part of the
-      clone (working assumption: git submodule at its own rev, workspace paths repointed
-      in-repo; decided at the plan). Done when a fresh clone alone builds and
-      `fieldsmith api` answers the pinned golden question byte-stably.
-- [ ] A remote exists: private GitHub repos under the active gh account
-      (GlassOnTin — unilateral call; Haven sits under the GlassHaven name, transfer or
-      flip to public remains the owner's). A credentials scan of the tree (tokens, keys,
-      `.env`-type files, absolute paths that should not travel) runs before the first
-      push and its findings are stated, whatever they are.
-- [ ] `main` and the tags are pushed; a second fresh clone verifies; V24 passes.
+- [x] The build stops depending on an invisible sibling: fenics-rs joined the clone as
+      a git submodule at its own rev (`881d5cd`, pinned at 14b0dc8). One plan finding:
+      the submodule's nested workspace had to keep its own root (`exclude =
+      ["fenics-rs"]`), else cargo resolved the submodule's `authors.workspace = true`
+      inheritance against fieldsmith's root and failed. Done: a fresh clone alone
+      builds (98 s workspace dev) and `fieldsmith api` answers the pinned golden
+      question byte-stably — V24, docs/verification/V24.md.
+- [x] A remote exists: private GitHub repo `GlassOnTin/fieldsmith` (fenics-rs was
+      already owner-hosted, public, at `GlassOnTin/fenics-rs` when execution began —
+      found and used as-is, not created; amending the drafted "repos (plural)").
+      Haven sits under the GlassHaven name, unaffected. The credentials scan of the
+      tree (tokens, keys, `.env`-type files, absolute paths) ran before the first
+      push: no credentials; the one name hit, `worker/src/token.rs`, is the enrolment
+      token's format module (source, holds none); prose `/tmp` tooling paths in docs
+      left as-is (findings recorded in V24.md).
+- [x] `main` and the tags (`v0.2.0`, `v0.4.0`) are pushed; a second fresh clone
+      verified through the gate (`scripts/v24-fresh-clone.sh`, now a CI stage); V24
+      passes — canon(clone run) equals the pinned golden bytes, 104 s clone-to-answer.
 
 ### B. The architecture datapoint (M18 — evidence: docs/verification/V25.md)
 - [ ] `fieldsmith api` runs on a machine the user owns that is not x86_64: the OnePlus
@@ -172,7 +180,7 @@ answered in a reviewed commit, never a quiet skip.
 
 | Metric | Budget |
 | :-- | :-- |
-| Fresh clone to a passing api answer | ≤ 5 min on the referee (declared; measured by V24's run) |
+| Fresh clone to a passing api answer | ≤ 5 min on the referee — **measured 104 s** (clone 2 s + build 98 s + answer 2 s; warm `~/.cargo` registry, one run) — V24 |
 | Sweep throughput on the SM8750 (aarch64) | ≥ 100 points/hour (declared, from the phone's web walls; the phone api walls do not exist yet — a first-measure miss triggers the reviewed-commit revision, not a silent band) |
 | V3x quarter leg | The half-plate study's recorded tolerances, unchanged |
 | Slicer manifold boundary | `manifold=yes` at skin 1.2 for the graded reference, measured; or the boundary cell's parameters documented |
