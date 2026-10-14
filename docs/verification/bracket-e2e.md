@@ -5,31 +5,31 @@
 | Step | Time | Screenshot |
 | :-- | --: | :-- |
 | Empty document | 0.41 s | bracket-01.png |
-| Base plate 60 × 40 × 8 | 1.17 s | bracket-02.png |
-| Upright plate with 8 mm fillet | 1.52 s | bracket-03.png |
-| Base hole hole1 ⌀6.5 | 2.19 s | bracket-04.png |
-| Base hole hole2 ⌀6.5 | 2.15 s | bracket-05.png |
-| Upright hole ⌀8.5 | 2.99 s | bracket-06.png |
-| Setup lens | 0.83 s | bracket-07.png |
-| Region: base-hole walls | 0.86 s | bracket-08.png |
-| Region: upright-hole wall | 1.08 s | bracket-09.png |
-| Support on the base_holes | 1.01 s | bracket-10.png |
-| Load on the upright_hole | 1.36 s | bracket-11.png |
-| Coarse result streamed | 1.08 s | bracket-12.png |
-| Refined solve finished | 2.10 s | bracket-13.png |
-| Results lens: stress field | 0.23 s | bracket-14.png |
+| Base plate 60 × 40 × 8 | 1.06 s | bracket-02.png |
+| Upright plate with 8 mm fillet | 1.43 s | bracket-03.png |
+| Base hole hole1 ⌀6.5 | 2.01 s | bracket-04.png |
+| Base hole hole2 ⌀6.5 | 2.45 s | bracket-05.png |
+| Upright hole ⌀8.5 | 3.23 s | bracket-06.png |
+| Setup lens | 0.81 s | bracket-07.png |
+| Region: base-hole walls | 0.95 s | bracket-08.png |
+| Region: upright-hole wall | 1.57 s | bracket-09.png |
+| Support on the base_holes | 0.62 s | bracket-10.png |
+| Load on the upright_hole | 1.47 s | bracket-11.png |
+| Coarse result streamed | 0.88 s | bracket-12.png |
+| Refined solve finished | 2.21 s | bracket-13.png |
+| Results lens: stress field | 0.21 s | bracket-14.png |
 | Probe the base plate | 0.20 s | bracket-15.png |
-| Set the legend upper bound to 1 MPa | 0.26 s | bracket-16.png |
+| Set the legend upper bound to 1 MPa | 0.30 s | bracket-16.png |
 | Switch to deflection: range falls back to auto bounds | 0.30 s | bracket-17.png |
 | Back to stress: the stored range still governs | 0.26 s | bracket-18.png |
 | Reset the legend to the auto bounds | 0.27 s | bracket-19.png |
-| Reset the deform scale | 0.34 s | bracket-20.png |
-| Fill lens: add lattice fill | 6.87 s | bracket-21.png |
+| Reset the deform scale | 0.33 s | bracket-20.png |
+| Fill lens: add lattice fill | 7.34 s | bracket-21.png |
 | Fill lens: badge and results rows | 0.19 s | bracket-22.png |
-| Fill lens: ρ band cross-clamp and undo/redo | 2.03 s | bracket-23.png |
-| Results lens: the temperature mode on a thermal doc | 6.81 s | bracket-24.png |
+| Fill lens: ρ band cross-clamp and undo/redo | 1.74 s | bracket-23.png |
+| Results lens: the temperature mode on a thermal doc | 7.09 s | bracket-24.png |
 
-Total scripted time: 36.6 s.
+Total scripted time: 37.4 s.
 
 - Modelled shapes equal `examples/bracket.fsm`: **yes**
 - Console errors: **0**
@@ -48,15 +48,15 @@ Total scripted time: 36.6 s.
 | solve reached ready with coarse and refined levels | pass | ready; labels ["coarse mesh","refined · 150k DOF"];  |
 | peak von Mises 20–100 MPa | pass | 47.0 MPa |
 | max deflection 0.01–3 mm | pass | 1.676 mm |
-| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 1054 ms measured in-page |
-| edit→refined ≤ 10 s (GOAL budget) | pass | 3167 ms measured in-page |
+| edit→coarse ≤ 1500 ms (GOAL budget) | pass | 728 ms measured in-page |
+| edit→refined ≤ 10 s (GOAL budget) | pass | 2947 ms measured in-page |
 | element order P2 | pass | order 2 |
 | probe hint names the surface click before any probe | pass | 1 hint elements |
 | probe returns a stress in MPa on the base plate | pass | 8.79 MPa at (30.0, 19.5, 7.5) mm |
 | probe hint replaced by the probe reading | pass | 0 hint elements after probing |
 | results panel, badge and legend render | pass |  |
 | provenance badge shows the refined level | pass | analysis-badge present once |
-| rung table lists both levels and labels the change an estimate | pass | Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 48822 dofs · 9588 elements · wall 370 msrung 1refined · 150k DOF · 190440 dofs · 40643 elements · wall 2113 ms · case envelope vs run |
+| rung table lists both levels and labels the change an estimate | pass | Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 48822 dofs · 9588 elements · wall 395 msrung 1refined · 150k DOF · 190440 dofs · 40643 elements · wall 2219 ms · case envelope vs run |
 | Show seg fits the results panel (no cropped chip) | pass | seg 320px holds 320px of chips, panel 372px wide |
 | legend range stored against this mode and rung | pass | {"mode":"stress","levelKey":"48:refined · 150k DOF","lo":0,"hi":1} |
 | legend caption notes the saturation | pass | von Mises stress, element centroids; values outside the range render at the ramp's end colours |
@@ -86,11 +86,11 @@ Total scripted time: 36.6 s.
 
 | Level | Elements | DOFs | Order | Iterations | Mesh ms | Solve ms | Total ms | Peak vm | Max deflection |
 | :-- | --: | --: | :-- | --: | --: | --: | --: | --: | --: |
-| coarse mesh | 9588 | 48822 | 2 | 27 | 27 | 341 | 368 | 41.98 MPa | 2.331 mm |
-| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 47 | 2062 | 2109 | 47.03 MPa | 1.676 mm |
+| coarse mesh | 9588 | 48822 | 2 | 27 | 31 | 363 | 394 | 41.98 MPa | 2.331 mm |
+| refined · 150k DOF | 40643 | 190440 | 2 | 24 | 49 | 2164 | 2213 | 47.03 MPa | 1.676 mm |
 
-- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 1054 ms of the 1500 ms budget; launch fired 397 ms after the edit (150 ms of that is the edit debounce).
-- Edit → refined: 3167 ms of the 10000 ms budget.
+- Edit → coarse: measured on the page clock from the last edit commit to levelArrived[0]: 728 ms of the 1500 ms budget; launch fired 167 ms after the edit (150 ms of that is the edit debounce).
+- Edit → refined: 2947 ms of the 10000 ms budget.
 - Solve is cold-started at every level (PCG from zero displacement; no warm start is carried between refinement levels), so the level-to-level deltas are of cold solves.
 - Timings measure this machine (software WebGL, JS shell): treat them as wall-clock evidence, not a performance guarantee.
 

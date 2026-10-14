@@ -141,3 +141,34 @@
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,2617.657443,-0.2807483011665701,0.12031574159861531
 1,2026-10,worker,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,549.450832,,
 1,2026-10,worker,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,2619.822615,-0.2807483011665701,0.12031574159861531
+# ---- M16 sweep-throughput rows 2026-10-14, same engine string, through the api verb: the
+# V23 Cantilever V1 document (box beam 100x10x10, 100 N down at the tip) sweeping
+# beam.size.2 over five values in [8,12] mm, rungs 30000,150000, tolerance
+# deflection:1%; one row per (point, rung). Every point met the declaration at rung 1
+# (2 rungs bought), so each point carries both rungs; rung-0 change cells are empty by
+# the schema rule and each rung-1 row carries that point's change values. Costs store
+# disabled on the runs (/dev/null). Cross-target: the N100 ran the referee-built
+# binary over ssh and returned every tracked field bit-identical to the referee
+# envelope; only wall time differs (~2.25x on this run). Throughput (5 points x one
+# process, api verb): referee 6.071 s process wall -> 2965 points/hour, engine sums
+# 6.065 s; N100 13.660 s process wall -> 1318 points/hour, engine sums 13.643 s.
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,39093,7616,1,147.102609,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,194445,41868,1,1052.9770970000002,0.0002896591389755115,0.09873661652369149
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,46233,9248,1,175.776893,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,184173,39644,1,994.113104,0.0002697560013260683,0.0888724389153618
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,45123,9024,1,162.36953400000002,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,202473,43988,1,1130.060853,0.00027730031015606686,0.11489173043641637
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,42903,8576,1,152.545467,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,196581,42700,1,1109.598981,0.0002980052922748116,0.12737474244454128
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,41793,8352,1,147.226259,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,187575,40640,1,992.949984,0.0003108074482299294,0.13433039532455965
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,39093,7616,1,360.279216,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,194445,41868,1,2302.064769,0.0002896591389755115,0.09873661652369149
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,46233,9248,1,429.202455,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,184173,39644,1,2202.9754970000004,0.0002697560013260683,0.0888724389153618
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,45123,9024,1,411.728913,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,202473,43988,1,2485.9095079999997,0.00027730031015606686,0.11489173043641637
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,42903,8576,1,396.84893,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,196581,42700,1,2460.2175110000003,0.0002980052922748116,0.12737474244454128
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,41793,8352,1,387.13104300000003,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,187575,40640,1,2206.886735,0.0003108074482299294,0.13433039532455965

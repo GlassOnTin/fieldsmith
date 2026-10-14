@@ -470,6 +470,72 @@ for (const mode of modes) {
   await browser.close();
 }
 
+/* ---- M16 sweep-throughput row (GOAL D4): the V23 cantilever sweep through the api verb,
+ * one native process, no browser. The rate basis is the process wall of the whole
+ * 5-point ladder; the declared targets are ≥ 6 points/hour on the referee and ≥ 2 on
+ * the N100 (GOAL.md's budget table). */
+let sweepRowMeasured = false;
+{
+  const bin = process.env.FIELDSMITH_BIN || resolve(ROOT, 'target/release/fieldsmith');
+  if (existsSync(bin)) {
+    const { spawnSync } = await import('node:child_process');
+    // V23's document and question: the cantilever fixture swept over five values of
+    // beam.size.2 at the reference 1 % deflection tolerance, rungs 30000,150000.
+    const req = {
+      apiv: 2,
+      doc: [
+        'fieldsmith 1',
+        'name "Cantilever V1"',
+        'custommaterial steel200 name="Steel (E 200 GPa)" e=200000 nu=0.3 yield=250 density=7.85',
+        'material steel200',
+        'box beam size=(100, 10, 10) at=(50, 5, 5)',
+        'region root = beam.nx',
+        'region tip = beam.px',
+        'support clamp root fixed=xyz',
+        'load push tip force=(0, 0, -100)',
+        '',
+      ].join('\n'),
+      question: {
+        kind: 'sweep', param: 'beam.size.2', values: [8, 9, 10, 11, 12],
+        rungs: [30000, 150000], tolerance: 'deflection:1%',
+      },
+    };
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync(bin, ['api'], {
+      input: JSON.stringify(req),
+      encoding: 'utf8',
+      env: { ...process.env, FIELDSMITH_COSTS_STORE: '/dev/null' },
+      timeout: 120000,
+    });
+    const wallMs = Number(process.hrtime.bigint() - t0) / 1e6;
+    let envelope = null;
+    try { envelope = JSON.parse(r.stdout || ''); } catch { /* the row detail names it */ }
+    const points = envelope?.sweep?.points ?? [];
+    const met = points.filter((p) => p.outcome?.met);
+    const engineSumMs = points.reduce((s, p) => s + (p.outcome?.total_ms ?? 0), 0);
+    const rate = wallMs > 0 ? (points.length * 3600000) / wallMs : 0;
+    const target = (cpus()[0]?.model ?? '').includes('N100') ? 2 : 6;
+    const label = `sweep throughput (api verb, 5 points) ≥ ${target}/h`;
+    const metNote = `${met.length}/${points.length} points met${met.length ? ` (rung ${met.map((p) => p.outcome.met.rung).join(',')})` : ''}`;
+    if (r.error || r.status !== 0 || !envelope || envelope.error || envelope.status !== 'ok' || points.length !== 5) {
+      const why = r.error ? String(r.error).split('\n')[0]
+        : (envelope && envelope.error ? String(envelope.error).split('\n')[0]
+          : `exit ${r.status}: ${(r.stderr || '').split('\n')[0] || 'no stderr'}`);
+      rows.push({ mode: 'native', label, ok: false, detail: `probe error: ${why}` });
+    } else {
+      const targetHit = met.length === points.length && rate >= target;
+      rows.push({
+        mode: 'native', label, ok: targetHit,
+        detail: `${Math.round(rate)} points/hour (process wall ${(wallMs / 1000).toFixed(2)} s, engine sums ${engineSumMs.toFixed(0)} ms, ${metNote}); engine ${envelope.engine}`,
+      });
+      sweepRowMeasured = true;
+    }
+    console.log(`${sweepRowMeasured ? 'PASS' : 'FAIL'} — [native] sweep throughput through the api verb: ${(wallMs / 1000).toFixed(2)} s process wall`);
+  } else {
+    notes.push('native: sweep-throughput row not measured here — no native binary (set FIELDSMITH_BIN)');
+  }
+}
+
 /* ---- regenerate docs/verification/budgets.md ------------------------------------- */
 await server.close();
 const today = new Date().toISOString().slice(0, 10);
@@ -524,6 +590,20 @@ md.push('same Make-lens 3MF measurement as the bracket row on that imported part
 md.push('fixture is not budget-scale: the 87k-triangle Meshy STL the milestone names is');
 md.push('measured natively in `docs/verification/V10.md`.');
 md.push('');
+md.push('');
+if (sweepRowMeasured) {
+  md.push(`Sweep-throughput row (M16, GOAL D4): the V23 cantilever sweep through \`fieldsmith api\` —`);
+  md.push('five points on beam.size.2 over 8..12 mm, rungs 30000,150000, tolerance deflection:1%,');
+  md.push('in one native process with the costs store off (the table row names the binary\'s');
+  md.push('engine). Points per hour uses the process wall of the whole 5-point ladder, not the');
+  md.push('engine sums, so the rate is the honest end-to-end one. The N100 leg of this row is');
+  md.push('measured over ssh (the shipped-binary route) and lives in data/costs/costs.csv and');
+  md.push("GOAL.md's Performance-budgets ledger, not in this doc.");
+} else if (!notes.some((n) => n.startsWith('native:')) && rows.some((r) => r.label.startsWith('sweep throughput') && !r.ok)) {
+  md.push('');
+  md.push('The sweep-throughput row failed this run: the api leg errored — see the native ');
+  md.push('row in the table.');
+}
 md.push(`Machine: ${machine}. Every timing above is this machine's.` +
   (outPathArg ? '' : ` GOAL's mid-range laptop is not measured here.`));
 if (xauth && !rows.filter((r) => r.mode === 'headed').every((r) => r.ok)) headedOk = false;

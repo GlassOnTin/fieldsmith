@@ -27,9 +27,9 @@ pub const CSV_HEADER: &str =
 /// sweep answer — including every error envelope — is a named error: `--csv` is a
 /// sweep-question option, and naming what failed is the honest reply.
 pub fn sweep_csv(resp: &Response) -> Result<String, String> {
-    let sweep = resp.sweep.as_ref().ok_or_else(|| {
-        "sweep csv: the envelope carries no sweep answer (--csv is a sweep-question option)"
-    })?;
+    let sweep = resp.sweep.as_ref().ok_or(
+        "sweep csv: the envelope carries no sweep answer (--csv is a sweep-question option)",
+    )?;
     let param = &sweep.param;
 
     let mut rows = vec![CSV_HEADER.to_string()];

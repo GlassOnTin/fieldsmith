@@ -58,7 +58,9 @@ const BAND: f64 = 0.0035;
 /// The first point's tracked deflection, recorded at ship (referee, 2026-10-14). The
 /// FE solve is deterministic, so this literal is stable run to run; the walls are not.
 /// Cross-machine bit-stability is not asserted here — V18 measured it for the ladder's
-/// change estimates, this run has not been repeated on the N100.
+/// change estimates, and the M16 close re-ran the same five points on the N100 (with a
+/// declared tolerance) and held bit-identity on every tracked field; those rows are
+/// pinned in data/costs/costs.csv. These literals stay referee-pinned.
 const POINT0_DEFLECTION_MM: f64 = 0.39066861588109364;
 
 fn sweep_shape(resp: &fieldsmith_api::schema::Response) -> &SweepJson {
@@ -179,7 +181,7 @@ fn v23_sweep_five_points_on_the_cantilever() {
     for p in &points {
         table.push_str(&format!(
             "| {} | {} | {} | {:.3} | {:.3} | {} | {} |\n",
-            p.value.to_string(),
+            p.value,
             p.dofs,
             p.elements,
             p.wall_ms[0],
@@ -218,12 +220,12 @@ fn v23_sweep_five_points_on_the_cantilever() {
             BAND,
         ));
     }
-    scaling.push_str(&format!(
+    scaling.push_str(
         "\nThe band is pinned from the first measured run (2026-10-14, referee): max \
          |error| 0.226 %, band 0.35 %. The FE solve is deterministic — the tracked \
          literals are the same run to run (asserted for point 0 in the test) — so \
-         these numbers re-assert themselves; only the walls move."
-    ));
+         these numbers re-assert themselves; only the walls move.",
+    );
     r.section("Deflection scaling between consecutive points", scaling);
 
     // vm has no power law: its pair ratios sit between 1/h and 1/h³. Recorded, not

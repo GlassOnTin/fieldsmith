@@ -13,13 +13,16 @@
 //! 3. `data/costs/costs.csv` ties to these constants: every CLI wall and change value
 //!    parses back bit-equal, wasm rows tie to the budgets-doc constants (probe-harness
 //!    rows with empty field cells) and to the OnePlus 13 in-page walls (rows carrying
-//!    achieved DOF/element cells). Twenty-six rows: the six 2026-10-13 static-ladder
+//!    achieved DOF/element cells). Forty-six rows: the six 2026-10-13 static-ladder
 //!    CLI rows, the four M14 thermal CLI rows (2026-10-14, `bracket-thermal.fsm` — the
 //!    wall is the mesh+solve+thermal superset, change cells empty by measurement), the
 //!    six M15 connection rows (2026-10-14: the same ladder solved locally on both
 //!    machine classes, and the two worker rows of the round-trip session — worker
-//!    walls tied into the recorded nine-job spans), the eight probe-harness wasm rows
-//!    and the two OnePlus 13 wasm rows.
+//!    walls tied into the recorded nine-job spans), the twenty M16 sweep rows
+//!    (2026-10-14: the V23 five-point sweep through the api verb on both machines —
+//!    per-point re-mesh walls with per-point achieved dofs, rung-1 change cells
+//!    identical across the machines the sweep envelopes proved bit-identical), the
+//!    eight probe-harness wasm rows and the two OnePlus 13 wasm rows.
 //! 4. The report carries the honest label: projections carry residuals, and the
 //!    first-pair fit is on the cheap side of the curve.
 
@@ -49,8 +52,10 @@ const CPU_REF: &str = "AMD Ryzen 9 9950X 16-Core Processor";
 const CPU_N100: &str = "Intel(R) N100";
 const CPU_ONEPLUS: &str = "SM8750";
 
-/// One CLI ladder row from the seed. `chd`/`chv` are the change-estimate columns
-/// (None on rung 0).
+/// One CLI row from the seed. `chd`/`chv` are the change-estimate columns (None on
+/// rung 0). `dofs` is the achieved-dof constant when a block carries it per row —
+/// the M16 sweep rows re-mesh per point, so theirs live on the row; None reads the
+/// ladder convention `DOFS[rung]`.
 struct ShipRow {
     cpu: &'static str,
     target: usize,
@@ -58,19 +63,27 @@ struct ShipRow {
     wall: f64,
     chd: Option<f64>,
     chv: Option<f64>,
+    dofs: Option<usize>,
 }
 
-/// The fourteen CLI rows of `data/costs/costs.csv`, verbatim. The first six are the
+/// The thirty-four CLI rows of `data/costs/costs.csv`, verbatim. The first six are the
 /// 2026-10-13 static ladder; change values are the envelope-to-envelope estimates the
 /// V17 replay proves are two-solve differences. The next four are the 2026-10-14 M14
 /// thermal rows (`examples/bracket-thermal.fsm`): wall_ms is the mesh+solve+thermal
 /// superset (the banner components sum to it), the change columns are empty because no
-/// envelope deltas were measured that way. The last four are the 2026-10-14 M15
+/// envelope deltas were measured that way. The next four are the 2026-10-14 M15
 /// connection rows: the same ladder solved locally on both machine classes, the
 /// change columns carrying the same bit-equal rung-1 estimates as the static rows.
+/// The last twenty are the 2026-10-14 M16 sweep rows: the V23 cantilever sweep
+/// through the api verb (beam.size.2 over 8/9/10/11/12 mm, rungs 30000/150000,
+/// tolerance deflection:1%, costs store off), one row per point per rung per
+/// machine — five walls on each of the two (cpu, target, rung) keys. The sweep
+/// re-meshes per point, so the achieved dofs are carried on the row and both
+/// machines share every dofs and change constant (the sweep envelopes came back
+/// bit-identical across the x86_64 pair; only the walls differ, ~2.25× overall).
 /// Every block's rungs 0/1 share (cpu, target, rung) with the others — the matcher
 /// ties by wall, as the wasm matcher does.
-const CLI_ROWS: [ShipRow; 14] = [
+const CLI_ROWS: [ShipRow; 34] = [
     ShipRow {
         cpu: CPU_REF,
         target: 30_000,
@@ -78,6 +91,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 250.913718,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_REF,
@@ -86,6 +100,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 1164.928266,
         chd: Some(-0.2807483011665701),
         chv: Some(0.12031574159861531),
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_REF,
@@ -94,6 +109,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 9792.657955,
         chd: Some(-0.04126717503663446),
         chv: Some(0.0993936436864128),
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -102,6 +118,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 569.213065,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -110,6 +127,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 2642.8623829999997,
         chd: Some(-0.2807483011665701),
         chv: Some(0.12031574159861531),
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -118,6 +136,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 25573.328251,
         chd: Some(-0.041267175037406054),
         chv: Some(0.09939364368535455),
+        dofs: None,
     },
     // 2026-10-14 M14 thermal block — wall_ms is the mesh+solve+thermal superset
     // (referee coarse 23+212+216, refined 41+1186+1245; N100 coarse 49+515+528,
@@ -129,6 +148,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 451.0,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_REF,
@@ -137,6 +157,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 2472.0,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -145,6 +166,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 1092.0,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -153,6 +175,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 5356.0,
         chd: None,
         chv: None,
+        dofs: None,
     },
     // 2026-10-14 M15 connection rows — the same ladder solved locally on both
     // machine classes (the CSV's provenance block records the third-run convention
@@ -165,6 +188,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 257.81440100000003,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_REF,
@@ -173,6 +197,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 1167.171564,
         chd: Some(-0.2807483011665701),
         chv: Some(0.12031574159861531),
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -181,6 +206,7 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 558.7470890000001,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -189,6 +215,190 @@ const CLI_ROWS: [ShipRow; 14] = [
         wall: 2617.657443,
         chd: Some(-0.2807483011665701),
         chv: Some(0.12031574159861531),
+        dofs: None,
+    },
+    // 2026-10-14 M16 sweep rows — point order 8/9/10/11/12 mm, rung 0 and 1 each,
+    // referee block then N100 block. dofs Some: the sweep re-meshes per point, so
+    // the achieved count moves with the point and both machines agree on it.
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 147.102609,
+        chd: None,
+        chv: None,
+        dofs: Some(39093),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 1052.9770970000002,
+        chd: Some(0.0002896591389755115),
+        chv: Some(0.09873661652369149),
+        dofs: Some(194445),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 175.776893,
+        chd: None,
+        chv: None,
+        dofs: Some(46233),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 994.113104,
+        chd: Some(0.0002697560013260683),
+        chv: Some(0.0888724389153618),
+        dofs: Some(184173),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 162.36953400000002,
+        chd: None,
+        chv: None,
+        dofs: Some(45123),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 1130.060853,
+        chd: Some(0.00027730031015606686),
+        chv: Some(0.11489173043641637),
+        dofs: Some(202473),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 152.545467,
+        chd: None,
+        chv: None,
+        dofs: Some(42903),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 1109.598981,
+        chd: Some(0.0002980052922748116),
+        chv: Some(0.12737474244454128),
+        dofs: Some(196581),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 147.226259,
+        chd: None,
+        chv: None,
+        dofs: Some(41793),
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 992.949984,
+        chd: Some(0.0003108074482299294),
+        chv: Some(0.13433039532455965),
+        dofs: Some(187575),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 360.279216,
+        chd: None,
+        chv: None,
+        dofs: Some(39093),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2302.064769,
+        chd: Some(0.0002896591389755115),
+        chv: Some(0.09873661652369149),
+        dofs: Some(194445),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 429.202455,
+        chd: None,
+        chv: None,
+        dofs: Some(46233),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2202.9754970000004,
+        chd: Some(0.0002697560013260683),
+        chv: Some(0.0888724389153618),
+        dofs: Some(184173),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 411.728913,
+        chd: None,
+        chv: None,
+        dofs: Some(45123),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2485.9095079999997,
+        chd: Some(0.00027730031015606686),
+        chv: Some(0.11489173043641637),
+        dofs: Some(202473),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 396.84893,
+        chd: None,
+        chv: None,
+        dofs: Some(42903),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2460.2175110000003,
+        chd: Some(0.0002980052922748116),
+        chv: Some(0.12737474244454128),
+        dofs: Some(196581),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 387.13104300000003,
+        chd: None,
+        chv: None,
+        dofs: Some(41793),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2206.886735,
+        chd: Some(0.0003108074482299294),
+        chv: Some(0.13433039532455965),
+        dofs: Some(187575),
     },
 ];
 
@@ -232,6 +442,7 @@ const WORKER_ROWS: [ShipRow; 2] = [
         wall: 549.450832,
         chd: None,
         chv: None,
+        dofs: None,
     },
     ShipRow {
         cpu: CPU_N100,
@@ -240,6 +451,7 @@ const WORKER_ROWS: [ShipRow; 2] = [
         wall: 2619.822615,
         chd: Some(-0.2807483011665701),
         chv: Some(0.12031574159861531),
+        dofs: None,
     },
 ];
 
@@ -256,7 +468,7 @@ fn parse_cost_csv(text: &str) -> Vec<Vec<String>> {
 /// Tie a cli/worker CSV row to its ship constant by (cpu, target, rung, wall) —
 /// same-key rows across the time blocks are distinguished by wall (the M15 block
 /// carries a rung-1 change estimate, the M14 thermal block the superset wall, the
-/// static block the plain solve).
+/// static block the plain solve, the M16 sweep block five per-point walls per key).
 fn tie<'a>(
     rows: &'a [ShipRow],
     row: &[String],
@@ -276,7 +488,8 @@ fn tie<'a>(
 }
 
 /// Every rung-1 row must tie to the ship change estimate bit-equal; rows without a
-/// change estimate (rung 0, the M14 thermal block) carry empty cells.
+/// change estimate (rung 0, the M14 thermal block, the M16 sweep rung-0 rows) carry
+/// empty cells.
 fn check_change_cells(ship: &ShipRow, row: &[String], rung: usize) {
     for (ci, want) in [(13usize, ship.chd), (14, ship.chv)] {
         match want {
@@ -516,13 +729,18 @@ fn v18_estimator_residual() {
         "costs.csv ties to these numbers",
         format!(
             "`v18_costs_csv_ties_to_ship_data` parses `data/costs/costs.csv` and checks: \
-             {nrows} rows, every row schema 1, month 2026-10; the fourteen CLI rows tie wall \
+             {nrows} rows, every row schema 1, month 2026-10; the thirty-four CLI rows tie wall \
              and change-estimate cells EXACTLY to the constants this test embeds — the six \
              2026-10-13 static-ladder rows carry the change estimates, the four 2026-10-14 \
              M14 thermal rows carry the mesh+solve+thermal superset wall with empty change \
              columns, the four M15 connection rows (2026-10-14) re-tie the same ladder's \
              walls on both machine classes with the static rung-1 estimates (rungs 0/1 \
-             share keys across the blocks, so the matcher ties by wall); the two M15 \
+             share keys across the blocks, so the matcher ties by wall); the twenty M16 \
+             sweep rows (2026-10-14) re-mesh per point on the V23 cantilever — \
+             beam.size.2 over [8, 9, 10, 11, 12] mm at tolerance deflection:1%, five walls \
+             per (cpu, target, rung) key tied by wall, carrying the per-point achieved \
+             dofs and rung-1 change cells both machines share bit-equal because the sweep \
+             envelopes are bit-identical across the x86_64 pair; the two M15 \
              worker rows tie to the round-trip session's last timed job, their walls \
              inside the recorded nine-job spans; the \
              eight wasm probe-harness rows tie to the budgets-document walls ({w0}, {w1}, \
@@ -570,9 +788,11 @@ fn v18_costs_csv_ties_to_ship_data() {
                 // same-key blocks by wall.
                 let ship = tie(&CLI_ROWS, row, rung, target, wall);
                 assert_eq!(row[3], "fieldsmith 0.2.0 / fenics-rs 0.1.0", "cli engine");
+                // The M16 sweep rows re-mesh per point (dofs Some on the ship row);
+                // the ladder blocks keep the DOFS[rung] convention.
                 assert_eq!(
                     row[9].parse::<usize>().expect("achieved dofs"),
-                    DOFS[rung] as usize,
+                    ship.dofs.unwrap_or(DOFS[rung] as usize),
                     "achieved dofs per rung",
                 );
                 check_change_cells(ship, row, rung);

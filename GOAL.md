@@ -124,7 +124,7 @@ V19(b) probed mid-length (Saint-Venant end effects); V20 takes the Lamé-class
 generalized-plane-strain cylinder solution with the free-end force balance.
 
 ### C. The connection — API, MCP, and the worker you own (M15 — evidence: docs/verification/V21.md, V22.md)
-- [ ] A versioned, headless JSON API over the verified crates: document and question in
+- [x] A versioned, headless JSON API over the verified crates: document and question in
       — tolerance mode, budget mode, sweep mode — result out with provenance, rung
       records and measurements. A contract case pins the schema; version bumps are named
       changes, not silent ones.
@@ -187,12 +187,12 @@ locally and through the worker, peak von Mises and max deflection compared, numb
 stated.
 
 ### D. Parameter sweep (M16 — evidence: docs/verification/V23.md)
-- [ ] Sweep any numeric document parameter over a stated range and point count; each
+- [x] Sweep any numeric document parameter over a stated range and point count; each
       point solves to its declaration (tolerance or the ladder default); the headless
       runner emits a table (JSON and CSV) with per-point measured records.
-- [ ] The Results lens shows the sweep table — parameter, tracked outputs, per-point box
+- [x] The Results lens shows the sweep table — parameter, tracked outputs, per-point box
       and time — and exports the same CSV.
-- [ ] V23 passes (below).
+- [x] V23 passes (below).
 
 Design (plan commit 2026-10-14). Three slices, one shared grammar:
 
@@ -236,8 +236,10 @@ Design (plan commit 2026-10-14). Three slices, one shared grammar:
    per hour into budgets.md and rows in costs.csv.
 
 ### E. Carried
-- [ ] CI runs the whole ladder: V1–V16 unchanged, V17–V23 as they land; `budgets.md`
-      regenerated per milestone on the referee.
+- [x] CI runs the whole ladder: V1–V16 unchanged, V17–V23 as they land; `budgets.md`
+      regenerated per milestone on the referee. (The 2026-10-14 close run: all nine
+      stages green per /tmp logs — clippy, typecheck, workspace V1–V23, wasm, the
+      headless browser suite, V16 isolated, V6, V7, V14.)
 - [x] README limitations gain the honesty lines: rung error estimates are estimates from
       rung-to-rung change, not bounds; cross-machine results are not bit-identical —
       divergence is measured and reported; the thermal flow names its scope (steady,
@@ -314,6 +316,35 @@ Measured 2026-10-14 at M15 close:
 - C1 status: the api's ladder (tolerance/budget), solve and modes questions are
   measured and byte-pinned by V22; the sweep-mode clause waits for M16, where
   schema.rs names the sweep question as the envelope's first version bump.
+
+Measured 2026-10-14 at M16 close:
+- Sweep-throughput row: the V23 cantilever sweep through `fieldsmith api` — five points
+  on beam.size.2 over 8..12 mm, rungs 30000,150000, tolerance deflection:1%, one
+  process per machine, costs store off (rows seeded by hand; the api verb never writes
+  the store). Referee: 6.071 s process wall → 2965 points/hour, engine sums 6.065 s
+  (declared ≥ 6). The regenerated budgets.md carries the probe's own fresh measure of
+  the same question — 2950 points/hour at 6.10 s — agreeing within 0.5 % of the direct
+  run. N100: the referee-built binary shipped over ssh, 13.660 s process wall →
+  1318 points/hour, engine sums 13.643 s (declared ≥ 2). Every point met its
+  declaration at rung 1 (2 rungs bought) on both machines. Twenty rows in
+  data/costs/costs.csv (per point per rung per machine; rung-0 change cells empty by
+  the schema rule, each rung-1 row carrying that point's change values). V18's
+  tie-in test grew with the file: all twenty rows now pin walls, per-point achieved
+  dofs and change cells against embedded constants (dofs shared across the machines
+  per the identity datapoint). The N100
+  number lives in the store and this ledger — that leg is a native measurement, not a
+  browser one, so the laptop budget doc does not carry it.
+- Cross-target identity (C4): the N100 sweep envelope is bit-identical to the
+  referee's in every tracked field — per-point records (dofs, elements, element sizes,
+  tracked deflection and von Mises, the change columns), the met blocks and
+  field_leaves — same engine string; divergence is wall time only, ~2.25× on this run
+  (rung walls 2.19–2.45×). The third x86_64↔x86_64 datapoint (after M15's
+  worker-vs-api pair and M14's thermal static part). Scope as measured: these hosts,
+  this question.
+- C1 status closed: the sweep-mode clause shipped with the apiv 1→2 bump named in
+  schema.rs (M16 slice 1), V22's golden regenerated at the pinned new version, and
+  V23 pinning the per-point boxes; the api takes document and question in all three
+  modes with provenance out. C1 ticks at this close.
 
 ---
 

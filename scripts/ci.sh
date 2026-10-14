@@ -5,7 +5,9 @@
 #
 # Stages, fail-soft so one run collects every result:
 #   clippy (-D warnings) and the TypeScript typecheck first; workspace tests (verification
-#   cases V1-V4, V8-V13, V15 and V14's standard tests run in it; V6/V7/V14's chord ladder
+#   cases V1-V4, V8-V13, V15 and V14's standard tests run in it, plus V17-V23 since M13 —
+#   rung records, estimator residual, thermal free expansion, Lamé cylinder, worker
+#   privacy, the API contract, the sweep case; V6/V7/V14's chord ladder
 #   excepted — they are #[ignore]d and run release below); the wasm package build; the
 #   headless browser suite (V5 shader check, V16 interior, bracket, shape, make, mesh —
 #   each refreshes its docs/verification/*.md; the interior case also runs isolated below);
@@ -31,7 +33,7 @@ step() {
 }
 step 'cargo clippy -D warnings' cargo clippy --workspace --all-targets -- -D warnings
 step 'TypeScript typecheck' npm --prefix web run typecheck
-step 'workspace tests (V1-V4, V8-V13, V15 + V14 standard + unit tests)' cargo test --workspace
+step 'workspace tests (V1-V4, V8-V13, V15, V17-V23 + V14 standard + unit tests)' cargo test --workspace
 step 'wasm package build' npm --prefix web run wasm
 step 'headless browser suite (V5 + V16 + bracket + shape + make + mesh)' npm --prefix web run test:e2e
 step 'V16 interior case (isolated)' node web/tests/run-e2e.mjs --only interior

@@ -635,10 +635,7 @@ load push tip force=(0, 0, -100)";
         for p in pts {
             let out = &p["outcome"];
             assert_eq!(out["records"].as_array().unwrap().len(), 2);
-            assert_eq!(
-                out["records"][1]["tracked"]["deflection_mm"].is_number(),
-                true
-            );
+            assert!(out["records"][1]["tracked"]["deflection_mm"].is_number());
             assert!(out["total_ms"].as_f64().unwrap() > 0.0);
             // The met/unmet shape: no tolerance declared, neither key present.
             assert!(out["met"].is_null() && out["unmet"].is_null());
