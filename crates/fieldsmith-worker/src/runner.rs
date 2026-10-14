@@ -63,9 +63,7 @@ pub fn run(
             Err(e) => {
                 if let Some(max) = opts.max_attempts {
                     if attempt >= max {
-                        return Err(format!(
-                            "worker: giving up after {attempt} attempt(s): {e}"
-                        ));
+                        return Err(format!("worker: giving up after {attempt} attempt(s): {e}"));
                     }
                 }
                 log(&format!("worker: attempt failed: {e}"));
@@ -87,8 +85,7 @@ fn once(
     log: &mut dyn FnMut(&str),
     job: &mut dyn FnMut(&str) -> String,
 ) -> Result<(), String> {
-    let stream =
-        TcpStream::connect((host, port)).map_err(|e| format!("connect: {e}"))?;
+    let stream = TcpStream::connect((host, port)).map_err(|e| format!("connect: {e}"))?;
     let mut chan = Chan::initiator(stream, own_priv, &token.host_static, &token.psk)
         .map_err(|e| format!("handshake: {e}"))?;
     log(&format!("worker: connected to {host}:{port}"));
@@ -120,7 +117,9 @@ fn once(
 /// pins the artifact + store behaviour.
 pub fn persist(dir: &std::path::Path, response: &str, log: &mut dyn FnMut(&str)) {
     if let Err(e) = std::fs::create_dir_all(dir) {
-        log(&format!("worker: artifacts dir {dir:?} could not be created: {e}"));
+        log(&format!(
+            "worker: artifacts dir {dir:?} could not be created: {e}"
+        ));
         return;
     }
     let millis = SystemTime::now()
@@ -132,10 +131,7 @@ pub fn persist(dir: &std::path::Path, response: &str, log: &mut dyn FnMut(&str))
         log(&format!("worker: artifact {path:?} write failed: {e}"));
         return;
     }
-    log(&format!(
-        "worker: artifact {}",
-        path.display()
-    ));
+    log(&format!("worker: artifact {}", path.display()));
 
     let Ok(envelope) = serde_json::from_str::<Value>(response) else {
         log("worker: the response did not parse as JSON — no cost rows recorded");

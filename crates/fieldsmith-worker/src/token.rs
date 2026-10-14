@@ -29,7 +29,13 @@ impl Token {
     pub fn generate() -> (Self, Key) {
         let (host_priv, host_pub) = static_keypair();
         let psk = static_keypair().0;
-        (Token { host_static: host_pub, psk }, host_priv)
+        (
+            Token {
+                host_static: host_pub,
+                psk,
+            },
+            host_priv,
+        )
     }
 
     pub fn encode(&self) -> String {
@@ -86,16 +92,17 @@ mod tests {
         let (t1, priv1) = Token::generate();
         let t1b: Token = Token::parse(&t1.encode()).expect("the encoded form parses back");
         assert_eq!(t1, t1b);
-        assert_ne!(t1.host_static, priv1, "the public half is not the private half");
+        assert_ne!(
+            t1.host_static, priv1,
+            "the public half is not the private half"
+        );
         assert_ne!(t1.host_static, [0u8; 32]);
         assert_ne!(t1.psk, [0u8; 32]);
 
         let (t2, _) = Token::generate();
         assert_ne!(t1, t2, "two generations are two distinct credentials");
 
-        let bad = "fieldsmith2.".to_string()
-            + &"A".repeat(88)
-            + " shorter than 64 bytes";
+        let bad = "fieldsmith2.".to_string() + &"A".repeat(88) + " shorter than 64 bytes";
         assert!(Token::parse(&bad).is_err());
         assert!(Token::parse("not a token").is_err());
         // 88 chars is exactly the base64 of 64 bytes; a wrong-content token still parses

@@ -171,7 +171,10 @@ fn unknown_tool_is_an_is_error_result() {
     let reply = c.next_reply();
     assert_eq!(reply["result"]["isError"], true);
     assert!(reply["error"].is_null());
-    assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("no_such"));
+    assert!(reply["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("no_such"));
 }
 
 /// Bad params on a method the server speaks: -32602.
@@ -213,19 +216,37 @@ fn open_edit_doc_text_solve_round_trip() {
     // wall carriers, and a box-face support must sit on an axis plane (measured: base.nz
     // matches, base.bottom matches nothing and the engine refuses it — regions.rs's
     // carrier contract).
-    let added = c.tool_ok(11, "add_region",
-        json!({"selectors": [{"shape": "base", "face": "nz"}]}));
+    let added = c.tool_ok(
+        11,
+        "add_region",
+        json!({"selectors": [{"shape": "base", "face": "nz"}]}),
+    );
     let region_id = added["added"].as_str().unwrap().to_string();
     assert!(region_id.starts_with("region"));
 
-    c.tool_ok(12, "add_support", json!({"region": region_id.clone(), "fixed": [true, true, true]}));
-    c.tool_ok(13, "add_load",
-        json!({"region": region_id, "kind": {"type": "force", "vector": [0, 0, -100]}}));
+    c.tool_ok(
+        12,
+        "add_support",
+        json!({"region": region_id.clone(), "fixed": [true, true, true]}),
+    );
+    c.tool_ok(
+        13,
+        "add_load",
+        json!({"region": region_id, "kind": {"type": "force", "vector": [0, 0, -100]}}),
+    );
 
-    let text = c.tool_ok(14, "doc_text", json!({}))["text"].as_str().unwrap().to_string();
-    assert!(text.contains(&region_id), "print must carry the added region");
-    assert!(text.contains("force=(0, 0, 100") || text.contains("force=(0, 0, -100"),
-        "print must carry the added load");
+    let text = c.tool_ok(14, "doc_text", json!({}))["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        text.contains(&region_id),
+        "print must carry the added region"
+    );
+    assert!(
+        text.contains("force=(0, 0, 100") || text.contains("force=(0, 0, -100"),
+        "print must carry the added load"
+    );
 
     let envelope: Value = c.tool_ok(15, "solve", json!({"kind": "solve", "dofs": 15000}));
     assert_eq!(envelope["status"], "ok");
@@ -253,7 +274,10 @@ fn is_error_mirrors_the_cli_exit_code_and_refusals_are_answers() {
     let text = reply["result"]["content"][0]["text"].as_str().unwrap();
     let envelope: Value = serde_json::from_str(text).expect("the envelope IS the message");
     assert_eq!(envelope["status"], "error");
-    assert!(envelope["error"].as_str().unwrap().contains("mount"), "got: {text}");
+    assert!(
+        envelope["error"].as_str().unwrap().contains("mount"),
+        "got: {text}"
+    );
 
     c.send(&json!({"jsonrpc": "2.0", "id": 22, "method": "tools/call",
                    "params": {"name": "solve",
@@ -269,8 +293,13 @@ fn is_error_mirrors_the_cli_exit_code_and_refusals_are_answers() {
     let text = reply["result"]["content"][0]["text"].as_str().unwrap();
     let envelope: Value = serde_json::from_str(text).expect("the refusal envelope");
     assert_eq!(envelope["status"], "refusal");
-    assert!(envelope.get("outcome").map(|o| o["refusal"].is_string()).unwrap_or(false),
-        "got: {text}");
+    assert!(
+        envelope
+            .get("outcome")
+            .map(|o| o["refusal"].is_string())
+            .unwrap_or(false),
+        "got: {text}"
+    );
 }
 
 /// open over base64 .fsmz — the form a worker job carries — loads the same document.
@@ -309,7 +338,11 @@ fn export_returns_facts_and_stl_bytes_that_agree() {
     let stl = b64::decode(result["stl_b64"].as_str().unwrap()).expect("stl b64");
     let count = u32::from_le_bytes([stl[80], stl[81], stl[82], stl[83]]) as u64;
     assert_eq!(count, tris, "STL triangle count ties the facts");
-    assert_eq!(stl.len(), (84 + 50 * tris) as usize, "binary STL is exactly 84 + 50/tri bytes");
+    assert_eq!(
+        stl.len(),
+        (84 + 50 * tris) as usize,
+        "binary STL is exactly 84 + 50/tri bytes"
+    );
 }
 
 /// inspect reports the whole setup — including the dangling-edit problem list that
@@ -327,10 +360,22 @@ fn inspect_reports_setup_validate_problems_and_missing_grids() {
     assert_eq!(info["problems"], json!([]));
 
     // A support referencing no region makes validate speak through inspect.
-    c.tool_ok(52, "add_support", json!({"region": "nowhere", "fixed": [true, false, false]}));
+    c.tool_ok(
+        52,
+        "add_support",
+        json!({"region": "nowhere", "fixed": [true, false, false]}),
+    );
     let info = c.tool_ok(53, "inspect", json!({}));
-    let problems: Vec<String> = info["problems"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().into()).collect();
-    assert!(problems.iter().any(|p| p.contains("nowhere")), "got: {problems:?}");
+    let problems: Vec<String> = info["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().into())
+        .collect();
+    assert!(
+        problems.iter().any(|p| p.contains("nowhere")),
+        "got: {problems:?}"
+    );
 }
 
 /// set_material reports unknown nodes as a tool error; known nodes land and show in the
@@ -346,7 +391,11 @@ fn set_material_errors_on_unknown_nodes_and_names_known_ones() {
     let reply = c.next_reply();
     assert_eq!(reply["result"]["isError"], true);
 
-    let _ = c.tool_ok(62, "set_material", json!({"node": "base", "material": "pla"}));
+    let _ = c.tool_ok(
+        62,
+        "set_material",
+        json!({"node": "base", "material": "pla"}),
+    );
     let printed = c.tool_ok(63, "doc_text", json!({}));
     let text = printed["text"].as_str().unwrap();
     assert!(text.contains("material pla"), "got: {text}");

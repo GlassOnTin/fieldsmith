@@ -185,7 +185,9 @@ impl Chan {
                 return Ok(acc);
             }
             if acc.len() > t {
-                return Err(ChanError::Protocol("payload overran its declared length".into()));
+                return Err(ChanError::Protocol(
+                    "payload overran its declared length".into(),
+                ));
             }
         }
     }
@@ -228,10 +230,7 @@ fn hs_write(
     frame_write(stream, &buf[..n])
 }
 
-fn hs_read(
-    noise: &mut snow::HandshakeState,
-    stream: &mut TcpStream,
-) -> Result<Vec<u8>, ChanError> {
+fn hs_read(noise: &mut snow::HandshakeState, stream: &mut TcpStream) -> Result<Vec<u8>, ChanError> {
     let msg = frame_read(stream)?;
     let mut buf = vec![0u8; msg.len()];
     let n = noise
@@ -279,8 +278,8 @@ mod tests {
         });
         let own_priv = static_priv();
         let s = std::net::TcpStream::connect(addr).expect("connect loopback");
-        let client =
-            Chan::initiator(s, &own_priv, &token.host_static, &token.psk).expect("client handshake");
+        let client = Chan::initiator(s, &own_priv, &token.host_static, &token.psk)
+            .expect("client handshake");
         let server = handle
             .join()
             .expect("responder thread")
@@ -367,7 +366,10 @@ mod tests {
         let eof = client
             .recv()
             .expect_err("no payload follows a rejected handshake");
-        assert!(matches!(eof, ChanError::Io(_)), "EOF at the first read, got {eof}");
+        assert!(
+            matches!(eof, ChanError::Io(_)),
+            "EOF at the first read, got {eof}"
+        );
     }
 
     #[test]

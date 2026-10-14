@@ -58,9 +58,7 @@ mod tests {
             .join()
             .expect("host thread")
             .expect("host exchange should succeed");
-        let (run_result, _worker_logs) = worker
-            .join()
-            .expect("worker thread");
+        let (run_result, _worker_logs) = worker.join().expect("worker thread");
         run_result.expect("worker run should succeed");
         assert_eq!(outcome.response, "echo:hello job");
         assert!(outcome.wall_ms > 0.0, "the host wall is measured");
@@ -130,10 +128,8 @@ mod tests {
     /// This test is the crate's only store-path user, so its env override is private.
     #[test]
     fn persist_writes_envelope_and_store_rows() {
-        let dir = std::env::temp_dir().join(format!(
-            "fieldsmith-worker-persist-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fieldsmith-worker-persist-{}", std::process::id()));
         let store = dir.join("costs.jsonl");
         std::env::set_var("FIELDSMITH_COSTS_STORE", &store);
         let envelope = serde_json::json!({
@@ -151,7 +147,9 @@ mod tests {
             }
         });
         let mut logs: Vec<String> = Vec::new();
-        runner::persist(&dir, &envelope.to_string(), &mut |l| logs.push(l.to_string()));
+        runner::persist(&dir, &envelope.to_string(), &mut |l| {
+            logs.push(l.to_string())
+        });
         let written = std::fs::read_dir(&dir)
             .expect("dir created")
             .filter_map(|e| e.ok())

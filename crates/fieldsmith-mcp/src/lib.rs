@@ -16,9 +16,11 @@
 use std::sync::OnceLock;
 
 use fieldsmith_api::schema::{QuestionSpec, APIV};
-use fieldsmith_api::{b64, export, load_doc, missing_grids, respond, question};
+use fieldsmith_api::{b64, export, load_doc, missing_grids, question, respond};
 use fieldsmith_core::fsmz;
-use fieldsmith_doc::{fsm, Document, LoadKind, Load, NodeKind, Region, Selector, Support, Temperature};
+use fieldsmith_doc::{
+    fsm, Document, Load, LoadKind, NodeKind, Region, Selector, Support, Temperature,
+};
 use serde_json::{json, Value};
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -50,7 +52,13 @@ impl Server {
         let id = obj.get("id").cloned();
         let method = match obj.get("method").and_then(Value::as_str) {
             Some(m) => m,
-            None => return Some(err_reply(id.clone().unwrap_or(Value::Null), -32600, "invalid request")),
+            None => {
+                return Some(err_reply(
+                    id.clone().unwrap_or(Value::Null),
+                    -32600,
+                    "invalid request",
+                ))
+            }
         };
         // A notification (no id) never gets a response — including an unknown one.
         let id = id?;
@@ -73,8 +81,13 @@ impl Server {
     }
 
     fn tools_call(&mut self, params: Option<&Value>) -> Result<Value, Value> {
-        let params = params.and_then(Value::as_object).ok_or_else(|| json_err(-32602, "tools/call needs params"))?;
-        let name = params.get("name").and_then(Value::as_str).ok_or_else(|| json_err(-32602, "tools/call needs a tool name"))?;
+        let params = params
+            .and_then(Value::as_object)
+            .ok_or_else(|| json_err(-32602, "tools/call needs params"))?;
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| json_err(-32602, "tools/call needs a tool name"))?;
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         match self.tool(name, args) {
             Ok(v) => Ok(json!({"content": [{"type": "text", "text": v.to_string()}]})),
@@ -106,9 +119,11 @@ impl Server {
     fn doc(&self) -> Result<&Document, String> {
         match &self.doc {
             Some(d) => Ok(d),
-            None => Err("no document open — call `open` with doc (.fsm text) or docz \
+            None => Err(
+                "no document open — call `open` with doc (.fsm text) or docz \
                          (base64 .fsmz) first"
-                .into()),
+                    .into(),
+            ),
         }
     }
 
@@ -119,9 +134,7 @@ impl Server {
         let doc = args.get("doc").and_then(Value::as_str);
         let docz = args.get("docz").and_then(Value::as_str);
         if doc.is_none() && docz.is_none() {
-            return Err(
-                "open: pass exactly one of doc (.fsm text) or docz (base64 .fsmz)".into(),
-            );
+            return Err("open: pass exactly one of doc (.fsm text) or docz (base64 .fsmz)".into());
         }
         let d = load_doc(doc, docz)?;
         let summary = doc_summary(&d);
@@ -169,7 +182,12 @@ impl Server {
         let case = case_or_default(&args, "Load 1");
         let kind: LoadKind = field("kind", &args)?;
         self.add_entity("load", args, |d, id| {
-            d.loads.push(Load { id, region, case, kind });
+            d.loads.push(Load {
+                id,
+                region,
+                case,
+                kind,
+            });
             Ok(())
         })
     }
@@ -179,7 +197,12 @@ impl Server {
         let celsius = number_field("celsius", &args)?;
         let case = case_or_default(&args, "Thermal 1");
         self.add_entity("temperature", args, |d, id| {
-            d.temperatures.push(Temperature { id, region, celsius, case });
+            d.temperatures.push(Temperature {
+                id,
+                region,
+                celsius,
+                case,
+            });
             Ok(())
         })
     }
@@ -289,7 +312,8 @@ impl Server {
             "total_ms": ex.ms,
         });
         if let Some(g) = ex.graded {
-            facts["graded"] = json!({"mass_g": g.mass_g, "solid_mass_g": g.solid_mass_g, "ms": g.ms});
+            facts["graded"] =
+                json!({"mass_g": g.mass_g, "solid_mass_g": g.solid_mass_g, "ms": g.ms});
         }
         if !ex.parts.is_empty() {
             facts["volumes"] = json!(ex.parts.iter().map(|p| json!({
@@ -347,7 +371,8 @@ fn doc_summary(d: &Document) -> Value {
     })
 }
 
-const NO_DOC: &str = "no document open — call `open` with doc (.fsm text) or docz (base64 .fsmz) first";
+const NO_DOC: &str =
+    "no document open — call `open` with doc (.fsm text) or docz (base64 .fsmz) first";
 
 fn text_field(key: &str, args: &Value) -> Result<String, String> {
     args.get(key)

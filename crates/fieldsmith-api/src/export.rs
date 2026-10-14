@@ -9,8 +9,8 @@
 use fieldsmith_core::fill;
 use fieldsmith_core::{Clock, Resolution};
 use fieldsmith_doc::{Document, NodeKind, Op};
-use fieldsmith_field::volume::{self, VolumeEstimate};
 use fieldsmith_field::expr;
+use fieldsmith_field::volume::{self, VolumeEstimate};
 use fieldsmith_mesh::{
     adaptive::{self, AdaptiveOpts, Sample},
     export::{surface, write_3mf_volumes, Defects, TriMesh, Volume3mf},
@@ -118,7 +118,10 @@ fn mesh_field(e: &expr::Expr, b_lo: [f64; 3], b_hi: [f64; 3], h: f64, adaptive: 
 }
 
 fn padded(lo: [f64; 3], hi: [f64; 3], h: f64) -> ([f64; 3], [f64; 3]) {
-    ([lo[0] - h, lo[1] - h, lo[2] - h], [hi[0] + h, hi[1] + h, hi[2] + h])
+    (
+        [lo[0] - h, lo[1] - h, lo[2] - h],
+        [hi[0] + h, hi[1] + h, hi[2] + h],
+    )
 }
 
 /// Export one document: mesh it, measure it against the field, build the requested
@@ -232,7 +235,11 @@ pub fn export(doc: &Document, opts: &ExportOpts, clock: Clock) -> Result<Export,
         None
     };
 
-    let stl = if opts.stl { Some(tri.write_stl()) } else { None };
+    let stl = if opts.stl {
+        Some(tri.write_stl())
+    } else {
+        None
+    };
 
     Ok(Export {
         h,

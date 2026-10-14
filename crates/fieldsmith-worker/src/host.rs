@@ -55,7 +55,11 @@ impl Host {
 
     /// Wait for the next worker connection and run one job through it: outbound job
     /// request, inbound answer. Timing spans accept through answer.
-    pub fn exchange(&self, request: &str, log: &mut dyn FnMut(&str)) -> Result<HostOutcome, String> {
+    pub fn exchange(
+        &self,
+        request: &str,
+        log: &mut dyn FnMut(&str),
+    ) -> Result<HostOutcome, String> {
         let start = Instant::now();
         let mut chan = self.accept_channel(log)?;
         chan.send(request.as_bytes())
