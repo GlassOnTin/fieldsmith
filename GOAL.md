@@ -194,10 +194,51 @@ stated.
       and time — and exports the same CSV.
 - [ ] V23 passes (below).
 
+Design (plan commit 2026-10-14). Three slices, one shared grammar:
+
+1. **The parameter** — a numeric document parameter is addressed as `<id>.<attr>[.<k>]`:
+   shape attributes by the document model's own names (`box`: `size`/`round`,
+   `cylinder`: `radius`/`height`/`round`, `sphere`: `radius`, `capsule`: `radius`/
+   `length`, `torus`: `major`/`minor`, `extrude`: `height`; `size`, `at` and `rotate`
+   take a 0–2 component index), loads (`force` components, `mpa`, `total`) and
+   temperatures (`celsius`) by their statement ids. The address is resolved against the
+   parsed document when the request arrives; an unknown id or a non-numeric attribute
+   is a request error naming what failed to resolve. Applying a value is an edit on the
+   parsed model, per point. Extrude profile vertices, region/support selector numbers
+   and the solve settings are outside the sweep grammar (stated in the report).
+2. **The sweep question** — a `sweep` variant in the API's question grammar: `param`
+   (the address), `values` (the stated range and point count), and the per-point
+   declaration the D box names — `rungs` and `tolerance`, defaulting exactly like the
+   ladder; a per-point budget is outside this grammar (a point runs to its tolerance or
+   to the schedule's cap). Each point copies the document, applies its value, and
+   solves through the same declared-question runner, so every point's box (rung, DOFs,
+   elements, change) and its time are measured, not reconstructed. The envelope takes
+   its first version bump — `apiv` 1 → 2 — named in schema.rs, and V22's golden is
+   regenerated at the pinned new version; an `apiv: 1` request is refused with a line
+   naming the change.
+3. **The headless table + the Results lens** — `fieldsmith api` gains `--csv <file>` for
+   sweep questions: one row per point (`value,dofs,elements,wall_ms,deflection_mm,
+   vm_mpa,deflection_change_rel,vm_change_rel,status`), the last rung's measured
+   numbers. The Results lens gains a sweep section: a parameter picker over the
+   document's addressable parameters, from/to/point-count inputs, a run that drives the
+   app's ladder machinery per point on a document clone (restoring the user's value
+   when it finishes), a table of value, tracked outputs, per-point box and time, and an
+   export button building the same column set — the CSV the runner emits and the CSV
+   the lens exports are the same file to the byte on the same run. Lens evidence: a
+   headless probe driving the sweep (report beside the other `-e2e` docs).
+4. **The cases** — V23 runs headless through the API grammar: the V1 cantilever
+   (`box beam size=(100, 10, 10)`, 100 N down at the tip) sweeping `beam.size.2` over
+   five values of [8, 12] mm at rungs 30000,150000; the per-point measured deflection
+   ratios against the beam-theory relation δ ∝ 1/h³, first run measured and the case
+   tolerance pinned from it, per-point boxes asserted present. The throughput row is
+   the same declaration style: a 5-point bracket sweep at the reference 1 % deflection
+   through the api verb, on the referee and on the N100 (ssh, as M15 measured), points
+   per hour into budgets.md and rows in costs.csv.
+
 ### E. Carried
 - [ ] CI runs the whole ladder: V1–V16 unchanged, V17–V23 as they land; `budgets.md`
       regenerated per milestone on the referee.
-- [ ] README limitations gain the honesty lines: rung error estimates are estimates from
+- [x] README limitations gain the honesty lines: rung error estimates are estimates from
       rung-to-rung change, not bounds; cross-machine results are not bit-identical —
       divergence is measured and reported; the thermal flow names its scope (steady,
       fixed-temperature boundaries, one material).
