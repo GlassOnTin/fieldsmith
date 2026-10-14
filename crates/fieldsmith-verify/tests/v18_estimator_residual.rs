@@ -13,7 +13,10 @@
 //! 3. `data/costs/costs.csv` ties to these constants: every CLI wall and change value
 //!    parses back bit-equal, wasm rows tie to the budgets-doc constants (probe-harness
 //!    rows with empty field cells) and to the OnePlus 13 in-page walls (rows carrying
-//!    achieved DOF/element cells), 16 rows total.
+//!    achieved DOF/element cells). Twenty rows: the six 2026-10-13 static-ladder CLI
+//!    rows, the four M14 thermal CLI rows (2026-10-14, `bracket-thermal.fsm` — the
+//!    wall is the mesh+solve+thermal superset, change cells empty by measurement), the
+//!    eight probe-harness wasm rows and the two OnePlus 13 wasm rows.
 //! 4. The report carries the honest label: projections carry residuals, and the
 //!    first-pair fit is on the cheap side of the curve.
 
@@ -54,9 +57,15 @@ struct ShipRow {
     chv: Option<f64>,
 }
 
-/// The six CLI rows of `data/costs/costs.csv`, verbatim. Change values are the
-/// envelope-to-envelope estimates the V17 replay proves are two-solve differences.
-const CLI_ROWS: [ShipRow; 6] = [
+/// The ten CLI rows of `data/costs/costs.csv`, verbatim. The first six are the
+/// 2026-10-13 static ladder; change values are the envelope-to-envelope estimates the
+/// V17 replay proves are two-solve differences. The last four are the 2026-10-14 M14
+/// thermal rows (`examples/bracket-thermal.fsm`): wall_ms is the mesh+solve+thermal
+/// superset (the banner components sum to it), the change columns are empty because no
+/// envelope deltas were measured that way, and rungs 0/1 of both machine classes share
+/// (cpu, target, rung) with the static rows — the matcher ties by wall, as the wasm
+/// matcher does.
+const CLI_ROWS: [ShipRow; 10] = [
     ShipRow {
         cpu: CPU_REF,
         target: 30_000,
@@ -104,6 +113,41 @@ const CLI_ROWS: [ShipRow; 6] = [
         wall: 25573.328251,
         chd: Some(-0.041267175037406054),
         chv: Some(0.09939364368535455),
+    },
+    // 2026-10-14 M14 thermal block — wall_ms is the mesh+solve+thermal superset
+    // (referee coarse 23+212+216, refined 41+1186+1245; N100 coarse 49+515+528,
+    // refined 86+2547+2723). Change columns empty: no envelope deltas measured.
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 451.0,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 2472.0,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 1092.0,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 5356.0,
+        chd: None,
+        chv: None,
     },
 ];
 
@@ -357,8 +401,12 @@ fn v18_estimator_residual() {
         "costs.csv ties to these numbers",
         format!(
             "`v18_costs_csv_ties_to_ship_data` parses `data/costs/costs.csv` and checks: \
-             {nrows} rows, every row schema 1, month 2026-10; the six CLI rows' walls and \
-             change-estimate cells parse back EXACTLY to the constants this test embeds; the \
+             {nrows} rows, every row schema 1, month 2026-10; the ten CLI rows tie wall and \
+             change-estimate cells EXACTLY to the constants this test embeds — the six \
+             2026-10-13 static-ladder rows carry the change estimates, the four 2026-10-14 \
+             M14 thermal rows carry the mesh+solve+thermal superset wall with empty change \
+             columns (two machine classes' rungs 0/1 share keys with the static rows, so \
+             the matcher ties by wall); the \
              eight wasm probe-harness rows tie to the budgets-document walls ({w0}, {w1}, \
              {w2}, {w3}, {w4}, {w5}, {w6}, {w7}) with empty DOF/element/leaf/change cells; \
              the two OnePlus 13 rows tie to the in-page walls ({w8}, {w9}) and carry achieved \
@@ -397,22 +445,24 @@ fn v18_costs_csv_ties_to_ship_data() {
             "cli" => {
                 let rung: usize = row[7].parse().expect("cli rung index");
                 let target: usize = row[8].parse().expect("cli target_dofs");
+                let wall: f64 = row[12].parse().expect("cli wall_ms");
+                // The M14 thermal block shares (cpu, target, rung) with the static
+                // ladder rows — its wall is the mesh+solve+thermal superset. Tie to
+                // the ship row whose constant equals the row's wall, as the wasm
+                // matcher ties two same-key blocks by wall.
                 let ship = CLI_ROWS
                     .iter()
-                    .find(|s| s.cpu == row[4] && s.target == target && s.rung == rung)
+                    .find(|s| {
+                        s.cpu == row[4] && s.target == target && s.rung == rung && s.wall == wall
+                    })
                     .unwrap_or_else(|| {
                         panic!(
-                            "no ship CLI row matches cpu={:?} rung={rung} target={target}",
+                            "no ship CLI row matches cpu={:?} rung={rung} target={target} \
+                             wall={wall} — data/costs/costs.csv drifted from this test",
                             row[4]
                         )
                     });
                 assert_eq!(row[3], "fieldsmith 0.2.0 / fenics-rs 0.1.0", "cli engine");
-                assert_eq!(
-                    row[12].parse::<f64>().expect("wall_ms parse"),
-                    ship.wall,
-                    "wall for cpu={:?} rung={rung} must tie to the ship measurement",
-                    row[4]
-                );
                 assert_eq!(
                     row[9].parse::<usize>().expect("achieved dofs"),
                     DOFS[rung] as usize,
@@ -428,7 +478,8 @@ fn v18_costs_csv_ties_to_ship_data() {
                         ),
                         None => assert!(
                             row[ci].is_empty(),
-                            "rung 0 must carry an empty change cell cpu={:?} column {ci}",
+                            "row must carry an empty change cell (rung 0, or the M14 \
+                             thermal rows) cpu={:?} column {ci}",
                             row[4],
                         ),
                     }

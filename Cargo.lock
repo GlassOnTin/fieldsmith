@@ -324,9 +324,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldsmith-api"
+version = "0.2.0"
+dependencies = [
+ "fieldsmith-core",
+ "fieldsmith-doc",
+ "fieldsmith-field",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fieldsmith-cli"
 version = "0.2.0"
 dependencies = [
+ "fieldsmith-api",
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
@@ -369,6 +381,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldsmith-mcp"
+version = "0.2.0"
+
+[[package]]
 name = "fieldsmith-mesh"
 version = "0.2.0"
 dependencies = [
@@ -396,12 +412,14 @@ version = "0.2.0"
 dependencies = [
  "fenics-assembly",
  "fenics-element",
+ "fieldsmith-api",
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
  "fieldsmith-mesh",
  "fieldsmith-solve",
  "miniz_oxide",
+ "serde_json",
 ]
 
 [[package]]

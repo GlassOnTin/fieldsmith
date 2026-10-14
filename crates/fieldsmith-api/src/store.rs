@@ -5,6 +5,9 @@
 //! `~/.local/state/fieldsmith/costs.jsonl` (`XDG_STATE_HOME` honoured),
 //! `FIELDSMITH_COSTS_STORE` override for tests. Reading is always allowed (seeding);
 //! nothing in this module writes anywhere but the store path it is handed.
+//!
+//! Lives in the API crate (M15) so the question runner and the CLI share one store;
+//! the CLI's `mod store` is `fieldsmith_api::store`.
 
 use serde::{Deserialize, Serialize};
 

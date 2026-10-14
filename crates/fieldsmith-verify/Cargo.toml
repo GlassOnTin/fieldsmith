@@ -14,3 +14,7 @@ fieldsmith-solve = { workspace = true }
 fenics-element = { workspace = true }
 fenics-assembly = { workspace = true }
 miniz_oxide = { workspace = true }
+
+[dev-dependencies]
+fieldsmith-api = { workspace = true }
+serde_json = { workspace = true }
