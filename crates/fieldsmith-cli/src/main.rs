@@ -1131,8 +1131,12 @@ fn print_records_report(records: &[RungRecord], total_ms: f64) {
 /// 2 via API_ERR. The verb itself writes nothing and reads no files — the request
 /// carries the document, and store seeding is the API crate's read-only look.
 fn api_cmd(args: &[String]) -> Result<(), String> {
-    // `--csv FILE` is the sweep table's headless route (M16): the envelope is parsed
-    // and the sweep points land as one CSV row each. Everything else stays on stdout.
+    // `--csv FILE` is the sweep table's headless route (M16): the sweep points land
+    // as one CSV row each. The rows build from the typed response — the engine's own
+    // floats, not the envelope string parsed back: serde_json's default float parse
+    // is not correctly rounded (measured 1 ulp off on a 17-digit literal in V23's
+    // own first run) and reparsing would print shifted digits into the cells.
+    // Everything else stays on stdout.
     let csv = match args[0].as_str() {
         "api" => match args[1..] {
             [] => None,
@@ -1156,27 +1160,23 @@ fn api_cmd(args: &[String]) -> Result<(), String> {
         API_ERR.store(true, Ordering::Relaxed);
     }
     if let Some(path) = csv {
-        let body: serde_json::Value = serde_json::from_str(&reply.body)
-            .map_err(|e| format!("api: its own envelope failed to parse: {e}"))?;
-        let (points, csv) = match body.get("sweep") {
-            Some(_) => {
-                let csv = fieldsmith_api::sweep_csv::sweep_csv(&body)?;
-                (
-                    body["sweep"]["points"]
-                        .as_array()
-                        .map(|p| p.len())
-                        .unwrap_or(0),
-                    csv,
-                )
-            }
-            None => {
-                return Err(
-                    "api: --csv is a sweep-question option and the envelope carries \
-                     no sweep answer"
-                        .to_string(),
-                )
-            }
-        };
+        let resp = reply
+            .response
+            .as_ref()
+            .ok_or_else(|| "api: its answer carries no typed envelope".to_string())?;
+        if resp.sweep.is_none() {
+            return Err(
+                "api: --csv is a sweep-question option and the envelope carries \
+                 no sweep answer"
+                    .to_string(),
+            );
+        }
+        let csv = fieldsmith_api::sweep_csv::sweep_csv(resp)?;
+        let points = resp
+            .sweep
+            .as_ref()
+            .map(|s| s.points.len())
+            .unwrap_or_default();
         std::fs::write(&path, csv).map_err(|e| format!("api: writing {path}: {e}"))?;
         eprintln!("api: wrote {points} sweep point(s) to {path}");
     }

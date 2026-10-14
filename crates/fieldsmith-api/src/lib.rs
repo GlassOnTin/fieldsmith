@@ -32,6 +32,14 @@ use schema::{QuestionSpec, Request, Response, Status, APIV};
 pub struct Reply {
     pub body: String,
     pub is_error: bool,
+    /// The typed response behind `body`, with the engine's own f64s. Anything that
+    /// re-derives numbers from `body` after a serde parse drifts: serde_json's float
+    /// parser is not correctly rounded — measured 2026-10-14, the envelope literal
+    /// `0.39066861588109364` parses back 1 ulp low (`0x3fd900b6f0321ac2` vs the
+    /// correctly rounded `0x3fd900b6f0321ac3`), and its printed shortest form changes
+    /// with it. The CSV builder reads this field so its cells print the same digits
+    /// the wire envelope carries (and the same a correctly rounding client computes).
+    pub response: Option<Response>,
 }
 
 /// The request's document: exactly one of `.fsm` text or base64 `.fsmz` bytes, parsed
@@ -493,14 +501,17 @@ fn ok_reply(r: Response) -> Reply {
 }
 
 fn final_reply(r: Response, is_error: bool) -> Reply {
+    // Compact one line (the envelope is a contract, not a display). The typed
+    // response rides along for the CSV builder — see Reply::response.
+    let body = serde_json::to_string(&r).unwrap_or_else(|e| {
+        // A Response of Strings and floats cannot fail to serialize; the escape
+        // hatch stays for honesty about the path, not as a live branch.
+        format!("{{\"apiv\":{APIV},\"engine\":\"\",\"status\":\"error\",\"name\":null,\"question\":null,\"warnings\":[],\"error\":\"serialize: {e}\"}}")
+    });
     Reply {
-        // Compact one line (the envelope is a contract, not a display).
-        body: serde_json::to_string(&r).unwrap_or_else(|e| {
-            // A Response of Strings and floats cannot fail to serialize; the escape
-            // hatch stays for honesty about the path, not as a live branch.
-            format!("{{\"apiv\":{APIV},\"engine\":\"\",\"status\":\"error\",\"name\":null,\"question\":null,\"warnings\":[],\"error\":\"serialize: {e}\"}}")
-        }),
+        body,
         is_error,
+        response: Some(r),
     }
 }
 
