@@ -58,6 +58,18 @@ export class AnalysisEngine {
   private timer = 0;
   /** docVersion the in-flight export was requested for. */
   private makeVersion = 0;
+  /** The results lens' sink for the running sweep's streaming replies. Ends on
+   * sweepDone/sweepError; cancel closes it with the cancellation message. */
+  private sweepSink: ((m: WorkerOut) => void) | null = null;
+
+  /** Results lens: run the parameter sweep on the current document through this worker.
+   * The sink receives one `sweepPoint` per value, then `sweepDone`/`sweepError`. */
+  runSweep(sink: (m: WorkerOut) => void, addr: string, values: number[], rungs: number[]) {
+    this.sweepSink = sink;
+    const w = this.ensureWorker();
+    this.feed(w);
+    w.postMessage({ type: 'sweep', doc: store.doc, addr, values, rungs });
+  }
 
   subscribe(l: () => void): () => void {
     this.listeners.add(l);
@@ -233,6 +245,12 @@ export class AnalysisEngine {
       this.set({ slice: m.segs ? { z: m.z, segs: m.segs } : null });
     } else if (m.type === 'bytesDone') {
       download(`${m.name}.${m.what}`, m.bytes, m.what === 'stl' ? 'model/stl' : 'model/3mf');
+    } else if (m.type === 'sweepPoint' || m.type === 'sweepDone' || m.type === 'sweepError') {
+      // Sweep replies go to the sink alone — they are not ladder state. sweepDone and
+      // sweepError end the sweep; sweepPoint keeps the sink for the next post.
+      if (!this.sweepSink) return;
+      this.sweepSink(m);
+      if (m.type !== 'sweepPoint') this.sweepSink = null;
     }
   }
 
@@ -259,10 +277,14 @@ export class AnalysisEngine {
   }
 
   /** Kill the in-flight run (an edit cancels and restarts); an import in flight dies with
-   * the worker, so reject its promise here. */
+   * the worker, so reject its promise here. A running sweep ends with the worker too, so
+   * the sink is closed here with words, where the worker can no longer post. */
   private cancel() {
     clearTimeout(this.timer);
     this.rejectImport('the import was cancelled');
+    const sink = this.sweepSink;
+    this.sweepSink = null;
+    if (sink) sink({ type: 'sweepError', message: 'the sweep was cancelled — a document edit restarted the analysis' });
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

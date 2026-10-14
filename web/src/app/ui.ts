@@ -56,6 +56,16 @@ class Ui {
   makeLayer = 0;
   /** Whether the slice preview contour overlay is shown. */
   makeSliceOn = true;
+  // Sweep panel display state (not undoable). The parameter defaults to the document's
+  // first sweepable one (null until the user picks); from/to fall back to that
+  // parameter's own value — the question is the user's to fill.
+  sweepParam: string | null = null;
+  /** The sweep's from value; null = the parameter's current value. */
+  sweepFrom: number | null = null;
+  /** The sweep's to value; null = the parameter's current value. */
+  sweepTo: number | null = null;
+  /** How many values the sweep steps from → to. */
+  sweepCount = 5;
   // Viewport display state (not undoable, session-only).
   /** Body opacity: 1 = opaque, < 1 renders the body translucent and shows the lattice
    * through it. Resets on load — UI state is not persisted. */

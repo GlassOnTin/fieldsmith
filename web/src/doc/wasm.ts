@@ -609,9 +609,39 @@ export type WorkerIn =
   | { type: 'import'; bytes: ArrayBuffer; kind: 'glb' | 'stl' | 'obj' | '3mf'; src: string; opts: { units?: string; up?: string; voxel?: number; ids?: string[] } }
   /** Register mesh grids in the worker's registry (fresh copies — the main-thread cache
    * keeps ownership of its own). Posted before `run`/`export` when the doc carries meshes. */
-  | { type: 'hydrate'; entries: HydrateEntry[] };
+  | { type: 'hydrate'; entries: HydrateEntry[] }
+  /** The parameter sweep (GOAL v0.4 section D): every value runs the coarse/refined
+   * ladder on a copy of the document, records stream back per point. */
+  | { type: 'sweep'; doc: Document; addr: string; values: number[]; rungs: number[] };
 
 export type ExportDone = { meta: ExportMeta };
+
+/** One sweep rung's measured record — the fields the ladder table and the CSV read
+ * from the native `RungRecord`. `element_size_mm` rides the same native record but is
+ * neither a CSV column nor a UI cell, so the mirror omits it. */
+export interface SweepTracked {
+  deflection_mm: number;
+  vm_mpa: number;
+}
+export interface SweepChange {
+  deflection_rel: number;
+  vm_rel: number;
+}
+export interface SweepRecord {
+  rung: number;
+  target_dofs: number;
+  dofs: number;
+  elements: number;
+  wall_ms: number;
+  /** The rung-over-rung change estimate; null on rung 0 (no baseline). */
+  change: SweepChange | null;
+  tracked: SweepTracked;
+}
+
+/** The web sweep's rung schedule — the ladder's own coarse/refined constants, shared
+ * with the analysis worker. */
+export const COARSE_DOFS = 30_000;
+export const FINE_DOFS = 150_000;
 
 export type WorkerOut =
   | { type: 'level'; label: string }
@@ -632,4 +662,9 @@ export type WorkerOut =
   /** Latest-wins: `z` is the slice this answer belongs to (ignore stale ones), `segs` is
    * packed `[x0, y0, x1, y1, …]` (mm) or null when there is no export mesh. */
   | { type: 'sliceDone'; z: number; segs: Float64Array | null }
-  | { type: 'bytesDone'; what: 'stl' | '3mf'; name: string; bytes: ArrayBuffer };
+  | { type: 'bytesDone'; what: 'stl' | '3mf'; name: string; bytes: ArrayBuffer }
+  /** The sweep, streaming: one post per point with that point's full record list
+   * (`value` echoes the request order), then a `sweepDone` tally. */
+  | { type: 'sweepPoint'; value: number; records: SweepRecord[] }
+  | { type: 'sweepDone'; count: number }
+  | { type: 'sweepError'; message: string };

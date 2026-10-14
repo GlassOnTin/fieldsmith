@@ -1,10 +1,11 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|mobile] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
-// docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md
-// and docs/verification/mobile-e2e.md, and exits non-zero on any failure or console error.
+// docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
+// docs/verification/sweep-e2e.md and docs/verification/mobile-e2e.md, and exits non-zero on
+// any failure or console error.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -16,6 +17,7 @@ import { makeTest } from './make.mjs';
 import { meshTest } from './mesh.mjs';
 import { mobileTest } from './mobile.mjs';
 import { interiorTest } from './interior.mjs';
+import { sweepTest } from './sweep.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -126,6 +128,11 @@ try {
   if (!only || only === 'mesh') {
     const ok = await meshTest(browser, url, { screens, docsDir });
     console.log(`mesh test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'sweep') {
+    const ok = await sweepTest(browser, url, { screens, docsDir });
+    console.log(`sweep lens ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
   if (!only || only === 'mobile') {

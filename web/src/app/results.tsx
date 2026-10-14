@@ -9,7 +9,9 @@ import { Seg, NumberInput } from './fields';
 import { viewOverlays, statusItems } from './App';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport } from '../view/viewport';
+import { addressableParams } from '../doc/param';
 import { analysis } from './analysis';
+import { sweep, useSweep } from './sweep';
 import { fmt } from './fields';
 import * as THREE from 'three';
 import type { LoadReport } from '../doc/wasm';
@@ -467,6 +469,108 @@ function AnalysisBadge() {
 }
 statusItems.push(AnalysisBadge);
 
+// ---- sweep ---------------------------------------------------------------------------
+
+/** The parameter sweep panel (GOAL v0.4 section D): the ladder question asked at each of a
+ * stepped range of one numeric document parameter. The analysis worker's sweep arm runs it
+ * — the mirror of the native Sweep question — the engine streams the points, and the
+ * export writes the CLI's sweep CSV (web/src/app/sweep.ts holds the byte contracts). */
+function SweepSection() {
+  const sw = useSweep();
+  const params = addressableParams(store.doc);
+  if (!params.length) return null;
+  const sel = params.some((p) => p.addr === ui.sweepParam) ? (ui.sweepParam as string) : params[0].addr;
+  const cur = params.find((p) => p.addr === sel)?.value ?? 0;
+  const from = ui.sweepFrom ?? cur;
+  const to = ui.sweepTo ?? cur;
+  const run = () => sweep.start(sel, from, to, Math.max(1, Math.round(ui.sweepCount)));
+  return (
+    <>
+      <div class="field-grid" data-testid="sweep-panel">
+        <span class="plain">Sweep</span>
+        <span class="meta">the ladder question at each value, each on a copy of the document — the document keeps its values</span>
+        <span class="plain">Parameter</span>
+        <select
+          class="select"
+          value={sel}
+          data-testid="sweep-param"
+          title="which parameter the sweep steps"
+          onChange={(e) => {
+            ui.set('sweepParam', (e.target as HTMLSelectElement).value);
+            // From/to re-derive from the newly chosen parameter.
+            ui.set('sweepFrom', null);
+            ui.set('sweepTo', null);
+          }}
+        >
+          {params.map((p) => (
+            <option key={p.addr} value={p.addr}>
+              {p.addr}
+              {p.value !== null ? ` = ${fmt(p.value)}` : ''}
+            </option>
+          ))}
+        </select>
+        <span class="plain">Values</span>
+        <div class="scale-row">
+          <NumberInput value={from} onChange={(v) => ui.set('sweepFrom', v)} label="sweep from" testId="sweep-from" />
+          <NumberInput value={to} onChange={(v) => ui.set('sweepTo', v)} label="sweep to" testId="sweep-to" />
+          <NumberInput
+            value={ui.sweepCount}
+            min={1}
+            step={1}
+            integer
+            onChange={(v) => ui.set('sweepCount', Math.max(1, Math.round(v)))}
+            label="sweep points"
+            testId="sweep-count"
+          />
+          <button type="button" class="mini-btn" data-testid="sweep-run" disabled={sw.running} title="Run the sweep on the analysis worker" onClick={run}>
+            Run
+          </button>
+        </div>
+        {sw.running && (
+          <>
+            <span class="plain">Progress</span>
+            <span class="num" data-testid="sweep-progress">
+              {sw.points.length} of {sw.total}…
+            </span>
+          </>
+        )}
+        {sw.points.length > 0 && (
+          <>
+            <span class="plain">Points</span>
+            <span class="meta">value · dofs · elements · wall ms · deflect mm · MPa</span>
+            {sw.points.map((p, i) => {
+              const last = p.records[p.records.length - 1];
+              return (
+                <Fragment key={i}>
+                  <span class="plain">{fmt(p.value)}</span>
+                  <span class="num" data-testid={`sweep-row-${i}`}>
+                    {last ? `${last.dofs} dofs · ${last.elements} elements · wall ${fmt(last.wall_ms, 0)} ms · deflect ${fmt(last.tracked.deflection_mm)} mm · ${fmt(last.tracked.vm_mpa)} MPa` : ''}
+                  </span>
+                </Fragment>
+              );
+            })}
+          </>
+        )}
+        {sw.done && (
+          <>
+            <span class="plain">Export</span>
+            <div class="scale-row">
+              <button type="button" class="mini-btn" data-testid="sweep-export" title="The CLI's sweep CSV — same header and cells; the wall-time column cannot match" onClick={() => sweep.exportCsv()}>
+                sweep CSV
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {sw.error && (
+        <div class="error-box" data-testid="sweep-error">
+          {sw.error}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ---- panel ---------------------------------------------------------------------------
 
 function ResultsPanel() {
@@ -612,6 +716,7 @@ function ResultsPanel() {
               })}
             </div>
           )}
+          <SweepSection />
           {lvl.meta.cases.some((c) => (c.load_reports ?? []).length > 0) && (
             <div class="field-grid" data-testid="load-provenance">
               <span class="plain">Loads (applied)</span>

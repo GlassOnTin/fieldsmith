@@ -7,10 +7,13 @@
 import type { Document, Node } from '../doc/types';
 import { walk } from '../doc/types';
 import { loadWasm, analyse, analyseGraded, exportSolid, exportGraded, importMesh, meshGrid, hydrateGrid, meshHydrated } from '../doc/wasm';
-import type { AnalysisHandle, GradedHandleWithExport, HydrateEntry, LevelResult, MeshHandle, WorkerIn, WorkerOut } from '../doc/wasm';
-
-export const COARSE_DOFS = 30_000;
-export const FINE_DOFS = 150_000;
+import type { AnalysisHandle, AnalysisMeta, GradedHandleWithExport, HydrateEntry, LevelResult, MeshHandle, WorkerIn, WorkerOut } from '../doc/wasm';
+// This file once carried its own copies of the rung schedule; the sweep's mirror of the
+// native question engine needs the same constants, and one definition is one number.
+import { COARSE_DOFS, FINE_DOFS } from '../doc/wasm';
+import { applyAddr, parseAddr, resolveAddr } from '../doc/param';
+import { rustFloat } from '../doc/numfmt';
+import type { SweepRecord } from '../doc/wasm';
 
 let ready: Promise<void> | null = null;
 
@@ -317,6 +320,99 @@ function doBytes(what: 'stl' | '3mf', name: string) {
   post({ type: 'bytesDone', what, name, bytes: bytes.buffer as ArrayBuffer }, [bytes.buffer as ArrayBuffer]);
 }
 
+/** The parameter sweep (GOAL v0.4 section D): every value runs the coarse/refined ladder
+ * on a copy of the document, one `sweepPoint` post per value, then `sweepDone`. The
+ * mirror of the native `Sweep` arm (crates/fieldsmith-api/src/lib.rs) — same check order,
+ * same error texts, same record semantics as `fieldsmith-core/src/rung.rs`. Unlike the
+ * native question, which discards partial work on a point failure, this worker streams
+ * the points before the failing one so they stand in the table. */
+async function doSweep(doc: Document, addr: string, values: number[], rungs: number[]) {
+  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  await ready;
+  try {
+    if (doc.fill !== null) {
+      post({ type: 'sweepError', message: 'the sweep runs the solid path — remove the fill statement' });
+      return;
+    }
+    const a = parseAddr(addr); // throws param.ts's mirror of param::parse's text
+    resolveAddr(doc, a); // throws param.ts's mirror of param::resolve's text
+    if (values.length === 0) {
+      post({ type: 'sweepError', message: 'sweep: values is empty — name at least one value of the parameter' });
+      return;
+    }
+    if (!values.every(Number.isFinite)) {
+      post({ type: 'sweepError', message: 'sweep: values must all be finite numbers' });
+      return;
+    }
+    if (rungs.length < 2) {
+      post({ type: 'sweepError', message: 'rungs: a ladder needs at least two rungs — the rung-to-rung change estimate needs a baseline' });
+      return;
+    }
+    for (let k = 1; k < rungs.length; k++) {
+      if (!(rungs[k - 1] < rungs[k])) {
+        post({ type: 'sweepError', message: 'rungs: rung DOF targets must increase (the change estimate reads refinement, not coarsening)' });
+        return;
+      }
+    }
+    // The sweep reuses this worker's wasm registries: an unhydrated mesh is the same
+    // silently-vacuum hazard run() refuses, not something a value change fixes.
+    const unh = unhydratedHash(doc);
+    if (unh) {
+      post({
+        type: 'sweepError',
+        message: `mesh ${unh} is not loaded here — open its .fsmz sidecar or re-import the mesh, then run again`,
+      });
+      return;
+    }
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      const d = structuredClone(doc);
+      try {
+        applyAddr(d, a, value);
+      } catch (e) {
+        // The honest path: native's apply cannot fire after resolve (same comment in
+        // lib.rs), but the mirror names the point if it ever does.
+        post({ type: 'sweepError', message: `sweep point ${i + 1} (param ${addr} = ${rustFloat(value)}): ${errText(e)}` });
+        return;
+      }
+      const records: SweepRecord[] = [];
+      let prev: { d: number; v: number } | null = null;
+      for (let r = 0; r < rungs.length; r++) {
+        const t0 = performance.now();
+        try {
+          const out = analyse(d, { dofs: rungs[r] });
+          const wall = performance.now() - t0;
+          const meta = JSON.parse(out.metaJson()) as AnalysisMeta;
+          // TrackedValues::of_cases: the max over cases, floored at 1e-9 so a
+          // vacuum-flat case still produces a finite change estimate next rung.
+          const defl = Math.max(1e-9, ...meta.cases.map((c) => c.max_displacement));
+          const vm = Math.max(1e-9, ...meta.cases.map((c) => c.max_vm_elem));
+          records.push({
+            rung: r,
+            target_dofs: rungs[r],
+            dofs: meta.provenance.dofs,
+            elements: meta.provenance.elements,
+            wall_ms: wall,
+            change: prev ? { deflection_rel: (defl - prev.d) / prev.d, vm_rel: (vm - prev.v) / prev.v } : null,
+            tracked: { deflection_mm: defl, vm_mpa: vm },
+          });
+          prev = { d: defl, v: vm };
+          out.free();
+        } catch (e) {
+          post({ type: 'sweepError', message: `sweep point ${i + 1} of ${values.length} (param ${addr} = ${rustFloat(value)}): ${errText(e)}` });
+          return;
+        }
+      }
+      post({ type: 'sweepPoint', value, records });
+    }
+    post({ type: 'sweepDone', count: values.length });
+  } catch (e) {
+    // Anything outside the per-point paths (structuredClone, the load itself) reports
+    // bare — the mirror's validation-phase throws already carry their native texts.
+    post({ type: 'sweepError', message: errText(e) });
+  }
+}
+
 (self as unknown as { onmessage: ((e: MessageEvent<WorkerIn>) => void) | null }).onmessage = (e) => {
   const m = e.data;
   if (m.type === 'run') void run(m.doc);
@@ -325,4 +421,5 @@ function doBytes(what: 'stl' | '3mf', name: string) {
   else if (m.type === 'bytes') doBytes(m.what, m.name);
   else if (m.type === 'import') void doImport(m.bytes, m.kind, m.src, m.opts);
   else if (m.type === 'hydrate') void doHydrate(m.entries);
+  else if (m.type === 'sweep') void doSweep(m.doc, m.addr, m.values, m.rungs);
 };
