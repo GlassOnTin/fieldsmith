@@ -110,9 +110,9 @@ fn ladder_met_stops_and_records_both_rungs() {
     assert!(!row_text.contains(".fsm"));
     // Engine + shape fields carried for seeding and provenance.
     assert!(rows[0]["engine"].as_str().unwrap().contains("fieldsmith"));
-    assert!(rows[0]["cpu"].as_str().unwrap().len() > 0);
+    assert!(!rows[0]["cpu"].as_str().unwrap().is_empty());
     assert!(rows[0]["field_leaves"].as_u64().unwrap() > 0);
-    assert_eq!(rows[0]["cores"].as_u64().unwrap() > 0, true);
+    assert!(rows[0]["cores"].as_u64().unwrap() > 0);
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
 }
 

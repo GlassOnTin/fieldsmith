@@ -12,6 +12,7 @@
 //!   row writes stay with the CLI (and later the worker host).
 
 pub mod b64;
+pub mod export;
 pub mod question;
 pub mod schema;
 pub mod store;
@@ -30,6 +31,42 @@ use schema::{QuestionSpec, Request, Response, Status, APIV};
 pub struct Reply {
     pub body: String,
     pub is_error: bool,
+}
+
+/// The request's document: exactly one of `.fsm` text or base64 `.fsmz` bytes, parsed
+/// through the same parser the CLI uses. The error strings are part of the contract
+/// (the V22 golden asserts them), not prose.
+pub fn load_doc(doc: Option<&str>, docz: Option<&str>) -> Result<Document, String> {
+    match (doc, docz) {
+        (Some(_), Some(_)) => {
+            Err("doc: pass exactly one of doc (.fsm text) or docz (base64 .fsmz) — got both".into())
+        }
+        (None, None) => {
+            Err("request carries no document — pass doc (.fsm text) or docz (base64 .fsmz)".into())
+        }
+        (Some(text), _) => {
+            fsm::parse(text).map_err(|e| format!("doc: line {}: {}", e.line, e.message))
+        }
+        (_, Some(z)) => {
+            let bytes = b64::decode(z).map_err(|e| format!("docz: {e}"))?;
+            fsmz::load(&bytes).map(|l| l.doc).map_err(|e| format!("docz: {e}"))
+        }
+    }
+}
+
+/// Hashes of the document's mesh nodes whose voxel grid is not in this process's
+/// registry. A question asked against missing grids would silently evaluate an
+/// all-outside field, so [`respond`] refuses and document-openers (the MCP) check
+/// with the same read.
+pub fn missing_grids(doc: &Document) -> Vec<String> {
+    doc.root
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::Mesh { hash, .. } => Some(hash.clone()),
+            _ => None,
+        })
+        .filter(|h| lookup(key_from_hex(h)).is_none())
+        .collect()
 }
 
 /// Turn one JSON request into one JSON envelope.
@@ -54,67 +91,18 @@ pub fn respond(input: &str) -> Reply {
         );
     }
 
-    // 3. Exactly one document field.
-    match (&req.doc, &req.docz) {
-        (Some(_), Some(_)) => {
+    // 3–4. Load the document (the shared loader the document-openers use too).
+    let doc: Document = match load_doc(req.doc.as_deref(), req.docz.as_deref()) {
+        Ok(d) => d,
+        Err(message) => {
             return error_reply(
                 APIV,
                 None,
                 Some(&req.question),
                 Vec::new(),
-                "doc: pass exactly one of doc (.fsm text) or docz (base64 .fsmz) — got both",
-            );
+                message,
+            )
         }
-        (None, None) => {
-            return error_reply(
-                APIV,
-                None,
-                Some(&req.question),
-                Vec::new(),
-                "request carries no document — pass doc (.fsm text) or docz (base64 .fsmz)",
-            );
-        }
-        _ => {}
-    }
-
-    // 4. Load the document.
-    let doc: Document = match (&req.doc, &req.docz) {
-        (Some(text), _) => match fsm::parse(text) {
-            Ok(d) => d,
-            Err(e) => {
-                return error_reply(
-                    APIV,
-                    None,
-                    Some(&req.question),
-                    Vec::new(),
-                    format!("doc: line {}: {}", e.line, e.message),
-                );
-            }
-        },
-        (_, Some(z)) => match b64::decode(z) {
-            Ok(bytes) => match fsmz::load(&bytes) {
-                Ok(l) => l.doc,
-                Err(e) => {
-                    return error_reply(
-                        APIV,
-                        None,
-                        Some(&req.question),
-                        Vec::new(),
-                        format!("docz: {e}"),
-                    );
-                }
-            },
-            Err(e) => {
-                return error_reply(
-                    APIV,
-                    None,
-                    Some(&req.question),
-                    Vec::new(),
-                    format!("docz: {e}"),
-                );
-            }
-        },
-        _ => unreachable!("one of doc/docz is present (checked above)"),
     };
 
     let name = doc.name.clone();
@@ -122,15 +110,7 @@ pub fn respond(input: &str) -> Reply {
 
     // 5. Grids. Only the inspection verbs work without the registry; every question
     // here evaluates the body, which would silently see an all-outside field.
-    let missing: Vec<String> = doc
-        .root
-        .iter()
-        .filter_map(|n| match &n.kind {
-            NodeKind::Mesh { hash, .. } => Some(hash.clone()),
-            _ => None,
-        })
-        .filter(|h| lookup(key_from_hex(h)).is_none())
-        .collect();
+    let missing = missing_grids(&doc);
     if !missing.is_empty() {
         return error_reply(
             APIV,
@@ -236,7 +216,7 @@ pub fn respond(input: &str) -> Reply {
                         unmet: o.unmet,
                         refusal,
                     };
-                    return ok_reply(schema::Response {
+                    ok_reply(schema::Response {
                         apiv: APIV,
                         engine: store::engine_identity(),
                         status,
@@ -246,11 +226,9 @@ pub fn respond(input: &str) -> Reply {
                         outcome: Some(outcome),
                         single: None,
                         error: None,
-                    });
+                    })
                 }
-                Err(SetupError(e)) => {
-                    return error_reply(APIV, Some(&name), Some(&echo), warnings, e);
-                }
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
         QuestionSpec::Solve { dofs, h } => {
@@ -273,7 +251,7 @@ pub fn respond(input: &str) -> Reply {
                     let fieldsmith_core::Analysis {
                         provenance, cases, ..
                     } = a;
-                    return ok_reply(schema::Response {
+                    ok_reply(schema::Response {
                         apiv: APIV,
                         engine: store::engine_identity(),
                         status: Status::Ok,
@@ -287,11 +265,9 @@ pub fn respond(input: &str) -> Reply {
                             modes: None,
                         }),
                         error: None,
-                    });
+                    })
                 }
-                Err(SetupError(e)) => {
-                    return error_reply(APIV, Some(&name), Some(&echo), warnings, e);
-                }
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
         QuestionSpec::Modes { n, dofs, h } => {
@@ -326,7 +302,7 @@ pub fn respond(input: &str) -> Reply {
             match analyse_modes(&doc, res, question::clock, n) {
                 Ok(run) => {
                     let n_req = n;
-                    return ok_reply(schema::Response {
+                    ok_reply(schema::Response {
                         apiv: APIV,
                         engine: store::engine_identity(),
                         status: Status::Ok,
@@ -343,11 +319,9 @@ pub fn respond(input: &str) -> Reply {
                             }),
                         }),
                         error: None,
-                    });
+                    })
                 }
-                Err(SetupError(e)) => {
-                    return error_reply(APIV, Some(&name), Some(&echo), warnings, e);
-                }
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
     }

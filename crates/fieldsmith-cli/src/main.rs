@@ -18,10 +18,9 @@ use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
 use fieldsmith_core::{
     analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution,
 };
-use fieldsmith_doc::{fsm, Document, NodeKind, Op};
+use fieldsmith_doc::{fsm, Document, NodeKind};
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
-use fieldsmith_mesh::export::{surface, write_3mf_volumes, TriMesh, Volume3mf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -84,9 +83,9 @@ const USAGE: &str =
           that stores its grids; volume/solve/export of the written
           document need that sidecar beside the .fsm.";
 
-/// The rung schedule the declared-question modes walk by default lives in the API
-/// crate (`fieldsmith_api::question::DEFAULT_RUNGS`, imported above): one schedule,
-/// both presentation verbs.
+// The rung schedule the declared-question modes walk by default lives in the API
+// crate (`fieldsmith_api::question::DEFAULT_RUNGS`, imported above): one schedule,
+// both presentation verbs.
 
 /// Set when a declared question ends in a refusal: run() returns Ok (the refusal is an
 /// honest answer, printed as such) and main exits 3 instead of 0 (GOAL v0.4 section A).
@@ -543,185 +542,78 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         return Err("bad --h value: must be positive and finite".into());
     }
     let solid_only = args.iter().any(|a| a == "--solid");
-    // Adaptive dual contouring refines only near the surface, which is what makes the
-    // 0.1 mm export budget reachable; see V8 for the measured defect classes against this
-    // model (and the uniform mesher's, for comparison).
     let adaptive = args.iter().any(|a| a == "--adaptive");
     let t_all = clock();
 
-    let e = expr::compile_body(doc);
-    let b = expr::bounds(&e);
-    if b.is_empty() {
-        return Err("document has no solid".into());
-    }
+    // The export core lives in fieldsmith-api (the MCP tool and the worker host run the
+    // same path); this verb keeps the prose and the file writes.
+    let ex = fieldsmith_api::export::export(
+        doc,
+        &fieldsmith_api::export::ExportOpts {
+            h,
+            adaptive,
+            solid_only,
+            stl: stl.is_some(),
+            mf: threemf.is_some(),
+        },
+        clock,
+    )?;
 
-    let field: expr::Expr = if doc.fill.is_some() && !solid_only {
-        let t0 = clock();
-        let (_, g) = graded(doc, Resolution::Dofs(150_000), clock).map_err(|x| x.0)?;
+    if let Some(g) = &ex.graded {
         println!(
             "{}: graded fill (mass {:.2} g of {:.2} g solid) built in {:.1} s",
             doc.name,
             g.mass_g,
             g.solid_mass_g,
-            (clock() - t0) / 1000.0
+            g.ms / 1000.0
         );
-        expr::Expr::Filled(Box::new(g.fill))
-    } else {
-        e
-    };
-
-    let t0 = clock();
-    let field_ref = &field;
-    let tri = if adaptive {
-        let lo = [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h];
-        let hi = [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h];
-        fieldsmith_mesh::adaptive::surface_adaptive(
-            |p| {
-                let d = expr::eval(field_ref, p);
-                fieldsmith_mesh::adaptive::Sample { v: d.v, g: d.g }
-            },
-            lo,
-            hi,
-            h,
-            &fieldsmith_mesh::adaptive::AdaptiveOpts::default(),
-        )
-    } else {
-        surface(
-            |p: [f64; 3]| expr::eval(field_ref, p).v,
-            [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h],
-            [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h],
-            h,
-        )
-    };
-    let mesh_s = (clock() - t0) / 1000.0;
-
-    let t0 = clock();
-    // Reference pair at the mesh spacing (export.rs in the wasm crate explains why the
-    // coarser auto spacing's Richardson band misses the truth on TPMS fill fields).
-    let v = volume::volume(field_ref, h);
-    let ref_s = (clock() - t0) / 1000.0;
-    let v_mesh = tri.volume();
-    let delta = if v.volume > 0.0 {
-        (v_mesh - v.volume) / v.volume * 100.0
-    } else {
-        f64::NAN
-    };
-
-    let t0 = clock();
-    let d = tri.defects();
-    let scan_s = (clock() - t0) / 1000.0;
-
+    }
     println!(
-        "mesh {} verts, {} tris at h={h} mm ({}, mesh {:.2} s, defect scan {:.2} s)",
-        tri.verts.len(),
-        tri.tris.len(),
-        if adaptive {
+        "mesh {} verts, {} tris at h={} mm ({}, mesh {:.2} s, defect scan {:.2} s)",
+        ex.verts,
+        ex.tris,
+        ex.h,
+        if ex.adaptive {
             "adaptive dc"
         } else {
             "uniform dc"
         },
-        mesh_s,
-        scan_s
+        ex.mesh_ms / 1000.0,
+        ex.scan_ms / 1000.0
     );
     println!(
         "field volume {:.1} ± {:.1} mm³, mesh volume {:.1} mm³, Δ {:+.3} % (field ref {:.1} s)",
-        v.volume, v.error, v_mesh, delta, ref_s
+        ex.reference.volume, ex.reference.error, ex.mesh_volume, ex.delta_percent, ex.ref_ms / 1000.0
     );
-    if d.none() {
+    if ex.defects.none() {
         println!(
             "defects: none (closed, 2-manifold, consistently oriented, self-intersection-free)"
         );
     } else {
         println!(
             "defects: {} open edges, {} non-manifold, {} orientation, {} degenerate, {} self-intersections",
-            d.open_edges,
-            d.non_manifold_edges,
-            d.orientation_defects,
-            d.degenerate_triangles,
-            d.self_intersections
+            ex.defects.open_edges,
+            ex.defects.non_manifold_edges,
+            ex.defects.orientation_defects,
+            ex.defects.degenerate_triangles,
+            ex.defects.self_intersections
         );
     }
-    let stl_bytes = stl.as_ref().map(|_| tri.write_stl());
-    // When the document is a plain stack of add-shaped nodes — nothing subtracted or
-    // intersected, no group shell/offset/mirror/pattern modifiers, no per-node blends, no
-    // exported fill — each node's own shape already is a volume of the part, so the 3MF
-    // carries one object per node, each labelled with its material (the node's label, else
-    // the document material). Slicers union the shipped objects, so the printed solid is
-    // the same body, and per-volume labels travel with it; where two labelled volumes
-    // overlap, the slicer's rule (first hit) states that overlap's material.
-    // A subtract/intersect node, a modifier, or a blend shapes the body *beyond* the nodes'
-    // own shapes, so no set of per-node volumes reconstructs it: those exports stay the
-    // single-union body labelled with the document material, as before.
-    let per_volume = (doc.fill.is_none() || solid_only) && volumes_ok(&doc.root);
-    let mf_bytes = threemf.as_ref().map(|_| {
-        let mut meshes: Vec<(String, String, String, TriMesh)> = Vec::new();
-        if per_volume {
-            for n in &doc.root {
-                if n.suppressed {
-                    continue;
-                }
-                let fe = expr::compile_node(doc, n);
-                let nb = expr::bounds(&fe);
-                if nb.is_empty() {
-                    continue;
-                }
-                let fref = &fe;
-                let t1 = clock();
-                let part = if adaptive {
-                    fieldsmith_mesh::adaptive::surface_adaptive(
-                        |p| {
-                            let d = expr::eval(fref, p);
-                            fieldsmith_mesh::adaptive::Sample { v: d.v, g: d.g }
-                        },
-                        [nb.lo[0] - h, nb.lo[1] - h, nb.lo[2] - h],
-                        [nb.hi[0] + h, nb.hi[1] + h, nb.hi[2] + h],
-                        h,
-                        &fieldsmith_mesh::adaptive::AdaptiveOpts::default(),
-                    )
-                } else {
-                    surface(
-                        |p: [f64; 3]| expr::eval(fref, p).v,
-                        [nb.lo[0] - h, nb.lo[1] - h, nb.lo[2] - h],
-                        [nb.hi[0] + h, nb.hi[1] + h, nb.hi[2] + h],
-                        h,
-                    )
-                };
-                let mat = n.material.clone().unwrap_or_else(|| doc.material.clone());
-                let vol = volume::volume(fref, h);
-                let vs = (clock() - t1) / 1000.0;
-                println!(
-                    "  volume {}: {} verts, {} tris, material {mat}, field volume {:.1} ± {:.1} mm³ ({:.2} s)",
-                    n.id,
-                    part.verts.len(),
-                    part.tris.len(),
-                    vol.volume,
-                    vol.error,
-                    vs
-                );
-                // Root-level volumes have no ancestors, so their effective colour is their
-                // own (a group passes its colour down through the per-volume carve).
-                meshes.push((n.id.clone(), mat, n.color.clone().unwrap_or_default(), part));
-            }
-            if !meshes.is_empty() {
-                let vols: Vec<Volume3mf> = meshes
-                    .iter()
-                    .map(|(id, mat, colour, m)| Volume3mf {
-                        name: id,
-                        material: mat,
-                        color: colour,
-                        mesh: m,
-                    })
-                    .collect();
-                return write_3mf_volumes(&vols);
-            }
-        }
-        tri.write_3mf(&doc.name, &doc.material)
-    });
+    for p in &ex.parts {
+        println!(
+            "  volume {}: {} verts, {} tris, material {}, field volume {:.1} ± {:.1} mm³ ({:.2} s)",
+            p.id,
+            p.verts,
+            p.tris,
+            p.material,
+            p.volume.volume,
+            p.volume.error,
+            p.ms / 1000.0
+        );
+    }
     for (path, bytes, what) in [
-        stl.as_deref()
-            .zip(stl_bytes)
-            .map(|(p, b)| (p, b, "binary STL")),
-        threemf.as_deref().zip(mf_bytes).map(|(p, b)| (p, b, "3MF")),
+        stl.as_deref().zip(ex.stl).map(|(p, b)| (p, b, "binary STL")),
+        threemf.as_deref().zip(ex.mf).map(|(p, b)| (p, b, "3MF")),
     ]
     .into_iter()
     .flatten()
@@ -734,27 +626,8 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
             (clock() - t0) / 1000.0
         );
     }
-    println!(
-        "export total {:.2} s (h {h:.3} mm)",
-        (clock() - t_all) / 1000.0
-    );
+    println!("export total {:.2} s (h {h:.3} mm)", (clock() - t_all) / 1000.0);
     Ok(())
-}
-
-/// True when every non-suppressed top-level node is additive and shapes nothing beyond its
-/// own geometry — the condition under which one object per node reconstructs the same solid
-/// as the union. Suppressed nodes are skipped by the exporter either way, so they don't
-/// disqualify.
-fn volumes_ok(nodes: &[fieldsmith_doc::Node]) -> bool {
-    nodes.iter().all(|n| {
-        n.suppressed
-            || (n.op == Op::Add
-                && n.blend == 0.0
-                && match &n.kind {
-                    NodeKind::Group { modifiers, .. } => modifiers.is_empty(),
-                    _ => true,
-                })
-    })
 }
 
 /// Class counts and the achieved design-density range of the graded result (min-wall

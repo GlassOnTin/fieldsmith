@@ -16,9 +16,13 @@
 //!    0.2.0 / fenics-rs 0.1.0` at pin time), so a version bump breaks the golden — the
 //!    named, never silent, change. Re-bless with `FIELDSMITH_BLESS=1` and record the
 //!    bump; the report below then names the old and new identity.
-//! 4. The MCP column (same tool, same result, same document) is the second half of the
-//!    V22 case: the stdio server is M15 slice 2 and its same-result assertion lands
-//!    with it. Named as pending here so the gap is contract, not accident.
+//! 4. The MCP column (same tool, same result, same document) is measured in
+//!    `v22_mcp_same_result_column` against THESE golden lines: the tool-reachable cases
+//!    re-run through `fieldsmith_mcp::Server::handle` and canon-byte-compare, the
+//!    bad-tolerance route also reproduces the pinned wire bytes, an edited document
+//!    solves to the same envelope through the tools and the one-shot, and the export
+//!    tool's facts agree with the export core field-by-field. Report:
+//!    `docs/verification/V22-MCP.md`.
 //!
 //! Named gaps (stated because this test cannot measure them):
 //! - Cross-machine float bit-identity is NOT promised (GOAL section E): the 6-digit
@@ -509,12 +513,14 @@ fn v22_api_golden_contract() {
         ),
     );
     rep.section(
-        "MCP same-result — pending slice 2",
-        "The V22 case's second column (the MCP tools return the same result for the same \
-         document) is named OPEN: the stdio server is M15 slice 2. This report and the \
-         golden envelope are its reference; when the server lands, its tools' answers \
-         are compared against these canon lines and this section is replaced with the \
-         measured claim.",
+        "MCP same-result — measured in V22-MCP",
+        "The second column exists as its own report (`docs/verification/V22-MCP.md`, test \
+         `v22_mcp_same_result_column`): the tool-reachable golden cases re-run through \
+         `fieldsmith_mcp::Server::handle` canon-compare against THIS fixture; the \
+         bad-tolerance route also reproduces the exact wire bytes pinned below; an \
+         edited document (region, support and load added through the tools) solves to \
+         the same envelope through the tool and the one-shot; the export tool's facts \
+         agree with the export core field-by-field.",
     );
     rep.section(
         "Named gaps",
@@ -557,6 +563,309 @@ fn v22_api_golden_contract() {
         1e-6,
     ));
     rep.finish();
+}
+
+/// The MCP column: drive `fieldsmith_mcp::Server::handle` — the exact code path the
+/// stdio binary runs, framing aside (framing is the server crate's 14 protocol tests) —
+/// and hold the tools to the golden lines above: the tool-reachable golden cases
+/// canon-byte-compare, the bad-tolerance route also reproduces the pinned wire bytes,
+/// an edited document solves to the same envelope through the tool and the one-shot,
+/// and the export tool's facts equal the export core's numbers field-by-field.
+#[test]
+fn v22_mcp_same_result_column() {
+    use fieldsmith_api::{export as api_export, question};
+    use fieldsmith_doc::fsm;
+    use fieldsmith_mcp::Server;
+
+    // Same store discipline as the golden test: a fresh, never-written path, so the
+    // estimators read nothing (seeding is a read-only look).
+    let seed_path = std::env::temp_dir().join("fsm-v22-mcp-seed.jsonl");
+    let _ = std::fs::remove_file(&seed_path);
+    std::env::set_var("FIELDSMITH_COSTS_STORE", &seed_path);
+
+    // One tool call through the real handler: Ok carries the parsed payload, Err the
+    // isError message text (which, for solve failures, IS the engine envelope).
+    fn tool(srv: &mut Server, id: u32, name: &str, args: Value) -> Result<Value, String> {
+        let line = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": args},
+        })
+        .to_string();
+        let reply: Value = serde_json::from_str(
+            &srv.handle(&line).expect("a tools/call always gets a reply"),
+        )
+        .expect("reply line parses");
+        let text = reply["result"]["content"][0]["text"]
+            .as_str()
+            .expect("result text")
+            .to_string();
+        if reply["result"]["isError"].as_bool().unwrap_or(false) {
+            Err(text)
+        } else {
+            Ok(serde_json::from_str(&text).expect("tool payload parses"))
+        }
+    }
+
+    // The golden lines this column compares against (the same fixture the golden test
+    // blesses; the wire line lives under its own id, `err-bad-tolerance-wire`).
+    let fixture = fixture_path();
+    let text = std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — bless first with FIELDSMITH_BLESS=1 cargo test -p fieldsmith-verify --test v22_api",
+            fixture.display()
+        )
+    });
+    let mut golden: std::collections::BTreeMap<String, (Option<Value>, Option<Value>)> =
+        std::collections::BTreeMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Value = serde_json::from_str(line).expect("golden line parses");
+        golden.insert(
+            v["id"].as_str().expect("golden id").to_string(),
+            (v.get("canon").cloned(), v.get("wire").cloned()),
+        );
+    }
+
+    // Leg A — the golden cases, re-run through the tool surface of one session.
+    let mut srv = Server::new();
+    let opened = tool(&mut srv, 1, "open", json!({"doc": DOC})).expect("open through the tool");
+    assert_eq!(opened["name"], "Bracket");
+
+    let mut ties = 0.0f64;
+    let mut wire_ties = 0.0f64;
+    for (i, c) in cases().iter().enumerate() {
+        // err-apiv-99 and err-both-docs are request-shape errors the server cannot
+        // emit: it builds every request with the constant APIV and `open` enforces
+        // exactly one document form. Pinned on the API surface by the golden; named in
+        // the report gap list here.
+        if c.id == "err-apiv-99" || c.id == "err-both-docs" {
+            continue;
+        }
+        let spec = c.request["question"].clone();
+        let drops: Vec<&str> = BASE_DROPS
+            .iter()
+            .chain(c.extra_drops.iter())
+            .copied()
+            .collect();
+        match tool(&mut srv, 100 + i as u32, "solve", spec) {
+            Ok(env) => {
+                assert!(
+                    !c.id.starts_with("err-"),
+                    "{} came back as a tool Ok — the isError contract moved",
+                    c.id
+                );
+                assert_semantics(c.id, &env);
+                ties += canon_tie(&golden, c.id, &env, &drops);
+            }
+            Err(text) => {
+                let env: Value =
+                    serde_json::from_str(&text).expect("the error message IS the envelope");
+                assert_semantics(c.id, &env);
+                ties += canon_tie(&golden, c.id, &env, &drops);
+                // For the validation error, the tool message passes the body through
+                // unchanged — the pinned wire bytes must reproduce exactly.
+                let (wire_id, want) = ("err-bad-tolerance-wire", c.id == "err-bad-tolerance");
+                if want {
+                    let (_, wire) = golden.get(wire_id).expect("golden wire line");
+                    let wire = wire.as_ref().expect("wire member").as_str().expect("wire string");
+                    assert_eq!(
+                        text, wire,
+                        "the MCP route must reproduce the pinned wire bytes for {}",
+                        c.id
+                    );
+                    wire_ties += 1.0;
+                }
+            }
+        }
+    }
+
+    // Leg B — the same edited document through both routes: the tool's `doc_text`
+    // output feeds the one-shot request, so the two envelopes differ only in timings.
+    let mut srv2 = Server::new();
+    tool(&mut srv2, 200, "open", json!({"doc": DOC})).expect("open");
+    let added = tool(&mut srv2, 201, "add_region",
+        json!({"selectors": [{"shape": "base", "face": "nz"}]}))
+        .expect("add_region");
+    let rid = added["added"].as_str().unwrap().to_string();
+    tool(&mut srv2, 202, "add_support",
+        json!({"region": rid.clone(), "fixed": [true, true, true]}))
+        .expect("add_support");
+    tool(&mut srv2, 203, "add_load",
+        json!({"region": rid, "kind": {"type": "force", "vector": [0, 0, -100]}}))
+        .expect("add_load");
+    let printed = tool(&mut srv2, 204, "doc_text", json!({})).expect("doc_text");
+    let edited = printed["text"].as_str().expect("doc text").to_string();
+    let spec = json!({"kind": "solve", "dofs": 30000});
+    let via_tool = tool(&mut srv2, 205, "solve", spec.clone()).expect("edited solve through the tool");
+    assert_eq!(via_tool["status"], "ok");
+    assert_eq!(
+        via_tool["single"]["provenance"]["dofs"], 48822,
+        "supports and loads do not change the mesh — the provenance ties solve-30k"
+    );
+    let reply = fieldsmith_api::respond(
+        &json!({"apiv": 1, "doc": edited, "question": spec}).to_string(),
+    );
+    assert!(
+        !reply.is_error,
+        "the one-shot accepts the tool's own doc_text output: {}",
+        reply.body
+    );
+    let via_api: Value = serde_json::from_str(&reply.body).expect("envelope parses");
+    assert_eq!(via_api["status"], "ok");
+    let drops: Vec<&str> = BASE_DROPS.to_vec();
+    assert_eq!(
+        serde_json::to_string(&canon(&via_tool, &drops)).unwrap(),
+        serde_json::to_string(&canon(&via_api, &drops)).unwrap(),
+        "tool and one-shot answers over the same edited document must canon-tie"
+    );
+    let edited_ties = 1.0f64;
+
+    // Leg C — the export tool's facts equal the export core's numbers field-by-field
+    // (timing leaves excluded; exact same-process floats, so no quantization needed).
+    let mut srv3 = Server::new();
+    tool(&mut srv3, 300, "open", json!({"doc": DOC})).expect("open");
+    let facts = tool(&mut srv3, 301, "export", json!({"h": 0.5})).expect("export through the tool");
+    assert!(
+        facts.get("stl_b64").is_none() && facts.get("mf_b64").is_none(),
+        "no artifacts requested, no artifact members returned"
+    );
+    let doc = fsm::parse(DOC).expect("fixture parses");
+    let opts = api_export::ExportOpts {
+        h: 0.5,
+        adaptive: false,
+        solid_only: false,
+        stl: false,
+        mf: false,
+    };
+    let ex = api_export::export(&doc, &opts, question::clock).expect("the export core");
+    assert_eq!(facts["name"], "Bracket");
+    assert_eq!(facts["h"].as_f64().unwrap(), ex.h);
+    assert_eq!(facts["adaptive"].as_bool().unwrap(), ex.adaptive);
+    assert_eq!(facts["verts"].as_f64().unwrap(), ex.verts as f64);
+    assert_eq!(facts["tris"].as_f64().unwrap(), ex.tris as f64);
+    assert_eq!(facts["mesh_volume"].as_f64().unwrap(), ex.mesh_volume);
+    assert_eq!(facts["field_volume"].as_f64().unwrap(), ex.reference.volume);
+    assert_eq!(facts["field_volume_error"].as_f64().unwrap(), ex.reference.error);
+    assert_eq!(facts["delta_percent"].as_f64().unwrap(), ex.delta_percent);
+    for (k, v) in [
+        ("open_edges", ex.defects.open_edges),
+        ("non_manifold_edges", ex.defects.non_manifold_edges),
+        ("orientation_defects", ex.defects.orientation_defects),
+        ("degenerate_triangles", ex.defects.degenerate_triangles),
+        ("self_intersections", ex.defects.self_intersections),
+    ] {
+        assert_eq!(
+            facts["defects"][k].as_f64().unwrap(),
+            v as f64,
+            "defects.{k}"
+        );
+    }
+    let export_ties = 1.0f64;
+
+    let mut rep = Report::new(
+        "V22-MCP",
+        "MCP same-result column — the tools held to the V22 golden lines",
+    );
+    rep.section(
+        "How the column is measured",
+        "`fieldsmith_mcp::Server::handle` — the exact code path the stdio binary runs — \
+         is driven in-process (framing is the server crate's protocol-suite business). \
+         The same golden fixture `v22_api_golden_contract` blesses is the reference. \
+         Store discipline is identical: a fresh, never-written costs path, so the \
+         estimators read nothing.",
+    );
+    rep.section(
+        "Measured ties",
+        format!(
+            "| Leg | Claim |\n| :-- | :-- |\n\
+             | A — golden canon | {ties} of 7 tool-reachable cases re-run through the \
+             tools (open once, then solve) canon-byte-compare against their golden \
+             lines: ladder-ok, ladder-met, ladder-refusal, ladder-budget, solve-30k, \
+             modes-30k, err-bad-tolerance |\n\
+             | A — wire bytes | {wire_ties} of 1: the bad-tolerance tool message passes \
+             the envelope body through unchanged and byte-equals the pinned wire line |\n\
+             | B — edited document | {edited_ties} of 1: region + support + load added \
+             through the tools; the tool's `doc_text` output feeds a one-shot request; \
+             tool answer and one-shot answer canon-tie; provenance DOF pins 48822 |\n\
+             | C — export | {export_ties} of 1: tool facts equal `fieldsmith_api::export` \
+             field-by-field (h, verts, tris, volumes, delta_percent, five defect \
+             counts), timing leaves excluded |\n\n\
+             The 48822 provenance DOF is the same mesh solve-30k pins: extra supports \
+             and loads do not change the mesh.",
+            ties = ties,
+            wire_ties = wire_ties,
+            edited_ties = edited_ties,
+            export_ties = export_ties,
+        ),
+    );
+    rep.section(
+        "Construction vs measurement",
+        "By construction: the solve tool builds the same `{apiv, doc|docz, question}` \
+         request and calls `fieldsmith_api::respond`; the export tool calls \
+         `fieldsmith_api::export` with the parsed ExportOpts. Measured anyway, every \
+         run: the canon and wire ties above, which would fail if either surface's \
+         question parsing, document printing, or envelope handling diverged. The \
+         doc_text output being accepted unchanged by the one-shot pins the print's \
+         round-trip fidelity on the edited document.",
+    );
+    rep.section(
+        "Named gaps",
+        "err-apiv-99 and err-both-docs are request-shape errors the server cannot emit \
+         (it writes the constant APIV into every request and `open` enforces exactly one \
+         document form) — they are pinned on the API surface by the golden test and on \
+         the tool surface by the server crate's protocol tests. Cross-machine float \
+         caveats carry over from the golden test's canon reasoning. The two tests set \
+         the costs-store env var concurrently (both to fresh empty paths); seeding is \
+         read-only, so neither run can see the other's writes.",
+    );
+    rep.check(Check::absolute(
+        "Golden cases canon-tie through the MCP tool surface",
+        7.0,
+        ties,
+        "cases",
+        0.0,
+    ));
+    rep.check(Check::absolute(
+        "Wire bytes reproduce through the MCP route (err-bad-tolerance)",
+        1.0,
+        wire_ties,
+        "line",
+        0.0,
+    ));
+    rep.check(Check::absolute(
+        "Edited-document tie (tool solve vs one-shot respond on the tool's doc_text)",
+        1.0,
+        edited_ties,
+        "tie",
+        0.0,
+    ));
+    rep.check(Check::absolute(
+        "Export facts tie the tool to the export core (field-by-field)",
+        1.0,
+        export_ties,
+        "tie",
+        0.0,
+    ));
+    rep.finish();
+}
+
+/// Canon-compare one envelope against its golden line; returns 1.0 on a tie (the call
+/// panics otherwise, so a return value is always 1.0).
+fn canon_tie(
+    golden: &std::collections::BTreeMap<String, (Option<Value>, Option<Value>)>,
+    id: &str,
+    env: &Value,
+    drops: &[&str],
+) -> f64 {
+    let got = serde_json::to_string(&canon(env, drops)).unwrap();
+    let (want, _) = golden
+        .get(id)
+        .unwrap_or_else(|| panic!("golden fixture lacks a canon line for {id}"));
+    let want = serde_json::to_string(want.as_ref().expect("canon member present")).unwrap();
+    assert_eq!(
+        got, want,
+        "case {id}: the MCP route's canon drifted from the pinned golden"
+    );
+    1.0
 }
 
 fn status_of(r: &Value) -> &'static str {

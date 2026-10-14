@@ -330,6 +330,7 @@ dependencies = [
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
+ "fieldsmith-mesh",
  "serde",
  "serde_json",
 ]
@@ -383,6 +384,13 @@ dependencies = [
 [[package]]
 name = "fieldsmith-mcp"
 version = "0.2.0"
+dependencies = [
+ "fieldsmith-api",
+ "fieldsmith-core",
+ "fieldsmith-doc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "fieldsmith-mesh"
@@ -416,6 +424,7 @@ dependencies = [
  "fieldsmith-core",
  "fieldsmith-doc",
  "fieldsmith-field",
+ "fieldsmith-mcp",
  "fieldsmith-mesh",
  "fieldsmith-solve",
  "miniz_oxide",

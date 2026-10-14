@@ -201,7 +201,7 @@ pub fn body_shader(doc_json: &str) -> Result<String, JsValue> {
                 leaves,
                 meshes: g.meshes.iter().map(mesh_tex_out).collect(),
                 core: true,
-                grid: (fx.param.data.len() > 1).then(|| ParamGridOut {
+                grid: (fx.param.data.len() > 1).then_some(ParamGridOut {
                     dims: fx.param.dims,
                     origin: fx.param.origin,
                     spacing: fx.param.spacing,

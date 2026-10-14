@@ -61,7 +61,7 @@ fn api_ok_solves_and_exits_zero() {
     assert!(err.is_empty(), "clean run prints nothing on stderr: {err}");
     assert_eq!(v["status"], "ok");
     assert_eq!(v["apiv"], 1);
-    assert_eq!(v["engine"].as_str().unwrap().contains("fieldsmith"), true);
+    assert!(v["engine"].as_str().unwrap().contains("fieldsmith"));
     assert_eq!(v["single"]["provenance"]["dofs"], 48822);
     assert_eq!(v["name"], "Bracket");
     std::fs::remove_dir_all(store.parent().unwrap()).ok();

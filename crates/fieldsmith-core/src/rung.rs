@@ -197,7 +197,7 @@ impl CostFit {
         let my = pts.iter().map(|p| p.1).sum::<f64>() / n;
         let num: f64 = pts.iter().map(|&(x, y)| (x - mx) * (y - my)).sum();
         let den: f64 = pts.iter().map(|&(x, _)| (x - mx) * (x - mx)).sum();
-        if !(den > 1e-12) {
+        if den <= 1e-12 {
             return None; // identical DOF counts — no slope knowable
         }
         let exponent = num / den;
@@ -350,9 +350,9 @@ load push tip force=(0, 0, -100)
     #[test]
     fn cost_fit_recovers_a_known_power_law() {
         // wall = 20 ms · dofs^1.35
-        let exact: Vec<(f64, f64)> = [30_000.0, 150_000.0, 750_000.0]
+        let exact: Vec<(f64, f64)> = [30_000.0f64, 150_000.0, 750_000.0]
             .iter()
-            .map(|&d| (d, 20.0 * (d as f64).powf(1.35)))
+            .map(|&d| (d, 20.0 * d.powf(1.35)))
             .collect();
         let f = CostFit::of(&exact).expect("three clean points fit");
         assert!((f.exponent - 1.35).abs() < 1e-9);

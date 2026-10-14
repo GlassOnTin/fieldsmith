@@ -69,7 +69,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, String> {
                 if bad {
                     return Err("base64: non-canonical trailing bits".into());
                 }
-                out.truncate(len - pad as usize);
+                out.truncate(len - pad);
             }
             g = 0;
         }

@@ -365,23 +365,24 @@ mod tests {
     fn tpms_is_periodic_when_sampled_far_from_the_origin() {
         for fam in [Family::Gyroid, Family::Primitive, Family::Diamond] {
             for a in [5.0, 6.0] {
-                for (off, shift) in [([70.3, -33.7, 21.9], [-60.0, 30.0, -30.0])] {
-                    let base = tpms(fam, a, off).v;
-                    let moved = tpms(
-                        fam,
-                        a,
-                        [off[0] - shift[0], off[1] - shift[1], off[2] - shift[2]],
-                    )
-                    .v;
-                    assert!(
-                        shift.iter().all(|&d| d % a == 0.0),
-                        "shift {shift:?} must be whole cells of {a}"
-                    );
-                    assert!(
-                        (base - moved).abs() < 1e-9,
-                        "{fam:?} a {a}: {off:?} gives {base}, folded shift gives {moved}"
-                    );
-                }
+                // One (offset, shift) pair: far-from-origin sampling with a whole-cell
+                // shift, to f64 precision.
+                let (off, shift) = ([70.3, -33.7, 21.9], [-60.0, 30.0, -30.0]);
+                let base = tpms(fam, a, off).v;
+                let moved = tpms(
+                    fam,
+                    a,
+                    [off[0] - shift[0], off[1] - shift[1], off[2] - shift[2]],
+                )
+                .v;
+                assert!(
+                    shift.iter().all(|&d| d % a == 0.0),
+                    "shift {shift:?} must be whole cells of {a}"
+                );
+                assert!(
+                    (base - moved).abs() < 1e-9,
+                    "{fam:?} a {a}: {off:?} gives {base}, folded shift gives {moved}"
+                );
             }
         }
     }

@@ -382,12 +382,10 @@ pub fn region_facets(
     let region_rules: Vec<Result<Vec<Rule>, SetupError>> =
         doc.regions.iter().map(|r| rules_for(doc, &r.id)).collect();
     let mut claimed_elsewhere = vec![false; facets.len()];
-    for result in &region_rules {
-        if let Ok(shapes) = result {
-            for (i, f) in facets.iter().enumerate() {
-                if !claimed_elsewhere[i] && chain_hit(shapes, f, mesh, tol_corner, tol_centroid) {
-                    claimed_elsewhere[i] = true;
-                }
+    for shapes in region_rules.iter().flatten() {
+        for (i, f) in facets.iter().enumerate() {
+            if !claimed_elsewhere[i] && chain_hit(shapes, f, mesh, tol_corner, tol_centroid) {
+                claimed_elsewhere[i] = true;
             }
         }
     }
@@ -419,7 +417,7 @@ pub fn region_facets(
                 if cn[0] * n[0] + cn[1] * n[1] + cn[2] * n[2] < 0.7 {
                     continue;
                 }
-                if best.map_or(true, |(_, bg)| gap < bg) {
+                if best.is_none_or(|(_, bg)| gap < bg) {
                     best = Some((ri, gap));
                 }
             }

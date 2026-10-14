@@ -157,7 +157,9 @@ const CLI_ROWS: [ShipRow; 10] = [
 /// achieved cells; the two OnePlus 13 rows are walls read in-page from the running app's
 /// analysis state (the worker's own per-level measurement, no document-UI overhead) and
 /// carry the achieved DOF/element three runs agree on.
-const WASM_ROWS: [(&str, usize, usize, f64, Option<usize>, Option<usize>); 10] = [
+type WasmRow = (&'static str, usize, usize, f64, Option<usize>, Option<usize>);
+
+const WASM_ROWS: [WasmRow; 10] = [
     (CPU_REF, 30_000, 0, 1352.0, None, None),
     (CPU_REF, 150_000, 1, 6025.0, None, None),
     (CPU_REF, 30_000, 0, 1678.0, None, None),
