@@ -73,13 +73,22 @@ volume's material label travels with the 3MF export for the slicer (validation r
 unknown label ids as errors and mixed labels as a warning). STEP import is CLI-only: a
 STEP file is tessellated to a mesh, and there is no B-rep editing. Per-part colours are
 render colours, in the app and on the 3MF export; neither affects what is printed or what
-the solve assumes. No topology optimisation, no thermal or CFD analysis, per-node material labels are not
+the solve assumes. No topology optimisation, no CFD analysis, per-node material labels are not
 adopted on 3MF import (another tool's ids are not fieldsmith material ids), no g-code
 generation, no mobile layout. Modal analysis reports the first natural frequencies of
 the same linear small-strain model; it takes the same supports and ignores loads. The
 shapes are computed but not visualised; the in-browser eigensolve completed without a
 memory error at a 190 k-DOF rung, and larger meshes may fail at the wasm memory limit
-with a named error. Rung-to-rung changes on the refinement ladder are estimates, not
+with a named error. Thermal analysis is steady conduction with fixed temperatures on
+labelled regions: the region's facet nodes take the stated value, everything else is
+insulated, and each thermal case then expands the part by α·(T − tref), the reference
+being the solve statement's tref (20 °C when unstated). With one isotropic conductivity
+the value of k drops out of the steady solution, so there is no conductivity property to
+set. Materials need a sourced thermal expansion coefficient for thermal cases, which
+validation refuses without one (the web setup lens has no editor for a custom material's
+`a=` value, so custom materials state it through the `.fsm` statement); convection,
+radiation, transient heat and per-region conductivity are not modelled. The graded fill re-solves mechanical cases only, so the
+fill lens has no temperature field. Rung-to-rung changes on the refinement ladder are estimates, not
 bounds: on the V1 cantilever the ratio of remaining error to change spans 13× between
 regimes (V17), and the wall-time estimator reports its own residual instead of none
 (V18). One load

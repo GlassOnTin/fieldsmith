@@ -86,3 +86,23 @@
 # identical in all three runs.
 1,2026-10,wasm,fieldsmith wasm,SM8750,8,15,0,30000,48822,9588,,1270,,
 1,2026-10,wasm,fieldsmith wasm,SM8750,8,15,1,150000,190440,40643,,7523,,
+
+# ---- thermal-budget rows 2026-10-14, same engine string (fenics-rs unchanged at 0.1.0), examples/bracket-thermal.fsm, rungs 30000,150000 (M14 thermal leg vs the 2026-10-13 static comparator) ----
+# The document is bracket geometry plus two Dirichlet temperature regions (mount 80 °C,
+# pin 20 °C, solve tref=20) — same 5 field leaves, one mechanical + one thermal case.
+# wall_ms here is the M14 superset of V17's mesh+solve: mesh + static solve + thermal
+# legs, the three banner components ("Mesh X + solve Y + thermal Z") being disjoint and
+# summing to the row. Third-run convention as before; the components:
+#   referee: coarse 23+212+216 = 451, refined 41+1186+1245 = 2472
+#   N100:    coarse 49+515+528 = 1092, refined 86+2547+2723 = 5356
+# Budget row (thermal leg ≤ 2× the v0.3 refined static wall, 1164.928266 / 2642.862383 ms):
+# referee 1245 = 1.07×, N100 2723 = 1.03× — both inside the target. The N100 binary is
+# the referee-built baseline-x86_64 shipped over ssh; its mesh+static part (86+2547 =
+# 2633 ms) reproduces the 2026-10-13 row within 0.4 %, so the thermal run rides the
+# measured engine behaviour. Change columns are empty: no envelope deltas were measured
+# for the thermal milestone (the thermal case sits in the envelope with the mechanical
+# one; the v0.3 change rows measured mechanical-only docs).
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,0,30000,48822,9588,5,451,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,AMD Ryzen 9 9950X 16-Core Processor,32,249,1,150000,190440,40643,5,2472,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,48822,9588,5,1092,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,190440,40643,5,5356,,

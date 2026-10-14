@@ -18,7 +18,7 @@ use fieldsmith_core::{
 use fieldsmith_doc::{fsm, Document, NodeKind, Op};
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
 use fieldsmith_field::{expr, glsl, volume};
-use fieldsmith_mesh::export::{surface, TriMesh, Volume3mf, write_3mf_volumes};
+use fieldsmith_mesh::export::{surface, write_3mf_volumes, TriMesh, Volume3mf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -178,13 +178,17 @@ fn run(args: &[String]) -> Result<(), String> {
     match cmd {
         "check" => {
             let problems = doc.validate();
+            let thermal_cases: std::collections::BTreeSet<&str> =
+                doc.temperatures.iter().map(|t| t.case.as_str()).collect();
             println!(
-                "{}: {} shapes, {} regions, {} supports, {} loads, material {}",
+                "{}: {} shapes, {} regions, {} supports, {} loads, {} temperatures in {} case(s), material {}",
                 doc.name,
                 doc.node_ids().len(),
                 doc.regions.len(),
                 doc.supports.len(),
                 doc.loads.len(),
+                doc.temperatures.len(),
+                thermal_cases.len(),
                 doc.material
             );
             for n in &doc.root {
@@ -292,8 +296,18 @@ fn run(args: &[String]) -> Result<(), String> {
                 println!("## solve report — {}\n", doc.name);
                 println!(
                     "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, \
-                     solve {:.0} ms, {} iterations. Peaks are element-centroid von Mises.",
-                    p.element_size, p.elements, p.dofs, p.mesh_ms, p.solve_ms, p.iterations
+                     solve {:.0} ms, {} iterations{}. Peaks are element-centroid von Mises.",
+                    p.element_size,
+                    p.elements,
+                    p.dofs,
+                    p.mesh_ms,
+                    p.solve_ms,
+                    p.iterations,
+                    if p.thermal_ms > 0.0 {
+                        format!(", thermal {:.0} ms", p.thermal_ms)
+                    } else {
+                        String::new()
+                    }
                 );
                 println!(
                     "| case | peak von Mises (MPa) | max deflection (mm) |\n\
@@ -304,6 +318,29 @@ fn run(args: &[String]) -> Result<(), String> {
                         "| {} | {:.2} | {:.4} |",
                         c.name, c.max_vm_elem, c.max_displacement
                     );
+                }
+                for c in &a.cases {
+                    if let Some(r) = &c.conduction {
+                        // A thermal case always carries a nodal temperature field (the
+                        // conduction solution); guard anyway so a degenerate mesh, were
+                        // one to reach here, cannot print inf.
+                        match c.temperature.as_deref() {
+                            Some(t) if !t.is_empty() => {
+                                let lo = t.iter().cloned().fold(f64::INFINITY, f64::min);
+                                let hi = t.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                                println!(
+                                    "thermal case '{}': conduction {} iterations, nodal range {:.1}–{:.1} °C",
+                                    c.name, r.iterations, lo, hi
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "thermal case '{}': conduction {} iterations",
+                                    c.name, r.iterations
+                                );
+                            }
+                        }
+                    }
                 }
                 if let Some(m) = &a.modes {
                     println!("\n## modes (solve modes={})\n", m.frequencies.len());
@@ -319,13 +356,28 @@ fn run(args: &[String]) -> Result<(), String> {
                     doc.name, p.elements, p.dofs, p.element_size
                 );
                 println!(
-                    "mesh {:.0} ms, solve {:.0} ms, {} iterations, min dihedral {:.1}°",
-                    p.mesh_ms, p.solve_ms, p.iterations, p.quality.min_dihedral_deg
+                    "mesh {:.0} ms, solve {:.0} ms, {} iterations, min dihedral {:.1}°{}",
+                    p.mesh_ms,
+                    p.solve_ms,
+                    p.iterations,
+                    p.quality.min_dihedral_deg,
+                    if p.thermal_ms > 0.0 {
+                        format!(", thermal {:.0} ms", p.thermal_ms)
+                    } else {
+                        String::new()
+                    }
                 );
                 for c in &a.cases {
                     println!(
-                        "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm",
-                        c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement
+                        "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm{}",
+                        c.name,
+                        c.max_vm_elem,
+                        c.max_von_mises,
+                        c.max_displacement,
+                        c.conduction
+                            .as_ref()
+                            .map(|r| format!(", conduction {} iterations", r.iterations))
+                            .unwrap_or_default()
                     );
                 }
                 if let Some(m) = &a.modes {
@@ -969,7 +1021,8 @@ fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
 
     let mut decl = format!(
         "ladder: rungs {}",
-        rungs.iter()
+        rungs
+            .iter()
             .map(|r| r.to_string())
             .collect::<Vec<_>>()
             .join(" → ")
@@ -1072,10 +1125,7 @@ fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
 
     // Cost fit over the rungs actually run, then projections and stored history for
     // the rungs the answer did not buy.
-    let pts: Vec<(f64, f64)> = records
-        .iter()
-        .map(|r| (r.dofs as f64, r.wall_ms))
-        .collect();
+    let pts: Vec<(f64, f64)> = records.iter().map(|r| (r.dofs as f64, r.wall_ms)).collect();
     let fit = CostFit::of(&pts);
     if let Some(f) = fit {
         let r = match f.residual {
@@ -1127,7 +1177,10 @@ fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
         // records above already show the numbers; this is the answer to the question.
         let why = match &stop_reason {
             Some(r) => format!("{r};"),
-            None => format!("the schedule ran to its cap ({} DOF);", rungs.last().unwrap()),
+            None => format!(
+                "the schedule ran to its cap ({} DOF);",
+                rungs.last().unwrap()
+            ),
         };
         REFUSED.store(true, Ordering::Relaxed);
         match records.last().and_then(|r| r.change) {
@@ -1224,10 +1277,7 @@ fn estimate_for(
     store_rows: &[Row],
     machine: &store::Machine,
 ) -> Option<(f64, String)> {
-    let pts: Vec<(f64, f64)> = records
-        .iter()
-        .map(|r| (r.dofs as f64, r.wall_ms))
-        .collect();
+    let pts: Vec<(f64, f64)> = records.iter().map(|r| (r.dofs as f64, r.wall_ms)).collect();
     if let Some(f) = CostFit::of(&pts) {
         let res = match f.residual {
             Some(r) => format!("fit residual {:.0} %", 100.0 * r),
@@ -1278,20 +1328,14 @@ fn costs_cmd(args: &[String]) -> Result<(), String> {
     for r in run {
         println!("{}", r.csv());
     }
-    let pts: Vec<(f64, f64)> = run
-        .iter()
-        .map(|r| (r.dofs as f64, r.wall_ms))
-        .collect();
+    let pts: Vec<(f64, f64)> = run.iter().map(|r| (r.dofs as f64, r.wall_ms)).collect();
     match CostFit::of(&pts) {
         Some(f) => {
             let res = match f.residual {
                 Some(r) => format!("{:.0} %", 100.0 * r),
                 None => "unmeasured (two rungs)".into(),
             };
-            println!(
-                "cost fit: wall ∝ DOF^{:.2}, fit residual {res}",
-                f.exponent
-            );
+            println!("cost fit: wall ∝ DOF^{:.2}, fit residual {res}", f.exponent);
             println!(
                 "at a 5× refined rung ({} DOF): about {:.1} s",
                 run.last().unwrap_or(&rows[start]).dofs * 5,

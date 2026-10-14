@@ -91,17 +91,17 @@ community rows by `data/costs/` being present with provenance stated.
 - [x] V17 and V18 pass (below).
 
 ### B. First flow — steady heat into thermal expansion (M14 — evidence: docs/verification/V19.md, V20.md)
-- [ ] One-way coupled solve: steady linear conduction on the existing tet mesh;
+- [x] One-way coupled solve: steady linear conduction on the existing tet mesh;
       temperature regions carry fixed values placed on labelled faces; the temperature
       field then enters the elasticity solve as thermal strain from a stated reference
       temperature. Both fields render in the Results lens, temperature with a legend and
       units.
-- [ ] A temperature region is placed like a load (pick a face, set the value); `.fsm`
+- [x] A temperature region is placed like a load (pick a face, set the value); `.fsm`
       round-trips it losslessly with named validation errors.
-- [ ] Single isotropic material for the coupled solve; per-volume material laws are named
+- [x] Single isotropic material for the coupled solve; per-volume material laws are named
       for later, not attempted here.
-- [ ] V19 and V20 pass (three analytic cases below).
-- [ ] The thermal solve leg gets budget rows on the referee and on the N100 class
+- [x] V19 and V20 pass (three analytic cases below).
+- [x] The thermal solve leg gets budget rows on the referee and on the N100 class
       (below).
 
 Design (plan commit 2026-10-13): `temperature` statements carry fixed values on
@@ -203,7 +203,10 @@ Measured 2026-10-13 at M13 close:
 - Leg-time row: referee edit→coarse/refined 1352/6025 ms (Chrome), 1678/6494 ms (Firefox), e2e in-page 724/3005 ms — at or below the v0.3 rows, so record collection adds nothing on the referee. On the N100 the Chrome legs moved within the day (9-10 s / 23-25 s vs 4918/15064 this morning); an A/B run of the HEAD (v0.3) web code on the same wasm reproduces the slow numbers, the fresh-wasm rebuild lands the same place, and the same box's Firefox legs reproduce their morning walls — so the move is not the records and is confined to the Chrome path; the split between the old binary's bytes and that session's environment state is not closed (data/costs/costs.csv carries it). The three N100 Chrome rows now hold what the shipped binary measures. **Owner verdict pending on the N100 legs.**
 - Tolerance row: the declared 1 % deflection ladder ran 10.9 s end to end on the referee and named its refusal at the 750k cap (deflection change −4.1 %) — an honest answer under the named-refusal rule, but the budget could not buy the declaration. **Owner verdict pending on whether a refusal at the cap counts for this row.**
 - Residual row: 13.6 % (referee) / 18.8 % (N100), inside the ≤ 35 % target, bands recorded by V18.
-The M14–M16 rows are unmeasured until their milestones.
+The M15–M16 rows are unmeasured until their milestones.
+
+Measured 2026-10-14 at M14 close:
+- Thermal-leg row: bracket-thermal (mount 80 °C, pin 20 °C, tref 20), third run of three, wall = mesh + static solve + thermal (the banner's disjoint components). Referee refined thermal leg 1245 ms vs the v0.3 refined static row 1164.928266 ms = 1.07×; N100 refined thermal 2723 ms vs 2642.862383 ms = 1.03× — both inside the ≤ 2× target. The N100 binary is the referee-built baseline-x86_64 shipped over ssh; its mesh+static part reproduces the 2026-10-13 row within 0.4 %, so the thermal run rides the measured engine behaviour. Components and rows in data/costs/costs.csv.
 
 ---
 
