@@ -530,6 +530,74 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
     await page.locator('[data-testid="undo"]').click(); // leave the default band in place
   });
 
+  await step('Results lens: the temperature mode on a thermal doc', async () => {
+    // The graded re-solve is mechanical only (its cases are the mechanical cases; no
+    // thermal field exists at that mesh), so the lattice fill is dropped in the same
+    // transaction and every level then carries the nodal field. A single Dirichlet
+    // region on an all-insulated domain would give a uniform field, so the two hole
+    // regions take the two ends of the gradient, as in examples/bracket-thermal.fsm.
+    await page.evaluate(() => {
+      const F = window.fieldsmith;
+      F.store.transact('thermal render', (d) => {
+        d.fill = null;
+        d.solve.t_ref = 20;
+        d.temperatures.push({ id: 'hot', region: 'base_holes', celsius: 80, case: 'Thermal 1' });
+        d.temperatures.push({ id: 'cold', region: 'upright_hole', celsius: 20, case: 'Thermal 1' });
+      });
+    });
+    const solved = await runHas(
+      () => {
+        const a = window.fieldsmith.analysis.state;
+        return a.status === 'ready' && a.resultsFor === window.fieldsmith.store.docVersion && a.levels.length >= 1;
+      },
+      70000,
+    );
+    await page.locator('[data-lens="results"]').click();
+    await page.locator('[data-testid="results-mode"] button[data-value="temperature"]').click();
+    await page.waitForTimeout(300);
+    const out = await page.evaluate(() => {
+      const F = window.fieldsmith;
+      const lvl = F.analysis.state.levels[F.analysis.state.levels.length - 1];
+      const i = lvl.meta.cases.findIndex((c) => c.name === 'Thermal 1');
+      const t1 = i >= 0 ? (lvl.temperature[i] ?? null) : null;
+      let lo = Infinity, hi = -Infinity;
+      if (t1) for (const v of t1) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      return {
+        temps: F.store.doc.temperatures.length,
+        tref: F.store.doc.solve.t_ref,
+        i,
+        count: lvl.meta.cases.length,
+        othersNull: lvl.temperature.every((t, k) => t === null || k === i),
+        lo: t1 ? lo : NaN,
+        hi: t1 ? hi : NaN,
+        mode: F.ui.resultsMode,
+        captionEnvelope: document.body.innerText.includes('per-node max across thermal cases, nodal (°C)'),
+      };
+    });
+    const range = isNaN(out.lo) ? 'none' : `${out.lo.toFixed(1)}–${out.hi.toFixed(1)} °C`;
+    check(
+      'thermal doc solved: two temperature statements, nodal °C on the thermal case only',
+      solved && out.temps === 2 && out.tref === 20 && out.mode === 'temperature' && out.i >= 0 && out.othersNull,
+      `temps ${out.temps}, tref ${out.tref}, cases ${out.count}, Thermal 1 at index ${out.i}, mechanical slots null ${out.othersNull}`,
+    );
+    check(
+      'nodal field keeps the Dirichlet bounds with a real gradient',
+      Math.abs(out.lo - 20) < 0.01 && Math.abs(out.hi - 80) < 0.01 && out.hi - out.lo > 20,
+      `nodal range ${range}`,
+    );
+    check('the legend names the envelope read in °C', out.captionEnvelope, 'caption on screen');
+    await page.locator('[data-testid="results-case"] button', { hasText: 'Thermal 1' }).click();
+    const after = await page.evaluate(() => {
+      const F = window.fieldsmith;
+      return { ci: F.ui.resultsCase, caption: document.body.innerText.includes('temperature, nodal (°C)') };
+    });
+    check(
+      'thermal case selectable, caption narrows to the nodal read',
+      after.ci === out.i && after.caption,
+      `resultsCase ${after.ci}, caption 'temperature, nodal (°C)' shown ${after.caption}`,
+    );
+  });
+
   // ---- verdict ---------------------------------------------------------------------------
 
   const total = Date.now() - t0;

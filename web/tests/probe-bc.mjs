@@ -1,10 +1,11 @@
 // One-off probe for the GOAL.md B/C claims the bracket script does not cover:
 //   B: blended-face region pick, per-axis support, pressure load, second load case +
-//      envelope, custom material.
+//      envelope, custom material; the temperature mode and field on a thermal doc (M14).
 // The study is built through the UI exactly as in bracket.mjs (shapes, then the setup
 // lens). Phase results print as PASS/FAIL lines with evidence; a summary block at the end
-// mirrors it. Custom materials have no UI to add them, so that phase uses the store API
-// the inspector itself reads — the probe reports it that way rather than implying a UI text.
+// mirrors it. Custom materials and the temperature statement have no editor UI in this
+// study, so those phases use the store API the inspector itself reads — the probe reports
+// it that way rather than implying a UI text.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 
@@ -297,22 +298,24 @@ await step('load, pure -z', async () => {
 
 {
   const out = [];
-  for (const m of ['stress', 'safety', 'deflection', 'vectors']) {
+  for (const m of ['stress', 'safety', 'deflection', 'vectors', 'temperature']) {
     await page.locator(`[data-testid="results-mode"] button[data-value="${m}"]`).click();
     await page.waitForTimeout(400);
     const state = await page.evaluate(() => window.fieldsmith.ui.resultsMode);
     out.push(`${m}=${state === m ? 'ok' : 'unset'}`);
   }
+  // A non-thermal doc has no temperature field: the legend must say so, not show a ramp.
+  const noFieldCaption = await page.evaluate(() => document.body.innerText.includes('no temperature field in this run'));
   // The Deform × input scales the drawn deformation.
   const before = await page.evaluate(() => window.fieldsmith.ui.resultsScale);
   await setNum('results-scale', 12);
   const after = await page.evaluate(() => window.fieldsmith.ui.resultsScale);
   const errors = consoleErrors.length;
-  const ok = errors === 0 && out.every((s) => s.endsWith('=ok')) && after === 12 && before !== 12;
+  const ok = errors === 0 && out.every((s) => s.endsWith('=ok')) && after === 12 && before !== 12 && noFieldCaption;
   check(
-    'all four result modes + deformed-scale input switch without console errors',
+    'all five result modes + deformed-scale input switch without console errors',
     ok,
-    `${out.join(', ')}; deform × ${before} → ${after}; console errors ${errors}`,
+    `${out.join(', ')}; no-field caption shown ${noFieldCaption}; deform × ${before} → ${after}; console errors ${errors}`,
   );
   await setNum('results-scale', before);
 }
@@ -348,6 +351,69 @@ await step('load, pure -z', async () => {
     out.material === 'probe_mat' && Math.abs(out.yield - 21) < 1e-9 && lib.every((m) => out.ids.includes(m)) && out.ids.includes('probe_mat');
   check('custom material drives the solver, listed in the picker', ok, `doc.material '${out.material}', meta yield ${out.yield} MPa, picker ${out.ids.length} options`);
   check('the cited source string is user-visible', out.sourceShown, out.sourceShown ? "the inspector renders the material's source text" : 'source text not found in the page');
+}
+
+// ---- phase 6: the thermal field on a thermal doc (M14) ------------------------------------
+
+{
+  await page.locator('[data-lens="setup"]').click();
+  // petg carries the sheet's CTE; probe_mat carries none, so the library material returns
+  // before the temperature statement can land on a material without one.
+  await page.selectOption('[data-testid="material"]', 'petg');
+  await page.evaluate(() => {
+    const F = window.fieldsmith;
+    F.store.transact('probe thermal', (d) => {
+      // Two Dirichlet regions: a single heated patch on an all-insulated domain solves to
+      // a uniform field (the maximum principle), which cannot show a gradient.
+      const hot = d.regions.find((r) => r.id === 'shoulder');
+      const cold = d.regions.find((r) => r.id === 'base_holes');
+      if (!hot || !cold) throw new Error('missing region to host the temperature');
+      d.temperatures.push({ id: 'probe_hot', region: hot.id, celsius: 80, case: 'Thermal 1' });
+      d.temperatures.push({ id: 'probe_cold', region: cold.id, celsius: 20, case: 'Thermal 1' });
+      d.solve.t_ref = 20;
+    });
+  });
+  await page.keyboard.press('Escape'); // clear the selection
+  await waitReady('thermal probe');
+  // Phase 5 left the setup lens active; the mode chips live in the results panel.
+  await page.locator('[data-lens="results"]').click();
+  await page.locator('[data-testid="results-mode"] button[data-value="temperature"]').click();
+  const out = await page.evaluate(() => {
+    const F = window.fieldsmith;
+    const lvl = F.analysis.state.levels[F.analysis.state.levels.length - 1];
+    const i = lvl.meta.cases.findIndex((c) => c.name === 'Thermal 1');
+    const t1 = i >= 0 ? (lvl.temperature[i] ?? null) : null;
+    let lo = Infinity, hi = -Infinity;
+    if (t1) for (const v of t1) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    return {
+      mode: F.ui.resultsMode,
+      i,
+      count: lvl.meta.cases.length,
+      othersNull: lvl.temperature.every((t, k) => t === null || k === i),
+      lo: t1 ? lo : NaN,
+      hi: t1 ? hi : NaN,
+      captionEnvelope: document.body.innerText.includes('per-node max across thermal cases, nodal (°C)'),
+      caps: [...document.querySelectorAll('[data-testid="results-case"] button')].map((b) => b.textContent),
+    };
+  });
+  check(
+    'thermal doc: nodal °C packed only on the thermal case, Dirichlet bounds kept',
+    out.mode === 'temperature' && out.i >= 0 && out.othersNull
+      && Math.abs(out.lo - 20) < 0.01 && Math.abs(out.hi - 80) < 0.01 && out.hi - out.lo > 20,
+    `cases ${out.count}, Thermal 1 at index ${out.i}, mechanical slots null ${out.othersNull}, nodal range ${isNaN(out.lo) ? 'none' : `${out.lo.toFixed(1)}–${out.hi.toFixed(1)} °C`}`,
+  );
+  check('the legend names the envelope read in °C', out.captionEnvelope, 'caption on screen');
+  // The envelope's "across thermal cases" line must become the plain nodal read of Thermal 1.
+  await page.locator('[data-testid="results-case"] button', { hasText: 'Thermal 1' }).click();
+  const after = await page.evaluate(() => {
+    const F = window.fieldsmith;
+    return { ci: F.ui.resultsCase, caption: document.body.innerText.includes('temperature, nodal (°C)') };
+  });
+  check(
+    'thermal case selectable, caption narrows to the nodal read',
+    after.ci === out.i && after.caption,
+    `resultsCase ${after.ci}, caption 'temperature, nodal (°C)' shown ${after.caption}`,
+  );
 }
 
 // ---- summary ------------------------------------------------------------------------------
