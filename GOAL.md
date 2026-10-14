@@ -1,350 +1,182 @@
-# Fieldsmith — Goal (v0.4)
+# Fieldsmith — Goal (v0.5)
 
-**Open.** Drafted 2026-10-13 from the owner's agenda and the same-day VISION refresh
-(`18754c2`; the computed-leaves-the-desk and declared-question commitments live there).
-Milestones are declared, nothing measured yet. Each milestone enters execution through a
-reviewed plan, as M12 did; design detail lands there, not here. If a criterion turns out
-to be wrong, change this file in a reviewed commit; do not quietly skip it.
+**Open.** Drafted 2026-10-14 from the owner's direction in the v0.4-close conversation:
+the five leftover threads of the close, worked "each as a goal". The owner's standing
+criterion, stated the same day: this is a long-term project, and the quality bar is
+outcomes "better than all the rest put together". v0.4 closed at `295e80e` — every box
+ticked, the ladder green through V23, tagged `v0.4.0`. Milestones are declared; nothing
+measured yet. Each milestone enters execution through a reviewed plan, as previous
+goals did; design detail lands there, not here. If a criterion turns out to be wrong,
+change this file in a reviewed commit; do not quietly skip it.
 
-This file defines **what "done" means for v0.4**. It is deliberately concrete and testable.
-The [VISION](VISION.md) says *why*; this says *what.* The previous goal, with its close-out
-audit, is in git history at `0b92e1c` (v0.3: the CAD round-trip, M8–M12).
-
-The ranking follows the owner's criterion of 2026-10-13: does the change make a leading
+The v0.4 ranking question stays the ranking question: does the change make a leading
 commercial tool's capability available to everyone, freely — licence and hardware class
-both count as "freely". That is why v0.4 takes a flow rather than CAD-parity asks
-(grouping, sketch, section planes), which are named for later.
+both count as "freely". Two of these milestones pass it (the repo's own home, the
+ARM datapoint); three are foundations the owner ordered alongside it: two documented
+findings that were closed out instead of fixed, and one measurement that was never
+explained. Quality of foundations is the point of this goal, per the owner's bar.
 
 ---
 
 ## The goal in one sentence
 
-> The user declares what a good answer means — a tolerance to meet or a time to spend —
-> and Fieldsmith answers with the measured rungs, their cost, and the result itself; the
-> first packaged engineering flow (steady heat driving thermal expansion) puts a paid
-> simulation capability within reach of anyone with a browser and the repo; and when the
-> desk box is too small, the analysis runs on machines the user owns, driven through an
-> API agents and scripts can use.
+> Anyone can clone Fieldsmith, build it from the clone alone, and get the measured
+> answer; the measured answer exists on an architecture other than x86_64, on a machine
+> the user owns; and the three known imperfections carried out of v0.3/v0.4 — the
+> quarter-junction mesh finding, the graded-fill slicer-manifold boundary, the
+> unexplained N100 Chrome wall move — are each closed with evidence, whatever the
+> evidence turns out to say.
 
 ---
 
-## The reference task — "the declared question"
+## The reference task
 
-The acceptance test for v0.4, on the reference fixture ladder (provenance stated as in
-v0.3):
+The acceptance test for v0.5, provenance stated as in the previous goals:
 
-1. Open the bracket document; confirm the carried ladder still holds (V1–V16 in CI).
-2. Ask in **tolerance mode**: tip deflection to within a stated mm. The ladder refines
-   until the rung-to-rung change sits inside it; the report states the per-rung error
-   estimates, the time each rung took, the total, and the residual.
-3. Ask in **budget mode**: a stated time. The report states the rungs that budget bought
-   and the tolerance they imply, measured after the fact.
-4. Switch to the **thermal flow**: mounting face held at 20 °C, working face at 80 °C.
-   Solve conduction, then thermal expansion; read the thermal stress beside the
-   mechanical one. The temperature field renders with a legend and units.
-5. The desk box too small? Start a worker on another machine you own, enrol it by token,
-   re-run the same declaration. The report states the wall time, the cost at your own
-   rate, and the measured divergence from the local solve — not bit-identity.
-6. Sweep one parameter over a range, headless; the table carries each point's own box,
-   measured time and outputs; the Results lens shows the same table.
-7. Save as `.fsmz`, reload, re-solve: bit-identical on the same machine (the v0.3
-   criterion holds), and the rung records are part of what the Results view shows.
+1. `git clone` the repo from its remote on a fresh path; `cargo build`; run the pinned
+   golden api question; the answer is byte-stable at the pinned version (V24).
+2. On the phone the user already measured (SM8750, aarch64, OnePlus 13): the reference
+   ladder and the V23 five-point sweep through `fieldsmith api`. Walls, points/hour and
+   tracked fields measured; the tracked fields compared against the x86_64 literals
+   field by field — divergence measured, never promised (V25).
+3. V3's quarter model runs the same 5-row mesh study the half-plate passes, at the
+   half-plate's tolerances — or the mesher mechanism is named from its own output.
+4. The graded-fill reference document goes through headless PrusaSlicer at skin 1.2
+   with `manifold=yes` measured — or the manifold boundary is located on a skin/cell
+   grid and documented with the probe artifacts.
+5. The N100 Chrome split closes: both sides of the M13 move reproduced in one controlled
+   run set, so the "not closed" line in the M13 ledger is replaced by a named cause or
+   explicit falsifications.
 
-**Pass:** the machine-side legs of steps 2–7 are covered by V17–V23 plus the carried
-ladder (V1–V16, still in CI); the privacy leg by the capture artifacts named in V21; the
-community rows by `data/costs/` being present with provenance stated.
+**Pass:** V24 passes in CI; V25 is measured at its milestone with rows in
+`data/costs/costs.csv`; V3 and the slicer doc carry the new legs with tables; the N100
+appendix names its outcome.
 
 ---
 
 ## New acceptance criteria
 
-### A. Measured rungs and the declared question (M13 — evidence: docs/verification/V17.md, V18.md, `data/costs/`)
-- [x] Every refinement rung becomes a first-class record: solve wall time, element count,
-      and the error estimate taken from rung-to-rung change of the tracked quantities
-      (tip deflection, peak von Mises). Records stream into the web UI and print from the
-      CLI. Measured, not claimed: a headless replay asserts the records are the solver's
-      own — time deltas within the run timer's resolution, estimates equal to the
-      two-solve differences to floating-point roundoff.
-- [x] The Results view shows the rung table with provenance — engine, element type and
-      count, per-rung time and error estimate, load case — every entry with units and a
-      stated source.
-- [x] Declared-tolerance mode: the user states a tolerance on a tracked quantity; the
-      ladder stops when the measured rung-to-rung change sits inside it, and the report
-      states total time and the residual. A tolerance the stated budget cannot meet is
-      answered with a named refusal (the V15 load-plane-fit precedent) — never a
-      stretched answer.
-- [x] Declared-budget mode: state a time budget; the report states the rungs it buys and
-      the tolerance they imply, measured from the rung record after the fact.
-- [x] Cost estimates carry their own error: the fit over rungs ≤ k projects rung k+1,
-      and the report shows the fit residual next to the projection (for example
-      "about 4.7 min, fit residual 6 %"). Cost is time in this milestone; the worker
-      (M15) converts it with the user's own rate. Local rung history seeds the estimator
-      on the next run (machine-specific; the store is chosen at plan time).
-- [x] The community rows live in the repo: `data/costs/` carries a header stating every
-      field of a row, and seed rows derived from the current referee and N100 budget
-      baselines with their provenance stated. A CLI command prints the record row for
-      the last run — shape-only fields: DOF, element count, field-leaf count, CPU class,
-      cores, RAM, engine, wasm-or-CLI, rung, wall time, error where known; timestamps at
-      month level; no geometry, no names. The command is a redaction preview: it prints
-      exactly what would be contributed and writes nothing; contribution is the user
-      opening a pull request. There is no submit endpoint.
-- [x] V17 and V18 pass (below).
+### A. The repo's own home (M17 — evidence: docs/verification/V24.md)
+- [x] Annotated tag `v0.4.0` at the v0.4 close `295e80e`, honesty body in the v0.2.0
+      tag's format. (Done at drafting: the tag names what v0.4 measured and what it
+      did not verify.)
+- [ ] The build stops depending on an invisible sibling: fenics-rs becomes part of the
+      clone (working assumption: git submodule at its own rev, workspace paths repointed
+      in-repo; decided at the plan). Done when a fresh clone alone builds and
+      `fieldsmith api` answers the pinned golden question byte-stably.
+- [ ] A remote exists: private GitHub repos under the active gh account
+      (GlassOnTin — unilateral call; Haven sits under the GlassHaven name, transfer or
+      flip to public remains the owner's). A credentials scan of the tree (tokens, keys,
+      `.env`-type files, absolute paths that should not travel) runs before the first
+      push and its findings are stated, whatever they are.
+- [ ] `main` and the tags are pushed; a second fresh clone verifies; V24 passes.
 
-### B. First flow — steady heat into thermal expansion (M14 — evidence: docs/verification/V19.md, V20.md)
-- [x] One-way coupled solve: steady linear conduction on the existing tet mesh;
-      temperature regions carry fixed values placed on labelled faces; the temperature
-      field then enters the elasticity solve as thermal strain from a stated reference
-      temperature. Both fields render in the Results lens, temperature with a legend and
-      units.
-- [x] A temperature region is placed like a load (pick a face, set the value); `.fsm`
-      round-trips it losslessly with named validation errors.
-- [x] Single isotropic material for the coupled solve; per-volume material laws are named
-      for later, not attempted here.
-- [x] V19 and V20 pass (three analytic cases below).
-- [x] The thermal solve leg gets budget rows on the referee and on the N100 class
-      (below).
+### B. The architecture datapoint (M18 — evidence: docs/verification/V25.md)
+- [ ] `fieldsmith api` runs on a machine the user owns that is not x86_64: the OnePlus
+      13 (SM8750, aarch64) — hosted through Haven's Linux guest (proot) or termux, the
+      binary cross-built on the referee or built on-device; the route is chosen at plan
+      with the working assumption first (proot guest, statically linked aarch64 build
+      shipped to the phone).
+- [ ] The reference-tolerance ladder and the V23 five-point sweep are measured there:
+      per-leg walls, points/hour, tracked fields. The phone throttles and the guest has
+      no GPU — walls are recorded with their band, and the browser rows stay separate
+      from the api rows as on the N100.
+- [ ] Tracked fields are compared with the referee's literals field by field; the case
+      states, per field, equal-or-not with both numbers. The README's divergence-scope
+      line updates from "these hosts" when the datapoint lands.
+- [ ] Rows enter `data/costs/costs.csv` with provenance, hand-seeded as the other rows;
+      V18's embedded constants grow with the file in the same commit (the M16 pitfall:
+      the tie-in test's row count and constants must be extended, never weakened).
+- [ ] V25 is measured and recorded — a milestone case like the N100 legs, not a CI
+      case; its portable assertions (schema, row shape) assert in CI.
 
-Design (plan commit 2026-10-13): `temperature` statements carry fixed values on
-labelled regions like loads do (`temp=<°C>`, case default "Thermal 1"), and `solve
-tref=` states the reference temperature. Dirichlet on every P2 node of the region's
-facets; conflicting values on shared nodes are a named setup error. Steady conduction
-on the existing tet mesh with one material is conductivity-independent (∇·(k∇T)=0
-with constant k is Laplace), so no conductivity property enters v0.4 and unlabelled
-faces are insulated by the natural boundary condition; README names this scope. The
-material gains a single thermal-expansion coefficient (sourced; same honesty pattern
-as the ν entries). Each thermal case is a conduction solve (scalar two-level PCG
-beside the elastic one) plus an elastic solve driven by the thermal load —
-f = (3λ+2μ)·α·∫ΔT·∇φ dV, degree-3-exact quadrature; stress recovery subtracts
-(3λ+2μ)·α·ΔT·I. Thermal cases run as their own results beside the mechanical ones;
-a case name claimed by both a load and a temperature is a named setup error (mixed
-cases named for later). V19(a) uses three single-component supports on the faces
-through the origin: the exact free-expansion solution u = αΔT·(x,y,z) satisfies
-them and lies in the P2 space, so the discrete stress must sit at roundoff.
-V19(b) probed mid-length (Saint-Venant end effects); V20 takes the Lamé-class
-generalized-plane-strain cylinder solution with the free-end force balance.
+### C. The quarter junction (M19 — evidence: docs/verification/V3.md, extended)
+- [ ] The mechanism is diagnosed from the mesher's own output before any fix: re-run
+      the quarter model, observe where the cut face meets the hole's tangent, name the
+      defect (element quality, node duplication, boundary-condition placement) with
+      numbers from the mesh, not a theory paragraph.
+- [ ] A fix is attempted and tested: the quarter model passes the 5-row mesh study at
+      the half-plate's recorded tolerances, tables in V3.md measured per row.
+- [ ] If a fix does not land, this file changes in a reviewed commit recording why and
+      what the standing bound is — but the attempted fix and its evidence must exist
+      before the box may change. A documented-deferral line can no longer tick or
+      replace this box; that is the delta this milestone is buying.
 
-### C. The connection — API, MCP, and the worker you own (M15 — evidence: docs/verification/V21.md, V22.md)
-- [x] A versioned, headless JSON API over the verified crates: document and question in
-      — tolerance mode, budget mode, sweep mode — result out with provenance, rung
-      records and measurements. A contract case pins the schema; version bumps are named
-      changes, not silent ones.
-- [x] An MCP server over that API, running as a local process on the user's machine:
-      typed tools to open and inspect a document, place supports, loads and temperatures,
-      solve to a declaration, export. Nothing hosted; no accounts.
-- [x] `fieldsmith worker` (working name) — the worker on machines the user owns:
-      enrols once by token to a session host started on a machine the user owns; connects
-      outbound only; runs solve jobs with the same verified crates; artifacts stay in the
-      directory the operator states. The session host binds only where the user says
-      (default loopback). Reaching a worker across networks is the user's own path
-      (Tailscale/WireGuard/SSH class); the browser-attached session host is named for
-      later, and this milestone's sessions are the CLI/API ones.
-- [x] Verified, not promised: session traffic captured during a full run and scanned for
-      plaintext model or field bytes; the worker's artifact directory scanned afterwards;
-      the same `.fsmz` re-solved locally and on the worker with the divergence measured
-      and reported. Cross-machine bit-identity is not promised; the divergence numbers
-      are stated in the case (V21).
-- [x] Remote rungs enter the M13 measures; the worker's cost is the user-stated rate
-      times measured time, shown per rung.
-- [x] V21 (privacy evidence) and V22 (API/MCP contract) pass (below).
+### D. Graded fill reaches the slicer (M20 — evidence: docs/verification/slicer.md, extended)
+- [ ] The manifold boundary is located: headless PrusaSlicer 2.9.6 (the v0.3 tooling,
+      re-derivable from the flathub AppImage), the graded-fill reference document, a
+      grid over skin (0 / 0.6 / 1.2 mm) and cell size; `manifold` verdict per cell; the
+      flip point identified from the grid.
+- [ ] The cause is found in fieldsmith's export path (what makes mesh-leaf graded fill
+      non-manifold to Prusa at skin 1.2) and either fixed there or named geometrically
+      from the probe artifacts — with the fix attempt evidenced, as in C.
+- [ ] Done when PrusaSlicer reports `manifold=yes` at skin 1.2 for the graded reference
+      document, measured — or the reviewed finding closes the box with the boundary
+      documented and the attempt's artifacts filed.
 
-Design (plan commit 2026-10-14). Three slices, one shared verified core:
+### E. The N100 Chrome anomaly, closed (M21 — evidence: an appendix section in docs/verification/budgets.md)
+- [ ] Hypotheses enumerated from the M13 record first (the old binary's actual bytes vs
+      that session's environment state; SwiftShader state; browser profile/cache;
+      scheduler or thermal context that morning; Firefox already held its walls), then
+      one factorial experiment: both binaries × the controlled dimensions that the
+      hypotheses make discriminating.
+- [ ] Both sides reproduce in the run set; the cause is named with numbers, replacing
+      the M13 "split ... not closed" ledger line.
+- [ ] If nothing separates: a reviewed finding states which hypotheses the experiment
+      falsified. "Not closed" is not an acceptable close state for this milestone — it
+      may only end named or falsified.
 
-1. **The API** — new crate `fieldsmith-api`. It owns two things: a JSON envelope
-   (request: `apiv` schema version, `doc` as `.fsm` text or `docz` as base64 `.fsmz`
-   bytes, `question` = ladder/solve/modes with the same tolerance/budget fields the CLI
-   parses; response: `apiv`, `engine` (the `store::engine_identity()` string), `status`
-   = ok / refusal / error, the per-rung records and their change measurements, the cost
-   fit and projections, and named errors), and the declared-question runner moved out of
-   the CLI's `solve_ladder` so there is one verified loop: records stream through a sink
-   trait; the CLI keeps its prose prints as the sink implementation. The one-shot verb
-   `fieldsmith api` reads a request on stdin and writes the response on stdout — no
-   server process to keep alive, and byte-stable golden cases are just files. Errors of
-   processing (bad request, setup error) are a JSON `error` status with exit code 2;
-   ok and refusal both exit 0 (a refusal is an answer).
-2. **The MCP server** — small binary over stdio, hand-rolled JSON-RPC (MCP is
-   initialize/tools-list/tools-call; a server library and a tokio runtime would outweight
-   the surface). It holds one document open at a time via the API crate's functions:
-   tools for inspecting, placing supports/loads/temperatures, solving to a declaration
-   (same runner, so tools return the same result the API does for the same document —
-   that is V22's second column), exporting. Local process, nothing hosted, no accounts.
-3. **The worker** — `fieldsmith session` starts the host: binds where the user says
-   (default `127.0.0.1`), prints an enrolment token once (the host's Noise static key +
-   a pre-shared key, base64). `fieldsmith worker enrol T <host:port>` stores the token;
-   `fieldsmith worker` then connects outbound, Noise_XXpsk3_25519_ChaChaPoly_SHA256
-   (via the `snow` crate — hand-rolled crypto is off the table). Jobs are the API
-   request (document inside a `.fsmz` built at send time); results come back as the API
-   response records. The worker writes artifacts only under the operator-stated
-   directory and prints nothing about geometry or fields; the host shows per-rung walls
-   from the worker's own records and computes cost = user-stated rate × measured time.
+### F. Carried
+- [ ] CI runs the whole ladder: V1–V23 unchanged, V24 as it lands, V25's portable
+      assertions as they land; `budgets.md` regenerated on the release legs. The two
+      owner verdicts still pending from v0.4 (the N100 leg-time row; whether a refusal
+      at the cap counts for the tolerance row) stay recorded until the owner rules —
+      they are surfaced explicitly at this goal's close.
+- [ ] The README carries the v0.4 honesty lines and gains no new claims without
+      measured evidence.
 
-V21's capture: tcpdump on loopback across a full worker run, scanned for the document's
-known plaintext patterns (shape names, coordinates, load vectors, field bytes); the
-expected match count is zero — handshake frames and one message-length prefix are
-accounted for. Worker-side scan: everything outside the stated artifact dir (temp, /tmp,
-stdout) carries no plaintext document/field bytes; the artifact dir holds what the
-operator asked for, and the listing is recorded. Divergence: the same `.fsmz` solved
-locally and through the worker, peak von Mises and max deflection compared, numbers
-stated.
-
-### D. Parameter sweep (M16 — evidence: docs/verification/V23.md)
-- [x] Sweep any numeric document parameter over a stated range and point count; each
-      point solves to its declaration (tolerance or the ladder default); the headless
-      runner emits a table (JSON and CSV) with per-point measured records.
-- [x] The Results lens shows the sweep table — parameter, tracked outputs, per-point box
-      and time — and exports the same CSV.
-- [x] V23 passes (below).
-
-Design (plan commit 2026-10-14). Three slices, one shared grammar:
-
-1. **The parameter** — a numeric document parameter is addressed as `<id>.<attr>[.<k>]`:
-   shape attributes by the document model's own names (`box`: `size`/`round`,
-   `cylinder`: `radius`/`height`/`round`, `sphere`: `radius`, `capsule`: `radius`/
-   `length`, `torus`: `major`/`minor`, `extrude`: `height`; `size`, `at` and `rotate`
-   take a 0–2 component index), loads (`force` components, `mpa`, `total`) and
-   temperatures (`celsius`) by their statement ids. The address is resolved against the
-   parsed document when the request arrives; an unknown id or a non-numeric attribute
-   is a request error naming what failed to resolve. Applying a value is an edit on the
-   parsed model, per point. Extrude profile vertices, region/support selector numbers
-   and the solve settings are outside the sweep grammar (stated in the report).
-2. **The sweep question** — a `sweep` variant in the API's question grammar: `param`
-   (the address), `values` (the stated range and point count), and the per-point
-   declaration the D box names — `rungs` and `tolerance`, defaulting exactly like the
-   ladder; a per-point budget is outside this grammar (a point runs to its tolerance or
-   to the schedule's cap). Each point copies the document, applies its value, and
-   solves through the same declared-question runner, so every point's box (rung, DOFs,
-   elements, change) and its time are measured, not reconstructed. The envelope takes
-   its first version bump — `apiv` 1 → 2 — named in schema.rs, and V22's golden is
-   regenerated at the pinned new version; an `apiv: 1` request is refused with a line
-   naming the change.
-3. **The headless table + the Results lens** — `fieldsmith api` gains `--csv <file>` for
-   sweep questions: one row per point (`value,dofs,elements,wall_ms,deflection_mm,
-   vm_mpa,deflection_change_rel,vm_change_rel,status`), the last rung's measured
-   numbers. The Results lens gains a sweep section: a parameter picker over the
-   document's addressable parameters, from/to/point-count inputs, a run that drives the
-   app's ladder machinery per point on a document clone (restoring the user's value
-   when it finishes), a table of value, tracked outputs, per-point box and time, and an
-   export button building the same column set — the CSV the runner emits and the CSV
-   the lens exports are the same file to the byte on the same run. Lens evidence: a
-   headless probe driving the sweep (report beside the other `-e2e` docs).
-4. **The cases** — V23 runs headless through the API grammar: the V1 cantilever
-   (`box beam size=(100, 10, 10)`, 100 N down at the tip) sweeping `beam.size.2` over
-   five values of [8, 12] mm at rungs 30000,150000; the per-point measured deflection
-   ratios against the beam-theory relation δ ∝ 1/h³, first run measured and the case
-   tolerance pinned from it, per-point boxes asserted present. The throughput row is
-   the same declaration style: a 5-point bracket sweep at the reference 1 % deflection
-   through the api verb, on the referee and on the N100 (ssh, as M15 measured), points
-   per hour into budgets.md and rows in costs.csv.
-
-### E. Carried
-- [x] CI runs the whole ladder: V1–V16 unchanged, V17–V23 as they land; `budgets.md`
-      regenerated per milestone on the referee. (The 2026-10-14 close run: all nine
-      stages green per /tmp logs — clippy, typecheck, workspace V1–V23, wasm, the
-      headless browser suite, V16 isolated, V6, V7, V14.)
-- [x] README limitations gain the honesty lines: rung error estimates are estimates from
-      rung-to-rung change, not bounds; cross-machine results are not bit-identical —
-      divergence is measured and reported; the thermal flow names its scope (steady,
-      fixed-temperature boundaries, one material).
+Unilateral calls made when drafting (cheap to reverse via a reviewed commit if the
+owner disagrees): the private GitHub account is GlassOnTin (the active gh auth), not
+the GlassHaven name Haven uses; the repos start private — the VISION §6
+"contributed to the repository itself" story becomes literal on the day the owner flips
+them public, which is the owner's publishing decision; submodule is the working
+assumption for fenics-rs (vendoring and crates.io named for later inside the plan);
+the ARM sweep target below is declared from the phone's web-wall evidence before any
+api wall exists; C and D's boxes deliberately require an attempted fix with evidence
+before a finding may close them.
 
 ---
 
-## Verification cases (must pass in CI)
+## Verification cases (must pass where they apply)
 
-Cases V1–V16 are the carried ladder and run in CI unchanged (definitions live in
+Cases V1–V23 are the carried ladder and run in CI unchanged (definitions live in
 `docs/verification/` and git history). The new cases; each tolerance is a declared
 target until first measured, then stated in the case and its report:
 
 | ID | Case | Reference | Tolerance |
 | :-- | :-- | :-- | :-- |
-| V17 | Rung-estimate honesty: the reference cantilever solved through the ladder; each rung pair's reported estimate (rung-to-rung change in tip deflection) tabulated against the known analytic error (V1's reference) | V1 analytic deflection | Both numbers reported each run; their ratio band recorded across the ladder; pass when a re-run reproduces the recorded band and the UI labels the number an estimate |
-| V18 | Estimator residual: after the coarse rung, the fit predicts refined and export rung times; compared with actual on the referee and on the N100 class (headless CLI); `data/costs/` seed rows carry provenance | Predicted vs actual wall time | Each report states its residual; pass when residuals fall inside the band recorded at ship time and the seed rows hold |
-| V19 | Thermal, linear: (a) unconstrained uniform ΔT — stress ≈ 0, displacement linear in L·α·ΔT; (b) long bar fixed at both ends, free laterally, uniform ΔT — uniaxial stress E·α·ΔT | Closed form | (a) stress within a stated roundoff-level bound; displacement linearity within a stated %; (b) stress ≤ 5 % of the closed form (declared target, revisable only in a reviewed commit) |
-| V20 | Thermal conduction + stress: long hollow cylinder, fixed inner and outer surface temperatures, single material | Exact radial temperature profile; Lamé-class thermal stress formulas | Temperature profile within a stated tolerance; peak hoop and axial stress within a stated % across a 3-point mesh study |
-| V21 | Privacy: reference task through a worker; packet capture of the session; scan of the worker's artifact directory; `.fsmz` re-solve local vs worker | Captured bytes and storage listings; divergence table | Zero matches for the model/field-content patterns the capture names, within its stated limits; divergence measured and stated; no capture or empty scan is a failure, not a pass |
-| V22 | API + MCP contract: golden request/response headless for the reference document at a pinned engine version; MCP tools return the same result for the same document | Golden JSON | Byte-stable for the pinned version; version bumps named, not silent |
-| V23 | Sweep correctness: a 5-point sweep of a parameter with known monotone physics (cantilever section height h: δ ∝ 1/h³) | Analytic ratio | Per-point boxes present; the ratio tracks the h³ relation within the stated tolerance |
+| V24 | Fresh-clone contract: `git clone` from the remote → build with nothing else present → the pinned golden api request → byte-stable response; `data/costs/costs.csv` intact in the clone | V22 golden at its pinned apiv/engine | Byte-stable at the pinned version; clone-to-answer wall recorded; passes in CI |
+| V25 | The architecture datapoint: reference-tolerance ladder and the 5-point sweep through the api verb on the SM8750 phone, through its Linux guest | The referee's x86_64 rows (V1/V23 tables, V18 constants) | Tracked fields stated equal-or-not per field with both numbers; sweep ≥ 100 points/hour (declared from coarse 1270 ms / refined 7523 ms web walls; revisable in a reviewed commit when first measured); walls recorded with their band |
+| V3x | V3 extended: the quarter model joins the 5-row mesh study already passing on the half-plate | The half-plate's 5-row study | The half-plate's recorded tolerances unchanged; full quarter tables in V3.md |
+| Sx | slicer.md extended: the manifold grid over skin and cell size, verdict per cell | PrusaSlicer's own `manifold` verdict | `manifold=yes` at skin 1.2 for the graded reference (the deliverable), or the boundary documented with the grid |
+
+V3x and Sx extend existing cases rather than spawning new ones: the docs they extend
+already carry the context, and a separate ID would fork it.
 
 ---
 
 ## Performance budgets
 
 Declared targets below; each row is measured as its milestone lands, and a miss is
-answered in a reviewed commit, never a quiet skip. Referee = the workstation referee from
-the previous goals; N100 legs are headless/CLI only, as in v0.3 (that box has no GL
-driver stack for Firefox — the v0.3 finding).
+answered in a reviewed commit, never a quiet skip.
 
 | Metric | Budget |
 | :-- | :-- |
-| Rung-record collection adds no measurable leg time | the v0.3 coarse/refined/export rows reproduce within their stated bounds |
-| Declared-tolerance ladder, reference task, referee | ≤ 25 s end to end at a 1 % deflection declaration (declared target) |
-| Estimator residual, per rung | ≤ 35 %, stated band measured and recorded by V18 |
-| Thermal leg (conduction + expansion), reference bracket | ≤ 2 × the v0.3 refined static row (declared target) |
-| Worker round-trip overhead vs local CLI, same task | ≤ 20 % on the LAN path (declared target) |
-| Sweep throughput at the reference tolerance | ≥ 6 points/hour referee, ≥ 2 points/hour N100 (declared targets) |
-
-Measured 2026-10-13 at M13 close:
-- Leg-time row: referee edit→coarse/refined 1352/6025 ms (Chrome), 1678/6494 ms (Firefox), e2e in-page 724/3005 ms — at or below the v0.3 rows, so record collection adds nothing on the referee. On the N100 the Chrome legs moved within the day (9-10 s / 23-25 s vs 4918/15064 this morning); an A/B run of the HEAD (v0.3) web code on the same wasm reproduces the slow numbers, the fresh-wasm rebuild lands the same place, and the same box's Firefox legs reproduce their morning walls — so the move is not the records and is confined to the Chrome path; the split between the old binary's bytes and that session's environment state is not closed (data/costs/costs.csv carries it). The three N100 Chrome rows now hold what the shipped binary measures. **Owner verdict pending on the N100 legs.**
-- Tolerance row: the declared 1 % deflection ladder ran 10.9 s end to end on the referee and named its refusal at the 750k cap (deflection change −4.1 %) — an honest answer under the named-refusal rule, but the budget could not buy the declaration. **Owner verdict pending on whether a refusal at the cap counts for this row.**
-- Residual row: 13.6 % (referee) / 18.8 % (N100), inside the ≤ 35 % target, bands recorded by V18.
-The M16 sweep rows are unmeasured until M16's close.
-
-Measured 2026-10-14 at M14 close:
-- Thermal-leg row: bracket-thermal (mount 80 °C, pin 20 °C, tref 20), third run of three, wall = mesh + static solve + thermal (the banner's disjoint components). Referee refined thermal leg 1245 ms vs the v0.3 refined static row 1164.928266 ms = 1.07×; N100 refined thermal 2723 ms vs 2642.862383 ms = 1.03× — both inside the ≤ 2× target. The N100 binary is the referee-built baseline-x86_64 shipped over ssh; its mesh+static part reproduces the 2026-10-13 row within 0.4 %, so the thermal run rides the measured engine behaviour. Components and rows in data/costs/costs.csv.
-
-Measured 2026-10-14 at M15 close:
-- Worker round-trip row: `fieldsmith session` on the referee served seven jobs of the
-  same ladder (bracket, rungs 30000,150000) to `fieldsmith worker` on the N100 over
-  LAN, each job a fresh outbound TCP + Noise_XXpsk3 handshake. The first job after the
-  worker's spawn measured a 10.0 s host wall: that wall contains spawn, enrolment and
-  first connect, not the per-job mechanism (an earlier unscripted pairing measured
-  82.9 s the same way). The six setup-free jobs measured 3.1–3.2 s host walls against
-  billed rung totals of 3.140–3.169 s from the worker's own records — the mechanism
-  overhead is bounded by the host print's 0.1 s granularity to ≤ ~100 ms per job
-  (≤ ~3 % of the wall), inside the ≤ 20 % target. The N100 local comparator, same day,
-  third run of three: 558.747089 / 2617.657443 ms, within 1.8 %/1.0 % of the
-  2026-10-13 rows. Rows and sample spans in data/costs/costs.csv.
-- Cross-machine divergence (C4): the same request through the referee's api verb and
-  through the N100 worker returned bit-identical tracked values on these two x86_64
-  hosts, same engine string — rung 0 deflection 2.330609765727498 mm / von Mises
-  41.97761660839724 MPa, rung 1 1.6762950333172848 mm / 47.02818468117891 MPa — with
-  identical rung-1 change values; divergence appears only in wall time, at the ~2.2×
-  machine ratio. That is a statement about these hosts, not about bit-identity in
-  general; the README limitation carries the scope.
-- C5 cost leg: the session host printed each rung's cost as rate × measured time (the
-  operator's 12/h: rung 0 0.6 s → 0.0019, rung 1 2.6 s → 0.0087), and the worker's
-  records entered the cost store as platform-"worker" rows — remote rungs are part of
-  the measure set (data/costs/costs.csv).
-- C1 status: the api's ladder (tolerance/budget), solve and modes questions are
-  measured and byte-pinned by V22; the sweep-mode clause waits for M16, where
-  schema.rs names the sweep question as the envelope's first version bump.
-
-Measured 2026-10-14 at M16 close:
-- Sweep-throughput row: the V23 cantilever sweep through `fieldsmith api` — five points
-  on beam.size.2 over 8..12 mm, rungs 30000,150000, tolerance deflection:1%, one
-  process per machine, costs store off (rows seeded by hand; the api verb never writes
-  the store). Referee: 6.071 s process wall → 2965 points/hour, engine sums 6.065 s
-  (declared ≥ 6). The regenerated budgets.md carries the probe's own fresh measure of
-  the same question — 2950 points/hour at 6.10 s — agreeing within 0.5 % of the direct
-  run. N100: the referee-built binary shipped over ssh, 13.660 s process wall →
-  1318 points/hour, engine sums 13.643 s (declared ≥ 2). Every point met its
-  declaration at rung 1 (2 rungs bought) on both machines. Twenty rows in
-  data/costs/costs.csv (per point per rung per machine; rung-0 change cells empty by
-  the schema rule, each rung-1 row carrying that point's change values). V18's
-  tie-in test grew with the file: all twenty rows now pin walls, per-point achieved
-  dofs and change cells against embedded constants (dofs shared across the machines
-  per the identity datapoint). The N100
-  number lives in the store and this ledger — that leg is a native measurement, not a
-  browser one, so the laptop budget doc does not carry it.
-- Cross-target identity (C4): the N100 sweep envelope is bit-identical to the
-  referee's in every tracked field — per-point records (dofs, elements, element sizes,
-  tracked deflection and von Mises, the change columns), the met blocks and
-  field_leaves — same engine string; divergence is wall time only, ~2.25× on this run
-  (rung walls 2.19–2.45×). The third x86_64↔x86_64 datapoint (after M15's
-  worker-vs-api pair and M14's thermal static part). Scope as measured: these hosts,
-  this question.
-- C1 status closed: the sweep-mode clause shipped with the apiv 1→2 bump named in
-  schema.rs (M16 slice 1), V22's golden regenerated at the pinned new version, and
-  V23 pinning the per-point boxes; the api takes document and question in all three
-  modes with provenance out. C1 ticks at this close.
+| Fresh clone to a passing api answer | ≤ 5 min on the referee (declared; measured by V24's run) |
+| Sweep throughput on the SM8750 (aarch64) | ≥ 100 points/hour (declared, from the phone's web walls; the phone api walls do not exist yet — a first-measure miss triggers the reviewed-commit revision, not a silent band) |
+| V3x quarter leg | The half-plate study's recorded tolerances, unchanged |
+| Slicer manifold boundary | `manifold=yes` at skin 1.2 for the graded reference, measured; or the boundary cell's parameters documented |
+| N100 Chrome split | Both sides of the move reproduce inside the wall bands already recorded; the cause named |
 
 ---
 
@@ -352,34 +184,34 @@ Measured 2026-10-14 at M16 close:
 
 | # | Milestone | Done when |
 | :-- | :-- | :-- |
-| M13 | **Measured rungs + declared question + `data/costs/`** | V17, V18 pass; the rung table visible headless and in the Results lens; the dataset seeded with provenance. |
-| M14 | **Thermal-structural flow** — conduction, temperature regions, thermal expansion | V19, V20 pass; temperature regions round-trip; the thermal budget row measured. |
-| M15 | **API/MCP + the worker** — JSON API, MCP server, `fieldsmith worker` | V21 passes with its capture artifacts; V22 green; cost rows flow per rung. |
-| M16 | **Parameter sweep** — headless runner, Results-lens table | V23 passes; the throughput row measured. |
+| M17 | **The repo's own home** — tag (done), fenics-rs in the clone, private remote, credentials scan, push | V24 green; a fresh clone builds and answers; `main` and the tags on the remote |
+| M18 | **The architecture datapoint** — the api verb on the phone | V25 measured; rows in `data/costs/costs.csv`; README scope line updated |
+| M19 | **The quarter junction** | V3's quarter tables green at half-plate tolerances, or the mechanism named with the mesher's own numbers |
+| M20 | **Graded fill reaches the slicer** | `manifold=yes` at skin 1.2 measured, or the boundary documented from the grid |
+| M21 | **N100 Chrome, closed** | The factorial run set executes; the cause named or the falsifications stated |
 
 ---
 
-## Explicitly out of scope for v0.4
+## Explicitly out of scope for v0.5
 
-Transient heat, convection or radiation boundaries · multi-material conduction (the
-bi-metal strip waits for it) · thermal behaviour of the graded lattice (homogenised α) ·
-nonlinear or material-law analysis · the other flows of the 2026-10-13 agenda (RF/EM,
-molding, waves, material laws; each takes its own verification ladder when taken) · any
-Fieldsmith-hosted service: relay, accounts, metering, a submit endpoint for cost rows ·
-provider provisioner helpers (Terraform-class) · the browser-attached session host ·
-bit-identical cross-machine results (divergence measured, never promised) · part
-grouping, sketch and section planes (supporting cast under the ranking; named for later)
-· multi-parameter sweep grids and optimisers · topology optimisation (SIMP), B-rep
-editing, collaboration, drawings (carried from v0.3).
+Making the repo public and hosted CI runners (GitHub Actions) — the ladder stays on
+`scripts/ci.sh`, and turning a repo public is the owner's publishing act, not mine ·
+publishing fenics-rs to crates.io (the submodule carries it; standalone publication is
+its own decision) · the termux route unless Haven's guest path fails · new analysis
+flows, CAD-parity asks (grouping, sketch, section planes), multi-parameter sweep grids,
+topology optimisation (carried from v0.3/v0.4) · any Fieldsmith-hosted service: relay,
+accounts, metering, a submit endpoint (the standing rule) · a `v0.5.0` tag on anything
+but this goal's close.
 
 ---
 
 ## Definition of done
 
-v0.4 is done when every box in sections A–E is ticked, V1–V23 pass in CI, the budget
-table is measured on the referee and on the N100 class's headless legs with the owner's
-verdicts recorded where a row misses its target, `data/costs/` holds its header and seed
-rows with provenance, and the V21 capture artifacts are filed in `docs/verification/` —
-and not before. If a criterion turns out to be wrong, change this file in a reviewed
-commit; do not quietly skip it. Each milestone's design detail lands in a reviewed plan
-before code, as in previous goals.
+v0.5 is done when every box in sections A–F is ticked, V1–V24 pass in CI with V25's
+portable assertions green alongside, the budget table is measured, `data/costs/costs.csv`
+holds the ARM rows with provenance, the V3 and slicer docs carry their extended tables,
+and the three close-out lines carried out of v0.3/v0.4 (V3 deferral, M10's no-route
+finding, M13's unclosed split) are each replaced by evidence — and not before. If a
+criterion turns out to be wrong, change this file in a reviewed commit; do not quietly
+skip it. Each milestone's design detail lands in a reviewed plan before code, as in
+previous goals.
