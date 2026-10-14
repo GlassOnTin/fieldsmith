@@ -80,22 +80,22 @@ appendix names its outcome.
       passes — canon(clone run) equals the pinned golden bytes, 104 s clone-to-answer.
 
 ### B. The architecture datapoint (M18 — evidence: docs/verification/V25.md)
-- [ ] `fieldsmith api` runs on a machine the user owns that is not x86_64: the OnePlus
+- [x] `fieldsmith api` runs on a machine the user owns that is not x86_64: the OnePlus
       13 (SM8750, aarch64) — hosted through Haven's Linux guest (proot) or termux, the
       binary cross-built on the referee or built on-device; the route is chosen at plan
       with the working assumption first (proot guest, statically linked aarch64 build
       shipped to the phone).
-- [ ] The reference-tolerance ladder and the V23 five-point sweep are measured there:
+- [x] The reference-tolerance ladder and the V23 five-point sweep are measured there:
       per-leg walls, points/hour, tracked fields. The phone throttles and the guest has
       no GPU — walls are recorded with their band, and the browser rows stay separate
       from the api rows as on the N100.
-- [ ] Tracked fields are compared with the referee's literals field by field; the case
+- [x] Tracked fields are compared with the referee's literals field by field; the case
       states, per field, equal-or-not with both numbers. The README's divergence-scope
       line updates from "these hosts" when the datapoint lands.
-- [ ] Rows enter `data/costs/costs.csv` with provenance, hand-seeded as the other rows;
+- [x] Rows enter `data/costs/costs.csv` with provenance, hand-seeded as the other rows;
       V18's embedded constants grow with the file in the same commit (the M16 pitfall:
       the tie-in test's row count and constants must be extended, never weakened).
-- [ ] V25 is measured and recorded — a milestone case like the N100 legs, not a CI
+- [x] V25 is measured and recorded — a milestone case like the N100 legs, not a CI
       case; its portable assertions (schema, row shape) assert in CI.
 
 ### C. The quarter junction (M19 — evidence: docs/verification/V3.md, extended)

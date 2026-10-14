@@ -101,7 +101,10 @@ regimes (V17), and the wall-time estimator reports its own residual instead of n
 machine over the worker channel is not promised bit-identical, and the divergence is
 measured rather than assumed: on the two measured x86_64 hosts the tracked values
 reproduced bit-identically and only wall time differed, by the machine ratio
-(data/costs/costs.csv); any other machine class carries that claim only once measured. One load
+(data/costs/costs.csv). Cross-architecture the divergence is real: on the measured
+aarch64 phone (SM8750, V25) tracked values diverge at ~1e-13..3e-11 relative (faer SIMD
+kernels; the sweep's small change fields to ~7e-8), while the V22 canon quantization
+ties every compared field; any other machine class carries its claim only once measured. One load
 case at a time in the setup lens; envelopes exist in
 the solver but the UI shows one case or the envelope, not both side by side.
 
