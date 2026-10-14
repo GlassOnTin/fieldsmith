@@ -13,10 +13,13 @@
 //! 3. `data/costs/costs.csv` ties to these constants: every CLI wall and change value
 //!    parses back bit-equal, wasm rows tie to the budgets-doc constants (probe-harness
 //!    rows with empty field cells) and to the OnePlus 13 in-page walls (rows carrying
-//!    achieved DOF/element cells). Twenty rows: the six 2026-10-13 static-ladder CLI
-//!    rows, the four M14 thermal CLI rows (2026-10-14, `bracket-thermal.fsm` — the
+//!    achieved DOF/element cells). Twenty-six rows: the six 2026-10-13 static-ladder
+//!    CLI rows, the four M14 thermal CLI rows (2026-10-14, `bracket-thermal.fsm` — the
 //!    wall is the mesh+solve+thermal superset, change cells empty by measurement), the
-//!    eight probe-harness wasm rows and the two OnePlus 13 wasm rows.
+//!    six M15 connection rows (2026-10-14: the same ladder solved locally on both
+//!    machine classes, and the two worker rows of the round-trip session — worker
+//!    walls tied into the recorded nine-job spans), the eight probe-harness wasm rows
+//!    and the two OnePlus 13 wasm rows.
 //! 4. The report carries the honest label: projections carry residuals, and the
 //!    first-pair fit is on the cheap side of the curve.
 
@@ -57,15 +60,17 @@ struct ShipRow {
     chv: Option<f64>,
 }
 
-/// The ten CLI rows of `data/costs/costs.csv`, verbatim. The first six are the
+/// The fourteen CLI rows of `data/costs/costs.csv`, verbatim. The first six are the
 /// 2026-10-13 static ladder; change values are the envelope-to-envelope estimates the
-/// V17 replay proves are two-solve differences. The last four are the 2026-10-14 M14
+/// V17 replay proves are two-solve differences. The next four are the 2026-10-14 M14
 /// thermal rows (`examples/bracket-thermal.fsm`): wall_ms is the mesh+solve+thermal
 /// superset (the banner components sum to it), the change columns are empty because no
-/// envelope deltas were measured that way, and rungs 0/1 of both machine classes share
-/// (cpu, target, rung) with the static rows — the matcher ties by wall, as the wasm
-/// matcher does.
-const CLI_ROWS: [ShipRow; 10] = [
+/// envelope deltas were measured that way. The last four are the 2026-10-14 M15
+/// connection rows: the same ladder solved locally on both machine classes, the
+/// change columns carrying the same bit-equal rung-1 estimates as the static rows.
+/// Every block's rungs 0/1 share (cpu, target, rung) with the others — the matcher
+/// ties by wall, as the wasm matcher does.
+const CLI_ROWS: [ShipRow; 14] = [
     ShipRow {
         cpu: CPU_REF,
         target: 30_000,
@@ -149,6 +154,42 @@ const CLI_ROWS: [ShipRow; 10] = [
         chd: None,
         chv: None,
     },
+    // 2026-10-14 M15 connection rows — the same ladder solved locally on both
+    // machine classes (the CSV's provenance block records the third-run convention
+    // and the ~2.2× machine ratio). Rung 1 change cells carry the same bit-equal
+    // estimates as the static rows.
+    ShipRow {
+        cpu: CPU_REF,
+        target: 30_000,
+        rung: 0,
+        wall: 257.81440100000003,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_REF,
+        target: 150_000,
+        rung: 1,
+        wall: 1167.171564,
+        chd: Some(-0.2807483011665701),
+        chv: Some(0.12031574159861531),
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 558.7470890000001,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2617.657443,
+        chd: Some(-0.2807483011665701),
+        chv: Some(0.12031574159861531),
+    },
 ];
 
 /// The ten wasm rows of `data/costs/costs.csv`, verbatim: (cpu, target, rung, wall,
@@ -157,7 +198,14 @@ const CLI_ROWS: [ShipRow; 10] = [
 /// achieved cells; the two OnePlus 13 rows are walls read in-page from the running app's
 /// analysis state (the worker's own per-level measurement, no document-UI overhead) and
 /// carry the achieved DOF/element three runs agree on.
-type WasmRow = (&'static str, usize, usize, f64, Option<usize>, Option<usize>);
+type WasmRow = (
+    &'static str,
+    usize,
+    usize,
+    f64,
+    Option<usize>,
+    Option<usize>,
+);
 
 const WASM_ROWS: [WasmRow; 10] = [
     (CPU_REF, 30_000, 0, 1352.0, None, None),
@@ -172,6 +220,29 @@ const WASM_ROWS: [WasmRow; 10] = [
     (CPU_ONEPLUS, 150_000, 1, 7523.0, Some(190440), Some(40643)),
 ];
 
+/// The two worker rows of `data/costs/costs.csv`, verbatim: the M15 round-trip
+/// session's last timed job on the N100 (the CSV's provenance block records nine
+/// stored jobs: rung 0 spans 539.873693–568.963282 ms, rung 1 2597.09215–2619.822615
+/// ms). Rung-1 change cells carry the same bit-equal estimates as the cli rows.
+const WORKER_ROWS: [ShipRow; 2] = [
+    ShipRow {
+        cpu: CPU_N100,
+        target: 30_000,
+        rung: 0,
+        wall: 549.450832,
+        chd: None,
+        chv: None,
+    },
+    ShipRow {
+        cpu: CPU_N100,
+        target: 150_000,
+        rung: 1,
+        wall: 2619.822615,
+        chd: Some(-0.2807483011665701),
+        chv: Some(0.12031574159861531),
+    },
+];
+
 /// The CSV fixture holds no commas inside fields, so a naive split is exact here;
 /// the production parse path is `crates/fieldsmith-cli/src/store.rs`.
 fn parse_cost_csv(text: &str) -> Vec<Vec<String>> {
@@ -180,6 +251,48 @@ fn parse_cost_csv(text: &str) -> Vec<Vec<String>> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.split(',').map(str::to_string).collect())
         .collect()
+}
+
+/// Tie a cli/worker CSV row to its ship constant by (cpu, target, rung, wall) —
+/// same-key rows across the time blocks are distinguished by wall (the M15 block
+/// carries a rung-1 change estimate, the M14 thermal block the superset wall, the
+/// static block the plain solve).
+fn tie<'a>(
+    rows: &'a [ShipRow],
+    row: &[String],
+    rung: usize,
+    target: usize,
+    wall: f64,
+) -> &'a ShipRow {
+    rows.iter()
+        .find(|s| s.cpu == row[4] && s.target == target && s.rung == rung && s.wall == wall)
+        .unwrap_or_else(|| {
+            panic!(
+                "no ship row matches cpu={:?} rung={rung} target={target} \
+                 wall={wall} — data/costs/costs.csv drifted from this test",
+                row[4]
+            )
+        })
+}
+
+/// Every rung-1 row must tie to the ship change estimate bit-equal; rows without a
+/// change estimate (rung 0, the M14 thermal block) carry empty cells.
+fn check_change_cells(ship: &ShipRow, row: &[String], rung: usize) {
+    for (ci, want) in [(13usize, ship.chd), (14, ship.chv)] {
+        match want {
+            Some(w) => assert_eq!(
+                row[ci].parse::<f64>().expect("change cell parse"),
+                w,
+                "change cell cpu={:?} rung={rung} column {ci}",
+                row[4],
+            ),
+            None => assert!(
+                row[ci].is_empty(),
+                "row must carry an empty change cell cpu={:?} rung={rung} column {ci}",
+                row[4],
+            ),
+        }
+    }
 }
 
 #[test]
@@ -403,19 +516,22 @@ fn v18_estimator_residual() {
         "costs.csv ties to these numbers",
         format!(
             "`v18_costs_csv_ties_to_ship_data` parses `data/costs/costs.csv` and checks: \
-             {nrows} rows, every row schema 1, month 2026-10; the ten CLI rows tie wall and \
-             change-estimate cells EXACTLY to the constants this test embeds — the six \
+             {nrows} rows, every row schema 1, month 2026-10; the fourteen CLI rows tie wall \
+             and change-estimate cells EXACTLY to the constants this test embeds — the six \
              2026-10-13 static-ladder rows carry the change estimates, the four 2026-10-14 \
              M14 thermal rows carry the mesh+solve+thermal superset wall with empty change \
-             columns (two machine classes' rungs 0/1 share keys with the static rows, so \
-             the matcher ties by wall); the \
+             columns, the four M15 connection rows (2026-10-14) re-tie the same ladder's \
+             walls on both machine classes with the static rung-1 estimates (rungs 0/1 \
+             share keys across the blocks, so the matcher ties by wall); the two M15 \
+             worker rows tie to the round-trip session's last timed job, their walls \
+             inside the recorded nine-job spans; the \
              eight wasm probe-harness rows tie to the budgets-document walls ({w0}, {w1}, \
              {w2}, {w3}, {w4}, {w5}, {w6}, {w7}) with empty DOF/element/leaf/change cells; \
              the two OnePlus 13 rows tie to the in-page walls ({w8}, {w9}) and carry achieved \
              DOF/element cells (the worker reads them from its own analysis state) with empty \
              leaf/change cells; engine \"fieldsmith wasm\". The CSV is the single seed \
              source; this test fails if the file and the ship data drift apart.",
-            nrows = CLI_ROWS.len() + WASM_ROWS.len(),
+            nrows = CLI_ROWS.len() + WASM_ROWS.len() + WORKER_ROWS.len(),
             w0 = WASM_ROWS[0].3,
             w1 = WASM_ROWS[1].3,
             w2 = WASM_ROWS[2].3,
@@ -437,7 +553,7 @@ fn v18_costs_csv_ties_to_ship_data() {
     let rows = parse_cost_csv(csv);
     assert_eq!(
         rows.len(),
-        CLI_ROWS.len() + WASM_ROWS.len(),
+        CLI_ROWS.len() + WASM_ROWS.len() + WORKER_ROWS.len(),
         "row count in data/costs/costs.csv must match its provenance blocks",
     );
     for row in &rows {
@@ -448,46 +564,49 @@ fn v18_costs_csv_ties_to_ship_data() {
                 let rung: usize = row[7].parse().expect("cli rung index");
                 let target: usize = row[8].parse().expect("cli target_dofs");
                 let wall: f64 = row[12].parse().expect("cli wall_ms");
-                // The M14 thermal block shares (cpu, target, rung) with the static
-                // ladder rows — its wall is the mesh+solve+thermal superset. Tie to
-                // the ship row whose constant equals the row's wall, as the wasm
-                // matcher ties two same-key blocks by wall.
-                let ship = CLI_ROWS
-                    .iter()
-                    .find(|s| {
-                        s.cpu == row[4] && s.target == target && s.rung == rung && s.wall == wall
-                    })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "no ship CLI row matches cpu={:?} rung={rung} target={target} \
-                             wall={wall} — data/costs/costs.csv drifted from this test",
-                            row[4]
-                        )
-                    });
+                // The M14 thermal, and M15 connection blocks share (cpu, target,
+                // rung) with the static ladder rows. Tie to the ship row whose
+                // constant equals the row's wall, as the wasm matcher ties two
+                // same-key blocks by wall.
+                let ship = tie(&CLI_ROWS, row, rung, target, wall);
                 assert_eq!(row[3], "fieldsmith 0.2.0 / fenics-rs 0.1.0", "cli engine");
                 assert_eq!(
                     row[9].parse::<usize>().expect("achieved dofs"),
                     DOFS[rung] as usize,
                     "achieved dofs per rung",
                 );
-                for (ci, want) in [(13usize, ship.chd), (14, ship.chv)] {
-                    match want {
-                        Some(w) => assert_eq!(
-                            row[ci].parse::<f64>().expect("change cell parse"),
-                            w,
-                            "change cell cpu={:?} rung={rung} column {ci}",
-                            row[4],
-                        ),
-                        None => assert!(
-                            row[ci].is_empty(),
-                            "row must carry an empty change cell (rung 0, or the M14 \
-                             thermal rows) cpu={:?} column {ci}",
-                            row[4],
-                        ),
-                    }
-                }
+                check_change_cells(ship, row, rung);
                 assert!(!row[10].is_empty(), "cli rows carry an element count");
                 assert!(!row[11].is_empty(), "cli rows carry a field-leaf count");
+            }
+            "worker" => {
+                let rung: usize = row[7].parse().expect("worker rung index");
+                let target: usize = row[8].parse().expect("worker target_dofs");
+                let wall: f64 = row[12].parse().expect("worker wall_ms");
+                let ship = tie(&WORKER_ROWS, row, rung, target, wall);
+                assert_eq!(
+                    row[3], "fieldsmith 0.2.0 / fenics-rs 0.1.0",
+                    "worker engine"
+                );
+                assert_eq!(
+                    row[9].parse::<usize>().expect("achieved dofs"),
+                    DOFS[rung] as usize,
+                    "achieved dofs per rung",
+                );
+                // The row's wall sits inside the span the CSV provenance block
+                // records for the nine stored jobs of the round-trip session.
+                let span: (f64, f64) = if rung == 0 {
+                    (539.873693, 568.963282)
+                } else {
+                    (2597.09215, 2619.822615)
+                };
+                assert!(
+                    span.0 <= wall && wall <= span.1,
+                    "worker wall {wall} outside the recorded span {span:?} (rung {rung})",
+                );
+                check_change_cells(ship, row, rung);
+                assert!(!row[10].is_empty(), "worker rows carry an element count");
+                assert!(!row[11].is_empty(), "worker rows carry a field-leaf count");
             }
             "wasm" => {
                 let rung: usize = row[7].parse().expect("wasm rung index");

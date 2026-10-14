@@ -2,10 +2,12 @@
 //! headless, for the reference document at a pinned engine version.
 //!
 //! Legs:
-//! 1. Nine golden cases through `fieldsmith_api::respond` — the ladder's ok / met /
-//!    refusal / budget answers, one solve, one modes run, and three request-error
-//!    envelopes. Their canon forms are held in `tests/fixtures/v22-golden.jsonl` and
-//!    byte-compared. One case additionally pins its EXACT wire bytes (field order).
+//! 1. Eleven golden cases through `fieldsmith_api::respond` — the ladder's ok / met /
+//!    refusal / budget answers, one solve, one modes run, four request-error
+//!    envelopes (apiv 1 refusal and the apiv 99 mismatch among them, M16's version
+//!    bump), and one sweep. Their canon forms are held in
+//!    `tests/fixtures/v22-golden.jsonl` and byte-compared. One case additionally
+//!    pins its EXACT wire bytes (field order).
 //! 2. The canon transform is justified by measurement, not theory: two same-machine
 //!    process runs of the same request were byte-identical apart from the timing
 //!    leaves (probed during M15 slice 1: 17-digit element sizes, changes and tracked
@@ -105,46 +107,46 @@ fn cases() -> Vec<Case> {
     vec![
         Case {
             id: "ladder-ok",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "ladder", "rungs": [30000, 150000]}}),
             extra_drops: &[],
         },
         Case {
             id: "ladder-met",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "ladder", "rungs": [30000, 150000],
                              "tolerance": "deflection:100%"}}),
             extra_drops: &[],
         },
         Case {
             id: "ladder-refusal",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "ladder", "rungs": [30000, 150000],
                              "tolerance": "deflection:0.00001mm"}}),
             extra_drops: &[],
         },
         Case {
             id: "ladder-budget",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "ladder", "rungs": [30000, 150000, 750000],
                              "budget": "0s"}}),
             extra_drops: BUDGET_DROPS,
         },
         Case {
             id: "solve-30k",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "solve", "dofs": 30000}}),
             extra_drops: &[],
         },
         Case {
             id: "modes-30k",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "modes", "n": 3, "dofs": 30000}}),
             extra_drops: &[],
         },
         Case {
             id: "err-bad-tolerance",
-            request: json!({"apiv": 1, "doc": DOC,
+            request: json!({"apiv": 2, "doc": DOC,
                 "question": {"kind": "ladder", "rungs": [30000, 150000],
                              "tolerance": "deflection:0.1"}}),
             extra_drops: &[],
@@ -156,9 +158,29 @@ fn cases() -> Vec<Case> {
             request: json!({"apiv": 99, "question": {"kind": "ladder"}}),
             extra_drops: &[],
         },
+        // The M16 version bump: a v1 request is refused, not translated, with a line
+        // naming the change (schema.rs's bump rule, tested at the golden level too).
+        Case {
+            id: "err-apiv-1",
+            request: json!({"apiv": 1, "question": {"kind": "ladder"}}),
+            extra_drops: &[],
+        },
+        // The sweep (M16): the envelope answer carries one point per value, each point
+        // its own ladder outcome. The bracket's hole-side regions only resolve at the
+        // reference rungs (a 2000-DOF sweep point errors naming the region that lost
+        // contact — the request errors name points), so this runs the same [30000,
+        // 150000] the ladder legs run; the canon drops every wall-derived leaf
+        // wherever it sits, points included.
+        Case {
+            id: "sweep-ok",
+            request: json!({"apiv": 2, "doc": DOC,
+                "question": {"kind": "sweep", "param": "base.size.2",
+                             "values": [6.0, 8.0], "rungs": [30000, 150000]}}),
+            extra_drops: &[],
+        },
         Case {
             id: "err-both-docs",
-            request: json!({"apiv": 1, "doc": DOC, "docz": "Zg==",
+            request: json!({"apiv": 2, "doc": DOC, "docz": "Zg==",
                 "question": {"kind": "ladder", "rungs": [30000, 150000]}}),
             extra_drops: &[],
         },
@@ -282,12 +304,56 @@ fn assert_semantics(id: &str, r: &Value) {
             assert_eq!(status, "error");
             assert_eq!(
                 r["error"].as_str().unwrap(),
-                "apiv: request declares 99, this engine speaks 1"
+                "apiv: request declares 99, this engine speaks 2 — apiv 2 added the \
+                 sweep question (v1 requests are not translated; see schema.rs)"
             );
             assert!(
                 r["name"].is_null(),
                 "the version check precedes any document read"
             );
+        }
+        "err-apiv-1" => {
+            assert_eq!(status, "error");
+            let e = r["error"].as_str().unwrap();
+            assert_eq!(r["apiv"], 1, "the error echoes the request's version");
+            assert!(
+                e.contains("apiv 2 added the sweep question"),
+                "the v1 refusal names the version's change: {e}"
+            );
+            assert!(
+                e.contains("speaks 2"),
+                "the error names the engine's version, not just the request's: {e}"
+            );
+        }
+        "sweep-ok" => {
+            assert_eq!(status, "ok");
+            let s = &r["sweep"];
+            assert_eq!(s["param"], "base.size.2");
+            assert_eq!(s["values"].as_array().unwrap().len(), 2);
+            let pts = s["points"].as_array().expect("one point per value");
+            assert_eq!(pts.len(), 2);
+            assert_eq!(pts[0]["value"], 6.0);
+            assert_eq!(pts[1]["value"], 8.0);
+            // Each point ran its own ladder — two rungs each — and no sweep-level
+            // tolerance was declared, so the met/unmet keys stay absent everywhere.
+            for p in pts {
+                let o = &p["outcome"];
+                let recs = o["records"].as_array().expect("point records");
+                assert_eq!(recs.len(), 2);
+                assert!(recs[1]["tracked"]["deflection_mm"].is_number());
+                assert!(o["met"].is_null() && o["unmet"].is_null());
+            }
+            assert!(
+                r["outcome"].is_null(),
+                "the sweep question answers in sweep, not outcome"
+            );
+            // Thicker base is stiffer — the rungs measured it, not the grammar.
+            let d = |i: usize| {
+                pts[i]["outcome"]["records"][1]["tracked"]["deflection_mm"]
+                    .as_f64()
+                    .unwrap()
+            };
+            assert!(d(1) < d(0), "size.2 6→8: deflection {} → {}", d(0), d(1));
         }
         "err-both-docs" => {
             assert_eq!(status, "error");
@@ -508,7 +574,14 @@ fn v22_api_golden_contract() {
             "Every envelope carries the engine identity `{}` (`store::engine_identity`). A \
              version bump changes every golden line — the compare fails naming the \
              drift, and the fix is a recorded re-bless (`FIELDSMITH_BLESS=1 cargo test \
-             -p fieldsmith-verify --test v22_api`), never a silent refresh.",
+             -p fieldsmith-verify --test v22_api`), never a silent refresh. Re-blessed \
+             2026-10-14 (M16) for the `apiv` move 1 → 2: apiv 2 adds the sweep question \
+             and apiv 1 requests are refused, not translated — the version check replies \
+             `apiv: request declares 1, this engine speaks 2 — apiv 2 added the sweep \
+             question (v1 requests are not translated; see schema.rs)`. The move also \
+             added two golden cases: `err-apiv-1` pins that refusal, `sweep-ok` pins the \
+             sweep envelope (one point per value, each point the same ladder records as \
+             a rung ladder, no sweep-level outcome).",
             store::engine_identity(),
         ),
     );
@@ -535,7 +608,7 @@ fn v22_api_golden_contract() {
     );
     rep.check(Check::absolute(
         "Canon lines byte-equal against fixtures/v22-golden.jsonl",
-        9.0,
+        11.0,
         lines_ok as f64,
         "lines",
         0.0,
@@ -591,10 +664,9 @@ fn v22_mcp_same_result_column() {
             "params": {"name": name, "arguments": args},
         })
         .to_string();
-        let reply: Value = serde_json::from_str(
-            &srv.handle(&line).expect("a tools/call always gets a reply"),
-        )
-        .expect("reply line parses");
+        let reply: Value =
+            serde_json::from_str(&srv.handle(&line).expect("a tools/call always gets a reply"))
+                .expect("reply line parses");
         let text = reply["result"]["content"][0]["text"]
             .as_str()
             .expect("result text")
@@ -633,11 +705,11 @@ fn v22_mcp_same_result_column() {
     let mut ties = 0.0f64;
     let mut wire_ties = 0.0f64;
     for (i, c) in cases().iter().enumerate() {
-        // err-apiv-99 and err-both-docs are request-shape errors the server cannot
-        // emit: it builds every request with the constant APIV and `open` enforces
-        // exactly one document form. Pinned on the API surface by the golden; named in
-        // the report gap list here.
-        if c.id == "err-apiv-99" || c.id == "err-both-docs" {
+        // err-apiv-99, err-apiv-1 and err-both-docs are request-shape errors the
+        // server cannot emit: it builds every request with the constant APIV and
+        // `open` enforces exactly one document form. Pinned on the API surface by
+        // the golden; named in the report gap list here.
+        if c.id == "err-apiv-99" || c.id == "err-apiv-1" || c.id == "err-both-docs" {
             continue;
         }
         let spec = c.request["question"].clone();
@@ -666,7 +738,11 @@ fn v22_mcp_same_result_column() {
                 let (wire_id, want) = ("err-bad-tolerance-wire", c.id == "err-bad-tolerance");
                 if want {
                     let (_, wire) = golden.get(wire_id).expect("golden wire line");
-                    let wire = wire.as_ref().expect("wire member").as_str().expect("wire string");
+                    let wire = wire
+                        .as_ref()
+                        .expect("wire member")
+                        .as_str()
+                        .expect("wire string");
                     assert_eq!(
                         text, wire,
                         "the MCP route must reproduce the pinned wire bytes for {}",
@@ -682,28 +758,40 @@ fn v22_mcp_same_result_column() {
     // output feeds the one-shot request, so the two envelopes differ only in timings.
     let mut srv2 = Server::new();
     tool(&mut srv2, 200, "open", json!({"doc": DOC})).expect("open");
-    let added = tool(&mut srv2, 201, "add_region",
-        json!({"selectors": [{"shape": "base", "face": "nz"}]}))
-        .expect("add_region");
+    let added = tool(
+        &mut srv2,
+        201,
+        "add_region",
+        json!({"selectors": [{"shape": "base", "face": "nz"}]}),
+    )
+    .expect("add_region");
     let rid = added["added"].as_str().unwrap().to_string();
-    tool(&mut srv2, 202, "add_support",
-        json!({"region": rid.clone(), "fixed": [true, true, true]}))
-        .expect("add_support");
-    tool(&mut srv2, 203, "add_load",
-        json!({"region": rid, "kind": {"type": "force", "vector": [0, 0, -100]}}))
-        .expect("add_load");
+    tool(
+        &mut srv2,
+        202,
+        "add_support",
+        json!({"region": rid.clone(), "fixed": [true, true, true]}),
+    )
+    .expect("add_support");
+    tool(
+        &mut srv2,
+        203,
+        "add_load",
+        json!({"region": rid, "kind": {"type": "force", "vector": [0, 0, -100]}}),
+    )
+    .expect("add_load");
     let printed = tool(&mut srv2, 204, "doc_text", json!({})).expect("doc_text");
     let edited = printed["text"].as_str().expect("doc text").to_string();
     let spec = json!({"kind": "solve", "dofs": 30000});
-    let via_tool = tool(&mut srv2, 205, "solve", spec.clone()).expect("edited solve through the tool");
+    let via_tool =
+        tool(&mut srv2, 205, "solve", spec.clone()).expect("edited solve through the tool");
     assert_eq!(via_tool["status"], "ok");
     assert_eq!(
         via_tool["single"]["provenance"]["dofs"], 48822,
         "supports and loads do not change the mesh — the provenance ties solve-30k"
     );
-    let reply = fieldsmith_api::respond(
-        &json!({"apiv": 1, "doc": edited, "question": spec}).to_string(),
-    );
+    let reply =
+        fieldsmith_api::respond(&json!({"apiv": 2, "doc": edited, "question": spec}).to_string());
     assert!(
         !reply.is_error,
         "the one-shot accepts the tool's own doc_text output: {}",
@@ -744,7 +832,10 @@ fn v22_mcp_same_result_column() {
     assert_eq!(facts["tris"].as_f64().unwrap(), ex.tris as f64);
     assert_eq!(facts["mesh_volume"].as_f64().unwrap(), ex.mesh_volume);
     assert_eq!(facts["field_volume"].as_f64().unwrap(), ex.reference.volume);
-    assert_eq!(facts["field_volume_error"].as_f64().unwrap(), ex.reference.error);
+    assert_eq!(
+        facts["field_volume_error"].as_f64().unwrap(),
+        ex.reference.error
+    );
     assert_eq!(facts["delta_percent"].as_f64().unwrap(), ex.delta_percent);
     for (k, v) in [
         ("open_edges", ex.defects.open_edges),
@@ -819,7 +910,7 @@ fn v22_mcp_same_result_column() {
     );
     rep.check(Check::absolute(
         "Golden cases canon-tie through the MCP tool surface",
-        7.0,
+        8.0,
         ties,
         "cases",
         0.0,

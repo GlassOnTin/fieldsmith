@@ -16,10 +16,11 @@ pub mod export;
 pub mod question;
 pub mod schema;
 pub mod store;
+pub mod sweep_csv;
 
 use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::{analyse, analyse_modes, fsmz, Resolution, SetupError};
-use fieldsmith_doc::{fsm, Document, NodeKind};
+use fieldsmith_doc::{fsm, param, Document, NodeKind};
 use fieldsmith_field::expr;
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
 
@@ -49,7 +50,9 @@ pub fn load_doc(doc: Option<&str>, docz: Option<&str>) -> Result<Document, Strin
         }
         (_, Some(z)) => {
             let bytes = b64::decode(z).map_err(|e| format!("docz: {e}"))?;
-            fsmz::load(&bytes).map(|l| l.doc).map_err(|e| format!("docz: {e}"))
+            fsmz::load(&bytes)
+                .map(|l| l.doc)
+                .map_err(|e| format!("docz: {e}"))
         }
     }
 }
@@ -77,7 +80,8 @@ pub fn respond(input: &str) -> Reply {
         Err(e) => return error_reply(APIV, None, None, Vec::new(), format!("request: {e}")),
     };
 
-    // 2. Version.
+    // 2. Version. A mismatch is refused, not translated, and names the change — the
+    // caller reads what differs from the engine's own line.
     if req.apiv != APIV {
         return error_reply(
             req.apiv,
@@ -85,7 +89,8 @@ pub fn respond(input: &str) -> Reply {
             Some(&req.question),
             Vec::new(),
             format!(
-                "apiv: request declares {}, this engine speaks {APIV}",
+                "apiv: request declares {}, this engine speaks {APIV} — apiv 2 added \
+                 the sweep question (v1 requests are not translated; see schema.rs)",
                 req.apiv
             ),
         );
@@ -94,15 +99,7 @@ pub fn respond(input: &str) -> Reply {
     // 3–4. Load the document (the shared loader the document-openers use too).
     let doc: Document = match load_doc(req.doc.as_deref(), req.docz.as_deref()) {
         Ok(d) => d,
-        Err(message) => {
-            return error_reply(
-                APIV,
-                None,
-                Some(&req.question),
-                Vec::new(),
-                message,
-            )
-        }
+        Err(message) => return error_reply(APIV, None, Some(&req.question), Vec::new(), message),
     };
 
     let name = doc.name.clone();
@@ -199,23 +196,6 @@ pub fn respond(input: &str) -> Reply {
                     } else {
                         Status::Ok
                     };
-                    let refusal = o.unmet.as_ref().map(question::refusal_text);
-                    let outcome = schema::OutcomeJson {
-                        records: o.records,
-                        total_ms: o.total_ms,
-                        field_leaves: expr::active_leaves(&doc).len(),
-                        cost_fit: o.fit.map(|f| schema::FitJson {
-                            exponent: f.exponent,
-                            ms_at_unit: f.ms_at_unit,
-                            residual_rel: f.residual,
-                        }),
-                        projections: o.projections,
-                        notes: o.notes,
-                        stop_reason: o.stop_reason,
-                        met: o.met,
-                        unmet: o.unmet,
-                        refusal,
-                    };
                     ok_reply(schema::Response {
                         apiv: APIV,
                         engine: store::engine_identity(),
@@ -223,8 +203,9 @@ pub fn respond(input: &str) -> Reply {
                         name: Some(name),
                         question: Some(echo),
                         warnings,
-                        outcome: Some(outcome),
+                        outcome: Some(outcome_json(&doc, o)),
                         single: None,
+                        sweep: None,
                         error: None,
                     })
                 }
@@ -264,6 +245,7 @@ pub fn respond(input: &str) -> Reply {
                             cases,
                             modes: None,
                         }),
+                        sweep: None,
                         error: None,
                     })
                 }
@@ -318,12 +300,167 @@ pub fn respond(input: &str) -> Reply {
                                 frequencies_hz: run.modal.frequencies,
                             }),
                         }),
+                        sweep: None,
                         error: None,
                     })
                 }
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
+        QuestionSpec::Sweep {
+            param,
+            values,
+            rungs,
+            tolerance,
+        } => {
+            if doc.fill.is_some() {
+                return error_reply(
+                    APIV,
+                    Some(&name),
+                    Some(&echo),
+                    warnings,
+                    "the sweep runs the solid path — remove the fill statement",
+                );
+            }
+            // The address must name a numeric parameter of THIS document before any
+            // point runs: unknown id or non-numeric attr is a request error naming
+            // what failed (param::resolve's text lists what the statement takes).
+            let addr = match param::ParamAddr::parse(&param) {
+                Ok(a) => a,
+                Err(e) => return error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            };
+            if let Err(e) = param::resolve(&doc, &addr) {
+                return error_reply(APIV, Some(&name), Some(&echo), warnings, e);
+            }
+            if values.is_empty() {
+                return error_reply(
+                    APIV,
+                    Some(&name),
+                    Some(&echo),
+                    warnings,
+                    "sweep: values is empty — name at least one value of the parameter",
+                );
+            }
+            if values.iter().any(|v| !v.is_finite()) {
+                return error_reply(
+                    APIV,
+                    Some(&name),
+                    Some(&echo),
+                    warnings,
+                    "sweep: values must all be finite numbers",
+                );
+            }
+            let rungs = match rungs {
+                None => question::DEFAULT_RUNGS.to_vec(),
+                Some(v) => match question::validate_rungs(&v) {
+                    Ok(()) => v,
+                    Err(e) => return error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+                },
+            };
+            let tolerance = match tolerance {
+                None => None,
+                Some(s) => match Tolerance::parse(&s) {
+                    Ok(t) => Some((t, s.clone())),
+                    Err(e) => {
+                        return error_reply(APIV, Some(&name), Some(&echo), warnings, e);
+                    }
+                },
+            };
+            // One machine probe, one store read: every point seeds from the same
+            // picture; only the document copy and its applied value change.
+            let machine = store::Machine::probe();
+            let store_rows = store::store_path()
+                .map(|p| store::read_all(&p))
+                .unwrap_or_default();
+            let base = question::Question {
+                rungs,
+                tolerance,
+                // A per-point budget is outside the sweep grammar: each point runs
+                // to its tolerance or the schedule's cap.
+                budget_ms: None,
+                store_rows,
+                machine,
+                clock: question::clock,
+            };
+            let mut points = Vec::with_capacity(values.len());
+            for (i, value) in values.iter().enumerate() {
+                let mut pd = doc.clone();
+                // apply re-runs resolve, which accepted this document above; the
+                // error arm cannot fire, but the honest path names the point if it
+                // ever did.
+                if let Err(e) = param::apply(&mut pd, &addr, *value) {
+                    return error_reply(
+                        APIV,
+                        Some(&name),
+                        Some(&echo),
+                        warnings,
+                        format!("sweep point {} (param {param} = {value}): {e}", i + 1),
+                    );
+                }
+                let q = base.clone();
+                match question::run(&pd, &q, &mut Collect) {
+                    Ok(o) => points.push(schema::SweepPoint {
+                        value: *value,
+                        outcome: outcome_json(&pd, o),
+                    }),
+                    Err(SetupError(e)) => {
+                        return error_reply(
+                            APIV,
+                            Some(&name),
+                            Some(&echo),
+                            warnings,
+                            format!(
+                                "sweep point {} of {} (param {param} = {value}): {e}",
+                                i + 1,
+                                values.len()
+                            ),
+                        );
+                    }
+                }
+            }
+            // The sweep always answers ok — each point carries its own verdict; a
+            // declared per-point tolerance that a point missed stays inside that
+            // point's outcome (its refusal text) rather than failing the sweep.
+            ok_reply(schema::Response {
+                apiv: APIV,
+                engine: store::engine_identity(),
+                status: Status::Ok,
+                name: Some(name),
+                question: Some(echo),
+                warnings,
+                outcome: None,
+                single: None,
+                sweep: Some(schema::SweepJson {
+                    param,
+                    values,
+                    points,
+                }),
+                error: None,
+            })
+        }
+    }
+}
+
+/// The ladder answer's envelope form — the ladder arm and each sweep point build the
+/// same JSON through this one function (one composition, no second presentation to
+/// drift).
+fn outcome_json(doc: &Document, o: question::Outcome) -> schema::OutcomeJson {
+    let refusal = o.unmet.as_ref().map(question::refusal_text);
+    schema::OutcomeJson {
+        records: o.records,
+        total_ms: o.total_ms,
+        field_leaves: expr::active_leaves(doc).len(),
+        cost_fit: o.fit.map(|f| schema::FitJson {
+            exponent: f.exponent,
+            ms_at_unit: f.ms_at_unit,
+            residual_rel: f.residual,
+        }),
+        projections: o.projections,
+        notes: o.notes,
+        stop_reason: o.stop_reason,
+        met: o.met,
+        unmet: o.unmet,
+        refusal,
     }
 }
 
@@ -344,6 +481,7 @@ fn error_reply(
             warnings,
             outcome: None,
             single: None,
+            sweep: None,
             error: Some(message.into()),
         },
         true,
@@ -373,4 +511,160 @@ struct Collect;
 impl question::Sink for Collect {
     fn record(&mut self, _rec: &fieldsmith_core::rung::RungRecord) {}
     fn note(&mut self, _text: &str) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOC: &str = "\
+fieldsmith 1
+name \"sweep test\"
+custommaterial steel200 name=\"Steel\" e=200000 nu=0.3 yield=250 density=7.85
+material steel200
+box beam size=(100, 10, 10) at=(50, 5, 5)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -100)";
+
+    fn sweep_request(param: &str, values: &str, extra: &str) -> String {
+        format!(
+            "{{\"apiv\": 2, \"doc\": {DOC:?}, \"question\": {{\"kind\": \"sweep\", \
+             \"param\": {param:?}, \"values\": {values}{extra}}}}}"
+        )
+    }
+
+    /// The V1 cantilever at a small ladder keeps the sweep unit tests in the
+    /// milliseconds range (referee: two rungs of a 2k/4k ladder solve in single-digit
+    /// ms; the measured boxes are V23's business, not these tests').
+    const FAST_RUNGS: &str = ", \"rungs\": [2000, 4000]";
+
+    fn envelope(input: &str) -> serde_json::Value {
+        let r = respond(input);
+        serde_json::from_str(&r.body).expect("envelope parses")
+    }
+
+    #[test]
+    fn unknown_param_is_a_named_request_error() {
+        let e = envelope(&sweep_request("nothere.size.0", "[1]", FAST_RUNGS));
+        assert_eq!(e["status"], "error");
+        assert!(e["error"]
+            .as_str()
+            .expect("error text")
+            .contains("no node, load or temperature named \"nothere\""));
+    }
+
+    #[test]
+    fn non_numeric_attr_names_what_the_statement_takes() {
+        let e = envelope(&sweep_request("beam.major", "[1]", FAST_RUNGS));
+        assert_eq!(e["status"], "error");
+        let text = e["error"].as_str().expect("error text");
+        assert!(text.contains("has no numeric parameter \"major\""));
+        assert!(
+            text.contains("size[0-2]"),
+            "the note names what a box takes"
+        );
+        // The scalar rule: index on a scalar, no index on a vector, both named.
+        let e2 = envelope(&sweep_request("beam.round.1", "[1]", FAST_RUNGS));
+        assert!(e2["error"]
+            .as_str()
+            .unwrap()
+            .contains("takes no component index"));
+        let e3 = envelope(&sweep_request("beam.size", "[1]", FAST_RUNGS));
+        assert!(e3["error"]
+            .as_str()
+            .unwrap()
+            .contains("needs a component index"));
+        let e4 = envelope(&sweep_request("beam.size.3", "[1]", FAST_RUNGS));
+        assert!(e4["error"].as_str().unwrap().contains("out of range"));
+    }
+
+    #[test]
+    fn empty_and_bad_values_are_request_errors() {
+        let e = envelope(&sweep_request("beam.size.2", "[]", FAST_RUNGS));
+        assert!(e["error"].as_str().unwrap().contains("values is empty"));
+        // A declared tolerance that does not parse is refused before any point runs.
+        let e2 = envelope(&sweep_request(
+            "beam.size.2",
+            "[1]",
+            ", \"tolerance\": \"deflection: 15 apples\"",
+        ));
+        assert!(e2["error"].as_str().unwrap().contains("tolerance"));
+        // One-rung schedules are refused the same way the ladder question refuses them.
+        let e3 = envelope(&sweep_request("beam.size.2", "[1]", ", \"rungs\": [4000]"));
+        assert!(e3["error"].as_str().unwrap().contains("at least two rungs"));
+    }
+
+    #[test]
+    fn apiv_mismatch_names_the_sweep_change() {
+        let req = format!(
+            "{{\"apiv\": 1, \"doc\": {DOC:?}, \"question\": {{\"kind\": \"sweep\", \
+             \"param\": \"beam.size.2\", \"values\": [1]}}}}"
+        );
+        let e = envelope(&req);
+        assert_eq!(e["status"], "error");
+        assert_eq!(e["apiv"], 1);
+        let text = e["error"].as_str().expect("error text");
+        assert!(text.contains("apiv 2 added the sweep question"), "{text}");
+        assert!(text.contains("speaks 2"));
+    }
+
+    #[test]
+    fn one_point_per_value_in_order_with_last_rung_numbers() {
+        let body = envelope(&sweep_request("beam.size.2", "[6, 10]", FAST_RUNGS));
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["question"]["kind"], "sweep");
+        assert_eq!(body["sweep"]["param"], "beam.size.2");
+        let pts = body["sweep"]["points"].as_array().expect("points");
+        assert_eq!(pts.len(), 2);
+        assert_eq!(pts[0]["value"], 6.0);
+        assert_eq!(pts[1]["value"], 10.0);
+        // Each point ran its own ladder: two rungs each, the change columns present.
+        for p in pts {
+            let out = &p["outcome"];
+            assert_eq!(out["records"].as_array().unwrap().len(), 2);
+            assert_eq!(
+                out["records"][1]["tracked"]["deflection_mm"].is_number(),
+                true
+            );
+            assert!(out["total_ms"].as_f64().unwrap() > 0.0);
+            // The met/unmet shape: no tolerance declared, neither key present.
+            assert!(out["met"].is_null() && out["unmet"].is_null());
+        }
+        // Thinner Z is much softer — the ordered sweep must disagree across its points
+        // (δ ∝ 1/h³ is V23's measured business; here one inequality only).
+        let d0 = pts[0]["outcome"]["records"][1]["tracked"]["deflection_mm"]
+            .as_f64()
+            .unwrap();
+        let d1 = pts[1]["outcome"]["records"][1]["tracked"]["deflection_mm"]
+            .as_f64()
+            .unwrap();
+        assert!(d0 > d1, "h=6 deflection {d0} must exceed h=10 {d1}");
+        // The sweep envelope answers ok even with nothing declared at the sweep level.
+    }
+
+    #[test]
+    fn declared_tolerance_lands_inside_each_point() {
+        let body = envelope(&sweep_request(
+            "beam.size.2",
+            "[6, 10]",
+            ", \"tolerance\": \"deflection:0.1%\"",
+        ));
+        let pts = body["sweep"]["points"].as_array().unwrap();
+        for p in pts {
+            let out = &p["outcome"];
+            let met = out["met"].as_object();
+            let unmet = out["unmet"].as_object();
+            assert!(
+                met.is_some() || unmet.is_some(),
+                "each point carries a verdict"
+            );
+            if unmet.is_some() {
+                assert!(out["refusal"].as_str().unwrap().contains("declared"));
+            }
+        }
+        // The sweep envelope itself stays ok regardless of the per-point verdicts.
+        assert_eq!(body["status"], "ok");
+    }
 }

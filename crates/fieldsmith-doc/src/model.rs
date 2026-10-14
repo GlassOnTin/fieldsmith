@@ -589,6 +589,24 @@ impl Document {
         rec(&self.root, id)
     }
 
+    /// Mutable `find`: the parameter sweep (M16) edits one number of one node in place.
+    pub fn find_mut(&mut self, id: &str) -> Option<&mut Node> {
+        fn rec<'a>(nodes: &'a mut [Node], id: &str) -> Option<&'a mut Node> {
+            for n in nodes {
+                if n.id == id {
+                    return Some(n);
+                }
+                if let NodeKind::Group { children, .. } = &mut n.kind {
+                    if let Some(f) = rec(children, id) {
+                        return Some(f);
+                    }
+                }
+            }
+            None
+        }
+        rec(&mut self.root, id)
+    }
+
     /// All node ids in tree order.
     pub fn node_ids(&self) -> Vec<String> {
         fn rec(nodes: &[Node], out: &mut Vec<String>) {

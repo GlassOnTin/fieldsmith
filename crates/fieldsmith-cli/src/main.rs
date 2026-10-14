@@ -13,7 +13,7 @@
 use fieldsmith_api::b64;
 use fieldsmith_api::question;
 use fieldsmith_api::question::{clock, parse_budget, DEFAULT_RUNGS};
-use fieldsmith_api::schema::{APIV, QuestionSpec};
+use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::store;
 use fieldsmith_core::import::{import_mesh, ImportOpts};
 use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
@@ -45,8 +45,12 @@ const USAGE: &str =
           stdout — ok and refusal both exit 0 (a refusal is an answer);
           a processing error is status:error, exit 2. The questions are
           the solver's same grammar: ladder (rungs/tolerance/budget),
-          solve, modes. Reads the costs store for seeding; writes
-          nothing.
+          solve, modes, sweep (M16). Reads the costs store for seeding;
+          [--csv FILE] writes the sweep answer as one CSV row per
+          point (value,dofs,elements,wall_ms,deflection_mm,vm_mpa,
+          deflection_change_rel,vm_change_rel,status — the last
+          rung's numbers); a non-sweep envelope is a named error and
+          writes nothing.
   session FILE [--bind A] [--port N] [--once] [--rate R]
           host M15 jobs for a worker: bind (default 127.0.0.1),
           print an enrolment token ONCE (the host's Noise static key
@@ -613,7 +617,11 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
     );
     println!(
         "field volume {:.1} ± {:.1} mm³, mesh volume {:.1} mm³, Δ {:+.3} % (field ref {:.1} s)",
-        ex.reference.volume, ex.reference.error, ex.mesh_volume, ex.delta_percent, ex.ref_ms / 1000.0
+        ex.reference.volume,
+        ex.reference.error,
+        ex.mesh_volume,
+        ex.delta_percent,
+        ex.ref_ms / 1000.0
     );
     if ex.defects.none() {
         println!(
@@ -642,7 +650,9 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         );
     }
     for (path, bytes, what) in [
-        stl.as_deref().zip(ex.stl).map(|(p, b)| (p, b, "binary STL")),
+        stl.as_deref()
+            .zip(ex.stl)
+            .map(|(p, b)| (p, b, "binary STL")),
         threemf.as_deref().zip(ex.mf).map(|(p, b)| (p, b, "3MF")),
     ]
     .into_iter()
@@ -656,7 +666,10 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
             (clock() - t0) / 1000.0
         );
     }
-    println!("export total {:.2} s (h {h:.3} mm)", (clock() - t_all) / 1000.0);
+    println!(
+        "export total {:.2} s (h {h:.3} mm)",
+        (clock() - t_all) / 1000.0
+    );
     Ok(())
 }
 
@@ -1118,12 +1131,22 @@ fn print_records_report(records: &[RungRecord], total_ms: f64) {
 /// 2 via API_ERR. The verb itself writes nothing and reads no files — the request
 /// carries the document, and store seeding is the API crate's read-only look.
 fn api_cmd(args: &[String]) -> Result<(), String> {
-    if args.len() > 1 {
-        return Err(
-            "api takes no arguments — the request on stdin carries everything\n\n".to_string()
-                + USAGE,
-        );
-    }
+    // `--csv FILE` is the sweep table's headless route (M16): the envelope is parsed
+    // and the sweep points land as one CSV row each. Everything else stays on stdout.
+    let csv = match args[0].as_str() {
+        "api" => match args[1..] {
+            [] => None,
+            [ref a, ref p] if a == "--csv" => Some(p.clone()),
+            _ => {
+                return Err(
+                    "api takes at most --csv FILE — the request on stdin carries everything\n\n"
+                        .to_string()
+                        + USAGE,
+                )
+            }
+        },
+        _ => unreachable!("run() dispatches the api verb with its name first"),
+    };
     let mut input = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)
         .map_err(|e| format!("api: reading stdin: {e}"))?;
@@ -1131,6 +1154,31 @@ fn api_cmd(args: &[String]) -> Result<(), String> {
     println!("{}", reply.body);
     if reply.is_error {
         API_ERR.store(true, Ordering::Relaxed);
+    }
+    if let Some(path) = csv {
+        let body: serde_json::Value = serde_json::from_str(&reply.body)
+            .map_err(|e| format!("api: its own envelope failed to parse: {e}"))?;
+        let (points, csv) = match body.get("sweep") {
+            Some(_) => {
+                let csv = fieldsmith_api::sweep_csv::sweep_csv(&body)?;
+                (
+                    body["sweep"]["points"]
+                        .as_array()
+                        .map(|p| p.len())
+                        .unwrap_or(0),
+                    csv,
+                )
+            }
+            None => {
+                return Err(
+                    "api: --csv is a sweep-question option and the envelope carries \
+                     no sweep answer"
+                        .to_string(),
+                )
+            }
+        };
+        std::fs::write(&path, csv).map_err(|e| format!("api: writing {path}: {e}"))?;
+        eprintln!("api: wrote {points} sweep point(s) to {path}");
     }
     Ok(())
 }
@@ -1206,7 +1254,8 @@ fn session_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
         }
         if let (Some(rate), Some(records)) = (
             rate,
-            v.pointer("/outcome/records").and_then(serde_json::Value::as_array),
+            v.pointer("/outcome/records")
+                .and_then(serde_json::Value::as_array),
         ) {
             let mut billed_ms = 0.0;
             for (i, r) in records.iter().enumerate() {
@@ -1277,11 +1326,17 @@ fn session_question(doc: &Document, args: &[String]) -> Result<QuestionSpec, Str
         });
     }
     let dofs = match opt(args, "--dofs") {
-        Some(s) => Some(s.parse::<usize>().map_err(|_| format!("bad --dofs value: {s}"))?),
+        Some(s) => Some(
+            s.parse::<usize>()
+                .map_err(|_| format!("bad --dofs value: {s}"))?,
+        ),
         None => None,
     };
     let h = match opt(args, "--h") {
-        Some(s) => Some(s.parse::<f64>().map_err(|_| format!("bad --h value: {s}"))?),
+        Some(s) => Some(
+            s.parse::<f64>()
+                .map_err(|_| format!("bad --h value: {s}"))?,
+        ),
         None => None,
     };
     if let Some(s) = opt(args, "--modes") {
@@ -1342,9 +1397,9 @@ fn token_path() -> Result<std::path::PathBuf, String> {
 
 /// `worker enrol T host:port`: parse, validate, store 0600. The token never echoes.
 fn worker_enrol(args: &[String]) -> Result<(), String> {
-    let token_raw = args
-        .get(2)
-        .ok_or("worker enrol: missing the token — copy the `session token:` line the host printed")?;
+    let token_raw = args.get(2).ok_or(
+        "worker enrol: missing the token — copy the `session token:` line the host printed",
+    )?;
     let addr = args
         .get(3)
         .ok_or("worker enrol: missing host:port — copy the address line the host printed")?;
@@ -1357,15 +1412,17 @@ fn worker_enrol(args: &[String]) -> Result<(), String> {
     let port: u16 = port
         .parse()
         .map_err(|e| format!("worker enrol: bad port in {addr:?}: {e}"))?;
-    let dir = match std::env::var("FIELDSMITH_TOKEN_DIR") {
-        Ok(d) => std::path::PathBuf::from(d),
-        Err(_) => match std::env::var("HOME") {
-            Ok(h) => std::path::PathBuf::from(h).join(".config/fieldsmith"),
-            Err(_) => {
-                return Err("worker enrol: no HOME for the token file — set HOME or FIELDSMITH_TOKEN_DIR".into())
-            }
-        },
-    };
+    let dir =
+        match std::env::var("FIELDSMITH_TOKEN_DIR") {
+            Ok(d) => std::path::PathBuf::from(d),
+            Err(_) => match std::env::var("HOME") {
+                Ok(h) => std::path::PathBuf::from(h).join(".config/fieldsmith"),
+                Err(_) => return Err(
+                    "worker enrol: no HOME for the token file — set HOME or FIELDSMITH_TOKEN_DIR"
+                        .into(),
+                ),
+            },
+        };
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::create_dir_all(&dir)
         .and_then(|_| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)))
@@ -1419,11 +1476,10 @@ fn worker_serve(args: &[String]) -> Result<(), String> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("worker: {} has no host field", path.display()))?
         .to_string();
-    let port = v
-        .get("port")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| format!("worker: {} has no port field", path.display()))?
-        as u16;
+    let port =
+        v.get("port")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("worker: {} has no port field", path.display()))? as u16;
     let token = fieldsmith_worker::Token::parse(token_raw)?;
     let opts = fieldsmith_worker::RunOpts {
         once,

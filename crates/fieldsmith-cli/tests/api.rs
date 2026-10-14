@@ -50,7 +50,7 @@ fn api(store: &Path, body: &str) -> (Value, String, Option<i32>, String) {
 }
 
 fn req(question: Value) -> String {
-    json!({"apiv": 1, "doc": BRACKET, "question": question}).to_string()
+    json!({"apiv": 2, "doc": BRACKET, "question": question}).to_string()
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn api_ok_solves_and_exits_zero() {
     assert_eq!(code, Some(0), "stderr: {err}");
     assert!(err.is_empty(), "clean run prints nothing on stderr: {err}");
     assert_eq!(v["status"], "ok");
-    assert_eq!(v["apiv"], 1);
+    assert_eq!(v["apiv"], 2);
     assert!(v["engine"].as_str().unwrap().contains("fieldsmith"));
     assert_eq!(v["single"]["provenance"]["dofs"], 48822);
     assert_eq!(v["name"], "Bracket");
@@ -138,11 +138,23 @@ fn api_error_envelope_exits_two() {
     assert_eq!(code, Some(2), "garbled stdin: {err}");
     assert_eq!(v["apiv"], 99, "the error echoes the request's apiv");
     assert_eq!(v["status"], "error");
+    // apiv 1 requests are refused, not translated (M16): the error names the change.
+    let (v, err, code, _) = api(
+        &store,
+        "{\"apiv\":1,\"doc\":\"x\",\"question\":{\"kind\":\"ladder\"}}",
+    );
+    assert_eq!(code, Some(2), "apiv 1 refusal: {err}");
+    assert_eq!(v["status"], "error");
+    let e = v["error"].as_str().unwrap();
+    assert!(
+        e.contains("apiv 2 added the sweep question"),
+        "error names the sweep change: {e}"
+    );
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
 }
 
 #[test]
-fn api_takes_no_arguments_and_exits_one() {
+fn api_rejects_argument_files_and_exits_one() {
     let store = empty_store("usage");
     let out = Command::new(BIN)
         .args(["api", "request.json"])
@@ -155,11 +167,64 @@ fn api_takes_no_arguments_and_exits_one() {
         "argument misuse is the plain CLI usage error, not an envelope"
     );
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(stderr.contains("api takes no arguments"), "{stderr}");
+    assert!(stderr.contains("api takes at most --csv FILE"), "{stderr}");
     assert!(
         String::from_utf8_lossy(&out.stdout).is_empty(),
         "no stdout for a usage error"
     );
+    std::fs::remove_dir_all(store.parent().unwrap()).ok();
+}
+
+#[test]
+fn api_csv_writes_one_row_per_sweep_point() {
+    // M16's --csv route: the envelope on stdout, one CSV row per point next to it.
+    let store = empty_store("csv");
+    let dir = std::env::temp_dir().join(format!("fs-api-cli-csv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("csv dir");
+    let out_csv = dir.join("sweep.csv");
+    let question = json!({
+        "kind": "sweep",
+        "param": "base.size.2",
+        "values": [6.0, 8.0],
+        "rungs": [30000, 150000],
+    });
+    let mut child = Command::new(BIN)
+        .args(["api", "--csv"])
+        .arg(&out_csv)
+        .env("FIELDSMITH_COSTS_STORE", &store)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin piped")
+        .write_all(req(question).as_bytes())
+        .expect("stdin write");
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("binary runs");
+    assert_eq!(out.status.code(), Some(0), "stderr of a sweep run: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains("wrote 2 sweep point(s)"), "{stderr}");
+    let body: Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("envelope");
+    assert_eq!(body["sweep"]["param"], "base.size.2");
+    let csv = std::fs::read_to_string(&out_csv).expect("csv written");
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines.len(), 3, "header plus two points: {lines:?}");
+    assert_eq!(
+        lines[0],
+        "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status"
+    );
+    assert!(lines[1].starts_with("6,"), "{}", lines[1]);
+    assert!(lines[2].starts_with("8,"), "{}", lines[2]);
+    // Thicker base is stiffer: fewer mm than the 6 mm point at the same rungs.
+    let d = |l: &str| l.split(',').nth(4).unwrap().parse::<f64>().unwrap();
+    let (d6, d8) = (d(lines[1]), d(lines[2]));
+    assert!(d8 < d6, "size.2 6→8: deflection {d6} → {d8}");
+    std::fs::remove_dir_all(dir).ok();
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
 }
 

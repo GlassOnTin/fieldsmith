@@ -11,9 +11,11 @@ use fieldsmith_core::{CaseResult, Provenance};
 use crate::question::{Met, Projection, Unmet};
 use serde::{Deserialize, Serialize};
 
-/// The envelope contract version. Bumping it is a named change (M16 sweep is the first
-/// consumer of a new question grammar, and would bump this).
-pub const APIV: u32 = 1;
+/// The envelope contract version. Bumping it is a named change — v2 (2026-10-14, M16)
+/// adds the `sweep` question: `{"kind": "sweep", "param": "<id>.<attr>[.<n>]",
+/// "values": [...], …}` with the per-point rungs/tolerance defaults. v1 requests are
+/// refused with a line naming the change; see `respond`.
+pub const APIV: u32 = 2;
 
 // ---------------------------------------------------------------- request ----
 
@@ -68,6 +70,21 @@ pub enum QuestionSpec {
         #[serde(default)]
         h: Option<f64>,
     },
+    /// The sweep (M16): one named numeric document parameter, one stated list of values.
+    /// Each value is applied to a copy of the document and asks the same ladder question
+    /// at it — `rungs` / `tolerance` default like [`Ladder`] and apply to EVERY point;
+    /// a per-point budget is outside this grammar (each point runs to its tolerance or
+    /// a shared schedule's cap). The param must resolve against the parsed document
+    /// (unknown id, non-numeric attr: request error naming what failed, see
+    /// `fieldsmith_doc::param`).
+    Sweep {
+        param: String,
+        values: Vec<f64>,
+        #[serde(default)]
+        rungs: Option<Vec<usize>>,
+        #[serde(default)]
+        tolerance: Option<String>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -104,6 +121,9 @@ pub struct Response {
     /// Present for the solve / modes questions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub single: Option<SingleResult>,
+    /// Present for the sweep question: one point per stated value, in order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepJson>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }
@@ -165,4 +185,27 @@ pub struct ModesJson {
     pub n_requested: usize,
     /// Natural frequencies, Hz, in order.
     pub frequencies_hz: Vec<f64>,
+}
+
+/// The sweep question's answer: the addressed parameter, the stated values, and one
+/// point per value in order (each point's rungs, boxes, costs and tolerance verdict as
+/// its own [`OutcomeJson`]). `total_ms` is the sum of the per-point rung walls (the
+/// host's own envelope wall around all points is not part of the honest contract —
+/// every other envelope names billed rung time, not caller overhead).
+#[derive(Debug, Serialize)]
+pub struct SweepJson {
+    /// The parameter address exactly as the request stated it.
+    pub param: String,
+    /// The values, in request order (the points are in the same order).
+    pub values: Vec<f64>,
+    /// One answer per value, in request order.
+    pub points: Vec<SweepPoint>,
+}
+
+/// One sweep point: the value applied to the document copy, and that point's own
+/// declared-question outcome (its last rung's tracked values are what the CSV takes).
+#[derive(Debug, Serialize)]
+pub struct SweepPoint {
+    pub value: f64,
+    pub outcome: OutcomeJson,
 }

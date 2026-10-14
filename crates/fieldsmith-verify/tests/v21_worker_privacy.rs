@@ -183,7 +183,10 @@ fn leak_patterns(local: &Value, docz_b64: &str) -> (Census, Census) {
         .iter()
         .map(|s| (format!("doc string {s:?}"), s.as_bytes().to_vec()))
         .collect();
-    wire.push(("zip magic of raw .fsmz bytes".into(), b"PK\x03\x04".to_vec()));
+    wire.push((
+        "zip magic of raw .fsmz bytes".into(),
+        b"PK\x03\x04".to_vec(),
+    ));
     wire.push(("request field name \"docz\":".into(), b"\"docz\":".to_vec()));
     // Three windows of the exact base64 the request carries — long, unique, and the
     // literal bytes a plaintext request would show.
@@ -251,7 +254,7 @@ fn v21_worker_privacy() {
     let docz = fsmz::save(&doc).expect("fsmz builds");
     let docz_b64 = b64::encode(&docz);
     let request = serde_json::json!({
-        "apiv": 1,
+        "apiv": 2,
         "docz": docz_b64,
         "question": {"kind": "ladder", "rungs": [30000u64, 150000u64]}
     })
@@ -322,7 +325,11 @@ fn v21_worker_privacy() {
     };
     let answer: Value =
         serde_json::from_str(&outcome.response).expect("worker answer parses as JSON");
-    assert_eq!(answer["status"], "ok", "worker answer: {}", outcome.response);
+    assert_eq!(
+        answer["status"], "ok",
+        "worker answer: {}",
+        outcome.response
+    );
     worker
         .join()
         .expect("worker thread")
@@ -442,9 +449,17 @@ fn v21_worker_privacy() {
     let artifact_files = walk(&artifacts);
     let artifact_names: Vec<String> = artifact_files
         .iter()
-        .map(|p| p.file_name().expect("file name").to_string_lossy().into_owned())
+        .map(|p| {
+            p.file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
-    let n_json = artifact_names.iter().filter(|n| n.ends_with(".json")).count();
+    let n_json = artifact_names
+        .iter()
+        .filter(|n| n.ends_with(".json"))
+        .count();
     assert_eq!(
         n_json, 1,
         "the artifacts directory held {n_json} response JSONs (expected one): {artifact_names:?}"

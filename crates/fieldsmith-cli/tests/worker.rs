@@ -85,8 +85,7 @@ fn lines_of(v: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
 /// while the host is blocked accepting.
 fn spawn_session(dir: &Path, runs: &str) -> (Captured, String, String) {
     let mut cmd = Command::new(BIN);
-    child_env(&mut cmd, dir, dir)
-        .args(["session", BRACKET_PATH, "--rungs", runs, "--once"]);
+    child_env(&mut cmd, dir, dir).args(["session", BRACKET_PATH, "--rungs", runs, "--once"]);
     let c = spawn_captured(&mut cmd);
     let deadline = Instant::now() + Duration::from_secs(180);
     let (mut token, mut addr) = (None, None);
@@ -121,7 +120,7 @@ fn local_envelope(home: &Path, question: Value) -> Value {
         .stderr(Stdio::piped())
         .spawn()
         .expect("api binary spawns");
-    let body = json!({"apiv": 1, "doc": BRACKET, "question": question}).to_string();
+    let body = json!({"apiv": 2, "doc": BRACKET, "question": question}).to_string();
     child
         .stdin
         .as_mut()
@@ -271,10 +270,7 @@ fn enrol_rejects_a_bad_token_without_storing_anything() {
         .expect("enrol runs");
     assert!(!out.status.success(), "a bad token must fail");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("token"),
-        "the error names the token: {err:?}"
-    );
+    assert!(err.contains("token"), "the error names the token: {err:?}");
     assert!(
         !dir.join(".config/fieldsmith/worker-token.json").exists(),
         "nothing is stored for a refused token"
@@ -292,8 +288,5 @@ fn worker_without_a_stored_token_names_the_enrol_step() {
         .expect("worker runs");
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("enrol"),
-        "the error points at enrol: {err:?}"
-    );
+    assert!(err.contains("enrol"), "the error points at enrol: {err:?}");
 }

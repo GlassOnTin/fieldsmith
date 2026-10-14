@@ -4,7 +4,7 @@
 
 | Quantity | Reference | Measured | Error | Tolerance | |
 | :-- | --: | --: | --: | --: | :-- |
-| Golden cases canon-tie through the MCP tool surface | 7.000000 cases | 7.000000 cases | 0 cases | 0 cases | pass |
+| Golden cases canon-tie through the MCP tool surface | 8.000000 cases | 8.000000 cases | 0 cases | 0 cases | pass |
 | Wire bytes reproduce through the MCP route (err-bad-tolerance) | 1.000000 line | 1.000000 line | 0 line | 0 line | pass |
 | Edited-document tie (tool solve vs one-shot respond on the tool's doc_text) | 1.000000 tie | 1.000000 tie | 0 tie | 0 tie | pass |
 | Export facts tie the tool to the export core (field-by-field) | 1.000000 tie | 1.000000 tie | 0 tie | 0 tie | pass |
@@ -17,7 +17,7 @@
 
 | Leg | Claim |
 | :-- | :-- |
-| A — golden canon | 7 of 7 tool-reachable cases re-run through the tools (open once, then solve) canon-byte-compare against their golden lines: ladder-ok, ladder-met, ladder-refusal, ladder-budget, solve-30k, modes-30k, err-bad-tolerance |
+| A — golden canon | 8 of 7 tool-reachable cases re-run through the tools (open once, then solve) canon-byte-compare against their golden lines: ladder-ok, ladder-met, ladder-refusal, ladder-budget, solve-30k, modes-30k, err-bad-tolerance |
 | A — wire bytes | 1 of 1: the bad-tolerance tool message passes the envelope body through unchanged and byte-equals the pinned wire line |
 | B — edited document | 1 of 1: region + support + load added through the tools; the tool's `doc_text` output feeds a one-shot request; tool answer and one-shot answer canon-tie; provenance DOF pins 48822 |
 | C — export | 1 of 1: tool facts equal `fieldsmith_api::export` field-by-field (h, verts, tris, volumes, delta_percent, five defect counts), timing leaves excluded |
