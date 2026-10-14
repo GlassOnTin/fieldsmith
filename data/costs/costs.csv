@@ -172,3 +172,30 @@
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,196581,42700,1,2460.2175110000003,0.0002980052922748116,0.12737474244454128
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,0,30000,41793,8352,1,387.13104300000003,,
 1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,Intel(R) N100,4,7,1,150000,187575,40640,1,2206.886735,0.0003108074482299294,0.13433039532455965
+# ---- M18 architecture rows 2026-10-14, same engine string, through the api verb on the
+# OnePlus 13 (SM8750, aarch64 - the phone datapoint, V25): the reference ladder and the V23
+# sweep again, on the cross-built static musl release fieldsmith-cli (sha256
+# c51ba032bc86181f30b3d011b186f6ce44f58e77e9f73adf85d39efaecbadef6 on the referee, checked
+# again in the guest after the LAN transfer), running bare in Haven's debian-trixie proot
+# guest; costs store disabled (/dev/null). The phone rows carry the envelope's OWN raw
+# estimates, not the x86_64 constants: tracked values diverge from the x86_64 pair at
+# ~1e-13..3e-11 relative (faer SIMD kernels), the sweep's small change fields to ~7e-8
+# relative, and the V22 canon quantization ties every compared field - the golden ladder
+# answers canon byte-tie the V22 fixture. Dofs/elements tie the x86_64 pair exactly (mesh,
+# not float). Ladder walls 554.6/1618.1/15424.3 ms (1.97x/1.17x/1.44x the referee release
+# run, V25); sweep engine sums 9.155 s, mean point wall 1831.1 ms -> 1966 points/hour.
+# Device band: 54% battery discharging -> 53%, 30.7 C -> 29.8 C, thermal none throughout;
+# Android 16, the guest shares the phone's cores.
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,48822,9588,5,554.5663020000001,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,190440,40643,5,1618.055,-0.2807483011647671,0.12031574160078838
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,2,750000,876558,198414,5,15424.328224,-0.04126717503794653,0.0993936436854263
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,39093,7616,1,373.39276,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,194445,41868,1,1433.550156,0.0002896591225530686,0.09873661648690131
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,46233,9248,1,288.671875,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,184173,39644,1,1396.2270829999998,0.0002697560053741153,0.08887243891973687
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,45123,9024,1,251.26322899999997,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,202473,43988,1,1677.579322,0.0002773003101829649,0.11489173043047798
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,42903,8576,1,244.307812,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,196581,42700,1,1759.225364,0.00029800527092207894,0.12737474241836777
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,0,30000,41793,8352,1,267.524584,,
+1,2026-10,cli,fieldsmith 0.2.0 / fenics-rs 0.1.0,SM8750,8,15,1,150000,187575,40640,1,1463.6253120000001,0.0003108074397170748,0.13433039531191515

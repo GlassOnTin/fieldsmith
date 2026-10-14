@@ -13,7 +13,7 @@
 //! 3. `data/costs/costs.csv` ties to these constants: every CLI wall and change value
 //!    parses back bit-equal, wasm rows tie to the budgets-doc constants (probe-harness
 //!    rows with empty field cells) and to the OnePlus 13 in-page walls (rows carrying
-//!    achieved DOF/element cells). Forty-six rows: the six 2026-10-13 static-ladder
+//!    achieved DOF/element cells). Fifty-nine rows: the six 2026-10-13 static-ladder
 //!    CLI rows, the four M14 thermal CLI rows (2026-10-14, `bracket-thermal.fsm` — the
 //!    wall is the mesh+solve+thermal superset, change cells empty by measurement), the
 //!    six M15 connection rows (2026-10-14: the same ladder solved locally on both
@@ -22,6 +22,10 @@
 //!    (2026-10-14: the V23 five-point sweep through the api verb on both machines —
 //!    per-point re-mesh walls with per-point achieved dofs, rung-1 change cells
 //!    identical across the machines the sweep envelopes proved bit-identical), the
+//!    thirteen M18 architecture rows (2026-10-14: the OnePlus 13 (SM8750, aarch64)
+//!    through the api verb — the three-rung ladder and the V23 sweep; dofs tie the
+//!    x86_64 pair exactly, tracked values raw-diverge at ~1e-13..3e-11 relative, and
+//!    change cells carry the phone's own estimates, not the x86_64 constants), the
 //!    eight probe-harness wasm rows and the two OnePlus 13 wasm rows.
 //! 4. The report carries the honest label: projections carry residuals, and the
 //!    first-pair fit is on the cheap side of the curve.
@@ -74,16 +78,23 @@ struct ShipRow {
 /// envelope deltas were measured that way. The next four are the 2026-10-14 M15
 /// connection rows: the same ladder solved locally on both machine classes, the
 /// change columns carrying the same bit-equal rung-1 estimates as the static rows.
-/// The last twenty are the 2026-10-14 M16 sweep rows: the V23 cantilever sweep
+/// The twenty 2026-10-14 M16 sweep rows: the V23 cantilever sweep
 /// through the api verb (beam.size.2 over 8/9/10/11/12 mm, rungs 30000/150000,
 /// tolerance deflection:1%, costs store off), one row per point per rung per
 /// machine — five walls on each of the two (cpu, target, rung) keys. The sweep
 /// re-meshes per point, so the achieved dofs are carried on the row and both
 /// machines share every dofs and change constant (the sweep envelopes came back
 /// bit-identical across the x86_64 pair; only the walls differ, ~2.25× overall).
+/// The thirteen 2026-10-14 M18 architecture rows carry the datapoint to the
+/// OnePlus 13 (SM8750, aarch64): the three-rung ladder, then the same V23 sweep.
+/// Dofs tie the x86_64 pair exactly; tracked values raw-diverge at
+/// ~1e-13..3e-11 relative (faer SIMD kernels), so the change cells are the
+/// phone's OWN estimates — the ladder rung-1/rung-2 cells and each sweep
+/// point's rung-1 cells differ from their x86_64 counterparts in the last
+/// digits. Walls are the phone's, ~1.2–2.0× the referee release run (V25).
 /// Every block's rungs 0/1 share (cpu, target, rung) with the others — the matcher
 /// ties by wall, as the wasm matcher does.
-const CLI_ROWS: [ShipRow; 34] = [
+const CLI_ROWS: [ShipRow; 47] = [
     ShipRow {
         cpu: CPU_REF,
         target: 30_000,
@@ -398,6 +409,130 @@ const CLI_ROWS: [ShipRow; 34] = [
         wall: 2206.886735,
         chd: Some(0.0003108074482299294),
         chv: Some(0.13433039532455965),
+        dofs: Some(187575),
+    },
+    // 2026-10-14 M18 architecture block — the OnePlus 13 (SM8750, aarch64) through the
+    // api verb, the cross-built static musl release binary (sha256 checked in the
+    // guest), inside Haven's debian-trixie proot guest; costs store off. Change cells
+    // are the phone envelope's own raw estimates; dofs tie the x86_64 pair exactly.
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 554.5663020000001,
+        chd: None,
+        chv: None,
+        dofs: None,
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1618.055,
+        chd: Some(-0.2807483011647671),
+        chv: Some(0.12031574160078838),
+        dofs: None,
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 750_000,
+        rung: 2,
+        wall: 15424.328224,
+        chd: Some(-0.04126717503794653),
+        chv: Some(0.0993936436854263),
+        dofs: None,
+    },
+    // M18 sweep rows — the same five-point V23 sweep, point order 8/9/10/11/12 mm,
+    // per-point achieved dofs (mesh ties the x86_64 pair), rung-1 change cells the
+    // phone's own.
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 373.39276,
+        chd: None,
+        chv: None,
+        dofs: Some(39093),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1433.550156,
+        chd: Some(0.0002896591225530686),
+        chv: Some(0.09873661648690131),
+        dofs: Some(194445),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 288.671875,
+        chd: None,
+        chv: None,
+        dofs: Some(46233),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1396.2270829999998,
+        chd: Some(0.0002697560053741153),
+        chv: Some(0.08887243891973687),
+        dofs: Some(184173),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 251.26322899999997,
+        chd: None,
+        chv: None,
+        dofs: Some(45123),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1677.579322,
+        chd: Some(0.0002773003101829649),
+        chv: Some(0.11489173043047798),
+        dofs: Some(202473),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 244.307812,
+        chd: None,
+        chv: None,
+        dofs: Some(42903),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1759.225364,
+        chd: Some(0.00029800527092207894),
+        chv: Some(0.12737474241836777),
+        dofs: Some(196581),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 30_000,
+        rung: 0,
+        wall: 267.524584,
+        chd: None,
+        chv: None,
+        dofs: Some(41793),
+    },
+    ShipRow {
+        cpu: CPU_ONEPLUS,
+        target: 150_000,
+        rung: 1,
+        wall: 1463.6253120000001,
+        chd: Some(0.0003108074397170748),
+        chv: Some(0.13433039531191515),
         dofs: Some(187575),
     },
 ];
@@ -729,7 +864,7 @@ fn v18_estimator_residual() {
         "costs.csv ties to these numbers",
         format!(
             "`v18_costs_csv_ties_to_ship_data` parses `data/costs/costs.csv` and checks: \
-             {nrows} rows, every row schema 1, month 2026-10; the thirty-four CLI rows tie wall \
+             {nrows} rows, every row schema 1, month 2026-10; the forty-seven CLI rows tie wall \
              and change-estimate cells EXACTLY to the constants this test embeds — the six \
              2026-10-13 static-ladder rows carry the change estimates, the four 2026-10-14 \
              M14 thermal rows carry the mesh+solve+thermal superset wall with empty change \
@@ -740,7 +875,13 @@ fn v18_estimator_residual() {
              beam.size.2 over [8, 9, 10, 11, 12] mm at tolerance deflection:1%, five walls \
              per (cpu, target, rung) key tied by wall, carrying the per-point achieved \
              dofs and rung-1 change cells both machines share bit-equal because the sweep \
-             envelopes are bit-identical across the x86_64 pair; the two M15 \
+             envelopes are bit-identical across the x86_64 pair; the thirteen M18 \
+             architecture rows (2026-10-14) carry the same shapes on the OnePlus 13 \
+             (SM8750, aarch64) — the ladder's rung-1/rung-2 change cells and each \
+             sweep point's rung-1 cells are the phone's own raw estimates, differing \
+             from the x86_64 constants at ~1e-13..3e-11 relative (faer SIMD \
+             kernels), while achieved dofs tie them exactly and the V22 canon \
+             quantization ties every compared field; the two M15 \
              worker rows tie to the round-trip session's last timed job, their walls \
              inside the recorded nine-job spans; the \
              eight wasm probe-harness rows tie to the budgets-document walls ({w0}, {w1}, \
