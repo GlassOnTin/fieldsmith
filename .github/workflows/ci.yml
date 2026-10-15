@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: false
+      - name: Assert external actions are SHA-pinned
+        run: |
+          if grep -rEn 'uses: [^.].+@(v[0-9]|main|master)' .github/workflows; then
+            echo "::error::Unpinned external action ref(s) above — pin to a 40-char SHA (# vX.Y.Z)."
+            exit 1
+          fi
+      - name: Assert submodules point at first-party repos
+        run: |
+          foreign=$(git config -f .gitmodules --get-regexp '\.url$' \
+            | grep -vE ' https://github\.com/GlassOnTin/' || true)
+          if [ -n "$foreign" ]; then
+            echo "$foreign"
+            echo "::error::Submodule URL(s) above are not under github.com/GlassOnTin."
+            exit 1
+          fi
+      - name: Assert AGPL-3.0-or-later license metadata
+        run: |
+          grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
+          grep -q 'license = "AGPL-3.0-or-later"' Cargo.toml
+          grep -q '"license": "AGPL-3.0-or-later"' web/package.json
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Run cargo clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run workspace tests (V1-V23 + unit tests)
+        env:
+          FIELDSMITH_SMALL_RAM: "1"
+          FIELDSMITH_COSTS_STORE: /dev/null
+        run: cargo test --workspace
+      - name: Run V14 STEP chord ladder (release)
+        run: cargo test -p fieldsmith-verify --release --test v14_step -- --ignored --nocapture
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.npm
+            target/wasm32-unknown-unknown/
+            target/wasm-mt/
+          key: ${{ runner.os }}-web-${{ hashFiles('**/Cargo.lock', 'web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-web-
+      - name: Install Rust wasm toolchains and wasm-bindgen 0.2.129
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
+          curl -fsSL -o /tmp/wasm-bindgen.tar.gz \
+            https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz
+          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  /tmp/wasm-bindgen.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/wasm-bindgen.tar.gz -C ~/.cargo/bin --strip-components=1 wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen
+          wasm-bindgen --version
+      - name: Install web dependencies
+        run: npm --prefix web ci
+      - name: Build single-thread and threaded WASM packages
+        run: bash scripts/build-wasm.sh
+      - name: Run TypeScript typecheck and production bundle build
+        run: |
+          npm --prefix web run typecheck
+          npm --prefix web run build
+      - name: Install Playwright Chromium and run browser verification (V5, V16, shape, mobile)
+        run: |
+          npx --prefix web playwright install --with-deps chromium
+          node web/tests/run-e2e.mjs --only v5
+          node web/tests/run-e2e.mjs --only interior
+          node web/tests/run-e2e.mjs --only shape
+          node web/tests/run-e2e.mjs --only mobile

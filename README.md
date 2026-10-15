@@ -21,6 +21,11 @@ Noise-encrypted connections — usage in each binary's help text.
 
 ## Building and running
 
+Prebuilt static Linux archives (`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
+carrying `fieldsmith` and `fieldsmith-mcp`) and the static web bundle (`fieldsmith-*-web.tar.gz`)
+publish on [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) on each `v*` tag.
+To build from source:
+
     git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
     cargo test -p fieldsmith-verify           # verification cases (V1–V23; V24/V25 in scripts/)
     npm --prefix web install                  # once
@@ -115,4 +120,4 @@ the solver but the UI shows one case or the envelope, not both side by side.
 Successor to the MorphoForge experiment. Built on
 [`fenics-rs`](https://github.com/GlassOnTin/fenics-rs), consumed as a submodule.
 
-License: AGPL-3.0-or-later.
+License: [AGPL-3.0-or-later](LICENSE).

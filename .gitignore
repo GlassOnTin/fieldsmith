@@ -7,3 +7,5 @@ web/src/pkg/
 web/src/pkg-mt/
 web/test-results/
 *.log
+.claude/
+.agents/

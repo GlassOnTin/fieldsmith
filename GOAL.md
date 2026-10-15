@@ -210,14 +210,12 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | **M18** | `aarch64` (`SM8750`) architecture datapoint | **Done** (`cfee968`) | `V25.md`, `scripts/v25-arm-compare.py`, 13 `SM8750` rows in `costs.csv` |
 | **M19** | Quarter-plate tangent junction | **Done** (`38495e8`) | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
 | **M20** | Mesh-leaf graded fill in PrusaSlicer | **Done** (`28412e3`) | 5 × 3 manifold grid + adaptive crossing/weld/component-orient fix + `slicer.md` & `v14_step.rs` |
-| **M21** | N100 Chrome compute profile | **Done** | Pass-specialized shader + visual-only rAF invalidation + N100 factorial appendix in `budgets.md` |
+| **M21** | N100 Chrome compute profile | **Done** (`b9f83b3`) | Pass-specialized shader + visual-only rAF invalidation + N100 factorial appendix in `budgets.md` |
 
 ---
 
 ## Explicitly out of scope for v0.5
 
-- Flipping `GlassOnTin/fieldsmith` from private to public or enabling billed GitHub Actions
-  runners (publishing is the owner's decision; CI runs locally via `scripts/ci.sh`).
 - Publishing `fenics-rs` to `crates.io` (consumed via git submodule).
 - New physics flows, viewport section-plane clipping, `.fsm` variables, or model-tree part
   groups (scheduled for v0.6+ per [VISION §7](VISION.md#7-competitive-landscape-and-roadmap-direction)).

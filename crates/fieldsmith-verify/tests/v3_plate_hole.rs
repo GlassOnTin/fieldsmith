@@ -89,7 +89,12 @@ fn run_study(doc_src: &str, sigma_net: f64, kt_ref: f64, quarter: bool, r: &mut 
         }
     }
 
-    for h in [0.2, 0.14, 0.1, 0.07, 0.05] {
+    let spacings: &[f64] = if std::env::var_os("FIELDSMITH_SMALL_RAM").is_some() {
+        &[0.2, 0.14, 0.1]
+    } else {
+        &[0.2, 0.14, 0.1, 0.07, 0.05]
+    };
+    for &h in spacings {
         let d = doc(doc_src);
         let a = analyse(&d, Resolution::Size(h), clock).expect("analysis");
         let c = &a.cases[0];
@@ -225,5 +230,21 @@ fn v3_plate_with_hole() {
     );
     r.section("Mesh study — half plate (y ≥ 0)", half_rows);
     r.section("Mesh study — quarter plate (x ≥ 0, y ≥ 0)", quarter_rows);
-    r.finish();
+    if std::env::var_os("FIELDSMITH_SMALL_RAM").is_some() {
+        println!("{}", r.markdown());
+        for c in &r.checks {
+            assert!(
+                c.passed(),
+                "{} {}: measured {} vs reference {} (error {:.4}, tolerance {})",
+                r.id,
+                c.quantity,
+                c.measured,
+                c.reference,
+                c.error(),
+                c.tolerance
+            );
+        }
+    } else {
+        r.finish();
+    }
 }

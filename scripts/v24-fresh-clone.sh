@@ -42,7 +42,11 @@ t_answer=0
 t_all=$SECONDS
 t0=$SECONDS
 echo "===== V24 leg 1: fresh clone from the remote ====="
-gh repo clone GlassOnTin/fieldsmith "$CLONE" -- --recurse-submodules || { fail=1; echo "clone failed"; }
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  gh repo clone GlassOnTin/fieldsmith "$CLONE" -- --recurse-submodules || { fail=1; echo "clone failed"; }
+else
+  git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith.git "$CLONE" || { fail=1; echo "clone failed"; }
+fi
 t_clone=$((SECONDS - t0))
 [ -d "$CLONE/fenics-rs/crates" ] || { fail=1; echo "submodule fenics-rs missing from the clone"; }
 

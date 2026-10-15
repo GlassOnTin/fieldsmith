@@ -1,0 +1,220 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ci-passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - name: Check CI status on tagged commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed" \
+            --jq '.workflow_runs[0].conclusion // "none"' 2>/dev/null || echo "unknown")
+          echo "CI conclusion for ${GITHUB_SHA:0:7}: ${conclusion}"
+          if [ "$conclusion" = "success" ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: verify-ci
+    if: needs.verify-ci.outputs.ci-passed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Run cargo clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run workspace verification suite
+        env:
+          FIELDSMITH_SMALL_RAM: "1"
+          FIELDSMITH_COSTS_STORE: /dev/null
+        run: cargo test --workspace
+
+  build-cli:
+    needs: [verify-ci, test]
+    if: |
+      !cancelled() &&
+      (needs.verify-ci.outputs.ci-passed == 'true' || needs.test.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            apt: musl-tools
+          - target: aarch64-unknown-linux-musl
+            apt: gcc-aarch64-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/${{ matrix.target }}/
+          key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-${{ matrix.target }}-
+      - name: Install cross-compile toolchain (${{ matrix.target }})
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+          rustup target add ${{ matrix.target }}
+      - name: Build release CLI and MCP binaries (${{ matrix.target }})
+        env:
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-gnu-ar
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p fieldsmith-cli -p fieldsmith-mcp
+          tag="${GITHUB_REF_NAME}"
+          stage="fieldsmith-${tag}-${{ matrix.target }}"
+          mkdir -p "dist/${stage}"
+          cp "target/${{ matrix.target }}/release/fieldsmith" "dist/${stage}/"
+          cp "target/${{ matrix.target }}/release/fieldsmith-mcp" "dist/${stage}/"
+          cp LICENSE README.md VISION.md GOAL.md "dist/${stage}/"
+          cp -r examples data "dist/${stage}/"
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+      - name: Upload CLI archive (${{ matrix.target }})
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fieldsmith-${{ matrix.target }}
+          path: dist/fieldsmith-*-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-web:
+    needs: [verify-ci, test]
+    if: |
+      !cancelled() &&
+      (needs.verify-ci.outputs.ci-passed == 'true' || needs.test.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.npm
+            target/wasm32-unknown-unknown/
+            target/wasm-mt/
+          key: ${{ runner.os }}-web-${{ hashFiles('**/Cargo.lock', 'web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-web-
+      - name: Install Rust wasm toolchains and wasm-bindgen 0.2.129
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
+          curl -fsSL -o /tmp/wasm-bindgen.tar.gz \
+            https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz
+          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  /tmp/wasm-bindgen.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/wasm-bindgen.tar.gz -C ~/.cargo/bin --strip-components=1 wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen
+      - name: Build web bundle
+        run: |
+          npm --prefix web ci
+          bash scripts/build-wasm.sh
+          npm --prefix web run typecheck
+          npm --prefix web run build
+          tag="${GITHUB_REF_NAME}"
+          stage="fieldsmith-${tag}-web"
+          mkdir -p "dist/${stage}"
+          cp -r web/dist/* "dist/${stage}/"
+          cp LICENSE README.md "dist/${stage}/"
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+      - name: Upload web archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fieldsmith-web
+          path: dist/fieldsmith-*-web.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [build-cli, build-web]
+    if: |
+      !cancelled() &&
+      needs.build-cli.result == 'success' &&
+      needs.build-web.result == 'success' &&
+      startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: false
+      - name: Download x86_64 CLI archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: fieldsmith-x86_64-unknown-linux-musl
+          path: release/
+      - name: Download aarch64 CLI archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: fieldsmith-aarch64-unknown-linux-musl
+          path: release/
+      - name: Download web archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: fieldsmith-web
+          path: release/
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: release/*.tar.gz
+      - name: Generate SHA256SUMS
+        run: |
+          : > SHA256SUMS
+          find release -maxdepth 1 -type f -name '*.tar.gz' | sort | while read -r f; do
+            printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")" >> SHA256SUMS
+          done
+          cat SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+        with:
+          generate_release_notes: true
+          files: |
+            release/*.tar.gz
+            SHA256SUMS
