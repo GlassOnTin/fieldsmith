@@ -72,6 +72,7 @@ function syncSlices(vp: Viewport) {
         const c = sliceGroup.children.pop()!;
         disposeDeep(c);
       }
+      vp.invalidate();
     }
     return;
   }
@@ -101,6 +102,7 @@ function syncSlices(vp: Viewport) {
   );
   lines.renderOrder = 4;
   sliceGroup.add(lines);
+  vp.invalidate();
 }
 
 viewportExtensions.push({ sync: syncSlices });

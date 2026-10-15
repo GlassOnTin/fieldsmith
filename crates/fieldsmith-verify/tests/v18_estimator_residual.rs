@@ -553,12 +553,12 @@ type WasmRow = (
 );
 
 const WASM_ROWS: [WasmRow; 10] = [
-    (CPU_REF, 30_000, 0, 1352.0, None, None),
-    (CPU_REF, 150_000, 1, 6025.0, None, None),
+    (CPU_REF, 30_000, 0, 1337.0, None, None),
+    (CPU_REF, 150_000, 1, 5983.0, None, None),
     (CPU_REF, 30_000, 0, 1678.0, None, None),
     (CPU_REF, 150_000, 1, 6494.0, None, None),
-    (CPU_N100, 30_000, 0, 9679.0, None, None),
-    (CPU_N100, 150_000, 1, 24967.0, None, None),
+    (CPU_N100, 30_000, 0, 3280.0, None, None),
+    (CPU_N100, 150_000, 1, 13363.0, None, None),
     (CPU_N100, 30_000, 0, 2963.0, None, None),
     (CPU_N100, 150_000, 1, 12670.0, None, None),
     (CPU_ONEPLUS, 30_000, 0, 1270.0, Some(48822), Some(9588)),

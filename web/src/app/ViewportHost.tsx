@@ -137,19 +137,25 @@ export function ViewportHost() {
       });
     });
 
+    let gizmoSig = '';
     const placeGizmo = () => {
       const s = store.selection;
       const n = s && s.kind === 'node' && store.lens === 'shape' ? findNode(store.doc, s.id) : null;
       if (!n) {
+        if (!gizmoNode && !helper.visible) return;
         tc.detach();
         gizmoNode = null;
+        gizmoSig = '';
         helper.visible = false;
         vp.invalidate();
         return;
       }
+      const m = worldMatrix(store.doc, n);
+      const nextSig = `${n.id}|${ui.gizmo}|${ui.snap}|${ui.gridStep}|${ui.angleStep}|${m.elements.join(',')}`;
+      if (!dragging && nextSig === gizmoSig && helper.visible) return;
+      gizmoSig = nextSig;
       gizmoNode = n.id;
       if (!dragging) {
-        const m = worldMatrix(store.doc, n);
         m.decompose(proxy.position, proxy.quaternion, proxy.scale);
         proxy.updateMatrixWorld();
       }

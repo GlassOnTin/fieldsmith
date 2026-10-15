@@ -454,19 +454,25 @@ function syncGlyphs(vp: Viewport) {
     glyphHost = vp;
     vp.overlays.add(glyphs);
   }
-  const lvl = analysis.latest;
-  const lfp = lvl ? `${lvl.nodes.length}:${lvl.surfaceRegion.length}:${analysis.state.resultsFor}` : 'none';
-  const sig = `${store.lens}|${store.docVersion}|${lfp}`;
+  const lvl =
+    store.lens === 'setup' && analysis.launchedFor === store.docVersion ? analysis.latest : null;
+  const lfp = lvl ? `${lvl.label}:${lvl.nodes.length}:${lvl.surfaceRegion.length}` : 'none';
+  const sig = store.lens === 'setup' ? `${store.docVersion}|${lfp}` : 'off';
   if (sig === glyphSig) return;
   glyphSig = sig;
+  const had = glyphs.children.length > 0;
   clearGlyphs();
-  if (store.lens !== 'setup' || !lvl) return;
+  if (store.lens !== 'setup' || !lvl) {
+    if (had) vp.invalidate();
+    return;
+  }
   try {
     buildGlyphs(lvl);
   } catch (err) {
     clearGlyphs();
     console.error('glyph build failed', err);
   }
+  vp.invalidate();
 }
 
 // Level arrivals don't touch the store, so bridge them into a UI re-render (and a sync).

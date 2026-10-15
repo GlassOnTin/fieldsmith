@@ -335,7 +335,11 @@ function syncResults(vp: Viewport) {
     resultHost = vp;
     vp.overlays.add(resultGroup);
   }
-  vp.showField = store.lens !== 'results';
+  const nextShow = store.lens !== 'results';
+  if (vp.showField !== nextShow) {
+    vp.showField = nextShow;
+    vp.invalidate();
+  }
   const lvl = analysis.latest;
   const on = store.lens === 'results' && !!lvl;
   const sig = on
@@ -345,12 +349,16 @@ function syncResults(vp: Viewport) {
     : 'off';
   if (sig === resultSig) return;
   resultSig = sig;
+  const had = resultGroup.children.length > 0;
   while (resultGroup.children.length) {
     const c = resultGroup.children.pop()!;
     disposeDeep(c);
   }
   resultMesh = null;
-  if (!on || !lvl) return;
+  if (!on || !lvl) {
+    if (had) vp.invalidate();
+    return;
+  }
   try {
     rebuild(lvl);
   } catch (err) {
@@ -360,6 +368,7 @@ function syncResults(vp: Viewport) {
     }
     console.error('results mesh build failed', err);
   }
+  vp.invalidate();
 }
 
 const raycaster = new THREE.Raycaster();

@@ -5,7 +5,7 @@ Fieldsmith is an implicit-field CAD and analysis tool: a document is a small tex
 its geometry is an SDF-like field, and every measurement (volume, stress, printed mass) comes
 from integrating that field, not from a boundary representation.
 
-**Status:** v0.2.0. The model → setup → solve → fill → export flow works locally and is
+**Status:** v0.5.0. The model → setup → solve → fill → export flow works locally and is
 verified by the cases in [docs/verification/](docs/verification/); imported meshes
 (GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
 with labelled faces and region-driven extension (V10); a multi-object 3MF imports as
@@ -22,7 +22,7 @@ Noise-encrypted connections — usage in each binary's help text.
 ## Building and running
 
     git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
-    cargo test -p fieldsmith-verify           # verification cases (V1–V23)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V23; V24/V25 in scripts/)
     npm --prefix web install                  # once
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist

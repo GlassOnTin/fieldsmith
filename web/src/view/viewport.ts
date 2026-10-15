@@ -15,9 +15,9 @@ export const MAX_HIGHLIGHTS = 16;
 /** Per-leaf colour cap; beyond the first 32 (tree order) parts render in the base colour. */
 export const MAX_PARTCOLORS = 32;
 
-function fragSource(field: string, ident: string): string {
-  const active = field.includes('vec4 fs_core(vec3 p) {')
-    ? 'vec4 fs_active(vec3 p) { if (u_core > 0.5) return fs_core(p); return fs_field(p); }'
+function fragSource(field: string, ident: string, core = false): string {
+  const active = core && field.includes('vec4 fs_core(vec3 p) {')
+    ? 'vec4 fs_active(vec3 p) { return fs_core(p); }'
     : 'vec4 fs_active(vec3 p) { return fs_field(p); }';
   return /* glsl */ `
 precision highp float;
@@ -316,7 +316,7 @@ export class Viewport {
     const loop = () => {
       requestAnimationFrame(loop);
       this.controls.update();
-      if (this.dirty) {
+      if (this.dirty && this.compiling === 0) {
         this.dirty = false;
         const t0 = performance.now();
         this.render();
@@ -412,7 +412,7 @@ export class Viewport {
       u_camRight: { value: new THREE.Vector3() },
       u_camUp: { value: new THREE.Vector3() },
       u_ghost: { value: ghost ? 1 : 0 },
-      u_alpha: { value: ghost ? 0.28 : this.bodyAlpha },
+      u_alpha: { value: ghost ? 0.28 : core ? 1 : this.bodyAlpha },
       u_core: { value: core ? 1 : 0 },
       u_gridCol: this.gridCol,
       u_gridOn: this.gridOn,
@@ -424,7 +424,7 @@ export class Viewport {
       u_hlCol: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector3()) },
       u_hlN: { value: 0 },
     };
-    if (spec.grid && spec.source.includes('u_param')) {
+    if (core && spec.grid && spec.source.includes('u_param')) {
       const g = spec.grid;
       const tex = new THREE.Data3DTexture(g.data, g.dims[0], g.dims[1], g.dims[2]);
       tex.format = THREE.RedFormat;
@@ -461,7 +461,7 @@ export class Viewport {
     return new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: VERT,
-      fragmentShader: fragSource(spec.source, ghost ? NO_IDENT : spec.ident || NO_IDENT),
+      fragmentShader: fragSource(spec.source, ghost ? NO_IDENT : spec.ident || NO_IDENT, core),
       uniforms,
       depthTest: true,
       depthWrite: !ghost && !translucent,
@@ -470,6 +470,7 @@ export class Viewport {
   }
 
   private fieldGen = 0;
+  private compiling = 0;
   private highlights: Highlight[] = [];
   /** Milliseconds the last shader took from source to first use (compile included). */
   lastCompileMs = 0;
@@ -494,10 +495,13 @@ export class Viewport {
     const mat = this.buildMaterial(spec, { translucent: this.bodyAlpha < 1 });
     const probe = new THREE.Mesh(this.quad.geometry, mat);
     probe.frustumCulled = false;
+    this.compiling++;
     try {
       await this.renderer.compileAsync(probe, this.camera, this.scene);
     } catch {
       /* fall back to synchronous compile on first render */
+    } finally {
+      this.compiling--;
     }
     if (gen !== this.fieldGen) {
       this.dropFieldTextures(mat);
@@ -517,7 +521,21 @@ export class Viewport {
 
   /** Surface highlights (selection, hover, regions); cheap — uniforms only. */
   setHighlights(h: Highlight[]) {
-    this.highlights = h.slice(0, MAX_HIGHLIGHTS);
+    const next = h.slice(0, MAX_HIGHLIGHTS);
+    if (
+      next.length === this.highlights.length &&
+      next.every(
+        (x, i) =>
+          x.leaf === this.highlights[i].leaf &&
+          x.face === this.highlights[i].face &&
+          x.color[0] === this.highlights[i].color[0] &&
+          x.color[1] === this.highlights[i].color[1] &&
+          x.color[2] === this.highlights[i].color[2],
+      )
+    ) {
+      return;
+    }
+    this.highlights = next;
     this.applyHighlights();
     this.invalidate();
   }
@@ -540,6 +558,8 @@ export class Viewport {
   private partLeaves: string[] = [];
   /** The last spec handed to `setField`; the alpha regime flip rebuilds from it. */
   private lastSpec: FieldSpec | null = null;
+  /** The last spec handed to `setCore`; compiled only while `bodyAlpha < 1`. */
+  private lastCoreSpec: FieldSpec | null = null;
   /** App-wide body alpha (1 = opaque). The interior pass shows when this is < 1. */
   private bodyAlpha = 1;
 
@@ -547,16 +567,19 @@ export class Viewport {
    * pending). The spec carries the core pass's own step scale (lower than the body's —
    * the lattice field over-estimates distances). Mirrors `setGhost`. */
   setCore(spec: FieldSpec | null) {
+    this.lastCoreSpec = spec;
     this.dropFieldTextures(this.coreMaterial);
     this.coreMaterial?.dispose();
-    if (!spec || !spec.bounds) {
+    if (!spec || !spec.bounds || this.bodyAlpha >= 1) {
+      const had = this.coreMaterial !== null;
       this.coreMaterial = null;
       this.coreQuad.material = new THREE.MeshBasicMaterial({ visible: false });
-    } else {
-      this.coreMaterial = this.buildMaterial(spec, { core: true });
-      this.coreQuad.material = this.coreMaterial;
-      this.applyPartColors();
+      if (had) this.invalidate();
+      return;
     }
+    this.coreMaterial = this.buildMaterial(spec, { core: true });
+    this.coreQuad.material = this.coreMaterial;
+    this.applyPartColors();
     this.invalidate();
   }
 
@@ -570,6 +593,18 @@ export class Viewport {
     const next = THREE.MathUtils.clamp(a, 0, 1);
     const flip = (this.bodyAlpha >= 1) !== (next >= 1) && !!this.lastSpec?.bounds;
     this.bodyAlpha = next;
+    if (flip) {
+      if (next < 1 && !this.coreMaterial && this.lastCoreSpec?.bounds) {
+        this.coreMaterial = this.buildMaterial(this.lastCoreSpec, { core: true });
+        this.coreQuad.material = this.coreMaterial;
+        this.applyPartColors();
+      } else if (next >= 1 && this.coreMaterial) {
+        this.dropFieldTextures(this.coreMaterial);
+        this.coreMaterial.dispose();
+        this.coreMaterial = null;
+        this.coreQuad.material = new THREE.MeshBasicMaterial({ visible: false });
+      }
+    }
     const done = flip ? this.setField(this.lastSpec!) : undefined;
     if (!flip && this.material) {
       (this.material.uniforms.u_alpha.value as number) = next;
@@ -578,17 +613,16 @@ export class Viewport {
     return done;
   }
 
-  /** Swap the bound `u_param` payload on both field materials (the analysis's graded grid
-   * arrived). Returns false when no material carries `u_param` or `dims` do not match the
-   * spec they were built with — the caller must then run a full `setField` with the new
-   * grid instead. */
+  /** Swap the bound `u_param` payload on the interior material (the analysis's graded grid
+   * arrived). Returns false when no material is bound or `dims` do not match the spec they
+   * were built with — the caller must then run a full `setField` with the new grid instead. */
   updateParamGrid(data: Float32Array, dims: [number, number, number]): boolean {
     const g = this.lastSpec?.grid;
     if (!g || g.dims[0] !== dims[0] || g.dims[1] !== dims[1] || g.dims[2] !== dims[2]) return false;
-    const materials = [this.material, this.coreMaterial]
-      .filter((m): m is THREE.RawShaderMaterial => m !== null && 'u_param' in m.uniforms);
-    if (!materials.length) return false;
-    for (const m of materials) {
+    if (!this.material) return false;
+    g.data = data;
+    if (this.lastCoreSpec?.grid) this.lastCoreSpec.grid.data = data;
+    if (this.coreMaterial && 'u_param' in this.coreMaterial.uniforms) {
       const tex = new THREE.Data3DTexture(data, dims[0], dims[1], dims[2]);
       tex.format = THREE.RedFormat;
       tex.type = THREE.FloatType;
@@ -596,10 +630,10 @@ export class Viewport {
       tex.magFilter = THREE.NearestFilter;
       tex.unpackAlignment = 1;
       tex.needsUpdate = true;
-      (m.uniforms.u_param.value as THREE.Data3DTexture | undefined)?.dispose();
-      m.uniforms.u_param.value = tex;
+      (this.coreMaterial.uniforms.u_param.value as THREE.Data3DTexture | undefined)?.dispose();
+      this.coreMaterial.uniforms.u_param.value = tex;
+      this.invalidate();
     }
-    this.invalidate();
     return true;
   }
 
@@ -607,8 +641,15 @@ export class Viewport {
    * order from the body shader). First 32 in `colors`' insertion order (tree order) ride;
    * the rest render in the base colour. */
   setPartColors(colors: Record<string, string>, leaves: string[]) {
-    this.partColors = colors;
-    this.partLeaves = leaves;
+    const sameLeaves =
+      leaves.length === this.partLeaves.length && leaves.every((l, i) => l === this.partLeaves[i]);
+    const keysA = Object.keys(colors);
+    const keysB = Object.keys(this.partColors);
+    const sameColors =
+      keysA.length === keysB.length && keysA.every((k) => colors[k] === this.partColors[k]);
+    if (sameLeaves && sameColors) return;
+    this.partColors = { ...colors };
+    this.partLeaves = [...leaves];
     this.applyPartColors();
     this.invalidate();
   }
@@ -651,16 +692,20 @@ export class Viewport {
 
   /** Translucent ghost of a shape (e.g. a selected cutter); `null` hides it. */
   setGhost(spec: FieldSpec | null) {
-    this.dropFieldTextures(this.ghostMaterial);
-    this.ghostMaterial?.dispose();
     if (!spec || !spec.bounds) {
+      if (!this.ghostMaterial) return;
+      this.dropFieldTextures(this.ghostMaterial);
+      this.ghostMaterial.dispose();
       this.ghostMaterial = null;
       this.ghostQuad.material = new THREE.MeshBasicMaterial({ visible: false });
-    } else {
-      this.ghostMaterial = this.buildMaterial(spec, { ghost: true });
-      this.ghostMaterial.userData.bounds = spec.bounds;
-      this.ghostQuad.material = this.ghostMaterial;
+      this.invalidate();
+      return;
     }
+    this.dropFieldTextures(this.ghostMaterial);
+    this.ghostMaterial?.dispose();
+    this.ghostMaterial = this.buildMaterial(spec, { ghost: true });
+    this.ghostMaterial.userData.bounds = spec.bounds;
+    this.ghostQuad.material = this.ghostMaterial;
     this.invalidate();
   }
 
@@ -735,6 +780,9 @@ export class Viewport {
     if (!animate) {
       this.controls.target.copy(centre);
       this.camera.position.copy(to);
+      this.controls.update();
+      this.interacting = false;
+      clearTimeout(this.idleTimer);
     } else {
       const fromP = this.camera.position.clone();
       const fromT = this.controls.target.clone();

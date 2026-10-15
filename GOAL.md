@@ -127,23 +127,35 @@ this file in a reviewed commit with the measured reason rather than skipping it.
 
 
 ### E. N100 Chrome empirical compute profile (M21 — evidence: appendix in [budgets.md](docs/verification/budgets.md))
-- [ ] **Measure controllable runtime factors on `ian-quieter.lan`.** On the 4-core N100, Chrome
-      (using software SwiftShader WebGL) recorded two distinct wall bands during M13
-      (`4918 / 15064 ms` vs. `~9100–9700 / 24100–25000 ms` coarse / refined) while native CLI
-      (`569 / 2643 ms`) and Firefox (`4526 / 16068 ms`) stayed within `0.4–2.8 %`. Measure a
-      compact factorial run set on the N100 covering:
-      1. *Main-thread SwiftShader WebGL rAF contention*: active 60 Hz software raymarching vs.
-         paused/throttled preview while the 4-core Web Worker rayon pool solves.
-      2. *Chromium profile / shader cache state* (warm vs. fresh profile).
-      3. *Thermal / package power state* across back-to-back runs.
-- [ ] **Record the empirical compute band in `budgets.md` and `data/costs/costs.csv`.** Add a
-      concise appendix to `docs/verification/budgets.md` (and `budgets-laptop-chrome.md`)
-      stating the measured walls across those conditions (and keep any rAF throttling improvement
-      if WebGL contention is significant on 4 cores).
+- [x] **Measure controllable runtime factors on `ian-quieter.lan`.** Isolated the v0.4 two-band
+      split (`4918 / 15064 ms` pre-M12 vs. `9679 / 24967 ms` post-M12) on the 4-core N100:
+      1. *Software WebGL (`SwiftShader` 1080p) shader inlining and redundant rAF invalidations:*
+         M12 added `if (u_core > 0.5) return fs_core(p); return fs_field(p);` to the shared
+         fragment shader and mounted `setCore` + `updateParamGrid` on every edit/arrival, causing
+         SwiftShader to inline the gyroid lattice (`fs_core`, `u_param` 3D texture fetches,
+         `3 × fs_sincos`) into the opaque body pass (`~2100 ms`/frame vs. `~750 ms`/frame) across
+         `9` solve-window frames (`18 937 ms` total CPU). Specializing `fragSource` per pass,
+         deferring `coreMaterial` construction and `u_param` uploads until `bodyAlpha < 1`,
+         holding the render loop while `compileAsync` is in flight, and deduplicating
+         highlight/gizmo/glyph invalidations reduces solve-window renders to the `3` visual
+         updates (`[[26,628],[3304,969],[13392,768]]`, `2 365 ms` sum) and brings N100 Chrome down
+         to **`3272–3285 / 13351–13409 ms`** (`1.9 fps` at 100 % opacity, `0.8–0.9 fps` at 35 %).
+         Pausing `vp.render` during the edit solve (`paused-webgl-worker-only`) measures
+         **`2746 / 13288 ms`** (`0` long tasks), matching WebGL-less Firefox (`2963 / 12670 ms`)
+         within `7 %`.
+      2. *Profile cache vs. sustained PL1 package thermal/power clamping:* cool-start runs
+         (`38 °C`, `2.9–3.1 GHz`) reproduce within `0.4 %` across `4` runs; back-to-back warm
+         runs after sustained 4-core load (`63 °C`, PL1 clamping one core to `1.69 GHz`) measure
+         `3722 / 14968 ms` (`+11.9–13.3 %`).
+- [x] **Record the empirical compute band in `budgets.md` and `data/costs/costs.csv`.** Added the
+      measured factorial appendix to `docs/verification/budgets.md`,
+      `docs/verification/budgets-laptop-chrome.md`, and `web/tests/probe-budgets.mjs`, and
+      updated `data/costs/costs.csv` (`3280 / 13363 ms` on N100, `1337 / 5983 ms` on referee)
+      and `v18_estimator_residual.rs`.
 
 ### F. Release hygiene & carried items
-- [ ] `scripts/ci.sh` passes end-to-end across `V1`–`V24` plus `V25`'s portable tie-in assertions.
-- [ ] `README.md` status header updated from `v0.2.0` to match the current release and reflects
+- [x] `scripts/ci.sh` passes end-to-end across `V1`–`V24` plus `V25`'s portable tie-in assertions.
+- [x] `README.md` status header updated from `v0.2.0` to `v0.5.0` and reflects
       the updated `V3`, `slicer.md`, and `budgets.md` findings without unmeasured claims.
 
 ---
@@ -169,7 +181,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | `SM8750` (`aarch64`) 5-point sweep throughput (`V25`) | `≥ 100 points/hour` | **1966 points/hour** (9.16 s engine sum across 5 points) — PASS |
 | `V3x` quarter-plate peak stress error (`h = 0.2..0.05`) | `≤ 5 %` (`≤ 8.5 %` graze, `≤ 5.5 %` at `0.05`) | **+1.59 / −3.30 / +1.47 / +6.85 / +5.39 %** (`V3.md`) — PASS |
 | Mesh-leaf graded fill in PrusaSlicer (`Sx`) | `manifold = yes` at `skin = 1.2 mm` | **`manifold = yes` across all 15 cells (`skin = 0..1.2 mm`, `h = 0.30..0.15 mm`), `0` open edges** (`slicer.md`) — PASS |
-| N100 Chrome compute profile (`M21`) | Empirical walls measured across WebGL/worker conditions | Pending M21 run on `ian-quieter.lan` |
+| N100 Chrome compute profile (`M21`) | Empirical walls measured across WebGL/worker conditions | **3280 / 13363 ms** (`3` visual rAFs, down from `9679 / 24967 ms`; `2746 / 13288 ms` worker-only) — PASS |
 
 ---
 
@@ -197,8 +209,8 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | **M17** | Standalone repo & fresh-clone gate | **Done** (`7e5c1db`) | `fenics-rs` submodule, `GlassOnTin/fieldsmith` remote, `V24.md`, CI gate |
 | **M18** | `aarch64` (`SM8750`) architecture datapoint | **Done** (`cfee968`) | `V25.md`, `scripts/v25-arm-compare.py`, 13 `SM8750` rows in `costs.csv` |
 | **M19** | Quarter-plate tangent junction | **Done** (`38495e8`) | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
-| **M20** | Mesh-leaf graded fill in PrusaSlicer | **Done** | 5 × 3 manifold grid + adaptive crossing/weld/component-orient fix + `slicer.md` & `v14_step.rs` |
-| **M21** | N100 Chrome compute profile | **Open** | Empirical WebGL/worker run set on `ian-quieter.lan` + appendix in `budgets.md` |
+| **M20** | Mesh-leaf graded fill in PrusaSlicer | **Done** (`28412e3`) | 5 × 3 manifold grid + adaptive crossing/weld/component-orient fix + `slicer.md` & `v14_step.rs` |
+| **M21** | N100 Chrome compute profile | **Done** | Pass-specialized shader + visual-only rAF invalidation + N100 factorial appendix in `budgets.md` |
 
 ---
 

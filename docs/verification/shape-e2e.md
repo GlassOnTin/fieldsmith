@@ -9,7 +9,7 @@
 | A2 | Intersect: only the overlap remains | pass | overlap -1.07 mm, box-only point 23.18 mm | shape-03.png |
 | A2 | Blend radius adds a fillet at the seam | pass | seam probe: sharp 0.80 mm, blended (r 4) -0.53 mm; cylinder add at (0, 0, 30) | shape-04.png |
 | A4 | Gizmo drag along X snaps to the nearby capsule centre | pass | X handle found 26 px from the origin; torus x 160 → 127.3 mm (y 0, z 4); capsule centre x 127.3 | shape-05.png |
-| A4 | Gizmo drag far from features snaps to the 1 mm grid | pass | torus x 127.3 → 150 mm | shape-06.png |
+| A4 | Gizmo drag far from features snaps to the 1 mm grid | pass | torus x 127.3 → 148 mm | shape-06.png |
 | A4 | A gizmo drag is a single undo step | pass | after Ctrl Z: x 127.3 mm (expected 127.3) | shape-07.png |
 | A3 | Ctrl G wraps the box in a group | pass | group group1: box1 | shape-08.png |
 | A3 | Shell 2 mm inward hollows the box | pass | centre 8.00 mm, inside the bottom wall -1.00 mm | shape-09.png |

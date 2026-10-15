@@ -606,6 +606,30 @@ if (sweepRowMeasured) {
 }
 md.push(`Machine: ${machine}. Every timing above is this machine's.` +
   (outPathArg ? '' : ` GOAL's mid-range laptop is not measured here.`));
+md.push('');
+md.push('## Appendix: N100 Chrome empirical compute profile (M21)');
+md.push('');
+md.push('Measured on `ian-quieter.lan` (`Intel(R) N100`, 4 hardware threads, 7 GiB RAM, headless Linux, no hardware GPU/display).');
+md.push('During v0.4 (M13), headless Chrome on the N100 recorded two wall bands (`4918 / 15064 ms` vs `9679 / 24967 ms` for `edit → coarse` / `edit → refined`).');
+md.push('Isolating the runtime factors in M21 identified two mechanisms:');
+md.push('');
+md.push('1. **Software WebGL (`SwiftShader` 1080p) shader inlining and redundant rAF invalidations:**');
+md.push('   - Before M12 (`3d021558`), the outer body shader compiled only `fs_field(p)` (`~750 ms`/frame on 4 N100 cores, `1.8 fps`), and unthrottled UI syncs triggered 7 frames during the solve (`5555 ms` total SwiftShader CPU), yielding `4918 / 15064 ms`.');
+md.push('   - M12 added `if (u_core > 0.5) return fs_core(p); return fs_field(p);` to the shared fragment shader and mounted `setCore` + `updateParamGrid` on every edit/arrival. Even with `u_core = 0` (`bodyAlpha = 1`, opaque body), SwiftShader inlined the gyroid lattice (`fs_core`, `u_param` 3D texture fetches, `3 × fs_sincos`) into the 300-step raymarch loop, raising per-frame CPU cost to `~2100 ms` (`0.9 fps`) across 9 solve-window frames (`18937 ms` total SwiftShader CPU) and stretching the solve to `9679 / 24967 ms`.');
+md.push('   - **M21 fix (`viewport.ts`, `ViewportHost.tsx`, `setup.tsx`, `results.tsx`, `make.tsx`):** specializing `fragSource` per pass (`fs_field` when `core = false`, `fs_core` when `core = true`), deferring `coreMaterial` construction and `u_param` uploads until `bodyAlpha < 1`, holding the render loop while `compileAsync` is in flight, and deduplicating highlight/gizmo/glyph invalidations reduces solve-window renders to the **3 visual updates** (`edit`, `coarse` glyphs, `refined` glyphs; `2365 ms` total SwiftShader CPU) and brings N100 Chrome down to **`3272–3285 / 13351–13409 ms`** (`1.9 fps` at 100 % opacity, `0.8–0.9 fps` at 35 % opacity).');
+md.push('   - Pausing `vp.render` during the edit solve (`paused-webgl-worker-only`) eliminates the single `635 ms` edit-frame overlap before `coarse`, measuring **`2746 / 13288 ms`** (`0` long tasks), matching WebGL-less headless Firefox (`2963 / 12670 ms`) within `7 %`.');
+md.push('2. **Profile cache vs. sustained PL1 package thermal/power clamping:**');
+md.push('   - Cool-start runs (`38 °C` package temperature, all 4 cores at `2.9–3.1 GHz`) reproduce within `0.4 %` (`3272 / 13351 ms`, `3280 / 13363 ms`, `3274 / 13409 ms`, `3285 / 13377 ms`).');
+md.push('   - Back-to-back warm-profile runs after sustained 4-core load (`63 °C` package temperature, PL1 clamping one core to `1.69 GHz`) add `+11.9–13.3 %` (`3722 / 14968 ms`); local loopback `.wasm` streaming compilation (`~80 ms`) is smaller than the PL1 thermal/power step.');
+md.push('');
+md.push('| Condition on `ian-quieter.lan` (4-core N100) | Setup solve (ms) | `edit → coarse` (ms) | `edit → refined` (ms) | Solve-window `longtasks` (`[start, dur]` ms) | Package temp / CPU freq |');
+md.push('| :-- | --: | --: | --: | :-- | :-- |');
+md.push('| Pre-M12 (`3d021558`, `fs_field` only, 7 rAFs) | 17606 | 4918 | 15064 | 7 frames (`5555 ms` sum, `1.8 fps`) | `~38 °C`, `2.9–3.1 GHz` |');
+md.push('| Post-M12 / v0.4 (`fs_core` inlined, 9 rAFs) | 23957 | 9679 | 24967 | 9 frames (`18937 ms` sum, `0.9 fps`) | `~38 °C`, `2.9–3.1 GHz` |');
+md.push('| **M21 (`fs_field` specialized, 3 visual rAFs, cool)** | **14127–14161** | **3272–3285** | **13351–13409** | **3 frames (`[[26,628],[3304,969],[13392,768]]`, `1.9 fps`)** | **`38 °C`, `2.9–3.1 GHz`** |');
+md.push('| M21 warm profile back-to-back (PL1 thermal clamp) | 15405 | 3722 | 14968 | 3 frames (`[[26,745],[3742,1048],[14992,821]]`) | `63 °C`, `1.69–3.13 GHz` |');
+md.push('| M21 paused WebGL (`vp.render` no-op, worker only) | 13839 | 2746 | 13288 | 0 (`none`) | `53–62 °C`, `2.85–3.13 GHz` |');
+md.push('| Firefox headless (`budgets-laptop-firefox.md`, no WebGL) | 15095 | 2963 | 12670 | 0 (`none`) | `~38 °C`, `2.9–3.1 GHz` |');
 if (xauth && !rows.filter((r) => r.mode === 'headed').every((r) => r.ok)) headedOk = false;
 writeFileSync(outPath, md.join('\n') + '\n');
 
