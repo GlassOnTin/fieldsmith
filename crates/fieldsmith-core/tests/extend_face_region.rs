@@ -210,13 +210,17 @@ fn extend_face_selector_claims_the_skirt_tip() {
     let tip_area: f64 = tip.iter().map(|&i| facets[i].area(&mesh)).sum();
     println!("tip (skirt.nz) facets: {} ({:.1} mm²)", tip.len(), tip_area);
     assert!(!tip.is_empty(), "the skirt.nz region claims facets");
-    // The skirt's tip is the swept hull's footprint: the cube's 10×10 face plus the
-    // half-spacing margin the sweep's hull adds, with the chamfer's corner rounding
-    // trimming the corners. Measured 105.0 mm² — between the cube's face (100) and
-    // the full margin footprint (11×11 = 121).
+    // Measured at h = 1.0 under the repaired mesher: 588 facets, 115.9 mm², the whole
+    // claim a single flat cap in the z band [−11.50, −11.25). The sweep plane is
+    // z = −10, but the voxelised field's material continues below it to the bounds
+    // floor — a pre-existing clamp artefact every earlier measurement shipped with —
+    // so the skirt's −z-facing boundary sits at the floor, not at the sweep plane.
+    // Readings taken before the same repair (last 93.5 mm² across 396 pieces with a
+    // tilted rim-slope band) were fragmented by the mesher's duplicate-vertex defect
+    // and are superseded; the repaired claim is one coherent band.
     assert!(
-        tip_area > 100.0 && tip_area < 121.0 * 1.05,
-        "tip area {tip_area:.1} mm² outside (100, 127) mm²"
+        tip_area > 104.0 && tip_area < 128.0,
+        "tip area {tip_area:.1} mm² outside (104, 128) mm²"
     );
     // Every claimed facet's normal lies within the 45° face cone of −z (cos ≥ 0.7) —
     // the same cone `region_facets` applies. The corner-rounded edge facets tilt
@@ -236,7 +240,10 @@ fn extend_face_selector_claims_the_skirt_tip() {
     assert!(!top.is_empty(), "the mesh1.pz region claims facets");
     // The top face's claimed area is the cube's 10×10 face plus the half-spacing
     // margin the voxelised field's trilinear interpolation rounds outward at the
-    // edges — measured 107.6 mm². Allow 10 %.
+    // edges — measured 107.6 mm² under the pre-repair mesher and 91.4 mm² after (the
+    // duplicate-vertex flares had inflated the reading; under coherent meshing the
+    // corner facets tilt past the +z face cone and drop out of the claim). Allow
+    // 10 %.
     assert!(
         (top_area - 100.0).abs() < 100.0 * 0.10,
         "top area {top_area:.1} mm² vs the cube's 100 mm² face"

@@ -62,6 +62,16 @@ pub struct Lattice {
 const ALPHA_LONG: f64 = 0.24999;
 const ALPHA_SHORT: f64 = 0.41189;
 
+// Noise floor for the claim bisection's predicate. Composite fields put a fixed ±ulp value
+// (of the probe coordinates, a few evaluation ops deep) on the zero patch next to anything
+// the caller's own quantisation calls a max face: measured +5.6e-17 on the mouth fixture's
+// top plane and ±3.6e-15 on the skirt model's cap. Below that the patch can read "positive"
+// the whole way to the bracket's far end and the bisection collapses onto the window end —
+// the junction node is lost outright (the mouth apex at 0.013 of a pitch) instead of landing
+// NOISE/slope off the surface (~1e-14, a planar sliver the emit floor drops). Parts evaluated
+// at much larger coordinate scales carry proportionally larger probe noise; unmeasured here.
+const NOISE: f64 = 1e-14;
+
 impl Lattice {
     /// A lattice covering `[lo, hi]` with spacing close to `h`, padded by one cell, aligned so
     /// that `lo` and `hi` fall on lattice planes.
@@ -257,6 +267,44 @@ fn crossing(f: &impl Fn(V3) -> f64, a: V3, b: V3, fa: f64, fb: f64) -> f64 {
     t
 }
 
+/// Parameter (in the a→b sense) of the boundary of the strictly-positive region of the raw
+/// field on the segment a–b, given a probe inside it (`f > 0`) and one beyond on `other`
+/// (`f ≤ 0`). [`crossing`] cannot be reused: the `≤0` side of a max-face edge lies on a zero
+/// patch where every probe reads exactly the same fixed value and the `ft == 0` break stops at
+/// the first one — potentially the whole bracket away from the crossing. Bisect instead on
+/// `raw(p) > NOISE`. With a zero-floor predicate the answer pins to the caller's own
+/// quantisation — the tiny band's edge, tiny/slope off the surface, far enough that a rim claim
+/// and a half-pitch cut on the same line carry distinct residuals and the consuming stencil
+/// emits a planar sliver; with a floor that is itself below the quantisation the patch's
+/// constant ±ulp probe values (a lattice coordinate one ulp outside a face) can instead read
+/// positive along the whole patch and the answer collapses onto the window end, losing the
+/// junction node. At ~1e-14 the answer lands NOISE/slope off the raw surface and a claim and
+/// a cut on the same line disagree by less than the emit floor drops. Tracks the region
+/// adjoining `pos` (skips interior gaps), under the same one-crossing-per-edge assumption
+/// [`crossing`] carries. 60 iterations with the 1e-14 break land at ~2⁻⁶⁰ of the edge.
+fn positive_boundary(
+    raw: &impl Fn(V3) -> f64,
+    a: V3,
+    b: V3,
+    pos: (f64, V3),
+    other: (f64, V3),
+) -> f64 {
+    let mut tp = pos.0;
+    let mut tn = other.0;
+    for _ in 0..60 {
+        if tn - tp < 1e-14 {
+            break;
+        }
+        let tm = 0.5 * (tp + tn);
+        if raw(lerp(a, b, tm)) > NOISE {
+            tp = tm;
+        } else {
+            tn = tm;
+        }
+    }
+    0.5 * (tp + tn)
+}
+
 /// Mesh the solid `{p : f(p) < 0}` inside the box `[lo, hi]` with target spacing `h`.
 ///
 /// Lattice positions are computed on demand ([`Lattice::position`] is O(1) arithmetic): at
@@ -308,27 +356,194 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
     // ---- warp vertices that lie too close to a crossing --------------------------------------
     // For each violated vertex keep the nearest violating cut point (as an edge fraction); the
     // cut point becomes the vertex's emitted position (a handful of vertices, so a map, not a
-    // whole-lattice table).
+    // whole-lattice table). Max-face edges — exactly one end strictly positive, the other
+    // exactly 0 — are scanned too: on a symmetry plane the field is exactly 0 across the whole
+    // face, so their hole side never reads negative and the strict-sign branch never fires;
+    // without this, junction nodes where a wall meets such a face are missed entirely. The
+    // positive end claims the node when the crossing sits inside its claim window; a deeper
+    // crossing claims the zero end itself, and pairs whose own crossing the claimed end
+    // no longer covers store the crossing in `zero_cuts` for cut-node emission (second pass
+    // below).
     let mut warp: HashMap<usize, (f64, V3)> = HashMap::new();
+    // Mid-edge crossings stored for cut-node emission: fraction from the smaller id to the
+    // larger. Every stored crossing is consumed between the pair's raw lattice positions —
+    // the bisection ran on that segment, and a claimed end's claim point belongs to its
+    // claiming edge, which may exit through another wall entirely.
+    let mut zero_cuts: HashMap<(usize, usize), f64> = HashMap::new();
+    // Claim runs per vertex: how many edges claimed it in this pass. The second pass below
+    // stores raw crossings only through single-run claims (see the note after the pass).
+    let mut claim_runs: HashMap<usize, usize> = HashMap::new();
     lat.edges(|a, b, long| {
         let (fa, fb) = (val[a], val[b]);
+        let alpha = if long { ALPHA_LONG } else { ALPHA_SHORT };
         if !((fa < 0.0 && fb > 0.0) || (fa > 0.0 && fb < 0.0)) {
-            return;
+            if !((fa == 0.0 && fb > 0.0) || (fb == 0.0 && fa > 0.0)) {
+                return;
+            }
+            // u = the positive end, z = the zero end; s measured u→z. The ≤0 side of the edge
+            // lies on a zero patch, so this is `positive_boundary`'s job, not `crossing`'s.
+            let (u, z) = if fb > 0.0 { (b, a) } else { (a, b) };
+            let pu = pos(u);
+            let pz = pos(z);
+            let rim = |ts: f64| lerp(pu, pz, ts);
+            // Probe sign at the val snapshot's own noise floor. A lattice plane coinciding with
+            // a face carries up to an ulp of coordinate error from the `origin + k·h`
+            // accumulation (−0.11 + 5·0.11 rounds to 0.44 + 1ulp), and the box distance turns a
+            // coordinate one ulp outside a face into a strictly positive value; at interior
+            // planes the same error folds back against the face and is invisible. `tiny` already
+            // declares such points zero in `val`; the probes must agree or the windows
+            // misclassify (the top-plane edge read skipfar and its junction node was lost).
+            let sign = |p: V3| if f(p) > tiny { 1.0 } else { -1.0 };
+            // The positive end must be positive in the field, not only in `val`. A spur vertex
+            // — a coincident-surface corner (two faces' caps on one lattice plane read a zero
+            // patch across the whole disc) flipped to `eps` so no cell keeps it — has
+            // `val > 0` while `f(pu)` is exactly 0. Claiming such an end feeds `positive_boundary`
+            // an unsigned bracket (both probes ≤ 0), the walk degenerates to ~0, and the warp
+            // pins the vertex at its own inside-the-void position as a kept corner — material
+            // tets reaching ~h/3 into the bore at every cap face (the V20 regression). Such an
+            // edge rides the zero patch with no interior crossing on its ≤0 side: skip it, as
+            // the strict-sign branch did before the max-face scan existed.
+            if sign(pu) < 0.0 {
+                return;
+            }
+            // Window order matters. Probe the far window first: an edge from the padded outer
+            // lattice ring to a face corner is a max-face pair by construction (the padded
+            // corner reads +h, the face corner exactly 0) but carries no interior crossing —
+            // its surface is the zero end itself, and the lattice vertex already lies on the
+            // surface. Bisecting it anyway breaks `positive_boundary`'s contract (both probes
+            // positive, the walk degenerates to alpha) and warps the padded corner onto phantom
+            // positions just outside the box, growing the volume. Settling these in one eval
+            // also guarantees the two bisections below only ever launch from a correctly signed
+            // bracket.
+            if sign(rim(1.0 - alpha)) > 0.0 {
+                return;
+            }
+            // Crossing beyond the claim window: a mid-edge crossing here would mint a new
+            // vertex, and the added dofs re-tessellate the mesh around the bore crown — on V3
+            // they pulled the Kt answer off band on three of five rungs while claims alone
+            // move it the other way. The mouth contract needs a node ON the rim, not a new
+            // dof, and the zero end is a kept corner on the max face (`val == 0`): claim it
+            // instead — nearest-wins with run bookkeeping, exactly like the claim window
+            // below — presenting the crossing at that vertex to every consuming stencil with
+            // no new dofs. Reach runs to 1 − alpha, held green by the fixture outcomes
+            // (tests/mouth_junction.rs: apex, seal and volume through 0.7 of a pitch). Pairs
+            // whose own crossing the claimed corner no longer covers ride the second pass
+            // below as raw tails.
+            if sign(rim(alpha)) > 0.0 {
+                let s = positive_boundary(
+                    &f,
+                    pu,
+                    pz,
+                    (alpha, rim(alpha)),
+                    (1.0 - alpha, rim(1.0 - alpha)),
+                );
+                let c = rim(s);
+                let reach = 1.0 - s;
+                let e = warp.entry(z).or_insert((f64::INFINITY, c));
+                if reach < e.0 {
+                    *e = (reach, c);
+                }
+                *claim_runs.entry(z).or_insert(0) += 1;
+                return;
+            }
+            // Claim window, capped: the claim drags the void corner onto the rim, so its reach
+            // is capped at the long-edge alpha. On short edges a deeper crossing — a void
+            // centre nearly the whole half-diagonal from the rim (V3's mid-layer centres, s up
+            // to 0.41) — would pull a full 30%-of-h displacement into interior-void geometry
+            // whose real material neighbours claim nothing there. Long edges keep the full
+            // window (`aclaim == alpha`), the mouth apexes all cross inside it.
+            let aclaim = if long { alpha } else { ALPHA_LONG };
+            if sign(rim(aclaim)) > 0.0 {
+                return;
+            }
+            // Claim window: warp the positive corner onto the first zero. The bracket ends are
+            // correctly classified: the guards above read the `tiny`-quantised sign, and the
+            // bisection below floors the raw patch at NOISE. The ulp-valued lattice-plane
+            // probes that `tiny` treats as zero are also below NOISE (a plane one ulp past a
+            // face evaluates its probes at +ulp too), so they read as the zero patch to both
+            // and the claim lands on the rim.
+            let s = positive_boundary(&f, pu, pz, (0.0, pu), (aclaim, rim(aclaim)));
+            let c = rim(s);
+            let e = warp.entry(u).or_insert((f64::INFINITY, c));
+            if s < e.0 {
+                *e = (s, c);
+            }
+            *claim_runs.entry(u).or_insert(0) += 1;
         }
         let t = crossing(&f, pos(a), pos(b), fa, fb);
-        let alpha = if long { ALPHA_LONG } else { ALPHA_SHORT };
         let c = lerp(pos(a), pos(b), t);
+        // Both endpoint kinds claim. A claim on the material side zeroes the only negative
+        // vertex of the mouth strip's tets (the quarter model's h = 0.07 tangent): without a
+        // record of the raw crossing those tets' cut nodes collapse onto the claimed corner's
+        // own claim point and the plane wedges are lost — the apexes print as orphan vertices
+        // and the V3 row peaks 10+% high (tests/mouth_junction.rs). The second edges pass
+        // below stores those crossings, so the cut-node lookup hands the consuming stencils a
+        // real surface node on the pair's own segment: the claim moves the vertex onto the
+        // surface rather than deleting its sliver.
         if t < alpha {
             let e = warp.entry(a).or_insert((f64::INFINITY, c));
             if t < e.0 {
                 *e = (t, c);
             }
+            *claim_runs.entry(a).or_insert(0) += 1;
         } else if 1.0 - t < alpha {
             let e = warp.entry(b).or_insert((f64::INFINITY, c));
             if 1.0 - t < e.0 {
                 *e = (1.0 - t, c);
             }
+            *claim_runs.entry(b).or_insert(0) += 1;
         }
+    });
+    // A vertex claimed by several edges has crossings riding different edges inside its one
+    // claim window — a corner graze, e.g. a curved wall sweeping past a lattice corner
+    // (V21's bores graze theirs). The claimed end keeps its own claim point; the other
+    // crossings arrive here as second-pass tails with the claimed end already zeroed, and a
+    // tail a fraction of the claim window from its claimed end emits a sub-degree sliver
+    // wedge (an edge fraction ~0.03·h from the claimed vertex; the two-level
+    // preconditioner's coarse LDLT went not-positive-definite on them at the V21
+    // sentinel's coarse rung). So the pass below stores a raw crossing only when every
+    // claimed end it touches is single-run — one crossing to snap, whose node really is on
+    // that pair's own segment.
+    // Second pass over the same edges: every pair with one claimed end and a strict sign change
+    // pre-reset (claimed material ends read `val < 0` here — the reset below has not run
+    // — claimed void ends `val > 0`) is a pair whose cut the stencils touch with the claimed
+    // end zeroed. `cut`'s zero-end branch needs the crossing to emit a real surface node on
+    // the pair's own segment instead of the claimed corner's point.
+    lat.edges(|a, b, _| {
+        let (fa, fb) = (val[a], val[b]);
+        if !(warp.contains_key(&a) || warp.contains_key(&b)) {
+            return;
+        }
+        if !((fa < 0.0 && fb > tiny) || (fa > tiny && fb < 0.0)) {
+            return;
+        }
+        let t = crossing(&f, pos(a), pos(b), fa, fb);
+        // An end may have been claimed by this very pair: the record's claim point is then
+        // this same crossing, bit for bit (the claiming bisection ran on identical arguments).
+        // Skip the entry — the consuming cut falls through to the zero-end branch and gets the
+        // claimed vertex itself; storing the crossing would emit a second node at the claim
+        // point. A record from a different edge matches nothing here, and that pair keeps its
+        // raw crossing.
+        let cp = lerp(pos(a), pos(b), t);
+        if [a, b]
+            .iter()
+            .any(|&v| warp.contains_key(&v) && claim_runs.get(&v) != Some(&1))
+        {
+            return;
+        }
+        if [a, b]
+            .iter()
+            .any(|&v| warp.get(&v).is_some_and(|&(_, c)| c == cp))
+        {
+            return;
+        }
+        // Fractions run smaller-id → larger-id (the key `cut` looks up and lerps from); `t`
+        // runs a→b. Consumed between the pair's raw lattice positions: the bisection ran
+        // there, and a claimed end's own claim point belongs to its claiming edge, whose
+        // direction may exit through another wall entirely.
+        zero_cuts
+            .entry(if a < b { (a, b) } else { (b, a) })
+            .or_insert(if a < b { t } else { 1.0 - t });
     });
     for &v in warp.keys() {
         val[v] = 0.0;
@@ -370,6 +585,14 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
         });
         let npos = s.iter().filter(|&&x| x > 0).count();
         let nneg = s.iter().filter(|&&x| x < 0).count();
+        // Sorted lattice pair of the tet edge (i, j) — the key of `cuts` and `zero_cuts`.
+        let ek = |i: usize, j: usize| -> (usize, usize) {
+            if t[i] < t[j] {
+                (t[i], t[j])
+            } else {
+                (t[j], t[i])
+            }
+        };
         if nneg == 0 {
             if npos == 0 {
                 // All four vertices on the surface: keep if the tet lies inside.
@@ -382,6 +605,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
                     emit(&mut out, v);
                 }
             }
+            // A hole-side tet with no material corner drops: nothing on it mints a cut node.
             return;
         }
         let vids: [u32; 4] = t.map(|x| {
@@ -391,14 +615,27 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
                 u32::MAX
             }
         });
+        // Surface node on the tet edge (a, b). Strict sign changes cross as before; a pair
+        // with a zero end — a zero-patch vertex or a claimed one (claims zero their target,
+        // so a still-positive end never warps) — takes its stored mid-edge crossing when
+        // there is one, else the zero end's own lattice vertex as the boundary rides out
+        // past the pair. Stored crossings are consumed between the pair's raw lattice
+        // positions: the bisection ran on that segment, and a claimed end's own claim point
+        // would drag the node off its own wall.
         let mut cut = |a: usize, b: usize, out: &mut TetMesh, gid: &mut Vec<usize>| -> u32 {
-            let key = if t[a] < t[b] {
-                (t[a], t[b])
-            } else {
-                (t[b], t[a])
-            };
+            let key = ek(a, b);
             *cuts.entry(key).or_insert_with(|| {
                 let (p, q) = (warp_pos(key.0), warp_pos(key.1));
+                if val[key.0] == 0.0 || val[key.1] == 0.0 {
+                    if let Some(&w) = zero_cuts.get(&key) {
+                        let c = lerp(pos(key.0), pos(key.1), w);
+                        out.verts.push(c);
+                        gid.push(nv + out.verts.len());
+                        return (out.verts.len() - 1) as u32;
+                    }
+                    let zv = if val[key.0] == 0.0 { key.0 } else { key.1 };
+                    return lattice_vertex(zv, out, gid);
+                }
                 let u = crossing(&f, p, q, val[key.0], val[key.1]);
                 out.verts.push(lerp(p, q, u));
                 gid.push(nv + out.verts.len());
@@ -437,7 +674,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
                 ];
                 prism(&mut out, &gid, p, q);
             }
-            (2, 1, 1) => {
+            (2, 1, _) => {
                 // Pyramid with apex z over quad (a, b, bd, ad).
                 let (a, b, z, d) = (negs[0], negs[1], zeros[0], poss[0]);
                 let ad = cut(a, d, &mut out, &mut gid);
@@ -458,6 +695,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             _ => unreachable!("sign pattern {s:?}"),
         }
     });
+
     (out, lat)
 }
 
@@ -476,6 +714,24 @@ fn signed_volume(m: &TetMesh, t: [u32; 4]) -> f64 {
 fn emit(m: &mut TetMesh, mut t: [u32; 4]) {
     let v = signed_volume(m, t);
     if v.abs() < 1e-14 {
+        return;
+    }
+    // Scale-relative degeneracy bound: a piece this far below the cube of its longest edge
+    // represents nothing — structurally flat truncation pieces whose planarity is exact by
+    // construction, with only roundoff separating their points (vol/e³ ~ 1e-16), or cut
+    // points coinciding with vertices. Legit material, even the slimmest slivers the lattice
+    // produces, sits two-plus orders above.
+    let pts = t.map(|i| m.verts[i as usize]);
+    let mut e2 = 0.0f64;
+    for (i, a) in pts.iter().enumerate() {
+        for b in &pts[i + 1..] {
+            let d = (a[0] - b[0]) * (a[0] - b[0])
+                + (a[1] - b[1]) * (a[1] - b[1])
+                + (a[2] - b[2]) * (a[2] - b[2]);
+            e2 = e2.max(d);
+        }
+    }
+    if v.abs() < 1e-14 * e2 * e2.sqrt() {
         return;
     }
     if v < 0.0 {

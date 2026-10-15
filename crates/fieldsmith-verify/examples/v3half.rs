@@ -164,10 +164,14 @@ fn main() {
     let mut top_y: Vec<(f64, usize)> = st.iter().enumerate().map(|(e, s)| (s[1], e)).collect();
     top_y.sort_by(|a, b2| b2.0.partial_cmp(&a.0).unwrap());
     let centroid = |e: usize| {
+        // p(ξcentroid) under the quadratic map: N_corner(ξc) = −1/8, N_mid(ξc) = +1/4
+        // (ξc = (1/4,1/4,1/4,1/4), equal barycentric weight; weights sum to 1). A flat /4 over
+        // all 10 node ids overweights the midside nodes ~10× and inflates printed centroids.
         let mut c = [0.0f64; 3];
-        for &v in mesh.tets[e].iter() {
+        for (i, &v) in mesh.tets[e].iter().enumerate() {
+            let w = if i < 4 { -0.125 } else { 0.25 };
             for (j, x) in c.iter_mut().enumerate() {
-                *x += mesh.nodes[v as usize][j] / 4.0;
+                *x += mesh.nodes[v as usize][j] * w;
             }
         }
         c

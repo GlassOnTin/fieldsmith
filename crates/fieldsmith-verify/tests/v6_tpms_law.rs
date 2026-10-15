@@ -10,9 +10,9 @@
 //! strain measurement. So the two tiers of this case mean different things and say so:
 //!
 //! * **N = 3 rows are the law's own fit inputs** — resolving the same coupons again checks the
-//!   measurement pipeline reproduces its inputs (a regression gate after the harness moved from
-//!   the example into `src/coupon.rs`; bit-identical mesh, same numbers). They have no power to
-//!   confirm the law beyond the fit.
+//!   measurement pipeline reproduces its inputs (a regression gate; the inputs were re-measured
+//!   on this tree's mesher, see the comment at the table below). They have no power to confirm
+//!   the law beyond the fit.
 //! * **N = 4 rows are the independent check** — a different coupon size (≈ 4× the elements,
 //!   same h) must reproduce the law to within 10 %. The relative ρ_mesh drift N = 3 → 4 is
 //!   ~1 %, so the check really is size independence, not a repeat of the same mesh.
@@ -43,12 +43,20 @@ fn v6_gyroid_sheet_law() {
         "TPMS homogenised stiffness law vs resolved coupon (gyroid, sheet mode)",
     );
 
-    // The fit inputs, as measured during the fitting session (regression gate below).
+    // The fit inputs, re-measured on the current mesher at the law's own settings
+    // (regression gate below). The fitting-session values were measured before the max-face
+    // junction scan: that scan re-positions junction nodes where the lattice crosses the
+    // coupon's outer box planes (the box term of the coupon field is a max-face, exactly 0
+    // there), which reads slightly denser. Under mesh-phase refinement at this size the
+    // measured ρ_mesh rises 0.1977 (h) → 0.2000 (h/2) → 0.2004 (h/4), so the mesher's move is
+    // toward the converged volume. The law's constants were not re-fitted: the density shift
+    // is ≤ 0.4 %, the reference evaluates the law at the coupon's own measured density, and
+    // the N = 4 check confirms the law independently.
     let fit_inputs: [(f64, usize, f64, f64); 3] = [
         // (rho nominal, N, rho_mesh measured, E_int measured)
-        (0.2, 3, 0.19734, 61.52),
-        (0.3, 3, 0.29585, 106.18),
-        (0.4, 3, 0.39733, 167.52),
+        (0.2, 3, 0.19767, 61.46),
+        (0.3, 3, 0.29644, 105.46),
+        (0.4, 3, 0.39906, 167.33),
     ];
 
     let mut n3_body = String::new();
@@ -99,9 +107,9 @@ fn v6_gyroid_sheet_law() {
                 String::new()
             }
         ));
-        // Sanity: the re-measurement must be bit-identical to the fit inputs (same seedless
-        // deterministic pipeline) — drift within printing precision is the gate itself; the
-        // law check above carries the 10 % envelope.
+        // Sanity: the re-measurement must reproduce the fit inputs (same seedless
+        // deterministic pipeline; the gate tolerance is printing precision). The law check
+        // above carries the 10 % envelope.
         assert!(
             (row.rho_mesh - rho_fit).abs() < 2e-5 && (e - e_fit).abs() < 0.05,
             "regression: N = {n} ρ = {rho} moved off its fit input (ρ_mesh {:.5} vs {rho_fit:.5}, E_int {e} vs {e_fit})",
@@ -161,7 +169,9 @@ remove the residual rigid modes. Apparent modulus E* = Σ / ε with Σ the macro
 stress and ε the volume-weighted least-squares slope of ux over the interior band \
 (1 cell from each platen). The law: E*/E = c·ρ^n with c = 616.9 MPa, n = 1.426, least-squares \
 fitted in log-log space on ρ_mesh/E_int pairs; V6 compares the law at the COUPON'S MEASURED \
-density (ρ_mesh) with the measured E*. 1000 MPa scaling matches the coupon material. The \
+density (ρ_mesh) with the measured E*. 1000 MPa scaling matches the coupon material. The fit \
+inputs were re-measured (2026-10-15) after the max-face junction scan \
+reshaped the mesh at the coupon's box planes; the law constants were not re-fitted. The \
 equilibrium identities (∫σxx dV = Σ Fₓ·x and ⟨σxx⟩ = −Σ/ρL² over the material) gate each run \
 at ≤ 0.5 %: a load-patch assembly regression shows there first.",
     );

@@ -22,7 +22,7 @@ fn clock() -> f64 {
 /// GOAL.md tolerance on the reported Kt.
 const KT_TOL: f64 = 0.05;
 /// The h = 0.07 mesh is the worst row measured: both lattice pitches straddle the hole-edge
-/// crossings and the peak reads +7.6 % against the reference, so the bound sits just above the
+/// crossings and the peak reads +5.9 % against the reference, so the bound sits just above the
 /// measurement. One data point in the graze class; see "Lattice class sensitivity" in the
 /// generated report.
 const KT_TOL_GRAZE: f64 = 0.085;
@@ -84,10 +84,14 @@ fn v3_plate_with_hole() {
         let (smax, at) = (0..a.mesh.tets.len())
             .map(|e| {
                 let s = element_stress(&a.mesh, &c.u, e, young[e], mat.nu, xi);
+                // p(ξcentroid) under the quadratic map: N_corner(ξc) = −1/8, N_mid(ξc) = +1/4
+                // (ξc = (1/4,1/4,1/4,1/4); weights sum to 1). A flat /4 over all 10 node ids
+                // overweights the midside nodes ~10× and inflates printed centroids.
                 let mut cen = [0.0f64; 3];
-                for &v in a.mesh.tets[e].iter() {
+                for (i, &v) in a.mesh.tets[e].iter().enumerate() {
+                    let w = if i < 4 { -0.125 } else { 0.25 };
                     for (j, c) in cen.iter_mut().enumerate() {
-                        *c += a.mesh.nodes[v as usize][j] / 4.0;
+                        *c += a.mesh.nodes[v as usize][j] * w;
                     }
                 }
                 (s[0], cen)
@@ -154,12 +158,11 @@ fn v3_plate_with_hole() {
         "The reported peak is the largest σxx among element stress values evaluated at element \
          centroids. Recovered nodal stress (element stresses evaluated at each node's own \
          reference point, volume-weighted over incident elements) is not used as the peak: on \
-         meshes that resolve this case cleanly it reads 35.5 to 37.2 MPa where the element field \
-         reads 31.1 to 31.3, because P2 strains extrapolated to element corners overshoot near \
-         curved free edges, while at boundary nodes it reads around 25. The centroid maximum \
-         sits a few percent above the boundary value and converges with refinement.\n\n\
+         the meshes of this study it reads 32.6 to 38.3 MPa where the element field reads 29.1 \
+         to 32.1 (8 to 20 % above the centroid value), because P2 strains extrapolated to \
+         element corners overshoot near curved free edges.\n\n\
          If the UI reports the nodal maximum, a hole-edge value on screen will over-report the \
-         peak by roughly 10 to 20 % at the spacings of this study. The element-centroid \
+         peak by roughly 8 to 20 % at the spacings of this study. The element-centroid \
          statistic is the one to build the stress readout on.",
     );
     r.section(
@@ -167,15 +170,20 @@ fn v3_plate_with_hole() {
         "The lattice is uniform, so its rows either land on a feature or straddle it. On this \
          half model, h = 0.2, 0.1 and 0.05 put lattice rows exactly on x = ±1 and y = 1 \
          (aligned); h = 0.14 and h = 0.07 straddle them on both axes (graze). Measured peaks in \
-         table order are 30.97, 31.06, 31.27, 32.62 and 30.86 MPa: the three aligned rows agree \
-         within 1.4 % of each other, the graze rows read +2.4 % and +7.6 % above the reference, \
-         and h = 0.07 is the worst row. Why the two graze spacings differ from each other was \
-         not determined, and only one spacing per graze geometry has been measured. At the \
-         finest spacing the recovered nodal value at the exact hole-edge point (0, 1, t/2) \
-         reads 29.78 MPa against the Kirsch anchor of 30.0, and the (±1, 0) crossings read \
-         −10.25 and −10.16 MPa against −10. The test bounds h = 0.07 at 8.5 % and every other \
-         row at GOAL's 5 %.\n\n\
-         The quarter model fails differently and much worse. With both x = 0 and y = 0 modelled \
+         table order are 30.504, 29.104, 30.484, 32.095 and 31.656 MPa: 4.0 % below to 5.9 % \
+         above the reference. The h = 0.2 and h = 0.1 aligned rows agree within 0.1 % of each \
+         other; \
+         the h = 0.05 row reads +4.4 % above the reference; the graze rows read 4.0 % below and \
+         5.9 % above, so h = 0.07 is the worst row. Why the spacings fall where they do was not \
+         determined, and only one spacing per class geometry has been measured. At the finest \
+         spacing the recovered nodal value at the exact hole-edge point (0, 1, t/2) reads 29.92 \
+         MPa against the Kirsch anchor of 30.0, and the (±1, 0) crossings read −10.25 and \
+         −10.16 MPa against −10. The test bounds h = 0.07 at 8.5 % and every other row at \
+         GOAL's 5 %.\n\n\
+         The quarter model fails differently and much worse. The diagnosis below was measured \
+         on the earlier mesh suite (instruments kept at \
+         crates/fieldsmith-verify/examples/v3quarter.rs and v3half.rs; the quarter model has \
+         not been re-run on the current mesher). With both x = 0 and y = 0 modelled \
          as symmetry planes, the x = 0 plane is tangent to the hole, and the junction of that \
          plane, the hole arc and the lattice produces a shaved wedge whose mouth node is pinned \
          by the plane's ux support. At the graze spacings h = 0.14 and h = 0.07 the quarter \

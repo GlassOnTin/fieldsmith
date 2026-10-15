@@ -181,13 +181,7 @@ fn v23_sweep_five_points_on_the_cantilever() {
     for p in &points {
         table.push_str(&format!(
             "| {} | {} | {} | {:.3} | {:.3} | {} | {} |\n",
-            p.value,
-            p.dofs,
-            p.elements,
-            p.wall_ms[0],
-            p.wall_ms[1],
-            p.deflection_mm,
-            p.vm_mpa,
+            p.value, p.dofs, p.elements, p.wall_ms[0], p.wall_ms[1], p.deflection_mm, p.vm_mpa,
         ));
     }
     r.section("Per-point ladders (last rung's numbers)", table);
