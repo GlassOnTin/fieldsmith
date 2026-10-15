@@ -2,277 +2,280 @@
 
 > **Shape a part, load it, and grow its interior to fit the load — in a browser tab, in minutes, with numbers you can trust.**
 
-Fieldsmith is a browser-native design tool for parts that are going to be 3D printed and
-are going to carry load. You model with implicit fields, pin and push the part directly
-in the viewport, and the interior is filled with a lattice whose density follows the
-stress. Nothing unencrypted leaves your machine, and data goes only to machines you
-own. There is no Fieldsmith server, and no Fieldsmith compute either; when an analysis
-outgrows your desk it runs on machines you control, under the standing rule in section 6.
+Fieldsmith is a browser-native design and analysis tool for load-bearing parts, built around
+implicit fields. You model with signed distance fields or imported CAD/mesh geometry, apply
+supports and loads directly on surfaces, and fill the interior with a lattice whose density
+follows the solved stress field. Nothing unencrypted leaves your machine, and compute beyond
+your desk runs only on machines you control (section 6).
 
 ---
 
 ## 1. Where this comes from
 
-MorphoForge (an earlier experiment by another agent) found the right ingredients:
+An earlier prototype (MorphoForge) proved that five ingredients belong together in a single
+browser-capable tool:
 
-| Kept idea | Why it is right |
+| Ingredient | Why it works |
 | :--- | :--- |
-| Implicit / SDF geometry | Booleans never fail; lattices with millions of features are just another function. |
-| In-browser FEA via `fenics-rs` | Real physics, no Fieldsmith cloud, works air-gapped. |
-| Stress-graded TPMS infill | The genuinely new thing: geometry that responds to load. |
-| Direct-to-print export + slice preview | The output is a physical object, not a picture. |
-| Literate, executable verification cases | Credibility comes from reproducible comparison with theory. |
+| Implicit / SDF geometry | Booleans do not fail on tangencies; lattices with millions of struts or sheets are a single closed-form function. |
+| In-browser FEA via `fenics-rs` | Real finite-element physics running locally in WebAssembly or native CLI, air-gapped and account-free. |
+| Stress-graded TPMS infill | Geometry that adapts continuously to the solved stress distribution. |
+| Direct-to-print export + slice preview | The output is a watertight 3MF ready for the slicer and a physical part on the build plate. |
+| Literate, executable verification cases | Engineering trust comes from reproducible comparison against closed-form theory and resolved reference meshes. |
 
-What did not come together, and what Fieldsmith does differently:
+Fieldsmith turns those ingredients into a real engineering tool through five structural choices:
 
-| MorphoForge | Problem | Fieldsmith |
-| :--- | :--- | :--- |
-| A dropdown of preset "envelopes" (and "Bracket" / "Cylinder" were secretly boxes) | You cannot design *your* part. A CAD tool where you cannot shape geometry is a demo. | **Modelling comes first.** Primitives, booleans, smooth blends, shells, offsets, patterns — composed by you. |
-| Loads as a single `Fz` slider applied as a body force; clamp hard-coded at `x = 0` | Physics does not match intent. | **Pick a face, drag an arrow.** Supports and loads are placed on regions of the real geometry, in N, on surfaces. |
-| Lattice coloured by height but shown with a stress legend; mass reduction from a clamped density average; "target mass" slider unused | Numbers looked authoritative and weren't. | **Honesty is a feature.** Every number has units and provenance. Nothing is labelled stress unless it was solved. |
-| Fixed six-step "Feature History (DAG)" checklist | Called a graph, behaved like a wizard. | **A real, editable model graph** that is also a readable text file. |
-| Three rows of chrome, status pills, emoji buttons, gradient logo, theme picker, "Basilisk Workflows" | Attention spent on the tool instead of the part. | **Calm interface.** One viewport, one inspector, one model tree. The part is the brightest thing on screen. |
-| One 1600-line `index.html`, a 23-positional-argument WASM call, a global mutex mesh | Hard to extend, hard to test. | Typed document model, small WASM surface, worker-based compute. |
-| "nTop killer", "predatory monopolies", marketing tables of savings | Erodes the trust it needs from engineers. | Let the verification cases speak. Plain language. |
+1. **Modelling and CAD import come first.** Compose primitives, booleans, smooth blends, shells,
+   offsets, and patterns, or bring in existing STEP, 3MF, STL, OBJ, and GLB parts as editable
+   field leaves with segmented faces.
+2. **Boundary conditions live on geometry.** Supports, forces, pressures, distributed loads, and
+   temperatures attach to geometric regions in physical units (N, MPa, °C).
+3. **Every number has units, provenance, and stated limits.** Nothing is labelled stress unless it
+   came from a solve; every result records its mesh, element order, rung convergence, and material law.
+4. **The model is a readable text programme (`*.fsm`).** The browser UI, the headless CLI, the
+   stdio MCP server, and remote workers all read and write the same diffable document.
+5. **Calm, viewport-first interface.** One viewport, one model tree, one inspector. The part and
+   its physical fields are the brightest things on screen.
 
 ---
 
 ## 2. The core idea: the part is a field
 
-Everything in Fieldsmith is a function of position:
+Everything in Fieldsmith is a function of position `p ∈ ℝ³`:
 
 - **Shape** — a signed distance field `d(p)`: negative inside, positive outside.
-- **Regions** — fields too: "the bolt hole face" is `|d_hole(p)| < ε`; a keep-solid skin is `d(p) > −t`.
+- **Regions** — predicates over position and surface distance: a bolt-hole bore, a mounting
+  face, or a keep-solid skin `d(p) > −t`.
 - **Material state** — relative density `ρ(p) ∈ [ρ_min, 1]`.
-- **Results** — displacement `u(p)`, von Mises stress `σ_vm(p)`, interpolated from the FE solution.
-- **The final part** — `d_final(p) = max(d(p), lattice(p; ρ(p)))` unioned with protected solid regions.
+- **Solved fields** — displacement `u(p)`, von Mises stress `σ_vm(p)`, temperature `T(p)`, and
+  vibration mode shapes, interpolated from the finite-element solution.
+- **The final part** — `d_final(p) = max(d(p), lattice(p; ρ(p)))` unioned with protected solid
+  skins and regions.
 
-Because everything shares one representation, every stage composes with every other:
-grading is just a field feeding a field; a keep-out zone is a boolean; a result can drive geometry.
+Because geometry, regions, analysis results, and lattice grading share one representation,
+every stage composes with every other: grading is a field feeding a field, a keep-out zone is a
+boolean, and an analysis result drives geometry.
 
-The model is a **directed acyclic graph of field operations**, stored as a small,
-human-readable text document (`*.fsm`). The UI is a view onto that document; so is a text
-editor; so is an LLM agent or a script. Diffable in git. Reproducible bit-for-bit.
+The document is a **directed acyclic graph of field operations**, stored as a small text file
+(`*.fsm`, or `.fsmz` when bundled with imported mesh assets). The browser UI, a text editor, a
+script, and an AI agent all operate on the same representation.
 
 ---
 
 ## 3. The experience
 
-A first-time user should be able to do this without reading anything:
+A first-time user can complete a full design-to-print loop without reading a manual:
 
-1. **Shape.** Drop a box, drop a cylinder, subtract it — a hole. Drag handles to size.
-   Round the edges with one slider. The preview never stutters: it is raymarched on the GPU
-   directly from the field, no meshing in the loop.
-2. **Hold.** Click the inside of the hole → *Fixed*. The face highlights; a support glyph appears.
-3. **Push.** Click the far face → *Load*. Drag the arrow; type `250 N`. The arrow's length and
-   direction *are* the load.
-4. **See.** A first stress result appears in about a second at coarse resolution and keeps
-   refining in the background. A small badge says how converged it is.
-5. **Fill.** Choose *Gyroid*, set a 1.2 mm skin and a 6 mm cell. The interior grades from dense
-   (near the hole, where it hurts) to airy (where it doesn't). Mass updates live, in grams.
-6. **Check.** Re-solve the graded part using homogenised lattice stiffness. See the new peak
-   stress, deflection and safety factor against the chosen material — before and after, side by side.
-7. **Make.** Export a watertight 3MF in millimetres. Scrub through slices to see what the printer will see.
+1. **Shape.** Drop primitives or import a STEP/3MF bracket, subtract bolt holes, and fillet
+   stress-concentrating corners. The preview is raymarched on the GPU directly from the field
+   without waiting on a triangle mesh.
+2. **Hold.** Click the inside of the mounting holes and mark them *Fixed*.
+3. **Push.** Select the loaded face, apply a force in N (or a pressure / distributed traction /
+   temperature), and orient it on the part.
+4. **See.** A coarse P2 finite-element solve returns in roughly a second and refines in the
+   background across a resolution ladder. The results table shows each rung's DOF count, wall
+   time, and rung-to-rung change.
+5. **Fill.** Choose *Gyroid*, *Schwarz-P*, or *Diamond* (sheet or network), set skin thickness
+   and cell size, and grade density by stress. Mass updates in grams from integrating the final
+   field.
+6. **Check.** Re-solve the graded part using fitted homogenised lattice stiffness (`V6`, `V7`).
+   Compare solid vs. graded peak stress, deflection, safety factor, and mass side by side.
+7. **Make.** Export a watertight 3MF in millimetres and scrub through layer slices before
+   sending to PrusaSlicer or OrcaSlicer.
 
 ### Interaction principles
 
-- **Direct manipulation over forms.** If something has a position, direction or size, you
-  set it in the viewport. The inspector is for precision, not for primary input.
-- **Always live, never blocking.** Geometry preview at display refresh rate. Analysis runs in
-  a worker, progressively, cancellable on edit. There is no "Run" button you must remember.
-- **Stages are lenses, not steps.** Shape / Setup / Results / Fill / Make are views of the same
-  model, freely revisited. Change the hole diameter after grading and everything downstream updates.
-- **Keyboard-first, discoverable.** A command palette (`Ctrl K`) reaches every action;
-  every button shows its shortcut on hover. No hidden modes.
-- **Undo everything.** Every edit is a document transaction.
+- **Direct manipulation with a precise inspector.** Set positions and regions in the viewport;
+  type exact numbers and expressions in the inspector.
+- **Live and non-blocking.** Raymarched preview runs at display refresh rate. Meshing and FEA
+  run in background Web Workers (with shared-memory rayon pools when cross-origin isolated) and
+  cancel cleanly on edit.
+- **Stages are lenses, not a one-way wizard.** Shape (`1`), Setup (`2`), Results (`3`),
+  Fill (`4`), and Make (`5`) are views over one document. Change a hole diameter after grading
+  and downstream results update automatically.
+- **Keyboard-first and discoverable.** `Ctrl K` opens the command palette for every action;
+  every control shows its shortcut on hover.
+- **Undo everything.** Every edit is a reversible document transaction.
 
 ### Visual principles
 
-- Neutral, low-contrast chrome; one accent colour reserved for selection and the active tool.
-- The part is the brightest object; results use perceptual colour maps (viridis / cividis or
-  a diverging map for signed quantities), always with a labelled legend and units.
-- Sans-serif UI, tabular monospace for numbers. No gradients on text, no emoji as icons.
-- Light and dark themes derived from the same tokens — chosen by OS preference, not a dropdown.
-- Clear empty states: an empty document says what to do next.
+- Neutral, low-contrast chrome; a single accent colour reserved for selection and the active tool.
+- Perceptual colour maps (viridis / cividis, or diverging maps for signed quantities) with an
+  explicit legend, range controls, and units.
+- Sans-serif UI labels, tabular monospace for numbers, OS-driven light/dark theme tokens.
 
 ---
 
 ## 4. Honesty as a product requirement
 
-Engineers will only use a tool whose numbers they can defend.
+Engineers only use a tool whose numbers they can defend.
 
-- **One unit system internally**: mm · N · MPa · tonne · s (self-consistent). Display units are a preference.
-- **Every result carries provenance**: element type, element count, solve time, convergence
-  indicator, and which load case produced it.
-- **Refinement is measured and shown**: each analysis climbs refinement rungs, and the
-  result shows the per-rung error estimate taken from rung-to-rung change and the time
-  each rung took. Declare a tolerance and see what it costs to meet; declare a budget and
-  see what tolerance it buys. When compute leaves the desk (section 6), a cost estimate
-  appears with its own stated error, and a tolerance the budget cannot meet is answered
-  with a stated refusal, never a stretched result.
-- **Lattice properties are modelled, not assumed**: each TPMS family has a fitted homogenised
-  stiffness law `E*(ρ) = C·E_s·ρ^n` (Gibson–Ashby form), with the coefficients and their
-  source documented and verified by a shipped unit-cell study.
-- **Mass is measured** from the final field (integrated occupancy), not inferred from a target.
-- **Verification is part of the product**: a public set of literate cases compares Fieldsmith
-  against closed-form solutions and reports the error, whatever it is. A failing case is a bug, not a footnote.
-- **Limits are stated in the UI**: linear elastic, small strain, isotropic homogenisation —
-  shown where the results are shown.
+- **One internal unit system**: `mm · N · MPa · tonne · s · °C` (self-consistent).
+- **Provenance on every result**: engine version, element type (P2 10-node tetrahedra), element
+  and DOF counts, wall time, solver iterations, and load case.
+- **Measured refinement rungs and cost-to-tolerance**: each analysis climbs a resolution ladder
+  and reports the rung-to-rung change and wall time at every step (`V17`, `V18`). Users can
+  declare a target tolerance and see the rungs required to meet it, or declare a time budget
+  and see the convergence achieved. When a stated budget or rung cap cannot meet the requested
+  tolerance, Fieldsmith returns an explicit refusal rather than a stretched result.
+- **Fitted and verified lattice laws**: each TPMS family uses a homogenised stiffness law
+  `E*(ρ) = C · E_s · ρ^n` whose coefficients are fitted from unit-cell finite-element studies
+  (`V6`) and checked against resolved full-lattice beam solves (`V7`, within 2.1 %).
+- **Integrated mass**: part mass comes from integrating occupancy of the final field, never
+  from multiplying solid mass by a nominal target density.
+- **Executable verification suite**: `docs/verification/` (`V1`–`V25`) compares Fieldsmith
+  against closed-form elasticity, beam, plate-hole, modal, thermal, and mesh benchmarks in CI.
+- **Stated model limits**: linear elastic, small strain, isotropic homogenisation, and steady
+  conduction assumptions are stated in the UI and reports alongside the numbers.
 
 ---
 
 ## 5. Architecture
 
 ```
-┌──────────────────────── Browser main thread ────────────────────────┐
-│  UI (TypeScript)                                                    │
-│   ├─ Document store  (model graph, undo/redo, *.fsm text round-trip)│
-│   ├─ Viewport        (WebGL2 / WebGPU raymarcher, generated shaders)│
-│   ├─ Picking         (ray → field hit → region field)               │
-│   └─ Inspector, model tree, command palette                         │
-└───────────────┬─────────────────────────────────────▲───────────────┘
-                │ graph IR (serialised)               │ results (transferable buffers)
-┌───────────────▼──────────── Web Worker(s) ──────────┴───────────────┐
-│  fieldsmith-core (Rust → WASM)                                      │
-│   ├─ field     graph IR, CPU evaluation, interval bounds, gradients │
-│   ├─ shader    IR → WGSL / GLSL codegen for preview                 │
-│   ├─ mesh      dual contouring (surface), isosurface stuffing (tets)│
-│   ├─ solve     fenics-rs linear elasticity, load/support from fields│
-│   ├─ grade     σ → ρ mapping, homogenised stiffness, re-solve       │
-│   └─ export    3MF (units, metadata), binary STL, slice contours    │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────── Browser main thread ───────────────────────────┐
+│  web/ (TypeScript + WebGL2)                                               │
+│   ├─ Document store   (*.fsm / *.fsmz round-trip, undo/redo, validation)  │
+│   ├─ Viewport         (GPU field raymarcher, compiled GLSL, overlays)     │
+│   ├─ Picking          (ray → field hit → face / region selection)         │
+│   └─ Lenses           (Shape · Setup · Results · Fill · Make)             │
+└──────────────────┬────────────────────────────────────────▲───────────────┘
+                   │ serialised document / job request      │ transferable buffers
+┌──────────────────▼────────── Web Worker / Native ─────────┴───────────────┐
+│  Rust workspace (`crates/*`, backed by `fenics-rs` submodule)             │
+│   ├─ fieldsmith-doc     *.fsm parser, printer, AST, address grammar       │
+│   ├─ fieldsmith-field   SDF / expression IR, interval bounds, GLSL codegen│
+│   ├─ fieldsmith-mesh    isosurface stuffing (P2 tets), adaptive DC (3MF)  │
+│   ├─ fieldsmith-solve   linear elasticity, modal eigensolve, steady heat  │
+│   ├─ fieldsmith-core    regions, grading, STEP/3MF/STL/OBJ/GLB, rungs     │
+│   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
+│   ├─ fieldsmith-mcp     stdio MCP server over fieldsmith-api              │
+│   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V25)        │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 Key technical choices:
 
-- **One IR, two back-ends.** The same field graph is evaluated in Rust (meshing, FEA, export)
-  and compiled to a shader (preview). A shared test suite asserts they agree.
-- **Interval arithmetic** over the IR to skip empty space — fast meshing and fast raymarching
-  over lattices.
-- **Quality tetrahedra from fields.** `fenics-rs` solves; it does not mesh arbitrary geometry.
-  Fieldsmith owns that step using isosurface stuffing (Labelle & Shewchuk, 2007) on an adaptive
-  grid — guaranteed element quality, no B-rep required.
-- **Progressive solving.** Coarse → fine resolution ladder, warm-started; results stream to the UI.
-- **No framework lock-in.** Small, typed TypeScript; Vite for dev/build; static hosting only.
-- **Testable headless.** Every pipeline stage runs from `cargo test` and from a CLI with no browser.
+- **One field IR across GPU and CPU.** The same field graph compiles to GLSL for 60 fps
+  raymarching and evaluates in Rust with interval arithmetic for tet stuffing, volume
+  integration, and dual-contoured 3MF export (`V5`).
+- **Quality tetrahedra from implicit fields.** `fieldsmith-mesh` implements isosurface stuffing
+  (Labelle & Shewchuk, 2007) with boundary-claim warping to generate graded P2 tetrahedral
+  meshes directly from signed distance fields without a B-rep kernel.
+- **Headless and AI-native by construction.** Every capability in the browser runs identically
+  through `fieldsmith-cli`, the JSON `fieldsmith api` verb, and `fieldsmith-mcp` (`V22`).
 
 ---
 
 ## 6. Who it is for
 
-- **Makers and small engineering shops** printing functional parts — brackets, mounts, jigs,
-  drone arms — who want lighter parts without guessing.
-- **Educators and students** who want to *see* load paths and why a lattice grades the way it does.
-- **Engineers with confidential geometry** (medical, defence, pre-release product) who cannot
-  upload to a cloud solver.
-- **Agents and scripts**: the text model format and headless CLI make Fieldsmith a target for
-  automated design loops, not just a GUI.
+- **Makers and engineering shops** printing functional brackets, mounts, jigs, and airframe
+  parts who want lighter hardware backed by stress and deflection numbers.
+- **Educators and students** who want to inspect load paths, stress concentrations, vibration
+  modes, and lattice grading interactively.
+- **Engineers with confidential geometry** (medical, defence, pre-release hardware) who cannot
+  upload CAD to a vendor cloud.
+- **Agents and automated design loops** driving parameter sweeps and structural checks over
+  `.fsm` text files via CLI or MCP.
 
 ### Compute beyond the desk, by the same rule
 
-The capabilities this vision reaches for, refined rungs and parameter sweeps now and the
-engineering flows later, are compute-bound. The v0.3 budget work measured the coarse,
-refined and export legs of the reference task on a £100 passively cooled box; a molding
-or wave study will not stay in that class. The licence is what this project removes; the
-hardware class is the user's choice, desk machine or cloud account, and the compute cost
-matters as soon as that choice does: what a commercial tool blends into a per-seat price
-or a quote appears here as a line in the user's own provider bill, unbundled and visible.
-Measurements make it concrete: each refinement rung is a measured error-and-time pair,
-and anonymised, shape-only measurements of real runs are contributed to the repository
-itself, so a first run on an unfamiliar machine starts from the community's numbers.
+Refined convergence ladders, multi-point parameter sweeps, and coupled physics studies quickly
+outgrow a laptop or passively cooled mini-PC. Commercial CAE tools bundle compute into
+high per-seat subscriptions or vendor clouds. Fieldsmith removes the software licence and keeps
+hardware choice in the user's hands:
 
-The standing rule, the same one the opening paragraph commits to:
+- **No Fieldsmith cloud, relay, or accounts.** Nothing is brokered, metered, or stored by this
+  project.
+- **Self-hosted outbound workers.** Run `fieldsmith worker` on any machine you control (a
+  workstation under the desk or a VM in your own cloud account) and connect it to your session
+  with a one-time enrolment token. Transport uses Noise encryption (`V21`), leaves no plaintext
+  geometry on disk, and requires no inbound firewall ports.
+- **Empirical, community-seeded cost model.** Each rung records an anonymised, shape-only
+  measurement (DOF, element count, leaf count, CPU class, cores, RAM, wall time, and rung
+  change) in `data/costs/costs.csv` (`V18`). Contributions happen via standard git pull
+  requests after a local redaction preview (`fieldsmith costs`), giving new machines realistic
+  wall-time projections with stated fit residuals.
+- **Measured cross-machine behaviour.** Floating-point solves across different SIMD widths and
+  architectures (such as x86_64 vs. aarch64 in `V25`) are compared field by field and bounded
+  against canonical tolerances rather than assumed bit-identical.
 
-- No Fieldsmith compute service and no accounts. Nothing is brokered, metered or stored
-  by us.
-- The pattern is the self-hosted runner: start a Fieldsmith worker on any machine you own,
-  a box under the desk or an instance in your cloud account, and it connects out to your
-  session. No inbound ports; nothing for a firewall to open toward Fieldsmith. Provisioner
-  helpers that describe and start instances can layer on later; the worker route is
-  provider-agnostic first.
-- Transport is user-keyed and nothing leaves unencrypted; artifacts on the worker land
-  only under the user's stated handling. Verified rather than promised, like everything
-  else here: captured session traffic and worker-side storage scanned for plaintext model
-  or field bytes, and the same document re-solved locally and remotely with any divergence
-  measured and reported.
+### Non-goals
 
-The group this serves most is the confidential-geometry engineer in the list above: a
-hosted solver is exactly what they cannot use, whereas a worker on machines they control is.
-
-### Non-goals (for now)
-
-- Full B-rep / NURBS parametric CAD with drawings and tolerances. Reading STEP into a
-  field shipped that way at v0.3 (see the landscape below); editing B-rep is not a
-  non-goal, it is a different product.
-- Transient dynamics, nonlinearity or CFD analysis. Linear static and steady-state
-  analysis, done well, first; the engineering flows enter through it one coupling at a
-  time.
-- Full topology optimisation (SIMP). Grading a lattice inside a fixed envelope is the scope;
-  topology optimisation may come once the honest grading loop is solid.
-- Being a slicer. We preview slices; Prusa/Orca/Cura print.
+- **2D manufacturing drawings, GD&T title blocks, and assembly BOM management.** Shops that
+  need machinist drawings belong in OnShape, SolidWorks, or FreeCAD.
+- **Editable B-rep / NURBS surface modelling.** Fieldsmith imports STEP and 3MF into signed
+  distance fields (`V10`, `V12`, `V14`) and models with implicit operations; it is not a B-rep
+  kernel.
+- **G-code toolpath generation.** Fieldsmith exports verified, manifold 3MF/STL meshes and
+  previews layer slices; PrusaSlicer, OrcaSlicer, and Cura generate machine toolpaths.
+- **Vendor-hosted SaaS.** All collaboration and compute stay on git repositories and machines
+  the user owns.
 
 ---
 
-## 7. The competitive landscape
+## 7. Competitive landscape and roadmap direction
 
-Recorded 2026-10-09 from product documents and published pricing, competitors read but
-not exercised by hand. The Fieldsmith column is this repo at v0.2.0; STEP reading and
-modal analysis shipped in v0.3, after this was written.
+### Where Fieldsmith sits
 
-There are two markets with our name in them.
+Two commercial categories border Fieldsmith:
 
-**Team CAD.** OnShape Professional ($2,500/user/year), Fusion ($680 base, $2,190 with
-simulation added), SolidWorks (~$2,820/year by subscription). Sketches with constraints,
-assemblies, drawings, BOM, sheet metal; STEP/IGES/Parasolid and native-CAD exchange;
-managed versions, release management, live co-editing. OnShape's simulation, bundled at
-Professional tier, does linear static and modal with no user-visible meshing and results
-that track model versions. OnShape is the team-CAD spine most engineers sit behind.
-This market wins wherever we have nothing to offer: a shop that needs drawings for a
- machinist needs this family. Fieldsmith does not pretend otherwise, and no part of the
-roadmap should chase mates, BOM columns or title blocks.
+- **Parametric Team CAD** (*OnShape Professional ~$2,500/yr, Fusion + Simulation ~$2,190/yr,
+  SolidWorks ~$2,820/yr*): built for sketch-constrained B-rep assemblies, machinist drawings,
+  sheet metal, and PDM. OnShape includes cloud-hosted linear static and modal FEA, but treats
+  meshes as secondary reference geometry, offers no lattice infill or field grading, requires a
+  vendor cloud account, and publishes no executable verification suite.
+- **Implicit Design-for-Additive** (*nTop, ~$7.5k–$20k/seat/yr, Windows-only, closed*): shares
+  Fieldsmith's core representation (implicit SDF kernel + field-driven lattices + FEA).
+  Fieldsmith covers a focused subset today (three TPMS families in sheet and network modes,
+  single-material linear static, modal, and steady thermo-elastic analysis) while adding
+  properties nTop does not offer: zero-install browser execution, open AGPL source, a diffable
+  text format, fitted and verified Gibson–Ashby laws in the repo (`V6`, `V7`), face-segmented
+  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V25`).
 
-**Design-for-additive.** nTop ($7.5k–$20k/seat/year by quote, Windows, closed) is the true
-sibling: an implicit SDF kernel, field-driven design, TPMS plus beam, honeycomb and
-stochastic lattices, voxel FEA, heat-exchanger and implant workflows, Automate scripting.
-Fieldsmith shares the representation and one flagship workflow (stress-graded TPMS
-infill), with a smaller surface: three TPMS families in sheet and network modes, no beam
-or stochastic cells, no conformal mapping, no thermal or CFD, one material, one part.
-What Fieldsmith adds is uncommon anywhere: the fill is graded by stress from the same
-solver loop, its homogenised stiffness laws are fitted and measured (V6 within 10 %,
-V7 at 2.1 % against a resolved reference), imported meshes become editable field leaves
-with labelled faces, and every number in the verification set carries a measured error
-against theory (V1–V11).
+### Roadmap priorities
 
-**OnShape specifically.** Where it is strictly ahead of us, named: sketch-driven B-rep,
-assemblies, drawings, STEP/IGES/Parasolid/native-CAD import, sheet metal, managed
-collaboration, modal analysis. Where it does not reach us: it reads meshes only as
-reference geometry, has no lattice or graded fill of any kind, does no slicer-quality
-AM export, keeps every feature of the tool behind accounts in a cloud we do not use,
-and its published verification is marketing, not measured error bars.
+New capabilities are ranked by one question: **does this put a high-value engineering
+capability into the hands of anyone with a browser and their own hardware, while keeping the
+numbers verifiable?**
 
-**What follows for the roadmap.** The nearest real users are the ones in section 6, and
-the files they already have are STEP and 3MF. OnShape and every mainstream tool exports
-3MF; we read it, multi-volume since v0.3 with per-volume materials recorded for the slicer
-even though analysis stays single-material. The named gap versus OnShape's simulation,
-modal analysis, closed at v0.3. STEP shipped on the old route this file always allowed:
-read the file, voxelise, make it a field, never edit a B-rep. The CAD round-trip was the
-v0.3 goal; v0.4 asks the declared question instead: state a tolerance or a budget, get
-the measured cost and the answer. Beyond it the ranking is one question: does the change
-make a capability engineers currently pay per seat available to everyone? The engineering
-flows are that ranking's winners, computed on hardware the user chooses under the
-section 6 rule.
+In priority order beyond the v0.5 foundation cleanup:
+
+1. **Interior inspection and parametric ergonomics.**
+   - *Interactive section-plane clipping* in the GPU raymarcher so engineers can slice through
+     a part in real time to inspect internal stress fields, thermal gradients, and graded TPMS
+     walls.
+   - *Named variables and expressions in `.fsm`* so dimensions, loads, and parameter sweeps
+     reference meaningful engineering parameters (`wall_t`, `bolt_pitch`) rather than raw node
+     indices.
+   - *Part/group hierarchy* in the model tree and in-UI 2D profile sketching for extrusions.
+2. **Deeper structural and lattice mechanics (where implicit fields excel).**
+   - *Rigorous error bounds*: pairing conforming displacement solves (lower bound on
+     compliance) with dual/equilibrated stress recovery so rung estimates become certified
+     brackets where the physics allows.
+   - *Anisotropic / direction-aware lattice homogenisation* and buckling/yield indicators for
+     thin TPMS walls.
+   - *Nonlinear material laws* (elasto-plasticity, brittle failure criteria, hyperelasticity)
+     for printed polymers and metals.
+3. **Coupled engineering flows.**
+   - *Thermal and heat-exchanger workflows*: convective and heat-flux boundary conditions and
+     two-domain TPMS core grading (builds directly on the M14 conduction kernel).
+   - *Wave / RF / acoustic problems*: added only when paired with appropriate finite-element
+     spaces (e.g. Nédélec edge elements or BEM/NEC-2 cross-checks) rather than forcing scalar
+     Lagrange elements outside their domain.
 
 ---
 
 ## 8. Principles, in one list
 
-1. The user's part, not ours.
-2. Live, not wizard.
-3. Direct manipulation, precise inspector.
-4. Every number has units and a source.
-5. Verification cases are tests, and tests are documentation.
-6. One representation; everything composes.
-7. Nothing unencrypted leaves the machine, and compute beyond it is the user's.
+1. The user's part, not a canned demo.
+2. Live preview and progressive background compute, never a blocking wizard.
+3. Direct manipulation in the viewport; exact expressions in the inspector.
+4. Every number carries units, provenance, and stated model assumptions.
+5. Verification cases (`V1`–`V25`) are executable tests in CI.
+6. One field representation; geometry, regions, physics, and lattices compose.
+7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.
 8. Quiet interface, loud geometry.
 
 ---
