@@ -18,6 +18,10 @@ jobs:
     outputs:
       ci-passed: ${{ steps.check.outputs.passed }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: false
+          fetch-depth: 2
       - name: Check CI status on tagged commit
         id: check
         env:
@@ -27,6 +31,16 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed" \
             --jq '.workflow_runs[0].conclusion // "none"' 2>/dev/null || echo "unknown")
           echo "CI conclusion for ${GITHUB_SHA:0:7}: ${conclusion}"
+          if [ "$conclusion" != "success" ]; then
+            diff_files=$(git diff --name-only HEAD~1 HEAD || true)
+            if [ "$diff_files" = ".github/workflows/release.yml" ]; then
+              parent_sha=$(git rev-parse HEAD~1)
+              conclusion=$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${parent_sha}&status=completed" \
+                --jq '.workflow_runs[0].conclusion // "none"' 2>/dev/null || echo "unknown")
+              echo "Release-workflow-only commit; parent ${parent_sha:0:7} CI conclusion: ${conclusion}"
+            fi
+          fi
           if [ "$conclusion" = "success" ]; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
           else
@@ -73,16 +87,16 @@ jobs:
     if: |
       !cancelled() &&
       (needs.verify-ci.outputs.ci-passed == 'true' || needs.test.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            apt: musl-tools
+            os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
-            apt: gcc-aarch64-linux-gnu
+            os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -97,16 +111,12 @@ jobs:
           key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-release-${{ matrix.target }}-
-      - name: Install cross-compile toolchain (${{ matrix.target }})
+      - name: Install musl toolchain (${{ matrix.target }})
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+          sudo apt-get install -y --no-install-recommends musl-tools
           rustup target add ${{ matrix.target }}
       - name: Build release CLI and MCP binaries (${{ matrix.target }})
-        env:
-          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
-          AR_aarch64_unknown_linux_musl: aarch64-linux-gnu-ar
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
         run: |
           cargo build --release --target ${{ matrix.target }} -p fieldsmith-cli -p fieldsmith-mcp
           tag="${GITHUB_REF_NAME}"
