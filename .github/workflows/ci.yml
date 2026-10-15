@@ -65,6 +65,12 @@ jobs:
           key: ${{ runner.os }}-cargo-opt3-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-opt3-
+      - name: Install dumpcap for V21 loopback wire census
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark libcap2-bin
+          sudo chmod 0755 "$(command -v dumpcap)"
+          sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
       - name: Run cargo clippy (-D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run workspace tests (V1-V23 + unit tests)
