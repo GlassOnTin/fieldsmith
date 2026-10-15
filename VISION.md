@@ -264,6 +264,24 @@ In priority order beyond the v0.5 foundation cleanup:
    - *Wave / RF / acoustic problems*: added only when paired with appropriate finite-element
      spaces (e.g. Nédélec edge elements or BEM/NEC-2 cross-checks) rather than forcing scalar
      Lagrange elements outside their domain.
+4. **Field-native synthesis (where implicit fields + live FEM + `.fsm` text go beyond B-rep CAD).**
+   - *Stress-driven outer geometry (shells, ribs, and variable fillets)*: feeding the solved
+     `u_param` / `σ_vm(p)` 3D grid back into the body field `f(p)` itself — e.g. wall offsets
+     `t(p)` and smooth-boolean fillet radii `k(p)` that automatically thicken and widen at
+     stress risers without NURBS self-intersection failures.
+   - *Print-orientation anisotropy and overhang checks*: using the exact surface normal `∇f(p)`
+     for closed-form overhang bounds (`∇f · ẑ`) and orthotropic / Tsai-Wu layer-peel criteria
+     aligned with build-Z, including orientation sweeps `(θ, φ)`.
+   - *Multi-objective Pareto explorer*: driving multi-parameter sweeps across local and LAN
+     workers (`fieldsmith api` / `fieldsmith worker`) and plotting the Pareto frontier (mass vs.
+     safety factor, compliance, or first natural frequency) in `Results` so clicking a point
+     snaps the 3D viewport and `.fsm` source to that candidate.
+   - *Direct field slice stacks*: emitting 2D Z-contour slice stacks (3MF Slice Extension)
+     directly from `f(x, y, z_layer) = 0` (`slice_field`) to avoid multi-hundred-megabyte
+     intermediate triangle meshes on dense lattices.
+   - *Closed-loop agentic synthesis via `fieldsmith-mcp`*: end-to-end mechanical design tasks
+     (propose `.fsm` → `ladder` / `sweep` → inspect failure region → refine → export manifold
+     3MF) verified against explicit load, deflection, and mass targets.
 
 ---
 

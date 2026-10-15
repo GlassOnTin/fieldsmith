@@ -67,6 +67,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run workspace tests (V1-V23 + unit tests)
         env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: "3"
           FIELDSMITH_SMALL_RAM: "1"
           FIELDSMITH_COSTS_STORE: /dev/null
         run: cargo test --workspace -- --test-threads=1
