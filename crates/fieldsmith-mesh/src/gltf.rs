@@ -322,7 +322,7 @@ pub fn read_glb(bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
                 as usize;
             let pos = read_accessor(accs, &views, bin, pai, 3, "VEC3")
                 .map_err(|e| format!("mesh {mi} primitive {pi}: {e}"))?;
-            let local: Vec<crate::V3> = pos.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+            let local: Vec<crate::V3> = pos.as_chunks::<3>().0.to_vec();
             let local_tris: Vec<[u32; 3]> = match prim.get("indices").and_then(Value::as_u64) {
                 None => {
                     if !local.len().is_multiple_of(3) {
@@ -350,7 +350,9 @@ pub fn read_glb(bytes: &[u8]) -> Result<Vec<NamedPart>, String> {
                             local.len()
                         ));
                     }
-                    ix.chunks_exact(3)
+                    ix.as_chunks::<3>()
+                        .0
+                        .iter()
                         .map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
                         .collect()
                 }

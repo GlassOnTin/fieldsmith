@@ -1668,15 +1668,15 @@ struct FxHasher(u64);
 impl std::hash::Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for c in &mut chunks {
-            self.0 = (self.0 ^ u64::from_le_bytes(c.try_into().expect("8 bytes")))
+        let (chunks, rem) = bytes.as_chunks::<8>();
+        for &c in chunks {
+            self.0 = (self.0 ^ u64::from_le_bytes(c))
                 .rotate_left(5)
                 .wrapping_mul(0x517c_c1b7_2722_0a95);
         }
-        if !chunks.remainder().is_empty() {
+        if !rem.is_empty() {
             let mut buf = [0u8; 8];
-            buf[..chunks.remainder().len()].copy_from_slice(chunks.remainder());
+            buf[..rem.len()].copy_from_slice(rem);
             self.0 = (self.0 ^ u64::from_le_bytes(buf))
                 .rotate_left(5)
                 .wrapping_mul(0x517c_c1b7_2722_0a95);

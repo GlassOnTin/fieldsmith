@@ -119,8 +119,10 @@ pub fn decode_f32(bytes: &[u8]) -> Result<Vec<f32>, String> {
         ));
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&c| f32::from_le_bytes(c))
         .collect())
 }
 
@@ -132,8 +134,10 @@ pub fn decode_u16(bytes: &[u8]) -> Result<Vec<u16>, String> {
         ));
     }
     Ok(bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&c| u16::from_le_bytes(c))
         .collect())
 }
 

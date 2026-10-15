@@ -267,8 +267,8 @@ pub fn eval_body(doc_json: &str, points: &[f64]) -> Result<Vec<f64>, JsValue> {
     let doc = doc_from(doc_json)?;
     let e = expr::compile_body(&doc);
     let mut out = Vec::with_capacity(points.len() / 3 * 4);
-    for p in points.chunks_exact(3) {
-        let d = expr::eval(&e, [p[0], p[1], p[2]]);
+    for &p in points.as_chunks::<3>().0 {
+        let d = expr::eval(&e, p);
         out.extend_from_slice(&[d.v, d.g[0], d.g[1], d.g[2]]);
     }
     Ok(out)
@@ -282,8 +282,8 @@ pub fn eval_core(doc_json: &str, points: &[f64]) -> Result<Vec<f64>, JsValue> {
     let doc = doc_from(doc_json)?;
     let fx = fieldsmith_core::fill::preview_fill(&doc).map_err(js_err)?;
     let mut out = Vec::with_capacity(points.len() / 3 * 4);
-    for p in points.chunks_exact(3) {
-        let d = fx.removed_skin([p[0], p[1], p[2]]);
+    for &p in points.as_chunks::<3>().0 {
+        let d = fx.removed_skin(p);
         out.extend_from_slice(&[d.v, d.g[0], d.g[1], d.g[2]]);
     }
     Ok(out)
@@ -311,8 +311,8 @@ pub fn eval_core_with_param(
     }
     fx.param.data = param.to_vec();
     let mut out = Vec::with_capacity(points.len() / 3 * 4);
-    for p in points.chunks_exact(3) {
-        let d = fx.removed_skin([p[0], p[1], p[2]]);
+    for &p in points.as_chunks::<3>().0 {
+        let d = fx.removed_skin(p);
         out.extend_from_slice(&[d.v, d.g[0], d.g[1], d.g[2]]);
     }
     Ok(out)

@@ -1843,7 +1843,7 @@ fn tess_earcut(
     // drop ears that are collinear-degenerate in (u,v) — their cross product
     // is roundoff relative to their own edge lengths, not the face's
     let mut seed: Vec<u32> = Vec::with_capacity(out.len());
-    for t in out.chunks_exact(3) {
+    for t in out.as_chunks::<3>().0 {
         let (p0, p1, p2) = (
             data[t[0] as usize],
             data[t[1] as usize],
@@ -1883,7 +1883,7 @@ fn tess_earcut(
     for _ in 0..8 {
         let mut next: Vec<u32> = Vec::with_capacity(out.len());
         let mut expanded = false;
-        for t in out.chunks_exact(3) {
+        for t in out.as_chunks::<3>().0 {
             let sides = [
                 (t[0] as usize, t[1] as usize, t[2] as usize),
                 (t[1] as usize, t[2] as usize, t[0] as usize),
@@ -2170,7 +2170,7 @@ fn refine_eearcut(
         wv_hi = wv_hi.max(p[1]);
     }
     let windows = ((wu_lo, wu_hi), (wv_lo, wv_hi));
-    let mut tris: Vec<[u32; 3]> = seed.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let mut tris: Vec<[u32; 3]> = seed.as_chunks::<3>().0.to_vec();
     let mut rounds = 0;
     loop {
         rounds += 1;
@@ -2451,7 +2451,7 @@ fn refine_eearcut(
     // independent area reference over the ORIGINAL earcut triangles (the
     // 3-midpoint √g rule; the seed's corners are `data` points)
     let mut quad_area = 0.0f64;
-    for t in seed.chunks_exact(3) {
+    for t in seed.as_chunks::<3>().0 {
         let (p0, p1, p2) = (
             data[t[0] as usize],
             data[t[1] as usize],
