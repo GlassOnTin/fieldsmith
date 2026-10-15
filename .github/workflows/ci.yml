@@ -69,7 +69,7 @@ jobs:
         env:
           FIELDSMITH_SMALL_RAM: "1"
           FIELDSMITH_COSTS_STORE: /dev/null
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
       - name: Run V14 STEP chord ladder (release)
         run: cargo test -p fieldsmith-verify --release --test v14_step -- --ignored --nocapture
 

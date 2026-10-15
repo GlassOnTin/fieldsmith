@@ -58,7 +58,7 @@ jobs:
         env:
           FIELDSMITH_SMALL_RAM: "1"
           FIELDSMITH_COSTS_STORE: /dev/null
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
   build-cli:
     needs: [verify-ci, test]
