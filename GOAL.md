@@ -1,6 +1,6 @@
 # Fieldsmith — Goal (v0.5: Foundation & Verification Closure)
 
-**In progress (M17–M18 closed, M19 mesher fix landed, M19 table + M20–M21 open).**
+**In progress (M17–M19 closed; M20–M21 open).**
 
 This file defines **what "done" means for v0.5**. The [VISION](VISION.md) defines *why* and
 *where next*; this file defines the concrete, testable acceptance bar for the current release.
@@ -73,7 +73,7 @@ this file in a reviewed commit with the measured reason rather than skipping it.
       (`v18_costs_csv_ties_to_ship_data`, 59 total rows); `README.md` updated with measured
       cross-architecture divergence scope.
 
-### C. Quarter-plate tangent junction (M19 — mesher fix in `f620a91`, study table in [V3.md](docs/verification/V3.md) open)
+### C. Quarter-plate tangent junction (M19 — closed, [V3.md](docs/verification/V3.md))
 - [x] **Diagnose from mesh output and fix boundary-claim bisection (`f620a91`).** Reconstructed
       the quarter plate (`crates/fieldsmith-verify/examples/v3quarter.rs`) and isolated two
       mechanisms in `fieldsmith-mesh`:
@@ -85,17 +85,21 @@ this file in a reviewed commit with the measured reason rather than skipping it.
          and drop the `(0, 1)` mouth apex node (`0.013 · h` miss).
       Fixed by bisecting `positive_boundary` on `raw(p) > NOISE` (`NOISE = 1e-14`, 60
       iterations), covered by `crates/fieldsmith-mesh/tests/mouth_junction.rs` and
-      `cap_chime.rs`. At the `h = 0.14` graze spacing, `v3quarter` now places the mouth apex at
-      `(0, 1, 0)` with `0` off-plane pinned nodes and drops peak centroid `σxx` from `45.48 MPa`
-      (`+50 %`) to `29.322 MPa` (`Kt = 2.639`, `−3.3 %` vs. Heywood `2.729`).
-- [ ] **Complete the 5-row quarter-model mesh study (`h = 0.2, 0.14, 0.1, 0.07, 0.05 mm`).**
-      Run `v3quarter` across all five spacings on the `f620a91` mesher, update
-      `docs/verification/V3.md` (replacing the stale pre-fix narrative in "Lattice class
-      sensitivity" with the measured post-fix quarter table), and assert the quarter tolerances
-      in `crates/fieldsmith-verify/tests/v3_plate_hole.rs`.
-- [ ] If any spacing on the quarter model still exceeds the half-plate tolerance band (`5 %`, or
-      `8.5 %` at `h = 0.07` graze), document the exact element geometry at that spacing in
-      `V3.md` and pin the measured bound in `v3_plate_hole.rs`.
+      `cap_chime.rs`.
+- [x] **Complete the 5-row quarter-model mesh study (`h = 0.2, 0.14, 0.1, 0.07, 0.05 mm`).**
+      Both the half-plate and quarter-plate 5-row studies now run in
+      `crates/fieldsmith-verify/tests/v3_plate_hole.rs` and emit full tables into
+      `docs/verification/V3.md`. The quarter model's graze peaks dropped from `45.48 / 45.59 MPa`
+      (`+50 %`) to `29.322 MPa` (`Kt = 2.6390`, `−3.30 %` at `h = 0.14`) and `32.399 MPa`
+      (`Kt = 2.9159`, `+6.85 %` at `h = 0.07`, inside the `8.5 %` graze bound), with `0`
+      off-plane pinned nodes and the mouth apex placed at `(0, 1, z)`.
+- [x] **Explain and bound the remaining `+0.95 %` half-vs-quarter offset at `h = 0.05`.** Across
+      the four spacings that share the same peak centroid element (`h = 0.2, 0.1, 0.07, 0.05`),
+      the quarter model reads a uniform `+0.93 %` to `+0.98 %` above the half model (`+1.59 %`,
+      `+1.47 %`, `+6.85 %`, `+5.39 %` vs. `+0.60 %`, `+0.53 %`, `+5.85 %`, `+4.40 %`) because
+      `ux = 0` on `x = 0` models symmetric uniform traction on both `x = ±10`, whereas the half
+      model constrains the entire `x = −10` end flat (`ux = 0`) and pulls `x = +10`. Documented
+      in `V3.md` and pinned at `5.5 %` (`KT_TOL_QUARTER_FINE`) in `v3_plate_hole.rs`.
 
 ### D. Mesh-leaf graded fill reaches the slicer (M20 — evidence: [slicer.md](docs/verification/slicer.md))
 - [ ] **Map the manifold boundary on a mesh-imported leaf.** Note: analytic SDF graded fill
@@ -147,7 +151,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | :-- | :-- | :-- | :-- |
 | `V24` | Fresh-clone build & golden API contract (`scripts/v24-fresh-clone.sh`) | `V22` golden canonical response | Byte-identical canonical output from a standalone clone; passes in CI (**measured: PASS, 104 s**) |
 | `V25` | `aarch64` (`SM8750` OnePlus 13) ladder + `V23` 5-point sweep (`scripts/v25-arm-compare.py`) | x86_64 referee envelopes & `V18` `costs.csv` tie-in | Per-field divergence measured and documented; 259/259 canon-equal; sweep `≥ 100 pts/h` (**measured: PASS, 1966 pts/h**) |
-| `V3x` | `V3` quarter-plate (`x ≥ 0, y ≥ 0`) 5-row mesh study | Heywood finite-width `Kt = 2.729` & half-plate study | 5-row quarter table in `V3.md`; passes half-plate tolerances (`≤ 5 %`, `≤ 8.5 %` at `h = 0.07`) or pins measured bound |
+| `V3x` | `V3` quarter-plate (`x ≥ 0, y ≥ 0`) 5-row mesh study | Heywood finite-width `Kt = 2.729` & half-plate study | 5-row quarter table in `V3.md` (**measured: PASS, +1.59 / −3.30 / +1.47 / +6.85 / +5.39 %**) |
 | `Sx` | Mesh-leaf graded-fill slicer manifold grid | Headless PrusaSlicer 2.9.6 `--info` (`manifold = yes`) | `manifold = yes` at `skin = 1.2 mm` on mesh-leaf graded part, or flip boundary pinned in `slicer.md` |
 
 ---
@@ -158,7 +162,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | :-- | :-- | :-- |
 | Fresh clone → build → golden API answer (`V24`) | `≤ 5 min` on referee | **104 s** (clone 2 s + build 98 s + run 2 s) — PASS |
 | `SM8750` (`aarch64`) 5-point sweep throughput (`V25`) | `≥ 100 points/hour` | **1966 points/hour** (9.16 s engine sum across 5 points) — PASS |
-| `V3x` quarter-plate peak stress error (`h = 0.2..0.05`) | `≤ 5 %` aligned (`≤ 8.5 %` graze) | `h = 0.14` graze measured at **−3.3 %** (`29.32 MPa`); full 5-row run pending |
+| `V3x` quarter-plate peak stress error (`h = 0.2..0.05`) | `≤ 5 %` (`≤ 8.5 %` graze, `≤ 5.5 %` at `0.05`) | **+1.59 / −3.30 / +1.47 / +6.85 / +5.39 %** (`V3.md`) — PASS |
 | Mesh-leaf graded fill in PrusaSlicer (`Sx`) | `manifold = yes` at `skin = 1.2 mm` | Pending M20 grid & stitch pass |
 | N100 Chrome compute profile (`M21`) | Empirical walls measured across WebGL/worker conditions | Pending M21 run on `ian-quieter.lan` |
 
@@ -187,7 +191,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | :-- | :-- | :-- | :-- |
 | **M17** | Standalone repo & fresh-clone gate | **Done** (`7e5c1db`) | `fenics-rs` submodule, `GlassOnTin/fieldsmith` remote, `V24.md`, CI gate |
 | **M18** | `aarch64` (`SM8750`) architecture datapoint | **Done** (`cfee968`) | `V25.md`, `scripts/v25-arm-compare.py`, 13 `SM8750` rows in `costs.csv` |
-| **M19** | Quarter-plate tangent junction | **In progress** (`f620a91`) | Mesher fix landed; run 5-row `v3quarter` table into `V3.md` and `v3_plate_hole.rs` |
+| **M19** | Quarter-plate tangent junction | **Done** | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
 | **M20** | Mesh-leaf graded fill in PrusaSlicer | **Open** | Manifold grid + stitch/offset fix + extended `slicer.md` |
 | **M21** | N100 Chrome compute profile | **Open** | Empirical WebGL/worker run set on `ian-quieter.lan` + appendix in `budgets.md` |
 
