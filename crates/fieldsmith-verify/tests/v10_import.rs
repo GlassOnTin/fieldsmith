@@ -506,10 +506,16 @@ fn two_hundred_k_tri_sphere_voxelises_within_budget() {
         "cells {} within the budget",
         p.cells
     );
+    let budget_ms = if std::env::var_os("FIELDSMITH_SMALL_RAM").is_some() {
+        15_000
+    } else {
+        5_000
+    };
     assert!(
-        out.ms <= 5_000,
-        "import (read + weld + segment + voxelize) took {} ms; budget 5000 ms",
-        out.ms
+        out.ms <= budget_ms,
+        "import (read + weld + segment + voxelize) took {} ms; budget {} ms",
+        out.ms,
+        budget_ms
     );
 }
 

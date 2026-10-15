@@ -108,8 +108,18 @@ fn analytic_nist_fixtures_import_voxelize_and_report_within_the_goal_bounds() {
             );
         }
         // Whole-chain sanity: voxelize + hydrate included (the read+voxelize budget for
-        // mesh imports is 5 s; CTC-04 at 542k grid cells lands well under).
-        assert!(out.ms <= 5_000, "{src}: whole import took {} ms", out.ms);
+        // mesh imports is 5 s on the 32-thread referee, 15 s on 4-vCPU CI runners).
+        let import_budget_ms = if std::env::var_os("FIELDSMITH_SMALL_RAM").is_some() {
+            15_000
+        } else {
+            5_000
+        };
+        assert!(
+            out.ms <= import_budget_ms,
+            "{src}: whole import took {} ms; budget {} ms",
+            out.ms,
+            import_budget_ms
+        );
         assert!(
             report.parse_ms + report.tess_ms <= STEP_BUDGET_MS,
             "{src}: parse {} ms + tessellate {} ms within the provisional {} ms budget",
