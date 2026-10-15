@@ -101,25 +101,30 @@ this file in a reviewed commit with the measured reason rather than skipping it.
       model constrains the entire `x = −10` end flat (`ux = 0`) and pulls `x = +10`. Documented
       in `V3.md` and pinned at `5.5 %` (`KT_TOL_QUARTER_FINE`) in `v3_plate_hole.rs`.
 
-### D. Mesh-leaf graded fill reaches the slicer (M20 — evidence: [slicer.md](docs/verification/slicer.md))
-- [ ] **Map the manifold boundary on a mesh-imported leaf.** Note: analytic SDF graded fill
-      (`examples/bracket-filled.fsm`) already passes headless PrusaSlicer 2.9.6 with
-      `manifold = yes` at `h = 0.25` and `h = 0.1 mm` (`slicer.md`). The open finding from M10
-      (`V14.md` Doc B) is graded TPMS fill inside a **mesh/STEP-imported leaf** (trilinear
-      signed-distance grid), where `skin = 0 mm` gives `manifold = yes` (4 open edges closed by
-      Prusa's weld) but `skin = 1.2 mm` gives `manifold = no` (202–344 open seams in adaptive DC).
-      Run a structured grid over `skin ∈ {0, 0.3, 0.6, 0.9, 1.2 mm}` and cell/mesh spacing on
-      the mesh-leaf graded fixture and record PrusaSlicer's `--info` verdict (`manifold`, open
-      edges, parts, volume) for each cell.
-- [ ] **Diagnose and attempt a stitch/field fix.** Identify why the inner shell offset
-      `d_body(p) + skin` on a piecewise-trilinear mesh field creates crease/sheet tangencies
-      that open seams in adaptive dual contouring (e.g. C0 gradient discontinuities across voxel
-      cell faces on the offset surface, or multi-sheet vertex allocation in `fieldsmith-mesh`),
-      and implement + test the fix (such as smoothing/filtering the inner skin field lookup or
-      extending the adaptive seam stitch).
-- [ ] **Close with measured `manifold = yes` at `skin = 1.2 mm` or a pinned boundary table.**
-      Update `docs/verification/slicer.md` and `README.md` with the resulting table and add a
-      regression test covering the mesh-leaf graded export defect census.
+### D. Mesh-leaf graded fill reaches the slicer (M20 — closed, [slicer.md](docs/verification/slicer.md))
+- [x] **Map the manifold boundary on a mesh-imported leaf.** Ran the 5 × 3 grid over
+      `skin ∈ {0, 0.3, 0.6, 0.9, 1.2 mm}` and adaptive DC spacing `h ∈ {0.30, 0.25, 0.15 mm}`
+      on `c01x-composite.fsmz` (`slicer.md`) and recorded `TriMesh::defects()` alongside
+      headless PrusaSlicer 2.9.6 (`--info`) verdicts.
+- [x] **Diagnose and fix the three adaptive-stitch causes (`crates/fieldsmith-mesh/src/adaptive.rs`).**
+      1. *Sub-tolerance `f32` corner crossings on planar offset faces (`216` apparent open edges
+         from `140` degenerate triangles at `h = 0.30 mm`):* clamped sign-changing edge crossings
+         into `[FOLD_NUDGE, 1.0 - FOLD_NUDGE]` (`[1e-4, 0.9999]`), upholding the corner-clearance
+         invariant across `f32` mesh-grid evaluation noise (`~1e-8..3e-7 mm`).
+      2. *Post-weld `[u, v, v]` collapsed triangles (`4 / 14 / 42` degenerate triangles at
+         `skin = 0.0`, causing PrusaSlicer `manifold = no, open_edges = 2`):* dropped
+         repeated-vertex triangles immediately after `weld_exact`.
+      3. *Per-component cavity orientation (`+18.02 %` volume jump at `h = 0.25 mm`, where a
+         crease seed inverted one `325 394`-triangle interior gyroid labyrinth from
+         `−1 088.3 mm³` to `+1 088.3 mm³`):* oriented each edge-connected component by majority
+         vote of its build-time (`emit_quad`) normals in `orient_inner`.
+- [x] **Close with measured `manifold = yes` across all 15 cells (`skin = 0..1.2 mm`,
+      `h = 0.30..0.15 mm`).** Every cell in the 5 × 3 grid now reports `0` open edges, `0`
+      degenerate triangles, `0` orientation defects, and PrusaSlicer `manifold = yes`;
+      `skin = 1.2 mm` slices at `0.2 mm` layer height (`--export-gcode`) to `11 MB` G-code with
+      zero repair diagnostics (`slicer.md`, `V14.md`), and regression tests are locked in
+      `adaptive.rs` and `v14_step.rs`.
+
 
 ### E. N100 Chrome empirical compute profile (M21 — evidence: appendix in [budgets.md](docs/verification/budgets.md))
 - [ ] **Measure controllable runtime factors on `ian-quieter.lan`.** On the 4-core N100, Chrome
@@ -152,7 +157,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | `V24` | Fresh-clone build & golden API contract (`scripts/v24-fresh-clone.sh`) | `V22` golden canonical response | Byte-identical canonical output from a standalone clone; passes in CI (**measured: PASS, 104 s**) |
 | `V25` | `aarch64` (`SM8750` OnePlus 13) ladder + `V23` 5-point sweep (`scripts/v25-arm-compare.py`) | x86_64 referee envelopes & `V18` `costs.csv` tie-in | Per-field divergence measured and documented; 259/259 canon-equal; sweep `≥ 100 pts/h` (**measured: PASS, 1966 pts/h**) |
 | `V3x` | `V3` quarter-plate (`x ≥ 0, y ≥ 0`) 5-row mesh study | Heywood finite-width `Kt = 2.729` & half-plate study | 5-row quarter table in `V3.md` (**measured: PASS, +1.59 / −3.30 / +1.47 / +6.85 / +5.39 %**) |
-| `Sx` | Mesh-leaf graded-fill slicer manifold grid | Headless PrusaSlicer 2.9.6 `--info` (`manifold = yes`) | `manifold = yes` at `skin = 1.2 mm` on mesh-leaf graded part, or flip boundary pinned in `slicer.md` |
+| `Sx` | Mesh-leaf graded-fill slicer manifold grid | Headless PrusaSlicer 2.9.6 `--info` (`manifold = yes`) | `manifold = yes` at `skin = 1.2 mm` on mesh-leaf graded part (**measured: PASS across all 15 cells, `0` open edges, slices at `0.2 mm` to `11 MB` G-code**) |
 
 ---
 
@@ -163,7 +168,7 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | Fresh clone → build → golden API answer (`V24`) | `≤ 5 min` on referee | **104 s** (clone 2 s + build 98 s + run 2 s) — PASS |
 | `SM8750` (`aarch64`) 5-point sweep throughput (`V25`) | `≥ 100 points/hour` | **1966 points/hour** (9.16 s engine sum across 5 points) — PASS |
 | `V3x` quarter-plate peak stress error (`h = 0.2..0.05`) | `≤ 5 %` (`≤ 8.5 %` graze, `≤ 5.5 %` at `0.05`) | **+1.59 / −3.30 / +1.47 / +6.85 / +5.39 %** (`V3.md`) — PASS |
-| Mesh-leaf graded fill in PrusaSlicer (`Sx`) | `manifold = yes` at `skin = 1.2 mm` | Pending M20 grid & stitch pass |
+| Mesh-leaf graded fill in PrusaSlicer (`Sx`) | `manifold = yes` at `skin = 1.2 mm` | **`manifold = yes` across all 15 cells (`skin = 0..1.2 mm`, `h = 0.30..0.15 mm`), `0` open edges** (`slicer.md`) — PASS |
 | N100 Chrome compute profile (`M21`) | Empirical walls measured across WebGL/worker conditions | Pending M21 run on `ian-quieter.lan` |
 
 ---
@@ -191,8 +196,8 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 | :-- | :-- | :-- | :-- |
 | **M17** | Standalone repo & fresh-clone gate | **Done** (`7e5c1db`) | `fenics-rs` submodule, `GlassOnTin/fieldsmith` remote, `V24.md`, CI gate |
 | **M18** | `aarch64` (`SM8750`) architecture datapoint | **Done** (`cfee968`) | `V25.md`, `scripts/v25-arm-compare.py`, 13 `SM8750` rows in `costs.csv` |
-| **M19** | Quarter-plate tangent junction | **Done** | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
-| **M20** | Mesh-leaf graded fill in PrusaSlicer | **Open** | Manifold grid + stitch/offset fix + extended `slicer.md` |
+| **M19** | Quarter-plate tangent junction | **Done** (`38495e8`) | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
+| **M20** | Mesh-leaf graded fill in PrusaSlicer | **Done** | 5 × 3 manifold grid + adaptive crossing/weld/component-orient fix + `slicer.md` & `v14_step.rs` |
 | **M21** | N100 Chrome compute profile | **Open** | Empirical WebGL/worker run set on `ian-quieter.lan` + appendix in `budgets.md` |
 
 ---

@@ -63,12 +63,16 @@ in-app export always does.
 ## What is verified, and what is not
 
 `docs/verification/` carries a report per verification case: volumes against closed-form
-answers (V4), a plate-with-hole against theory (V3), the cantilever against theory (V2), the
-graded lattice's stiffness against a resolved reference mesh (V7), and an imported mesh
-against its file's own header and the slicer that consumes it (V10). Limits that are not
-covered get stated in those reports rather than glossed: the graded fill's surface carries
-measured non-manifold edges where TPMS sheets cross or pinch inside one cell
-(V8, "Non-manifold edges"); slicers take the solid as the union of the closed shell.
+answers (V4), the half and quarter plate-with-hole models against Heywood theory (V3), the
+cantilever against theory (V2), the graded lattice's stiffness against a resolved reference
+mesh (V7), and an imported mesh or STEP B-rep against its file's own header, analytic flux
+volume, and the slicer that consumes it (V10, V14, [slicer.md](docs/verification/slicer.md)).
+Limits that are not covered get stated in those reports rather than glossed: the graded
+fill's surface carries measured non-manifold spoke edges and interpenetrating wall tiles
+where TPMS sheets cross or pinch inside one cell (V8, "Non-manifold edges"), while adaptive
+dual contouring closes both analytic and mesh-leaf graded fills (`skin = 0..1.2 mm`) with
+`0` open edges and `manifold = yes` in PrusaSlicer 2.9.6 (`slicer.md`).
+
 
 ## Limitations
 

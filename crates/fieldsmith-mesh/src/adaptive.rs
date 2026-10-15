@@ -771,13 +771,14 @@ pub fn surface_adaptive<F: Fn(V3) -> Sample + Sync>(
     // Crossings sitting exactly on a corner (t = 0 or 1: the plane-aligned snap) coincide
     // positionally across different edges; weld them so the surface is edge-closed there.
     weld_exact(&mut verts, &mut tris);
+    tris.retain(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]);
     trace.mark("weld", String::new);
-    orient(&mut tris);
+    // Restore consistent 2-colouring within each edge-connected component, choosing each
+    // component's sign by majority vote of its build-time quad orientations (which follow
+    // the local field gradient on both outer shells and enclosed interior cavities) before
+    // the whole-mesh volume fallback.
+    orient_inner(&mut tris, true);
     trace.mark("orient", String::new);
-    // Per-quad winding is only a first guess: at plane-aligned creases the field gradient
-    // ties between planes and emission can wind a band of quads backwards. Consistency is
-    // restored by `orient`; with the surface closed its global sign is then uniform, so
-    // the windings whose volume comes out negative are flipped to the outward convention.
     if signed_volume(&verts, &tris) < 0.0 {
         for t in &mut tris {
             t.swap(1, 2);
@@ -1308,17 +1309,11 @@ fn leaf_record(
             continue;
         }
         let t0 = (ua / (ua - ub)).clamp(0.0, 1.0);
-        // t hits an endpoint exactly only when that endpoint's sample was snapped to
-        // 0.0 — the fold that makes two crossings of neighbouring edges coincide.
-        // Nudge the fold into the edge interior (on the segment, toward the other
-        // endpoint) so folds of adjacent edges separate.
-        let t = if t0 == 0.0 {
-            FOLD_NUDGE
-        } else if t0 == 1.0 {
-            1.0 - FOLD_NUDGE
-        } else {
-            t0
-        };
+        // Crossings landing at or within FOLD_NUDGE of an endpoint (an exact-zero sample
+        // from the plane-aligned snap, or sub-tolerance f32 evaluation noise on a mesh-leaf
+        // voxel plane) are clamped into [FOLD_NUDGE, 1 - FOLD_NUDGE] so adjacent edge folds
+        // separate and corner pinch quads keep area above the 1e-12 degeneracy floor.
+        let t = t0.clamp(FOLD_NUDGE, 1.0 - FOLD_NUDGE);
         let mut p = [0.0f64; 3];
         for i in 0..3 {
             p[i] = pos[a as usize][i] + (pos[b as usize][i] - pos[a as usize][i]) * t;
@@ -1707,7 +1702,12 @@ impl std::hash::Hasher for FxHasher {
 ///
 /// Propagation only crosses manifold edges (two incident triangles): a non-manifold seam
 /// edge carries more, and no 2-colouring exists there.
+#[cfg(test)]
 fn orient(tris: &mut [[u32; 3]]) {
+    orient_inner(tris, false);
+}
+
+fn orient_inner(tris: &mut [[u32; 3]], majority: bool) {
     // Undirected edge -> its half-edges, bucketed by the edge's lower vertex (counting sort:
     // offsets per vertex, then one u32 per half-edge), and within a bucket matched by the
     // upper vertex. An edge with exactly two half-edges becomes a `mate` pair; any other
@@ -1783,12 +1783,18 @@ fn orient(tris: &mut [[u32; 3]]) {
     let mut flip = vec![false; n_t];
     let mut seen = vec![false; n_t];
     let mut stack: Vec<u32> = Vec::new();
+    let mut comp: Vec<u32> = Vec::new();
     for seed in 0..n_t {
         if seen[seed] {
             continue;
         }
         seen[seed] = true;
         stack.push(seed as u32);
+        if majority {
+            comp.clear();
+            comp.push(seed as u32);
+        }
+        let mut n_flipped = 0usize;
         while let Some(ti) = stack.pop() {
             let ti = ti as usize;
             for slot in 0..3 {
@@ -1830,8 +1836,22 @@ fn orient(tris: &mut [[u32; 3]]) {
                 if same {
                     flip[nt] = !flip[nt];
                 }
+                if flip[nt] {
+                    n_flipped += 1;
+                }
                 seen[nt] = true;
                 stack.push(nt as u32);
+                if majority {
+                    comp.push(nt as u32);
+                }
+            }
+        }
+        // When the component's seed happened to be a backwards crease quad, more than half
+        // of the component was flipped to match the seed; invert the component's flips so
+        // every shell/cavity keeps its majority build-time (outward field-gradient) sign.
+        if majority && 2 * n_flipped > comp.len() {
+            for &ti in &comp {
+                flip[ti as usize] = !flip[ti as usize];
             }
         }
     }
@@ -2439,7 +2459,7 @@ mod tests {
                 [-10.0; 3],
                 [10.0; 3],
                 0.25,
-                0x971051eb5f084573,
+                0xe22d2b9b79310d7f,
             ),
         ];
         let mut bad = Vec::new();
@@ -2475,5 +2495,84 @@ mod tests {
         let a = run(1);
         let b = run(4);
         assert_eq!(a, b, "adaptive mesh differs between 1 and 4 threads");
+    }
+
+    #[test]
+    fn per_component_orientation_preserves_enclosed_cavity_sign() {
+        // Hollow sphere (outer r = 6, inner cavity r = 4): two disconnected closed surface
+        // components. When the inner cavity's first triangle (its BFS seed) is wound
+        // backwards — as happens when a gyroid cavity's first quad sits on a plane-aligned
+        // crease — seed-locked orientation flips the entire cavity positive and adds 2*V_inner
+        // to the mesh volume; majority-vote orientation keeps the cavity negative.
+        let outer = sample_sphere([0.0; 3], 6.0);
+        let inner = sample_sphere([0.0; 3], 4.0);
+        let hollow = |p: V3| {
+            let so = outer(p);
+            let si = inner(p);
+            let neg_in = Sample {
+                v: -si.v,
+                g: [-si.g[0], -si.g[1], -si.g[2]],
+            };
+            if so.v >= neg_in.v {
+                so
+            } else {
+                neg_in
+            }
+        };
+        let mut m = surface_adaptive(hollow, [-8.0; 3], [8.0; 3], 0.5, &AdaptiveOpts::default());
+        let v_ref = m.volume();
+        let v_exact = 4.0 / 3.0 * std::f64::consts::PI * (6.0_f64.powi(3) - 4.0_f64.powi(3));
+        assert!(
+            (v_ref - v_exact).abs() < 0.02 * v_exact,
+            "hollow sphere volume {v_ref} vs {v_exact}"
+        );
+        // Find the first triangle belonging to the inner cavity (radius ~ 4) and flip only it.
+        let inner_seed = m
+            .tris
+            .iter()
+            .position(|t| {
+                let p = m.verts[t[0] as usize];
+                (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() < 5.0
+            })
+            .expect("inner cavity component present");
+        m.tris[inner_seed].swap(1, 2);
+        orient_inner(&mut m.tris, true);
+        let v_after = m.volume();
+        assert!(
+            (v_after - v_ref).abs() <= 1e-9,
+            "per-component majority vote must recover cavity sign: {v_after} vs {v_ref}"
+        );
+        assert!(m.defects().none());
+    }
+
+    #[test]
+    fn noisy_planar_offset_crossings_stay_non_degenerate_and_closed() {
+        // Mesh-leaf SDFs carry ~1e-7 mm (f32) evaluation noise on planar offset faces, above
+        // the 1e-9 * h exact-zero corner snap. Crossings landing within FOLD_NUDGE of a
+        // lattice corner must still be clamped into [FOLD_NUDGE, 1 - FOLD_NUDGE] and any
+        // post-weld [u, v, v] slits dropped, leaving zero degenerate triangles and zero open
+        // edges.
+        let base = gyroid_sheet(6.0, 0.35, 6.0);
+        let noisy = |p: V3| {
+            let mut s = base(p);
+            if s.v.abs() < 1e-6 {
+                // Deterministic ~2e-7 mm f32-scale perturbation on lattice-aligned planes.
+                let h = fx3([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]);
+                let eps = if h & 1 == 0 { 2e-7 } else { -2e-7 };
+                s.v += eps;
+            }
+            s
+        };
+        let m = surface_adaptive(noisy, [-8.0; 3], [8.0; 3], 0.3, &AdaptiveOpts::default());
+        let d = m.defects();
+        assert_eq!(d.open_edges, 0, "open edges on noisy planar offset: {d:?}");
+        assert_eq!(
+            d.orientation_defects, 0,
+            "orientation defects on noisy planar offset: {d:?}"
+        );
+        assert_eq!(
+            d.degenerate_triangles, 0,
+            "degenerate triangles on noisy planar offset: {d:?}"
+        );
     }
 }

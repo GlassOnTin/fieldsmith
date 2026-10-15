@@ -281,3 +281,89 @@ fn tessellated_parts_reexport_to_3mf_and_roundtrip_watertight() {
         );
     }
 }
+
+/// M20 regression: a mesh-leaf body (1:10 scaled CTC-01) with positive-skin graded gyroid
+/// fill (`skin = 1.2 mm`) exports through adaptive dual contouring with zero open edges,
+/// zero degenerate triangles, zero orientation defects, bounded non-manifold spokes, and
+/// mesh volume within 1 % of the field integral (locking out both the f32 corner-crossing
+/// degeneracy class and the per-component cavity-inversion volume jump).
+#[test]
+fn graded_mesh_leaf_with_positive_skin_exports_closed_and_within_volume_bound() {
+    use fieldsmith_core::fill::graded;
+    use fieldsmith_core::Resolution;
+    use fieldsmith_doc::{fsm, Document};
+    use fieldsmith_field::{expr, volume};
+    use fieldsmith_mesh::adaptive::{surface_adaptive, AdaptiveOpts, Sample};
+    use std::time::Instant;
+
+    fn clock() -> f64 {
+        thread_local!(static T0: Instant = Instant::now());
+        T0.with(|t| t.elapsed().as_secs_f64() * 1000.0)
+    }
+
+    let step = tessellate(CTC01, None).unwrap();
+    let mut scaled = step.parts[0].mesh.clone();
+    for v in &mut scaled.verts {
+        *v = [v[0] * 0.1, v[1] * 0.1, v[2] * 0.1];
+    }
+    let stl = scaled.write_stl();
+    let out = import_mesh("stl", &stl, &opts("c01-scaled.stl")).unwrap();
+    let base = Document {
+        name: "c01-scaled".into(),
+        material: "petg".into(),
+        root: out.nodes,
+        ..Default::default()
+    };
+    let text = format!(
+        "{}\nregion mount = mesh1.nz\nregion work = mesh1.py\nsupport fixed mount\nload press work force=(103.53, 0, 386.37) case=\"Press 15 deg\"\nfill gyroid sheet cell=6 skin=1.2 rho=(0.2, 0.8) curve=1 wall=0.8 margin=2\n",
+        fsm::print(&base)
+    );
+    let doc = fsm::parse(&text).expect("graded mesh-leaf document parses");
+    let (_, g) = graded(&doc, Resolution::Dofs(150_000), clock).expect("graded solve");
+    let filled = expr::Expr::Filled(Box::new(g.fill));
+    let b = expr::bounds(&filled);
+
+    for h in [0.30, 0.25] {
+        let lo = [b.lo[0] - h, b.lo[1] - h, b.lo[2] - h];
+        let hi = [b.hi[0] + h, b.hi[1] + h, b.hi[2] + h];
+        let m = surface_adaptive(
+            |p| {
+                let d = expr::eval(&filled, p);
+                Sample { v: d.v, g: d.g }
+            },
+            lo,
+            hi,
+            h,
+            &AdaptiveOpts::default(),
+        );
+        let vf = volume::volume(&filled, h).volume;
+        let vm = m.volume();
+        let rel_vol = (vm - vf).abs() / vf;
+        let d = m.defects();
+        println!(
+            "c01-scaled skin=1.2 h={h}: {} verts, {} tris, field {vf:.1} mm³, mesh {vm:.1} mm³ (Δ {:+.2} %), defects {d:?}",
+            m.verts.len(),
+            m.tris.len(),
+            (vm - vf) / vf * 100.0
+        );
+        assert_eq!(d.open_edges, 0, "h={h}: open edges must be zero: {d:?}");
+        assert_eq!(
+            d.orientation_defects, 0,
+            "h={h}: orientation defects must be zero: {d:?}"
+        );
+        assert_eq!(
+            d.degenerate_triangles, 0,
+            "h={h}: degenerate triangles must be zero: {d:?}"
+        );
+        assert!(
+            d.non_manifold_edges <= 15,
+            "h={h}: non-manifold spokes {d:?} exceeded bound"
+        );
+        assert!(
+            rel_vol < 0.01,
+            "h={h}: mesh volume {vm:.1} vs field {vf:.1} ({:.2} % > 1 %)",
+            rel_vol * 100.0
+        );
+    }
+}
+
