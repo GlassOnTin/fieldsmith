@@ -280,7 +280,7 @@ fn v21_worker_privacy() {
     // --- the capture window -------------------------------------------------------
     let cap = dir.join("capture.pcap");
     let mut dump = Command::new("dumpcap")
-        .args(["-F", "pcap", "-i", "lo", "-w"])
+        .args(["-P", "-i", "lo", "-w"])
         .arg(&cap)
         .args(["-a", "duration:20"])
         .stdout(Stdio::piped())
