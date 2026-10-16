@@ -1,6 +1,8 @@
 # Fieldsmith — Goal (v0.5: Foundation & Verification Closure)
 
-**In progress (M17–M19 closed; M20–M21 open).**
+**Closed.** `M20` closed at `28412e3` and `M21` at `b9f83b3`, which also ticked the criteria
+below; `v0.5.0` is tagged at `ab59756`, where GitHub Actions CI and the release workflow are
+green.
 
 This file defines **what "done" means for v0.5**. The [VISION](VISION.md) defines *why* and
 *where next*; this file defines the concrete, testable acceptance bar for the current release.
