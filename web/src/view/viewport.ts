@@ -44,6 +44,9 @@ uniform vec2 u_gridFade;    // fade radius (inner, outer) in mm from u_gridCente
 uniform vec2 u_hlKey[${MAX_HIGHLIGHTS}];  // (leaf index, face code or -1 for every face)
 uniform vec3 u_hlCol[${MAX_HIGHLIGHTS}];
 uniform int u_hlN;
+uniform float u_clipOn;     // 1 = clip along the section plane (u_clipN / u_clipD)
+uniform vec3 u_clipN;       // plane normal (unit, field space); kept half: dot(p, N) - D >= 0
+uniform float u_clipD;
 in vec2 v_ndc;
 out vec4 fragColor;
 ${field}
@@ -58,6 +61,39 @@ bool boxHit(vec3 ro, vec3 rd, out float t0, out float t1) {
   t0 = max(max(mn.x, mn.y), mn.z);
   t1 = min(min(mx.x, mx.y), mx.z);
   return t1 > max(t0, 0.0);
+}
+bool clipInterval(vec3 ro, vec3 rd, inout float t0, inout float t1, out bool capEnter) {
+  // Tighten the kept interval to the clip half-space dot(p, u_clipN) - u_clipD >= 0.
+  // Returns false when nothing survives; the caller then skips the march entirely.
+  // capEnter marks a surviving interval that starts at the cut plane: the first kept
+  // sample sits on the section face and its normal is -u_clipN (facing the viewer that
+  // looks from the removed half into the kept material).
+  capEnter = false;
+  if (u_clipOn < 0.5) return true;
+  float sd = dot(ro, u_clipN) - u_clipD;
+  float dN = dot(rd, u_clipN);
+  if (abs(dN) < 1e-12) {
+    if (sd < 0.0) { t0 = 1.0; t1 = 0.0; return false; }
+    return true;
+  }
+  float tc = -sd / dN;  // plane crossing; s(t) = sd + t * dN
+  if (dN > 0.0) {
+    // Heading into the kept half: keep t >= tc.
+    if (tc > t1) { t0 = 1.0; t1 = 0.0; return false; }
+    if (tc > t0) { t0 = tc; capEnter = tc > 0.0; }
+    return true;
+  }
+  // Heading out of the kept half: keep t <= tc.
+  if (tc < t0) { t0 = 1.0; t1 = 0.0; return false; }
+  t1 = min(t1, tc);
+  return true;
+}
+// Field sampled for ambient occlusion, with the clipped-away half treated as empty so
+// the cut face (whose AO probes point into the removed void) is not shaded as enclosed.
+vec4 fsClip(vec3 q) {
+  vec4 v = fs_active(q);
+  if (u_clipOn > 0.5 && dot(q, u_clipN) - u_clipD < 0.0) return vec4(1e3, v.yzw);
+  return v;
 }
 
 // Floor grid: drawn only where the ray misses the part, so it can never appear
@@ -111,15 +147,19 @@ void main() {
     fragColor = floorCol;
     return;
   }
+  bool capEnter = false;
+  clipInterval(ro, rd, t0, t1, capEnter);
   float t = max(t0, 0.0);
   t1 = min(t1, tmax);
+  bool cap = false;
   vec4 f = vec4(1e9);
   bool hit = false;
   float eps = 0.0;
   float tPrev = t;
-  for (int i = 0; i < 300; i++) {
+  for (int i = 0; i < 300 && t1 > t; i++) {
     vec3 p = ro + rd * t;
     f = fs_active(p);
+    if (i == 0 && capEnter) cap = f.x <= 0.0;  // opening on material: this is the cut face
     eps = max(1e-4, t * u_pixel * 0.6);
     if (f.x < eps) {
       // A step that lands deep inside material overshot the surface (the field is not
@@ -148,7 +188,7 @@ void main() {
     return;
   }
   vec3 p = ro + rd * t;
-  vec3 n = normalize(f.yzw);
+  vec3 n = cap ? -u_clipN : normalize(f.yzw);
   if (dot(n, rd) > 0.0) n = -n;
   // Leaf identity is queried only when somebody will read it (part colours or highlights),
   // so the no-colour/ no-selection path costs nothing.
@@ -169,7 +209,7 @@ void main() {
   float h = max(0.6, t * u_pixel * 6.0);
   for (int k = 1; k <= 4; k++) {
     float s = h * float(k);
-    ao -= max(s - fs_active(p + n * s).x, 0.0) / s * 0.12;
+    ao -= max(s - fsClip(p + n * s).x, 0.0) / s * 0.12;
   }
   ao = clamp(ao, 0.35, 1.0);
   vec3 col = base * (0.30 + 0.22 * hemi + 0.58 * diff) * ao;
@@ -246,6 +286,15 @@ export class Viewport {
   // colour flip or toggle updates all of them at once.
   private gridCol = { value: new THREE.Color(0x000000) };
   private gridOn = { value: 1 };
+  // Shared section-plane uniform objects: every field material (body, core, ghost, floor)
+  // aliases these, so one clip update reaches every pass at once. clipPlane is the same
+  // plane handed to three.js-clipped overlays (result mesh), kept persistent so overlay
+  // materials set once keep tracking updates — clipPlane.normal aliases clipNU.value.
+  private clipOnU = { value: 0 };
+  private clipNU = { value: new THREE.Vector3(0, 1, 0) };
+  private clipDU = { value: 0 };
+  private clipPlane = new THREE.Plane();
+  private clipPlaneArr: THREE.Plane[] | null = null;
   private dirty = true;
   private interacting = false;
   private idleTimer = 0;
@@ -268,6 +317,9 @@ export class Viewport {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setClearColor(0x000000, 0);
+    // Built-in overlay materials (result mesh, glyphs) honour the section plane through
+    // three's local clipping; the raymarched passes implement it in their own shader.
+    this.renderer.localClippingEnabled = true;
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'viewport-canvas';
     host.appendChild(this.canvas);
@@ -365,6 +417,36 @@ export class Viewport {
     this.invalidate();
   }
 
+  /** Section plane, field space: keep the half where dot(p, n) - d >= 0; null restores
+   * the intact body. One write reaches every field material through the shared uniform
+   * objects, and overlay materials holding clipPlanes()'s plane track the same update. */
+  setClip(v: { n: Vec3; d: number } | null) {
+    if (!v) {
+      if (this.clipOnU.value !== 0 || this.clipPlaneArr !== null) {
+        this.clipOnU.value = 0;
+        this.clipPlaneArr = null;
+        this.invalidate();
+      }
+      return;
+    }
+    const len = Math.hypot(v.n[0], v.n[1], v.n[2]) || 1;
+    this.clipNU.value.set(v.n[0] / len, v.n[1] / len, v.n[2] / len);
+    this.clipDU.value = v.d / len;
+    this.clipPlane.normal = this.clipNU.value;
+    this.clipPlane.constant = -this.clipDU.value;
+    // Reuse the array so overlay holders compare by identity and plane-value updates
+    // propagate in place (three re-projects local clip planes every frame).
+    const arr = this.clipPlaneArr ?? (this.clipPlaneArr = [this.clipPlane]);
+    arr[0] = this.clipPlane;
+    this.clipOnU.value = 1;
+    this.invalidate();
+  }
+
+  /** The live clip plane as a three.js world-space plane, or null when the body is intact. */
+  clipPlanes(): THREE.Plane[] | null {
+    return this.clipPlaneArr;
+  }
+
   private resize() {
     const w = Math.max(1, this.host.clientWidth);
     const h = Math.max(1, this.host.clientHeight);
@@ -423,6 +505,9 @@ export class Viewport {
       u_hlKey: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector2()) },
       u_hlCol: { value: Array.from({ length: MAX_HIGHLIGHTS }, () => new THREE.Vector3()) },
       u_hlN: { value: 0 },
+      u_clipOn: this.clipOnU,
+      u_clipN: this.clipNU,
+      u_clipD: this.clipDU,
     };
     if (core && spec.grid && spec.source.includes('u_param')) {
       const g = spec.grid;

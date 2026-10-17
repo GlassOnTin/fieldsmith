@@ -253,6 +253,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .opacity-panel .plain { color: var(--text-2); white-space: nowrap; }
 .opacity-panel input { width: 130px; accent-color: var(--accent); }
 .opacity-panel .num { min-width: 36px; font-family: var(--mono); text-align: right; color: var(--text-2); }
+.clip-panel {
+  position: absolute; right: 12px; bottom: 58px; z-index: 5;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: var(--shadow); padding: 6px 10px; font-size: 12px;
+}
+.clip-panel .btn { height: 24px; padding: 0 8px; font-size: 11px; }
+.clip-panel input { width: 110px; accent-color: var(--accent); }
+.clip-panel .num { min-width: 32px; font-family: var(--mono); text-align: right; color: var(--text-2); }
 .chips .swatch {
   width: 18px; height: 18px; padding: 0; border-radius: 4px; cursor: pointer;
   border: 1px solid var(--line-strong); flex: none;
@@ -287,5 +296,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
   /* The make/fill panel owns the bottom-left, so the opacity control moves under the
    * toggles top-left (78 = toggle column height + gap). */
   .opacity-panel { top: 78px; left: 10px; bottom: auto; right: auto; }
+  .clip-panel { top: 122px; left: 10px; bottom: auto; right: auto; }
   .results-panel { max-width: min(372px, calc(100vw - 24px)); }
 }

@@ -13,6 +13,7 @@ import './app/results';
 import './app/fill';
 import './app/make';
 import './app/view-opacity';
+import './app/view-clip';
 
 async function main() {
   await loadWasm();

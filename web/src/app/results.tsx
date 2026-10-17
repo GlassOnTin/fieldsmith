@@ -347,28 +347,40 @@ function syncResults(vp: Viewport) {
         ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
       }`
     : 'off';
-  if (sig === resultSig) return;
-  resultSig = sig;
-  const had = resultGroup.children.length > 0;
-  while (resultGroup.children.length) {
-    const c = resultGroup.children.pop()!;
-    disposeDeep(c);
-  }
-  resultMesh = null;
-  if (!on || !lvl) {
-    if (had) vp.invalidate();
-    return;
-  }
-  try {
-    rebuild(lvl);
-  } catch (err) {
+  if (sig !== resultSig) {
+    resultSig = sig;
     while (resultGroup.children.length) {
       const c = resultGroup.children.pop()!;
       disposeDeep(c);
     }
-    console.error('results mesh build failed', err);
+    resultMesh = null;
+    if (on && lvl) {
+      try {
+        rebuild(lvl);
+      } catch (err) {
+        while (resultGroup.children.length) {
+          const c = resultGroup.children.pop()!;
+          disposeDeep(c);
+        }
+        console.error('results mesh build failed', err);
+      }
+    }
+    vp.invalidate();
   }
-  vp.invalidate();
+  // The section plane reaches the analysed mesh through three's local clipping, not the
+  // shader: hand every overlay material the viewport's persistent plane (stable identity,
+  // so this costs a traverse, not a recompile). It runs after the build above so a fresh
+  // material picks up the plane in the same pass, and after clip off (planes → null).
+  const planes = vp.clipPlanes();
+  let clipped = false;
+  resultGroup.traverse((c) => {
+    const mat = (c as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+    if (mat && mat.clippingPlanes !== planes) {
+      mat.clippingPlanes = planes;
+      clipped = true;
+    }
+  });
+  if (clipped) vp.invalidate();
 }
 
 const raycaster = new THREE.Raycaster();

@@ -200,6 +200,32 @@ export function ViewportHost() {
       } else vp.setGhost(null);
     };
 
+    // Section-plane state → viewport. dir=+1 keeps the +axis half (plane sweeps up from
+    // lo); dir=−1 keeps the −axis half (plane sweeps down from hi); t=0 restores the
+    // intact body in both directions, so flip pairs with t → 1−t to keep the same plane.
+    // At t=0 the plane coincides with a field bound face, so routing it inert keeps the
+    // rest frame bit-identical to the unclipped march — a plane ON the face can shave the
+    // march interval by an ulp (tc and the box exit come from different arithmetic) and
+    // flicker the silhouette edges.
+    const applyClip = () => {
+      const c = ui.clip;
+      const b = vp.bounds;
+      if (!c.on || !b || c.t <= 0) {
+        vp.setClip(null);
+        return;
+      }
+      const a = c.axis;
+      const lo = b[0][a];
+      const hi = b[1][a];
+      const pos = c.dir === 1 ? lo + c.t * (hi - lo) : hi - c.t * (hi - lo);
+      const n: Vec3 = [0, 0, 0];
+      n[a] = c.dir;
+      // Keep dot(p, N) - D >= 0: N = +e_a keeps p_a >= pos (D = pos); N = -e_a keeps
+      // p_a <= pos (D = -pos).
+      vp.setClip({ n, d: c.dir === 1 ? pos : -pos });
+    };
+    applyClip();
+
     const sync = () => {
       pending = 0;
       const doc = store.doc;
@@ -238,6 +264,9 @@ export function ViewportHost() {
           ui.compileMs = vp.lastCompileMs;
           updateHighlights();
           if (refit) vp.fit(shader?.bounds ?? EMPTY_VIEW);
+          // Bounds may have changed: the section plane's position is re-derived from the
+          // new field extents (a no-op write while the ui t maps to the same position).
+          applyClip();
         });
         // Interior pass of a filled part: mounted whenever its part renders (the quad only
         // draws once the body goes sub-1-α), at a slower march step — the lattice field
@@ -271,9 +300,10 @@ export function ViewportHost() {
       if (!pending) pending = requestAnimationFrame(sync);
     };
     const unsubStore = store.subscribe(schedule);
-    let lastUi = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
+    let lastUi = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha, clip: ui.clip };
     const unsubUi = ui.subscribe(() => {
-      const now = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha };
+      const now = { gizmo: ui.gizmo, snap: ui.snap, hover: ui.hover?.shape, alpha: ui.bodyAlpha, clip: ui.clip };
+      if (now.clip !== lastUi.clip) applyClip();
       if (now.alpha !== lastUi.alpha) {
         // The opaque↔translucent regime flip rebuilds the material asynchronously — expose
         // its compile time like setField's callers do.

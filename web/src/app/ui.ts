@@ -70,6 +70,10 @@ class Ui {
   /** Body opacity: 1 = opaque, < 1 renders the body translucent and shows the lattice
    * through it. Resets on load — UI state is not persisted. */
   bodyAlpha = 1;
+  /** Section plane: axis-aligned cut sweeping through the part. `t` ∈ [0, 1] sweeps the
+   * plane along the axis inside the field bounds; t = 0 restores the intact body in both
+   * directions. Display-only like bodyAlpha — resets on load. */
+  clip: { on: boolean; axis: 0 | 1 | 2; dir: 1 | -1; t: number } = { on: false, axis: 0, dir: 1, t: 0 };
   probe: Probe | null = null;
   collapsed = new Set<string>();
   version = 0;
