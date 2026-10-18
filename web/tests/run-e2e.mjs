@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -8,8 +8,8 @@
 // docs/verification/V26.md (section-plane clip),
 // docs/verification/V27.md (.fsm let-variables),
 // docs/verification/V28.md (mode-shape animation), docs/verification/V29.md (Robin
-// convection), docs/verification/V30.md (heat flux) and exits non-zero on any failure or
-// console error.
+// convection), docs/verification/V30.md (heat flux), docs/verification/V31.md (profile
+// sketch) and exits non-zero on any failure or console error.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -27,6 +27,7 @@ import { paramsTest } from './params.mjs';
 import { modesTest } from './modes.mjs';
 import { convectionTest } from './convection.mjs';
 import { heatfluxTest } from './heatflux.mjs';
+import { profilesketchTest } from './profilesketch.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -172,6 +173,11 @@ try {
   if (!only || only === 'heatflux') {
     const ok = await heatfluxTest(browser, url, { screens, docsDir });
     console.log(`heat flux test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'profilesketch') {
+    const ok = await profilesketchTest(browser, url, { screens, docsDir });
+    console.log(`profile sketch test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

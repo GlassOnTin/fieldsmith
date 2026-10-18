@@ -12,6 +12,7 @@ import { Fragment } from 'preact';
 import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
+import { SketchCanvas } from './Sketch';
 
 let library: ReturnType<typeof materialLibrary> | null = null;
 export function materials() {
@@ -128,7 +129,14 @@ function ProfileEditor({ node }: { node: Node }) {
           Add point
         </button>
       </div>
-      <div style={{ padding: '6px 8px' }}>
+      <div style={{ padding: '6px 8px 2px' }}>
+        <SketchCanvas id={id} />
+        <div class="hint" style={{ marginTop: '4px' }}>
+          Sketch in the profile's own X-Y. Click an edge to add a point there; drag
+          a dot to move it. The first dot is where the closed profile starts.
+        </div>
+      </div>
+      <div style={{ padding: '4px 8px 6px' }}>
         <table class="profile-table">
           <thead>
             <tr>
