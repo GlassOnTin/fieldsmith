@@ -145,11 +145,18 @@ pub fn solve_modes(
         .map(|(i, mode)| {
             let mphi = fenics_solver::cg::spmv(&m, &mode.mode_shape);
             let mass = fenics_solver::cg::dot(&mode.mode_shape, &mphi);
-            if !(mass > 0.0) || !mass.is_finite() {
-                return Err(format!("modal shape {}: modal mass {mass} not positive", i + 1));
+            if mass <= 0.0 || !mass.is_finite() {
+                return Err(format!(
+                    "modal shape {}: modal mass {mass} not positive",
+                    i + 1
+                ));
             }
             let scale = mass.sqrt().recip();
-            Ok(mode.mode_shape.iter().map(|&v| v * scale).collect::<Vec<f64>>())
+            Ok(mode
+                .mode_shape
+                .iter()
+                .map(|&v| v * scale)
+                .collect::<Vec<f64>>())
         })
         .collect::<Result<Vec<Vec<f64>>, String>>()?;
     Ok(ModalResult {
@@ -236,11 +243,7 @@ mod tests {
         let r = solve_modes(&mesh, &young, 0.3, 7.85e-9, &fixed, &opts).expect("modal run");
         assert_eq!(r.shapes.len(), 2);
 
-        let cells: Vec<[usize; 10]> = mesh
-            .tets
-            .iter()
-            .map(|t| t.map(|n| n as usize))
-            .collect();
+        let cells: Vec<[usize; 10]> = mesh.tets.iter().map(|t| t.map(|n| n as usize)).collect();
         let m = fenics_assembly::assemble_elasticity_mass_p2_3d(&mesh.nodes, &cells, 7.85e-9);
 
         let len = 3 * mesh.nodes.len();
