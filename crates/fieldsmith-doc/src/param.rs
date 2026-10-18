@@ -589,7 +589,10 @@ temperature hot root temp=80 + w";
             85.0
         );
         // The derived let revaluated with the new value.
-        assert_eq!(d.lets.iter().find(|l| l.name == "bolt").unwrap().value, 12.0);
+        assert_eq!(
+            d.lets.iter().find(|l| l.name == "bolt").unwrap().value,
+            12.0
+        );
         assert!(apply(&mut d, &ParamAddr::parse("notw").unwrap(), 1.0).is_err());
         assert!(apply(&mut d, &a, f64::NAN).is_err());
     }
@@ -638,12 +641,13 @@ heatflux lead coldface q=10 * qv
         let e = resolve(&d, &ParamAddr::parse("air.h.0").unwrap()).unwrap_err();
         assert!(e.contains("take no component index"), "{e}");
         let e = resolve(&d, &ParamAddr::parse("air.pressure").unwrap()).unwrap_err();
-        assert!(e.contains("no numeric parameter \"pressure\" — h, tinf"), "{e}");
+        assert!(
+            e.contains("no numeric parameter \"pressure\" — h, tinf"),
+            "{e}"
+        );
         let e = resolve(&d, &ParamAddr::parse("ghost.h").unwrap()).unwrap_err();
         assert!(
-            e.contains(
-                "no node, load, temperature, convection or heat flux named \"ghost\"",
-            ),
+            e.contains("no node, load, temperature, convection or heat flux named \"ghost\"",),
             "{e}"
         );
         // Plain edits land on the fields.

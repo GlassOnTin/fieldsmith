@@ -73,12 +73,7 @@ fn no_vertex_stands_deeper_into_the_bore_than_the_coincidence_offset() {
         // The chime rim where each cap meets the bore wall must still carry vertices: without
         // them the cap face mesh runs past the wall into the disc.
         for z in [eps, len - eps] {
-            for apex in [
-                [ri, 0.0, z],
-                [0.0, ri, z],
-                [-ri, 0.0, z],
-                [0.0, -ri, z],
-            ] {
+            for apex in [[ri, 0.0, z], [0.0, ri, z], [-ri, 0.0, z], [0.0, -ri, z]] {
                 let d = nearest(&mesh, apex);
                 assert!(
                     d < 0.8 * h,

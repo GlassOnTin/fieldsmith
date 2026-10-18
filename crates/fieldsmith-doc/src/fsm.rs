@@ -148,7 +148,9 @@ enum Val {
     List(Vec<Val>),
     /// Arithmetic kept as canonical text (`2 * wall_t`); the value is resolved by the
     /// attribute reader, so errors carry the attribute and target it appears on.
-    Expr { txt: String },
+    Expr {
+        txt: String,
+    },
 }
 
 // Arithmetic expressions -------------------------------------------------------
@@ -287,7 +289,11 @@ fn expr_txt(e: &Expr) -> String {
 /// (`no let named 'w'`, `division by zero`); callers add their own context.
 pub fn eval_expr(text: &str, lets: &[(String, f64)]) -> Result<f64, String> {
     let toks = tokenize_line(text, 0).map_err(|e| e.message)?;
-    let mut c = Cursor { toks: &toks, pos: 0, line: 0 };
+    let mut c = Cursor {
+        toks: &toks,
+        pos: 0,
+        line: 0,
+    };
     let tree = expr_sum(&mut c).map_err(|e| e.message)?;
     if !c.done() {
         return Err("unexpected text after the expression".into());
@@ -511,7 +517,13 @@ impl Attrs {
     /// to plain numbers with no record; trees reading a let record a consumer and
     /// return today's value. `key` names the attribute as written for the errors;
     /// `attr` is the model vocabulary the consumer record stores.
-    fn eval_for(&mut self, key: &str, attr: &str, comp: Option<usize>, txt: &str) -> Result<f64, ParseError> {
+    fn eval_for(
+        &mut self,
+        key: &str,
+        attr: &str,
+        comp: Option<usize>,
+        txt: &str,
+    ) -> Result<f64, ParseError> {
         if let Ok(v) = eval_expr(txt, &[]) {
             return Ok(v);
         }
@@ -556,9 +568,7 @@ impl Attrs {
             None => self.err(format!("missing '{key}='")),
             Some(Some(Val::Num(v))) => Ok(v),
             Some(Some(Val::Expr { txt })) => Ok(self.eval_for(key, attr, None, &txt)?),
-            Some(Some(Val::Ident(_))) | Some(_) => {
-                self.err(format!("'{key}' must be a number"))
-            }
+            Some(Some(Val::Ident(_))) | Some(_) => self.err(format!("'{key}' must be a number")),
         }
     }
     fn req_string(&mut self, key: &str) -> Result<String, ParseError> {
@@ -1347,7 +1357,11 @@ impl<'a> Printer<'a> {
     /// The printed form of one number: the consumer expression when the statement
     /// recorded one, else the plain value.
     fn num_for(&self, id: &str, attr: &str, comp: Option<usize>, v: f64) -> String {
-        match self.consumed.iter().find(|c| c.target == id && c.attr == attr && c.comp == comp) {
+        match self
+            .consumed
+            .iter()
+            .find(|c| c.target == id && c.attr == attr && c.comp == comp)
+        {
             Some(c) => c.expr.clone(),
             None => n(v),
         }
@@ -1364,7 +1378,9 @@ impl<'a> Printer<'a> {
     /// Whether any component of this attribute was driven (for the plain-number
     /// conditionals that must not drop a driven zero).
     fn driven(&self, id: &str, attr: &str) -> bool {
-        self.consumed.iter().any(|c| c.target == id && c.attr == attr)
+        self.consumed
+            .iter()
+            .any(|c| c.target == id && c.attr == attr)
     }
 }
 
@@ -1535,9 +1551,18 @@ fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
     let _ = write!(line, "{ind}");
     match &node.kind {
         NodeKind::Box { size, round } => {
-            let _ = write!(line, "box {} size={}", node.id, p.v3_for(&node.id, "size", *size));
+            let _ = write!(
+                line,
+                "box {} size={}",
+                node.id,
+                p.v3_for(&node.id, "size", *size)
+            );
             if *round != 0.0 || p.driven(&node.id, "round") {
-                let _ = write!(line, " round={}", p.num_for(&node.id, "round", None, *round));
+                let _ = write!(
+                    line,
+                    " round={}",
+                    p.num_for(&node.id, "round", None, *round)
+                );
             }
         }
         NodeKind::Cylinder {
@@ -1553,11 +1578,20 @@ fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
                 p.num_for(&node.id, "height", None, *height)
             );
             if *round != 0.0 || p.driven(&node.id, "round") {
-                let _ = write!(line, " round={}", p.num_for(&node.id, "round", None, *round));
+                let _ = write!(
+                    line,
+                    " round={}",
+                    p.num_for(&node.id, "round", None, *round)
+                );
             }
         }
         NodeKind::Sphere { radius } => {
-            let _ = write!(line, "sphere {} r={}", node.id, p.num_for(&node.id, "radius", None, *radius));
+            let _ = write!(
+                line,
+                "sphere {} r={}",
+                node.id,
+                p.num_for(&node.id, "radius", None, *radius)
+            );
         }
         NodeKind::Capsule { radius, length } => {
             let _ = write!(
@@ -1641,10 +1675,18 @@ fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
         }
     }
     if node.transform.translate != [0.0; 3] || p.driven(&node.id, "at") {
-        let _ = write!(line, " at={}", p.v3_for(&node.id, "at", node.transform.translate));
+        let _ = write!(
+            line,
+            " at={}",
+            p.v3_for(&node.id, "at", node.transform.translate)
+        );
     }
     if node.transform.rotate != [0.0; 3] || p.driven(&node.id, "rotate") {
-        let _ = write!(line, " rotate={}", p.v3_for(&node.id, "rotate", node.transform.rotate));
+        let _ = write!(
+            line,
+            " rotate={}",
+            p.v3_for(&node.id, "rotate", node.transform.rotate)
+        );
     }
     match node.op {
         Op::Add => {}
@@ -1850,12 +1892,14 @@ solve size=2.5
     #[test]
     fn expression_precedence_and_scopes() {
         let value_of = |body: &str| {
-            parse(&format!("fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"))
-                .unwrap()
-                .lets
-                .last()
-                .expect("at least one let")
-                .value
+            parse(&format!(
+                "fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"
+            ))
+            .unwrap()
+            .lets
+            .last()
+            .expect("at least one let")
+            .value
         };
         assert_eq!(value_of("let a = 2 + 3 * 4"), 14.0);
         assert_eq!(value_of("let a = (2 + 3) * 4"), 20.0);
@@ -1869,10 +1913,12 @@ solve size=2.5
     #[test]
     fn let_errors_are_named() {
         let with_lets = |body: &str| {
-            parse(&format!("fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"))
-                .err()
-                .map(|e| e.message)
-                .expect("expected a parse error")
+            parse(&format!(
+                "fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"
+            ))
+            .err()
+            .map(|e| e.message)
+            .expect("expected a parse error")
         };
         // Unknown names, duplicates, collisions, forward references.
         assert!(
@@ -1880,8 +1926,7 @@ solve size=2.5
             "undefined variable"
         );
         assert!(
-            with_lets("let w = 1\nlet w = 2")
-                .contains("let 'w' is defined more than once"),
+            with_lets("let w = 1\nlet w = 2").contains("let 'w' is defined more than once"),
             "duplicate let"
         );
         assert!(
@@ -1895,8 +1940,7 @@ solve size=2.5
             "let colliding with an earlier shape"
         );
         assert!(
-            with_lets("box beam size=(w, 4, 4)\nlet w = 4")
-                .contains("no let named 'w'"),
+            with_lets("box beam size=(w, 4, 4)\nlet w = 4").contains("no let named 'w'"),
             "forward reference"
         );
         // Bad arithmetic fails at its own line.
@@ -1905,8 +1949,7 @@ solve size=2.5
             "divide by zero in a let"
         );
         assert!(
-            with_lets("let big = 1e308 * 10")
-                .contains("let 'big': value is not finite"),
+            with_lets("let big = 1e308 * 10").contains("let 'big': value is not finite"),
             "non-finite let value"
         );
         assert!(
@@ -1927,8 +1970,7 @@ solve size=2.5
         );
         // Non-consumer vocabulary refuses expression values.
         assert!(
-            with_lets("let w = 4\nfill gyroid sheet cell=w")
-                .contains("'cell' must be a number"),
+            with_lets("let w = 4\nfill gyroid sheet cell=w").contains("'cell' must be a number"),
             "fill cell"
         );
         assert!(
@@ -1937,23 +1979,19 @@ solve size=2.5
             "blend"
         );
         assert!(
-            with_lets("let w = 4\nsolve size=w")
-                .contains("size must be a number or 'auto'"),
+            with_lets("let w = 4\nsolve size=w").contains("size must be a number or 'auto'"),
             "solve size"
         );
         assert!(
-            with_lets("let w = 4\nsolve modes=w")
-                .contains("modes must be a count"),
+            with_lets("let w = 4\nsolve modes=w").contains("modes must be a count"),
             "solve modes"
         );
         assert!(
-            with_lets("let w = 4\nload push t pressure=w")
-                .contains("'pressure' must be a number"),
+            with_lets("let w = 4\nload push t pressure=w").contains("'pressure' must be a number"),
             "load pressure"
         );
         assert!(
-            with_lets("let w = 4\ntemperature hot t temp=w")
-                .contains("'temp' must be a number"),
+            with_lets("let w = 4\ntemperature hot t temp=w").contains("'temp' must be a number"),
             "temperature value"
         );
         // Tokenizer: unknown characters still fail before any expression work.
@@ -1964,10 +2002,9 @@ solve size=2.5
     }
     #[test]
     fn const_folded_arithmetic_needs_no_let() {
-        let d = parse(
-            "fieldsmith 1\nname \"t\"\nmaterial petg\nbox beam size=(2 - 1, 2 + 2, 2 * 6)",
-        )
-        .unwrap();
+        let d =
+            parse("fieldsmith 1\nname \"t\"\nmaterial petg\nbox beam size=(2 - 1, 2 + 2, 2 * 6)")
+                .unwrap();
         assert!(d.lets.is_empty());
         assert!(d.consumed.is_empty());
         assert!(print(&d).contains("size=(1, 4, 12)"), "{}", print(&d));
@@ -1981,7 +2018,10 @@ solve size=2.5
         assert_eq!(back, d);
         // Let-less documents keep today's JSON shape.
         let plain_json = serde_json::to_string(&parse(PLAIN_BRACKET).unwrap()).unwrap();
-        assert!(!plain_json.contains("consumed"), "empty fields stay omitted");
+        assert!(
+            !plain_json.contains("consumed"),
+            "empty fields stay omitted"
+        );
     }
 
     #[test]
@@ -2000,7 +2040,10 @@ solve size=2.5
         let mut d = parse(LET_SAMPLE).unwrap();
         d.consumed[0].target = "ghost".into();
         let errors = d.validate();
-        assert!(errors.iter().any(|e| e.contains("references 'ghost'")), "{errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("references 'ghost'")),
+            "{errors:?}"
+        );
         let mut d = parse(LET_SAMPLE).unwrap();
         d.lets[0].name = "push".into();
         let errors = d.validate();
@@ -2412,9 +2455,10 @@ solve size=2.5 tref=20
         assert_eq!(d.convections[1].case, "Thermal 1");
         // The driven h recorded a consumer, so the param writer routes edits through it.
         assert!(
-            d.consumed
-                .iter()
-                .any(|c| c.target == "wall" && c.attr == "h" && c.comp.is_none() && c.expr == "2 * air_h"),
+            d.consumed.iter().any(|c| c.target == "wall"
+                && c.attr == "h"
+                && c.comp.is_none()
+                && c.expr == "2 * air_h"),
             "{:?}",
             d.consumed
         );
@@ -2446,11 +2490,15 @@ region face = b.px
         };
 
         // A convection on a region the document never declares.
-        let e = base("convection hot ghost h=0.1 tinf=20").validate().join(" | ");
+        let e = base("convection hot ghost h=0.1 tinf=20")
+            .validate()
+            .join(" | ");
         assert!(e.contains("refers to missing region 'ghost'"), "{e}");
 
         // Negative h, and a NaN the parser cannot express, are caught by name.
-        let e = base("convection hot face h=-0.1 tinf=20").validate().join(" | ");
+        let e = base("convection hot face h=-0.1 tinf=20")
+            .validate()
+            .join(" | ");
         assert!(e.contains("h= must be a finite number ≥ 0"), "{e}");
         let mut d = base("convection hot face h=0.1 tinf=20");
         d.convections[0].h = f64::NAN;
@@ -2616,11 +2664,9 @@ region face = b.px
         assert!(base("heatflux out face q=-0.4").validate().is_empty());
 
         // Two flux statements on one region in one case superpose — nothing fights.
-        assert!(
-            base("heatflux a face q=0.1\nheatflux b face q=0.2")
-                .validate()
-                .is_empty()
-        );
+        assert!(base("heatflux a face q=0.1\nheatflux b face q=0.2")
+            .validate()
+            .is_empty());
 
         // A case name claimed by both a load and a heat flux cannot be solved honestly.
         let e = base(
@@ -2629,10 +2675,7 @@ load w face pressure=0.25 case="Load 1""#,
         )
         .validate()
         .join(" | ");
-        assert!(
-            e.contains("claimed by load 'w' and heat flux 'hot'"),
-            "{e}"
-        );
+        assert!(e.contains("claimed by load 'w' and heat flux 'hot'"), "{e}");
 
         // A fixed temperature or a convection on the same region is legal.
         assert!(

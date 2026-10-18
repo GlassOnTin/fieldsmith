@@ -565,15 +565,15 @@ pub fn graded_of(
     let all_cases = cases.iter().chain(&thermal_cases);
     let nn = base.mesh.nodes.len();
     let envelope = (0..nn)
-        .map(|i| all_cases.clone().map(|c| c.von_mises[i]).fold(0.0, f64::max))
-        .collect();
-    let envelope_elem = (0..base.mesh.tets.len())
-        .map(|e| {
+        .map(|i| {
             all_cases
                 .clone()
-                .map(|c| c.vm_elem[e])
+                .map(|c| c.von_mises[i])
                 .fold(0.0, f64::max)
         })
+        .collect();
+    let envelope_elem = (0..base.mesh.tets.len())
+        .map(|e| all_cases.clone().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
         .collect();
 
     Ok(Graded {
@@ -977,7 +977,12 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
     fn affine_gradient(mesh: &P2Mesh, e: usize, t: &[f64]) -> [f64; 3] {
         let tt = &mesh.tets[e];
         let x = [0usize, 1, 2, 3].map(|i| mesh.nodes[tt[i] as usize]);
-        let tv = [t[tt[0] as usize], t[tt[1] as usize], t[tt[2] as usize], t[tt[3] as usize]];
+        let tv = [
+            t[tt[0] as usize],
+            t[tt[1] as usize],
+            t[tt[2] as usize],
+            t[tt[3] as usize],
+        ];
         let rhs = [tv[1] - tv[0], tv[2] - tv[0], tv[3] - tv[0]];
         let rows = [0usize, 1, 2].map(|r| {
             [
@@ -995,9 +1000,21 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
         let mut g = [0.0f64; 3];
         for (j, gj) in g.iter_mut().enumerate() {
             let mj = [
-                [if j == 0 { rhs[0] } else { rows[0][0] }, if j == 1 { rhs[0] } else { rows[0][1] }, if j == 2 { rhs[0] } else { rows[0][2] }],
-                [if j == 0 { rhs[1] } else { rows[1][0] }, if j == 1 { rhs[1] } else { rows[1][1] }, if j == 2 { rhs[1] } else { rows[1][2] }],
-                [if j == 0 { rhs[2] } else { rows[2][0] }, if j == 1 { rhs[2] } else { rows[2][1] }, if j == 2 { rhs[2] } else { rows[2][2] }],
+                [
+                    if j == 0 { rhs[0] } else { rows[0][0] },
+                    if j == 1 { rhs[0] } else { rows[0][1] },
+                    if j == 2 { rhs[0] } else { rows[0][2] },
+                ],
+                [
+                    if j == 0 { rhs[1] } else { rows[1][0] },
+                    if j == 1 { rhs[1] } else { rows[1][1] },
+                    if j == 2 { rhs[1] } else { rows[1][2] },
+                ],
+                [
+                    if j == 0 { rhs[2] } else { rows[2][0] },
+                    if j == 1 { rhs[2] } else { rows[2][1] },
+                    if j == 2 { rhs[2] } else { rows[2][2] },
+                ],
             ];
             *gj = det(&mj) / denom;
         }
@@ -1032,13 +1049,20 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             .temperature
             .as_ref()
             .expect("solid temperature");
-        let graded_t = g.thermal_cases[0].temperature.as_ref().expect("graded temperature");
+        let graded_t = g.thermal_cases[0]
+            .temperature
+            .as_ref()
+            .expect("graded temperature");
         assert!(
             g.thermal_cases[0].solve.converged
                 && g.thermal_cases[0].conduction.as_ref().unwrap().converged,
             "graded thermal case did not converge"
         );
-        assert_eq!(graded_t.len(), base.mesh.nodes.len(), "temperature node count");
+        assert_eq!(
+            graded_t.len(),
+            base.mesh.nodes.len(),
+            "temperature node count"
+        );
 
         // The solid case's field is the affine 100 − 2.5·x (face spacing 40), so its
         // dissipation is the analytic ∫k|∇T|²dV = 1·2.5²·4000 = 25000; check the FE field
@@ -1097,7 +1121,10 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 
         // The document has no loads, so the graded path runs no mechanical re-solves and
         // every stress on the part comes from the thermal case.
-        assert!(g.cases.is_empty(), "load-free document graded a mechanical case");
+        assert!(
+            g.cases.is_empty(),
+            "load-free document graded a mechanical case"
+        );
         assert_eq!(g.thermal_cases.len(), 1);
         let thermal = &g.thermal_cases[0];
         assert!(
@@ -1115,7 +1142,11 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 
         // The envelope over {nothing} ∪ {thermal} with non-negative von Mises is the
         // thermal case's own field — bit-exact, the fold is the same f64::max.
-        assert_eq!(g.envelope_elem.len(), thermal.vm_elem.len(), "element count");
+        assert_eq!(
+            g.envelope_elem.len(),
+            thermal.vm_elem.len(),
+            "element count"
+        );
         assert_eq!(g.envelope.len(), thermal.von_mises.len(), "node count");
         for (e, (env, vm)) in g.envelope_elem.iter().zip(&thermal.vm_elem).enumerate() {
             assert_eq!(env, vm, "envelope_elem[{e}] {env} vs thermal {vm}");
@@ -1123,6 +1154,10 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
         for (i, (env, vm)) in g.envelope.iter().zip(&thermal.von_mises).enumerate() {
             assert_eq!(env, vm, "envelope[{i}] {env} vs thermal {vm}");
         }
-        assert_eq!(g.envelope_elem.len(), base.mesh.tets.len(), "envelope_elem spans the mesh");
+        assert_eq!(
+            g.envelope_elem.len(),
+            base.mesh.tets.len(),
+            "envelope_elem spans the mesh"
+        );
     }
 }

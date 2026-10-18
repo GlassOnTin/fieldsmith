@@ -777,8 +777,11 @@ impl Document {
         }
         // Consumers name existing statements, and their canonical expressions must
         // still evaluate against the lets — json surgery can leave both stale.
-        let let_values: Vec<(String, f64)> =
-            self.lets.iter().map(|l| (l.name.clone(), l.value)).collect();
+        let let_values: Vec<(String, f64)> = self
+            .lets
+            .iter()
+            .map(|l| (l.name.clone(), l.value))
+            .collect();
         for l in &self.lets {
             let spec = format!("let '{}'", l.name);
             match crate::fsm::eval_expr(&l.expr, &let_values) {
@@ -807,7 +810,9 @@ impl Document {
             match crate::fsm::eval_expr(&c.expr, &let_values) {
                 Ok(v) if v.is_finite() => {}
                 Ok(_) => errs.push(format!("The expression for '{spec}' value is not finite")),
-                Err(m) => errs.push(format!("The expression for '{spec}' does not evaluate: {m}")),
+                Err(m) => errs.push(format!(
+                    "The expression for '{spec}' does not evaluate: {m}"
+                )),
             }
         }
         let region_ids: Vec<&str> = self.regions.iter().map(|r| r.id.as_str()).collect();
@@ -992,7 +997,10 @@ impl Document {
                 ));
             }
             if !c.t_inf.is_finite() {
-                errs.push(format!("Convection '{}' tinf= is not a finite number", c.id));
+                errs.push(format!(
+                    "Convection '{}' tinf= is not a finite number",
+                    c.id
+                ));
             }
             for l in &self.loads {
                 if l.case == c.case {
@@ -1035,10 +1043,7 @@ impl Document {
         // agree; differing values would double-assemble the surface term.
         for (i, a) in self.convections.iter().enumerate() {
             for b in &self.convections[..i] {
-                if a.case == b.case
-                    && a.region == b.region
-                    && (a.h != b.h || a.t_inf != b.t_inf)
-                {
+                if a.case == b.case && a.region == b.region && (a.h != b.h || a.t_inf != b.t_inf) {
                     errs.push(format!(
                         "Convections '{}' and '{}' set conflicting values (h {} and {}) on \
                          region '{}' in thermal case '{}' — one value per region per case",

@@ -235,7 +235,12 @@ fn slab_d(mesh: &P2Mesh) -> Vec<Option<f64>> {
 fn affine_gradient(mesh: &P2Mesh, e: usize, t: &[f64]) -> [f64; 3] {
     let tt = &mesh.tets[e];
     let x = [0usize, 1, 2, 3].map(|i| mesh.nodes[tt[i] as usize]);
-    let tv = [t[tt[0] as usize], t[tt[1] as usize], t[tt[2] as usize], t[tt[3] as usize]];
+    let tv = [
+        t[tt[0] as usize],
+        t[tt[1] as usize],
+        t[tt[2] as usize],
+        t[tt[3] as usize],
+    ];
     let rhs = [tv[1] - tv[0], tv[2] - tv[0], tv[3] - tv[0]];
     let rows = [0usize, 1, 2].map(|r| {
         [
@@ -253,9 +258,21 @@ fn affine_gradient(mesh: &P2Mesh, e: usize, t: &[f64]) -> [f64; 3] {
     let mut g = [0.0f64; 3];
     for (j, gj) in g.iter_mut().enumerate() {
         let mj = [
-            [if j == 0 { rhs[0] } else { rows[0][0] }, if j == 1 { rhs[0] } else { rows[0][1] }, if j == 2 { rhs[0] } else { rows[0][2] }],
-            [if j == 0 { rhs[1] } else { rows[1][0] }, if j == 1 { rhs[1] } else { rows[1][1] }, if j == 2 { rhs[1] } else { rows[1][2] }],
-            [if j == 0 { rhs[2] } else { rows[2][0] }, if j == 1 { rhs[2] } else { rows[2][1] }, if j == 2 { rhs[2] } else { rows[2][2] }],
+            [
+                if j == 0 { rhs[0] } else { rows[0][0] },
+                if j == 1 { rhs[0] } else { rows[0][1] },
+                if j == 2 { rhs[0] } else { rows[0][2] },
+            ],
+            [
+                if j == 0 { rhs[1] } else { rows[1][0] },
+                if j == 1 { rhs[1] } else { rows[1][1] },
+                if j == 2 { rhs[1] } else { rows[1][2] },
+            ],
+            [
+                if j == 0 { rhs[2] } else { rows[2][0] },
+                if j == 1 { rhs[2] } else { rows[2][1] },
+                if j == 2 { rhs[2] } else { rows[2][2] },
+            ],
         ];
         *gj = det(&mj) / denom;
     }
@@ -430,7 +447,15 @@ fn conduction_reproduces_linear_field_exactly() {
             d[mesh.nverts + k] = None;
         }
     }
-    let (t, report) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
+    let (t, report) = solve_conduction(
+        &mesh,
+        &d,
+        &ones_k(&mesh),
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations > 0, "expected real iterations");
     for (i, ti) in t.iter().enumerate() {
@@ -447,7 +472,15 @@ fn conduction_reproduces_linear_field_exactly() {
 fn conduction_names_the_unsolvable_case() {
     let mesh = star_mesh();
     let d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
-    let e = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap_err();
+    let e = solve_conduction(
+        &mesh,
+        &d,
+        &ones_k(&mesh),
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
     assert!(e.contains("at least one temperature region"), "{e}");
     assert!(e.contains("every face would be insulated"), "{e}");
 }
@@ -578,8 +611,24 @@ fn zero_convection_band_is_a_no_op() {
         t_inf: 20.0,
         facets: wall,
     };
-    let (t0, r0) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[band], &[], SolverOptions::default()).unwrap();
-    let (t1, r1) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
+    let (t0, r0) = solve_conduction(
+        &mesh,
+        &d,
+        &ones_k(&mesh),
+        &[band],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap();
+    let (t1, r1) = solve_conduction(
+        &mesh,
+        &d,
+        &ones_k(&mesh),
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap();
     assert_eq!(t0, t1);
     assert_eq!(r0.iterations, r1.iterations);
 }
@@ -677,7 +726,10 @@ fn heatflux_bar_matches_the_analytic_profile() {
         &d,
         &ones_k(&mesh),
         &[],
-        &[HeatFluxBc { q: 2.0, facets: wall }],
+        &[HeatFluxBc {
+            q: 2.0,
+            facets: wall,
+        }],
         opts,
     )
     .unwrap();
@@ -721,7 +773,15 @@ fn heatflux_on_fixed_face_is_silent() {
         SolverOptions::default(),
     )
     .unwrap();
-    let (t1, r1) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
+    let (t1, r1) = solve_conduction(
+        &mesh,
+        &d,
+        &ones_k(&mesh),
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap();
     assert_eq!(t0, t1);
     assert_eq!(r0.iterations, r1.iterations);
 }
@@ -758,14 +818,14 @@ fn flux_only_body_names_its_gap() {
         &d,
         &ones_k(&mesh),
         &[],
-        &[HeatFluxBc {
-            q: 1.0,
-            facets,
-        }],
+        &[HeatFluxBc { q: 1.0, facets }],
         SolverOptions::default(),
     )
     .unwrap_err();
-    assert!(e.contains("a heat flux q alone does not fix the field's level"), "{e}");
+    assert!(
+        e.contains("a heat flux q alone does not fix the field's level"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -907,7 +967,11 @@ fn conduction_two_domain_series_matches_the_layer_analytic() {
     let t_int = 1000.0 / 11.0;
     for (i, &ti) in t.iter().enumerate() {
         let x = mesh.nodes[i][0];
-        let want = if x <= 1.0 { 100.0 - q * x } else { t_int * (2.0 - x) };
+        let want = if x <= 1.0 {
+            100.0 - q * x
+        } else {
+            t_int * (2.0 - x)
+        };
         assert!(
             (ti - want).abs() < 1e-9,
             "node {i} at {:?}: {ti} vs {want}",
@@ -972,8 +1036,7 @@ fn conduction_validates_the_conductivity_vector() {
     let mut k = ones_k(&mesh);
     for bad in [0.0, -1.0, f64::NAN] {
         k[3] = bad;
-        let e = solve_conduction(&mesh, &d, &k, &[], &[], SolverOptions::default())
-            .unwrap_err();
+        let e = solve_conduction(&mesh, &d, &k, &[], &[], SolverOptions::default()).unwrap_err();
         assert!(
             e.contains("element 3") && e.contains("finite and > 0"),
             "bad k {bad}: {e}"
