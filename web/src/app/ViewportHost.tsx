@@ -12,6 +12,7 @@ import type { ShaderInfo } from '../doc/wasm';
 import { findNode, walk } from '../doc/types';
 import type { Document, Node, Vec3 } from '../doc/types';
 import { effectiveLeafColors } from '../doc/ops';
+import { drivenExpr } from '../doc/param';
 import { parentMatrix, toTransform, worldMatrix, clean } from '../doc/xform';
 import { ui } from './ui';
 import { analysis } from './analysis';
@@ -112,16 +113,43 @@ export function ViewportHost() {
     tc.setSize(0.8);
     let gizmoNode: string | null = null;
     let dragging = false;
+    /** One refusal note per drag gesture, not per frame. */
+    let gizmoRefused = false;
     tc.addEventListener('change', () => vp.invalidate());
     viewApi.gizmoAxis = () => tc.axis;
     tc.addEventListener('dragging-changed', (e) => {
       dragging = !!(e as unknown as { value: boolean }).value;
+      if (dragging) gizmoRefused = false;
       vp.controls.enabled = !dragging;
-      if (!dragging && gizmoNode) store.commitTransient(ui.gizmo === 'rotate' ? `Rotate ${gizmoNode}` : `Move ${gizmoNode}`);
+      if (!dragging && gizmoNode) {
+        // A refused drag never touched the document: put the gizmo back where the
+        // document says it lives.
+        if (gizmoRefused) {
+          const n = findNode(store.doc, gizmoNode);
+          if (n) {
+            worldMatrix(store.doc, n).decompose(proxy.position, proxy.quaternion, proxy.scale);
+            gizmoSig = '';
+            vp.invalidate();
+          }
+        }
+        store.commitTransient(ui.gizmo === 'rotate' ? `Rotate ${gizmoNode}` : `Move ${gizmoNode}`);
+      }
     });
     tc.addEventListener('objectChange', () => {
       if (!gizmoNode || !dragging) return;
       const id = gizmoNode;
+      // A position or rotation a .fsm let's expression writes is not dragged: the
+      // expression rewrites it at the next let sweep, so the drag is refused and the
+      // gizmo snaps back on release (the transient writer below never runs).
+      const attr = ui.gizmo === 'rotate' ? 'rotate' : 'at';
+      const hit = [0, 1, 2].map((k) => drivenExpr(store.doc, id, attr, k)).find((x) => x);
+      if (hit) {
+        if (!gizmoRefused) {
+          ui.notify(`Cannot move ${id}: written by an expression ('${hit}') — sweep the let that drives it`, 'error');
+          gizmoRefused = true;
+        }
+        return;
+      }
       proxy.updateMatrixWorld();
       const world = proxy.matrixWorld.clone();
       if (ui.snap && ui.gizmo === 'translate') {

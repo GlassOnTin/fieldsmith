@@ -6,8 +6,10 @@ import { findNode, kindLabel } from '../doc/types';
 import type { Document, Modifier, Node, NodeKind, Op } from '../doc/types';
 import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import { MODIFIER_LABEL, defaultModifier, inheritedColor, renameId } from '../doc/ops';
+import { drivenExpr } from '../doc/param';
 import { PART_COLORS } from '../doc/types';
-import { NumRow, NumberInput, Seg, VecRow } from './fields';
+import { Fragment } from 'preact';
+import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -31,42 +33,45 @@ function kindIn<T extends NodeKind['type']>(d: Document, id: string, _t: T): Ext
 function Dimensions({ node }: { node: Node }) {
   const id = node.id;
   const u = `Edit ${id}`;
+  // The refusal hint when a .fsm let's expression writes the attribute: the field is
+  // display-only until the let is swept.
+  const drv = (attr: string, comp: number | null = null) => drivenExpr(store.doc, id, attr, comp);
   switch (node.kind.type) {
     case 'box':
       return (
         <>
-          <VecRow label="Size" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'box').size} set={(d, v) => (kindIn(d, id, 'box').size = v)} undoLabel={u} testId="size" />
-          <NumRow label="Corner radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'box').round} set={(d, v) => (kindIn(d, id, 'box').round = v)} undoLabel={u} testId="round" />
+          <VecRow label="Size" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'box').size} set={(d, v) => (kindIn(d, id, 'box').size = v)} undoLabel={u} testId="size" driven={(i) => drv('size', i)} />
+          <NumRow label="Corner radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'box').round} set={(d, v) => (kindIn(d, id, 'box').round = v)} undoLabel={u} testId="round" driven={drv('round')} />
         </>
       );
     case 'cylinder':
       return (
         <>
-          <NumRow label="Diameter" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'cylinder').radius * 2} set={(d, v) => (kindIn(d, id, 'cylinder').radius = v / 2)} undoLabel={u} testId="diameter" />
-          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'cylinder').height} set={(d, v) => (kindIn(d, id, 'cylinder').height = v)} undoLabel={u} testId="height" />
-          <NumRow label="Edge radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'cylinder').round} set={(d, v) => (kindIn(d, id, 'cylinder').round = v)} undoLabel={u} />
+          <NumRow label="Diameter" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'cylinder').radius * 2} set={(d, v) => (kindIn(d, id, 'cylinder').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} />
+          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'cylinder').height} set={(d, v) => (kindIn(d, id, 'cylinder').height = v)} undoLabel={u} testId="height" driven={drv('height')} />
+          <NumRow label="Edge radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'cylinder').round} set={(d, v) => (kindIn(d, id, 'cylinder').round = v)} undoLabel={u} driven={drv('round')} />
         </>
       );
     case 'sphere':
-      return <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'sphere').radius * 2} set={(d, v) => (kindIn(d, id, 'sphere').radius = v / 2)} undoLabel={u} testId="diameter" />;
+      return <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'sphere').radius * 2} set={(d, v) => (kindIn(d, id, 'sphere').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} />;
     case 'capsule':
       return (
         <>
-          <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'capsule').radius * 2} set={(d, v) => (kindIn(d, id, 'capsule').radius = v / 2)} undoLabel={u} />
-          <NumRow label="Length" unit="mm" min={0} title="Straight length between the hemispherical ends" get={(d) => kindIn(d, id, 'capsule').length} set={(d, v) => (kindIn(d, id, 'capsule').length = v)} undoLabel={u} />
+          <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'capsule').radius * 2} set={(d, v) => (kindIn(d, id, 'capsule').radius = v / 2)} undoLabel={u} driven={drv('radius')} />
+          <NumRow label="Length" unit="mm" min={0} title="Straight length between the hemispherical ends" get={(d) => kindIn(d, id, 'capsule').length} set={(d, v) => (kindIn(d, id, 'capsule').length = v)} undoLabel={u} driven={drv('length')} />
         </>
       );
     case 'torus':
       return (
         <>
-          <NumRow label="Ring radius" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'torus').major} set={(d, v) => (kindIn(d, id, 'torus').major = v)} undoLabel={u} />
-          <NumRow label="Tube radius" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'torus').minor} set={(d, v) => (kindIn(d, id, 'torus').minor = v)} undoLabel={u} />
+          <NumRow label="Ring radius" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'torus').major} set={(d, v) => (kindIn(d, id, 'torus').major = v)} undoLabel={u} driven={drv('major')} />
+          <NumRow label="Tube radius" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'torus').minor} set={(d, v) => (kindIn(d, id, 'torus').minor = v)} undoLabel={u} driven={drv('minor')} />
         </>
       );
     case 'extrude':
       return (
         <>
-          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'extrude').height} set={(d, v) => (kindIn(d, id, 'extrude').height = v)} undoLabel={u} />
+          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'extrude').height} set={(d, v) => (kindIn(d, id, 'extrude').height = v)} undoLabel={u} driven={drv('height')} />
         </>
       );
     case 'mesh':
@@ -368,8 +373,8 @@ function NodeInspector({ node }: { node: Node }) {
       </div>
       <div class="section-label">Placement</div>
       <div class="field-grid">
-        <VecRow label="Position" unit="mm" get={(d) => nodeIn(d, id).transform.translate} set={(d, v) => (nodeIn(d, id).transform.translate = v)} undoLabel={`Move ${id}`} testId="position" />
-        <VecRow label="Rotation" unit="°" step={15} get={(d) => nodeIn(d, id).transform.rotate} set={(d, v) => (nodeIn(d, id).transform.rotate = v)} undoLabel={`Rotate ${id}`} testId="rotation" />
+        <VecRow label="Position" unit="mm" get={(d) => nodeIn(d, id).transform.translate} set={(d, v) => (nodeIn(d, id).transform.translate = v)} undoLabel={`Move ${id}`} testId="position" driven={(i) => drivenExpr(store.doc, id, 'at', i)} />
+        <VecRow label="Rotation" unit="°" step={15} get={(d) => nodeIn(d, id).transform.rotate} set={(d, v) => (nodeIn(d, id).transform.rotate = v)} undoLabel={`Rotate ${id}`} testId="rotation" driven={(i) => drivenExpr(store.doc, id, 'rotate', i)} />
       </div>
       <ProfileEditor node={node} />
       {node.kind.type === 'mesh' && <MeshPanel node={node} />}
@@ -581,6 +586,28 @@ function DocumentInspector() {
           />
         )}
       </div>
+      {(doc.lets?.length ?? 0) > 0 && (
+        <>
+          <div class="section-label" style={{ marginTop: '8px' }}>
+            Parameters
+          </div>
+          <div class="field-grid" data-testid="params-panel">
+            {doc.lets?.map((l) => (
+              <Fragment key={l.name}>
+                <label class="plain">{l.name}</label>
+                <span class="num" title={`let ${l.name} = ${l.expr}`}>
+                  {l.expr}
+                </span>
+                <span class="num">{fmt(l.value)}</span>
+              </Fragment>
+            ))}
+            <span class="hint" style={{ gridColumn: '1 / -1' }}>
+              Defined as <code>let</code> in the .fsm source. The sweep panel takes these
+              names as parameters; sweeping one recomputes everything that reads it.
+            </span>
+          </div>
+        </>
+      )}
       <div class="hint" style={{ marginTop: '8px' }}>
         Select a shape in the tree or the viewport to edit it.
       </div>

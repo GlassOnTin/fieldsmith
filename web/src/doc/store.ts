@@ -1,6 +1,6 @@
 // Application state: the document (with undo/redo), selection and UI lens.
 import type { Document } from './types';
-import { emptyDocument } from './types';
+import { emptyDocument, withLetTables } from './types';
 
 export type Lens = 'shape' | 'setup' | 'results' | 'fill' | 'make';
 export const LENSES: { id: Lens; label: string; key: string }[] = [
@@ -176,7 +176,7 @@ export class Store {
   static restore(): Document | null {
     try {
       const s = localStorage.getItem(AUTOSAVE_KEY);
-      return s ? (JSON.parse(s) as Document) : null;
+      return s ? withLetTables(JSON.parse(s) as Document) : null;
     } catch {
       return null;
     }

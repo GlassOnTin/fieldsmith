@@ -1,13 +1,15 @@
 //! Numeric document parameters by address (GOAL v0.4 section D): a sweep value edits one
-//! number of one named statement, `<id>.<attr>[.<index>]`. Ids resolve against the parsed
-//! document — nodes first, then loads, then temperatures — and applying a value is an edit
-//! of that one number. The addressable attributes are the model's own numeric fields,
-//! plus the placement transform (`at`, `rotate`); everything else (region and support
-//! selectors, extrude profile vertices, mesh and extend internals, solve settings) is
-//! outside the grammar, which [`resolve`] states in its errors rather than leaving to
-//! the caller.
+//! number of one named statement, `<id>.<attr>[.<index>]`, or one `let` by bare id
+//! (`w`), which re-evaluates the lets and every expression that references them. Ids
+//! resolve against the parsed document — bare ids are lets and never resolve to a
+//! statement; dotted addresses run nodes, then loads, then temperatures — and a number
+//! that a declared expression writes refuses a direct edit ("sweep the let that drives
+//! it"). The addressable attributes are the model's own numeric fields, plus the
+//! placement transform (`at`, `rotate`); everything else (region and support selectors,
+//! extrude profile vertices, mesh and extend internals, solve settings) is outside the
+//! grammar, which [`resolve`] states in its errors rather than leaving to the caller.
 
-use crate::model::{Document, LoadKind, NodeKind};
+use crate::model::{Consumer, Document, Let, LoadKind, NodeKind};
 
 /// One parsed address: statement id, attribute name, optional 0-based component index.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,23 +20,33 @@ pub struct ParamAddr {
 }
 
 impl ParamAddr {
-    /// Parse `id.attr` or `id.attr.n`. The id grammar is the node-id grammar (the
-    /// parser enforces it on statements too); the index must be decimal.
+    /// Parse a bare `let` name, `id.attr`, or `id.attr.n`. The id grammar is the
+    /// node-id grammar (the parser enforces it on statements too); the index must be
+    /// decimal.
     pub fn parse(addr: &str) -> Result<ParamAddr, String> {
         let bad = || {
             format!(
-                "bad param address {addr:?}: expect id.attr or id.attr.n — e.g. \
-                 beam.size.2, hole1.radius, pull.force.1"
+                "bad param address {addr:?}: expect a let name or id.attr / id.attr.n \
+                 — e.g. beam.size.2, hole1.radius, pull.force.1, w"
             )
         };
-        let (id, rest) = addr.split_once('.').ok_or_else(bad)?;
+        // A bare id is a let address; a dot starts the statement-attribute grammar.
+        if !addr.contains('.') {
+            return if is_ident(addr) {
+                Ok(ParamAddr {
+                    id: addr.into(),
+                    attr: String::new(),
+                    comp: None,
+                })
+            } else {
+                Err(bad())
+            };
+        }
+        let (id, rest) = addr.split_once('.').expect("checked for a dot");
         if id.is_empty() || rest.is_empty() {
             return Err(bad());
         }
-        let first = id.chars().next().expect("checked non-empty");
-        if !(first.is_ascii_alphabetic() || first == '_')
-            || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if !is_ident(id) {
             return Err(bad());
         }
         let parts: Vec<&str> = rest.split('.').collect();
@@ -58,6 +70,9 @@ impl ParamAddr {
 
     /// The full address as written, for error texts and the envelope.
     pub fn text(&self) -> String {
+        if self.attr.is_empty() {
+            return self.id.clone();
+        }
         match self.comp {
             Some(n) => format!("{}.{}.{}", self.id, self.attr, n),
             None => format!("{}.{}", self.id, self.attr),
@@ -75,6 +90,15 @@ impl std::fmt::Display for ParamAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.text())
     }
+}
+
+/// The id grammar shared with `.fsm` statement names.
+fn is_ident(s: &str) -> bool {
+    match s.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// `attr.k` requires the index; 0..2 for the 3-component vectors this grammar covers.
@@ -109,10 +133,20 @@ fn no_index(addr: &ParamAddr, attr: &str) -> Result<(), String> {
     }
 }
 
-/// Resolve the address against what the document actually names — nodes first, then
-/// loads, then temperatures — and check the attribute's component rule. No mutation.
+/// Resolve the address against what the document actually names — bare ids against the
+/// lets, dotted ones against nodes, then loads, then temperatures — and check the
+/// attribute's component rule. No mutation.
 pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
     let (id, attr) = (&addr.id, addr.attr.as_str());
+    // A bare id is a let address and never a statement name: shapes are swept
+    // through their attribute addresses.
+    if attr.is_empty() {
+        return if doc.lets.iter().any(|l| l.name == *id) {
+            Ok(())
+        } else {
+            Err(format!("param {addr}: no parameter named \"{id}\""))
+        };
+    }
     if let Some(node) = doc.find(id) {
         return match (&node.kind, attr) {
             // `at` and `rotate` address any node's placement, meshes and groups included.
@@ -189,62 +223,133 @@ pub fn apply(doc: &mut Document, addr: &ParamAddr, value: f64) -> Result<(), Str
     if !value.is_finite() {
         return Err(format!("param {addr}: value {value} is not finite"));
     }
-    if let Some(node) = doc.find_mut(&addr.id) {
-        // resolve() proved every access below is in-bounds.
-        match (&mut node.kind, addr.attr.as_str(), addr.comp) {
-            (NodeKind::Box { size, .. }, "size", Some(k)) => size[k] = value,
-            (NodeKind::Box { round, .. }, "round", None) => {
-                *round = value;
+    if addr.attr.is_empty() {
+        return apply_let(doc, &addr.id, value);
+    }
+    // A number a declared expression writes must be swept through its let: writing
+    // over it here would leave the rest of the statement inconsistent with the
+    // values the expression still references.
+    if let Some(c) = doc
+        .consumed
+        .iter()
+        .find(|c| c.target == addr.id && c.attr == addr.attr && c.comp == addr.comp)
+    {
+        return Err(format!(
+            "param {addr}: written by an expression ('{}') — sweep the let that drives it",
+            c.expr
+        ));
+    }
+    write_plain(doc, &addr.id, &addr.attr, addr.comp, value);
+    Ok(())
+}
+
+/// Re-evaluate every `let` in declaration order (each sees the values before it), then
+/// every recorded consumer in parse order, and write the numbers back to the plain
+/// fields the consumers address.
+fn apply_let(doc: &mut Document, name: &str, value: f64) -> Result<(), String> {
+    let slot = doc
+        .lets
+        .iter()
+        .position(|l| l.name == name)
+        .expect("resolve accepted this let");
+    doc.lets[slot].value = value;
+    let exprs: Vec<(String, String)> = doc
+        .lets
+        .iter()
+        .map(|l| (l.name.clone(), l.expr.clone()))
+        .collect();
+    let mut values: Vec<(String, f64)> = Vec::new();
+    for (oname, expr) in &exprs {
+        // The applied let keeps the swept value; every other let re-evaluates in
+        // declaration order, so derived lets chain. Re-evaluating the applied let
+        // itself would clobber the sweep with its const-folded declaration value.
+        let v = if *oname == name {
+            value
+        } else {
+            let v = crate::fsm::eval_expr(expr, &values)
+                .map_err(|m| format!("param {name}: the let '{oname}' does not evaluate: {m}"))?;
+            if !v.is_finite() {
+                return Err(format!(
+                    "param {name}: the let '{oname}' value is not finite"
+                ));
             }
-            (NodeKind::Cylinder { radius, .. }, "radius", None) => {
-                *radius = value;
-            }
-            (NodeKind::Cylinder { height, .. }, "height", None) => {
-                *height = value;
-            }
-            (NodeKind::Cylinder { round, .. }, "round", None) => {
-                *round = value;
-            }
-            (NodeKind::Sphere { radius }, "radius", None) => {
-                *radius = value;
-            }
-            (NodeKind::Capsule { radius, .. }, "radius", None) => {
-                *radius = value;
-            }
-            (NodeKind::Capsule { length, .. }, "length", None) => {
-                *length = value;
-            }
-            (NodeKind::Torus { major, .. }, "major", None) => {
-                *major = value;
-            }
-            (NodeKind::Torus { minor, .. }, "minor", None) => {
-                *minor = value;
-            }
-            (NodeKind::Extrude { height, .. }, "height", None) => {
-                *height = value;
-            }
-            (_, "at", Some(k)) => node.transform.translate[k] = value,
-            (_, "rotate", Some(k)) => node.transform.rotate[k] = value,
-            _ => unreachable!("resolve accepted this attr"),
+            v
+        };
+        values.push((oname.clone(), v));
+    }
+    doc.lets = doc
+        .lets
+        .iter()
+        .zip(&values)
+        .map(|(l, (_, v))| Let {
+            name: l.name.clone(),
+            expr: l.expr.clone(),
+            value: *v,
+        })
+        .collect();
+    let consumed = doc.consumed.clone();
+    for c in &consumed {
+        let v = crate::fsm::eval_expr(&c.expr, &values).map_err(|m| {
+            format!(
+                "param {name}: the expression for '{}' does not evaluate: {m}",
+                consumer_spec(c)
+            )
+        })?;
+        if !v.is_finite() {
+            return Err(format!(
+                "param {name}: the expression for '{}' value is not finite",
+                consumer_spec(c)
+            ));
         }
-        return Ok(());
+        write_plain(doc, &c.target, &c.attr, c.comp, v);
     }
-    if let Some(load) = doc.loads.iter_mut().find(|l| l.id == addr.id) {
-        match (&mut load.kind, addr.attr.as_str(), addr.comp) {
-            (LoadKind::Force { vector }, "force", Some(k)) => vector[k] = value,
-            (LoadKind::Pressure { mpa }, "mpa", None) => {
-                *mpa = value;
-            }
-            (LoadKind::Distributed { total, .. }, "total", None) => *total = Some(value),
-            _ => unreachable!("resolve accepted this attr"),
+    Ok(())
+}
+
+/// The dotted spelling of one recorded consumer, for re-evaluation errors.
+fn consumer_spec(c: &Consumer) -> String {
+    match c.comp {
+        Some(k) => format!("{}.{}.{}", c.target, c.attr, k),
+        None => format!("{}.{}", c.target, c.attr),
+    }
+}
+
+/// Write one number into the plain field of the addressed statement. Checked callers
+/// only: `resolve` for addresses, parse/validate for recorded consumers.
+fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>, v: f64) {
+    if let Some(node) = doc.find_mut(target) {
+        match (&mut node.kind, attr, comp) {
+            (NodeKind::Box { size, .. }, "size", Some(k)) => size[k] = v,
+            (NodeKind::Box { round, .. }, "round", None) => *round = v,
+            (NodeKind::Cylinder { radius, .. }, "radius", None) => *radius = v,
+            (NodeKind::Cylinder { height, .. }, "height", None) => *height = v,
+            (NodeKind::Cylinder { round, .. }, "round", None) => *round = v,
+            (NodeKind::Sphere { radius }, "radius", None) => *radius = v,
+            (NodeKind::Capsule { radius, .. }, "radius", None) => *radius = v,
+            (NodeKind::Capsule { length, .. }, "length", None) => *length = v,
+            (NodeKind::Torus { major, .. }, "major", None) => *major = v,
+            (NodeKind::Torus { minor, .. }, "minor", None) => *minor = v,
+            (NodeKind::Extrude { height, .. }, "height", None) => *height = v,
+            (_, "at", Some(k)) => node.transform.translate[k] = v,
+            (_, "rotate", Some(k)) => node.transform.rotate[k] = v,
+            _ => unreachable!("the writer was checked against this statement"),
         }
-        return Ok(());
+        return;
     }
-    if let Some(t) = doc.temperatures.iter_mut().find(|t| t.id == addr.id) {
-        t.celsius = value;
-        return Ok(());
+    if let Some(load) = doc.loads.iter_mut().find(|l| l.id == target) {
+        match (&mut load.kind, attr, comp) {
+            (LoadKind::Force { vector }, "force", Some(k)) => vector[k] = v,
+            (LoadKind::Pressure { mpa }, "mpa", None) => *mpa = v,
+            (LoadKind::Distributed { total, .. }, "total", None) => *total = Some(v),
+            _ => unreachable!("the writer was checked against this statement"),
+        }
+        return;
     }
-    unreachable!("resolve accepted this id")
+    if let Some(t) = doc.temperatures.iter_mut().find(|t| t.id == target) {
+        t.celsius = v;
+        return;
+    }
+    unreachable!("the writer was checked against this document");
 }
 
 /// The numeric attribute names one statement kind accepts, for the error that names
@@ -324,7 +429,7 @@ temperature hot root temp=80";
         let b = ParamAddr::parse("pin.radius").expect("parse");
         assert_eq!(b.comp, None);
         // Bad shapes are the named error, not a panic on the index or the id grammar.
-        assert!(ParamAddr::parse("beam").is_err());
+        // A bare id is a let address now, so the bad spellings keep their dots.
         assert!(ParamAddr::parse("beam.").is_err());
         assert!(ParamAddr::parse(".size").is_err());
         assert!(ParamAddr::parse("beam.size.1.2").is_err());
@@ -398,5 +503,76 @@ temperature hot root temp=80";
         assert_eq!(d.find("pin").unwrap().transform.rotate[1], 45.0);
         assert!(apply(&mut d, &a, f64::NAN).is_err());
         assert!(apply(&mut d, &a, f64::INFINITY).is_err());
+    }
+
+    const LET_DOC: &str = "fieldsmith 1
+name \"params\"
+custommaterial steel200 name=\"Steel\" e=200000 nu=0.3 yield=250 density=7.85
+material steel200
+let w = 4
+let bolt = 2 * w + 2
+box beam size=(100, 2 * w, 2 * w) at=(50, w, w)
+cylinder pin r=w h=bolt at=(20, 5, 5)
+region root = beam.nx
+support clamp root fixed=xyz
+load push root force=(0, 0, -(w * 25))
+temperature hot root temp=80 + w";
+
+    fn let_doc() -> Document {
+        fsm::parse(LET_DOC).expect("parse")
+    }
+
+    #[test]
+    fn bare_addresses_resolve_lets() {
+        // A bare id addresses a let now; the dotted spellings stay the node grammar.
+        assert!(ParamAddr::parse("w").is_ok());
+        assert!(ParamAddr::parse("beam.").is_err());
+        let d = let_doc();
+        resolve(&d, &ParamAddr::parse("w").unwrap()).expect("let resolves");
+        let e = resolve(&d, &ParamAddr::parse("notw").unwrap()).unwrap_err();
+        assert!(e.contains("no parameter named \"notw\""), "{e}");
+        // An id that names a node cannot be addressed bare.
+        let e2 = resolve(&d, &ParamAddr::parse("beam").unwrap()).unwrap_err();
+        assert!(e2.contains("no parameter named \"beam\""), "{e2}");
+    }
+
+    #[test]
+    fn applying_to_a_let_recomputes_its_consumers() {
+        let mut d = let_doc();
+        let a = ParamAddr::parse("w").unwrap();
+        apply(&mut d, &a, 5.0).expect("apply");
+        let beam = d.find("beam").unwrap();
+        let NodeKind::Box { size, .. } = &beam.kind else {
+            panic!("box")
+        };
+        assert_eq!(*size, [100.0, 10.0, 10.0]);
+        assert_eq!(beam.transform.translate, [50.0, 5.0, 5.0]);
+        assert_eq!(
+            d.temperatures
+                .iter()
+                .find(|t| t.id == "hot")
+                .unwrap()
+                .celsius,
+            85.0
+        );
+        // The derived let revaluated with the new value.
+        assert_eq!(d.lets.iter().find(|l| l.name == "bolt").unwrap().value, 12.0);
+        assert!(apply(&mut d, &ParamAddr::parse("notw").unwrap(), 1.0).is_err());
+        assert!(apply(&mut d, &a, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn driven_attrs_refuse_direct_writes() {
+        let mut d = let_doc();
+        let e = apply(&mut d, &ParamAddr::parse("beam.size.2").unwrap(), 9.0).unwrap_err();
+        assert!(e.contains("written by an expression"), "{e}");
+        assert!(e.contains("sweep the let that drives it"), "{e}");
+        // An undriven component of the same statement still writes.
+        apply(&mut d, &ParamAddr::parse("beam.size.0").unwrap(), 120.0).expect("apply");
+        let beam = d.find("beam").unwrap();
+        let NodeKind::Box { size, .. } = &beam.kind else {
+            panic!("box")
+        };
+        assert_eq!(size[0], 120.0);
     }
 }

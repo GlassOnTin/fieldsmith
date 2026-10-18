@@ -7,6 +7,7 @@ import { parseFsm, printFsm, loadFsmz, saveFsmz, meshHydrated } from '../doc/was
 import { meshcache, cacheSidecar, docMeshHashes } from '../doc/meshcache';
 import { SHAPE_TYPES, duplicateNode, groupNode, insertNode, newNode, nudgeNode, removeNode } from '../doc/ops';
 import type { ShapeType } from '../doc/ops';
+import { pruneConsumers } from '../doc/param';
 import { analysis } from './analysis';
 import { ui } from './ui';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
@@ -256,11 +257,17 @@ function deleteSelection() {
     });
   } else if (s.kind === 'region') {
     store.transact(`Delete ${s.id}`, (d) => {
+      // The region and any statement on it go, so the expression reads on those
+      // statements go too.
+      const gone = new Set<string>([s.id]);
+      for (const l of d.loads) if (l.region === s.id) gone.add(l.id);
+      for (const t of d.temperatures) if (t.region === s.id) gone.add(t.id);
       d.regions = d.regions.filter((r) => r.id !== s.id);
       d.supports = d.supports.filter((r) => r.region !== s.id);
       d.loads = d.loads.filter((r) => r.region !== s.id);
       d.temperatures = d.temperatures.filter((r) => r.region !== s.id);
       if (d.fill) d.fill.protect = d.fill.protect.filter((r) => r !== s.id);
+      pruneConsumers(d, gone);
     });
   } else if (s.kind === 'support') {
     store.transact(`Delete ${s.id}`, (d) => {
@@ -269,10 +276,12 @@ function deleteSelection() {
   } else if (s.kind === 'load') {
     store.transact(`Delete ${s.id}`, (d) => {
       d.loads = d.loads.filter((r) => r.id !== s.id);
+      pruneConsumers(d, new Set([s.id]));
     });
   } else if (s.kind === 'temperature') {
     store.transact(`Delete ${s.id}`, (d) => {
       d.temperatures = d.temperatures.filter((r) => r.id !== s.id);
+      pruneConsumers(d, new Set([s.id]));
     });
   }
   store.select(null);

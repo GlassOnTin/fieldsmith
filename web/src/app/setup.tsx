@@ -9,6 +9,7 @@ import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
 import type { Document, Face, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
+import { drivenExpr, pruneConsumers } from '../doc/param';
 import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
@@ -647,11 +648,15 @@ function removeFace(regionId: string, index: number) {
     if (!r) return;
     r.selectors.splice(index, 1);
     if (r.selectors.length === 0) {
+      const gone = new Set<string>([regionId]);
+      for (const l of d.loads) if (l.region === regionId) gone.add(l.id);
+      for (const t of d.temperatures) if (t.region === regionId) gone.add(t.id);
       d.regions = d.regions.filter((x) => x.id !== regionId);
       d.supports = d.supports.filter((s) => s.region !== regionId);
       d.loads = d.loads.filter((l) => l.region !== regionId);
       d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
       if (d.fill) d.fill.protect = d.fill.protect.filter((p) => p !== regionId);
+      pruneConsumers(d, gone);
     }
   });
 }
@@ -929,12 +934,17 @@ function LoadInspector({ id }: { id: string }) {
     if (t === l.kind.type) return;
     store.transact('Set load kind', (d) => {
       const load = loadIn(d, id);
+      // Expression reads recorded against the old kind have nothing left to write.
+      const gone = load.kind.type === 'force' ? ['force'] : load.kind.type === 'distributed' ? ['total'] : ['mpa'];
       load.kind =
         t === 'force'
           ? { type: 'force', vector: [0, 0, -100] }
           : t === 'pressure'
             ? { type: 'pressure', mpa: 1 }
             : { type: 'distributed', expr: '0.01', dir: { form: 'local', v: [0, 0, -1] } };
+      for (const attr of gone) {
+        d.consumed = (d.consumed ?? []).filter((c) => !(c.target === id && c.attr === attr));
+      }
     });
   };
   return (
@@ -978,6 +988,7 @@ function LoadInspector({ id }: { id: string }) {
               undoLabel="Set force"
               testId="force"
               step={10}
+              driven={(i) => drivenExpr(store.doc, id, 'force', i)}
             />
             <TextInputRow
               label="Case"
@@ -1074,6 +1085,7 @@ function LoadInspector({ id }: { id: string }) {
             testId="load-total"
             step={10}
             title="Optional: rescale the fn so its resultant is this many newtons (0 keeps the fn as written)"
+            driven={drivenExpr(store.doc, id, 'total')}
           />
           <div class="hint" style={{ gridColumn: '1 / -1' }}>
             Density in N/mm² at the face's frame: x runs from the face centroid, y across it,
@@ -1118,6 +1130,7 @@ function TemperatureInspector({ id }: { id: string }) {
           testId="temperature-celsius"
           step={10}
           title="Fixed boundary temperature for the conduction solve; faces without one stay insulated"
+          driven={drivenExpr(store.doc, id, 'celsius')}
         />
         <TextInputRow
           label="Case"

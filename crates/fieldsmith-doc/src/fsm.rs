@@ -126,7 +126,7 @@ fn tokenize_line(line: &str, lineno: usize) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             out.push(Tok::Ident(chars[start..i].iter().collect()));
-        } else if "(){}[],=.+".contains(c) {
+        } else if "(){}[],=.+*/-".contains(c) {
             out.push(Tok::Sym(c));
             i += 1;
         } else {
@@ -146,6 +146,180 @@ enum Val {
     Ident(String),
     Tuple(Vec<Val>),
     List(Vec<Val>),
+    /// Arithmetic kept as canonical text (`2 * wall_t`); the value is resolved by the
+    /// attribute reader, so errors carry the attribute and target it appears on.
+    Expr { txt: String },
+}
+
+// Arithmetic expressions -------------------------------------------------------
+
+/// A numeric expression from `.fsm`: `let w = 4`, `size=(100, 2 * w, w / 2)`,
+/// `temp=80 + w`. Precedence: unary minus, then * and /, then + and −.
+#[derive(Debug, Clone)]
+enum Expr {
+    Num(f64),
+    Var(String),
+    Neg(Box<Expr>),
+    Bin(char, Box<Expr>, Box<Expr>),
+}
+
+/// Parse a unary operand: `-e` or an atom.
+fn expr_unary(c: &mut Cursor) -> Result<Expr, ParseError> {
+    if c.is_sym('-') {
+        c.next();
+        return Ok(Expr::Neg(Box::new(expr_unary(c)?)));
+    }
+    match c.next() {
+        Some(Tok::Num(v)) => Ok(Expr::Num(v)),
+        Some(Tok::Ident(s)) => Ok(Expr::Var(s)),
+        Some(Tok::Sym('(')) => {
+            let e = expr_sum(c)?;
+            c.sym(')')?;
+            Ok(e)
+        }
+        _ => c.err("expected a value"),
+    }
+}
+
+/// Fold `*` and `/` (left-associative) onto a parsed left operand.
+fn expr_products(c: &mut Cursor, mut left: Expr) -> Result<Expr, ParseError> {
+    while matches!(c.peek(), Some(Tok::Sym('*')) | Some(Tok::Sym('/'))) {
+        let op = match c.next() {
+            Some(Tok::Sym(o)) => o,
+            _ => unreachable!("matched"),
+        };
+        left = Expr::Bin(op, Box::new(left), Box::new(expr_unary(c)?));
+    }
+    Ok(left)
+}
+
+/// A product-level operand, for the right side of a sum.
+fn expr_product(c: &mut Cursor) -> Result<Expr, ParseError> {
+    let head = expr_unary(c)?;
+    expr_products(c, head)
+}
+
+/// Continue a parsed left operand through any remaining products, then sums.
+fn expr_tail(c: &mut Cursor, left: Expr) -> Result<Expr, ParseError> {
+    let mut left = expr_products(c, left)?;
+    while matches!(c.peek(), Some(Tok::Sym('+')) | Some(Tok::Sym('-'))) {
+        let op = match c.next() {
+            Some(Tok::Sym(o)) => o,
+            _ => unreachable!("matched"),
+        };
+        left = Expr::Bin(op, Box::new(left), Box::new(expr_product(c)?));
+    }
+    Ok(left)
+}
+
+/// Parse a full expression at the cursor (the `let` statement's value).
+fn expr_sum(c: &mut Cursor) -> Result<Expr, ParseError> {
+    let head = expr_unary(c)?;
+    expr_tail(c, head)
+}
+
+/// Binding power for the canonical printer: atoms > unary > (products, sums).
+fn expr_prec(e: &Expr) -> u8 {
+    match e {
+        Expr::Num(_) | Expr::Var(_) => 3,
+        Expr::Neg(_) => 2,
+        Expr::Bin(op, _, _) => match op {
+            '+' | '-' => 1,
+            _ => 2,
+        },
+    }
+}
+
+/// Canonical text for a parsed tree, stable under re-parse: `2 * wall_t + 2`,
+/// `-(wall_t * 25)`, `wall_t / 2`.
+fn expr_txt(e: &Expr) -> String {
+    fn go(e: &Expr, o: &mut String) {
+        match e {
+            Expr::Num(v) => {
+                let _ = write!(o, "{}", n(*v));
+            }
+            Expr::Var(s) => {
+                let _ = write!(o, "{s}");
+            }
+            Expr::Neg(child) => match child.as_ref() {
+                Expr::Num(_) | Expr::Var(_) => {
+                    let _ = write!(o, "-");
+                    go(child, o);
+                }
+                _ => {
+                    let _ = write!(o, "-(");
+                    go(child, o);
+                    let _ = write!(o, ")");
+                }
+            },
+            Expr::Bin(op, l, r) => {
+                let p = match op {
+                    '+' | '-' => 1,
+                    _ => 2,
+                };
+                if expr_prec(l) < p {
+                    let _ = write!(o, "(");
+                    go(l, o);
+                    let _ = write!(o, ")");
+                } else {
+                    go(l, o);
+                }
+                let _ = write!(o, " {op} ");
+                // Non-associative operators parenthesise an equal-precedence right
+                // side, so `a - (b - c)` and `a / (b * c)` keep their meaning.
+                if expr_prec(r) < p || (expr_prec(r) == p && matches!(op, '-' | '/')) {
+                    let _ = write!(o, "(");
+                    go(r, o);
+                    let _ = write!(o, ")");
+                } else {
+                    go(r, o);
+                }
+            }
+        }
+    }
+    let mut o = String::new();
+    go(e, &mut o);
+    o
+}
+
+/// Evaluate an expression text against let values. Public so model validation can
+/// re-check recorded expressions without re-parsing. Errors are the plain message
+/// (`no let named 'w'`, `division by zero`); callers add their own context.
+pub fn eval_expr(text: &str, lets: &[(String, f64)]) -> Result<f64, String> {
+    let toks = tokenize_line(text, 0).map_err(|e| e.message)?;
+    let mut c = Cursor { toks: &toks, pos: 0, line: 0 };
+    let tree = expr_sum(&mut c).map_err(|e| e.message)?;
+    if !c.done() {
+        return Err("unexpected text after the expression".into());
+    }
+    fn eval_tree(e: &Expr, lets: &[(String, f64)]) -> Result<f64, String> {
+        Ok(match e {
+            Expr::Num(v) => *v,
+            Expr::Var(s) => lets
+                .iter()
+                .find(|(name, _)| name == s)
+                .map(|(_, v)| *v)
+                .ok_or_else(|| format!("no let named '{s}'"))?,
+            Expr::Neg(i) => -eval_tree(i, lets)?,
+            Expr::Bin(op, l, r) => {
+                let lv = eval_tree(l, lets)?;
+                let rv = eval_tree(r, lets)?;
+                match op {
+                    '+' => lv + rv,
+                    '-' => lv - rv,
+                    '*' => lv * rv,
+                    '/' => {
+                        if rv == 0.0 {
+                            return Err("division by zero".into());
+                        }
+                        lv / rv
+                    }
+                    _ => return Err(format!("unknown operator '{op}'")),
+                }
+            }
+        })
+    }
+    eval_tree(&tree, lets)
 }
 
 struct Cursor<'a> {
@@ -188,14 +362,66 @@ impl<'a> Cursor<'a> {
         matches!(self.peek(), Some(Tok::Sym(s)) if *s == c)
     }
     fn value(&mut self) -> Result<Val, ParseError> {
-        match self.next() {
-            Some(Tok::Num(v)) => Ok(Val::Num(v)),
-            Some(Tok::Str(s)) => Ok(Val::Str(s)),
-            Some(Tok::Ident(s)) => Ok(Val::Ident(s)),
-            Some(Tok::Sym('(')) => Ok(Val::Tuple(self.seq(')')?)),
-            Some(Tok::Sym('[')) => Ok(Val::List(self.seq(']')?)),
-            _ => self.err("expected a value"),
+        // An operator after a number or name (`2 * wall_t`) starts an arithmetic
+        // expression; it is kept as canonical text for the attribute readers, which
+        // evaluate it against the lets and record the consumer.
+        let follows_op = matches!(
+            self.toks.get(self.pos + 1),
+            Some(Tok::Sym(s)) if "+-*/".contains(*s)
+        );
+        match self.peek() {
+            Some(Tok::Num(_) | Tok::Ident(_)) if follows_op => {
+                let e = expr_sum(self)?;
+                Ok(Val::Expr { txt: expr_txt(&e) })
+            }
+            Some(Tok::Sym('-')) => {
+                self.next();
+                let inner = expr_unary(self)?;
+                let e = expr_tail(self, Expr::Neg(Box::new(inner)))?;
+                Ok(Val::Expr { txt: expr_txt(&e) })
+            }
+            Some(Tok::Sym('(')) => {
+                // `(a, b, c)` is a tuple; `(2 - 1)` is a parenthesised scalar.
+                if self.scan_top_level_comma() {
+                    self.next();
+                    Ok(Val::Tuple(self.seq(')')?))
+                } else {
+                    self.next();
+                    let e = expr_sum(self)?;
+                    self.sym(')')?;
+                    Ok(Val::Expr { txt: expr_txt(&e) })
+                }
+            }
+            Some(Tok::Sym('[')) => {
+                self.next();
+                Ok(Val::List(self.seq(']')?))
+            }
+            _ => match self.next() {
+                Some(Tok::Num(v)) => Ok(Val::Num(v)),
+                Some(Tok::Str(s)) => Ok(Val::Str(s)),
+                Some(Tok::Ident(s)) => Ok(Val::Ident(s)),
+                _ => self.err("expected a value"),
+            },
         }
+    }
+    /// Whether the parenthesised value starting at this '(' has a top-level comma,
+    /// which makes it a tuple rather than a parenthesised expression.
+    fn scan_top_level_comma(&self) -> bool {
+        let mut depth = 1usize;
+        for t in &self.toks[self.pos + 1..] {
+            match t {
+                Tok::Sym('(') | Tok::Sym('[') => depth += 1,
+                Tok::Sym(')') | Tok::Sym(']') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Tok::Sym(',') if depth == 1 => return true,
+                _ => {}
+            }
+        }
+        false
     }
     fn seq(&mut self, close: char) -> Result<Vec<Val>, ParseError> {
         let mut items = Vec::new();
@@ -213,11 +439,15 @@ impl<'a> Cursor<'a> {
         }
         Ok(items)
     }
-    /// Remaining tokens as `key=value` pairs or bare flags.
-    fn attrs(&mut self) -> Result<Attrs, ParseError> {
+    /// Remaining tokens as `key=value` pairs or bare flags, addressed to `target`
+    /// with the lets in scope (which attribute readers use to resolve expressions).
+    fn attrs(&mut self, target: &str, lets: &[(String, f64)]) -> Result<Attrs, ParseError> {
         let mut a = Attrs {
             items: Vec::new(),
             line: self.line,
+            target: target.to_string(),
+            lets: lets.to_vec(),
+            consumed: Vec::new(),
         };
         while !self.done() {
             if self.is_sym('{') {
@@ -239,6 +469,12 @@ impl<'a> Cursor<'a> {
 struct Attrs {
     items: Vec<(String, Option<Val>)>,
     line: usize,
+    /// The statement the attrs belong to, for consumer-record targets.
+    target: String,
+    /// The lets in scope, for resolving `Val::Expr` and bare let names.
+    lets: Vec<(String, f64)>,
+    /// Expressions this statement read, to be moved into the document.
+    consumed: Vec<Consumer>,
 }
 
 impl Attrs {
@@ -271,6 +507,60 @@ impl Attrs {
             None => self.err(format!("missing '{key}='")),
         }
     }
+    /// Evaluate an expression text in this statement's context: let-free trees fold
+    /// to plain numbers with no record; trees reading a let record a consumer and
+    /// return today's value. `key` names the attribute as written for the errors;
+    /// `attr` is the model vocabulary the consumer record stores.
+    fn eval_for(&mut self, key: &str, attr: &str, comp: Option<usize>, txt: &str) -> Result<f64, ParseError> {
+        if let Ok(v) = eval_expr(txt, &[]) {
+            return Ok(v);
+        }
+        match eval_expr(txt, &self.lets) {
+            Ok(v) if v.is_finite() => {
+                self.consumed.push(Consumer {
+                    target: self.target.clone(),
+                    attr: attr.to_string(),
+                    comp,
+                    expr: txt.to_string(),
+                });
+                Ok(v)
+            }
+            Ok(_) => self.err(format!("'{key}' on '{}': value is not finite", self.target)),
+            Err(m) => self.err(format!("'{key}' on '{}': {m}", self.target)),
+        }
+    }
+    /// A number that may be driven by a `let` expression or bare let name.
+    fn expr_num(&mut self, key: &str, attr: &str) -> Result<Option<f64>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::Num(v))) => Ok(Some(v)),
+            Some(Some(Val::Ident(s))) => Ok(Some(self.eval_for(key, attr, None, &s)?)),
+            Some(Some(Val::Expr { txt })) => Ok(Some(self.eval_for(key, attr, None, &txt)?)),
+            Some(_) => self.err(format!("'{key}' must be a number")),
+        }
+    }
+    fn req_expr_num(&mut self, key: &str, attr: &str) -> Result<f64, ParseError> {
+        match self.expr_num(key, attr)? {
+            Some(v) => Ok(v),
+            None => self.err(format!("missing '{key}='")),
+        }
+    }
+    fn expr_num_or(&mut self, key: &str, attr: &str, d: f64) -> Result<f64, ParseError> {
+        Ok(self.expr_num(key, attr)?.unwrap_or(d))
+    }
+    /// Temperature `temp=` is the one compound-only position: `80 + wall_t` drives
+    /// it, but a bare let name (`temp=w`) is refused — the temperature's sweepable
+    /// address is a plain number on its own line.
+    fn req_compound_num(&mut self, key: &str, attr: &str) -> Result<f64, ParseError> {
+        match self.take(key) {
+            None => self.err(format!("missing '{key}='")),
+            Some(Some(Val::Num(v))) => Ok(v),
+            Some(Some(Val::Expr { txt })) => Ok(self.eval_for(key, attr, None, &txt)?),
+            Some(Some(Val::Ident(_))) | Some(_) => {
+                self.err(format!("'{key}' must be a number"))
+            }
+        }
+    }
     fn req_string(&mut self, key: &str) -> Result<String, ParseError> {
         match self.string(key)? {
             Some(s) => Ok(s),
@@ -278,6 +568,13 @@ impl Attrs {
         }
     }
     fn vec3(&mut self, key: &str) -> Result<Option<[f64; 3]>, ParseError> {
+        // Only vectors the param grammar sweeps take expressions (`size=`, `at=`,
+        // `rotate=`, `force=`); `dir=`, `step=` and `local=` are fixed at declaration,
+        // so an expression there reads like a non-numeric value.
+        let vocab: Option<&str> = match key {
+            "size" | "at" | "rotate" | "force" => Some(key),
+            _ => None,
+        };
         match self.take(key) {
             None => Ok(None),
             Some(Some(Val::Tuple(t))) if t.len() == 3 => {
@@ -285,6 +582,14 @@ impl Attrs {
                 for (i, v) in t.iter().enumerate() {
                     match v {
                         Val::Num(x) => o[i] = *x,
+                        // Only the vocab vectors record; the `_` arm's tuple error
+                        // still names `key` for anything non-numeric.
+                        Val::Ident(s) if vocab.is_some() => {
+                            o[i] = self.eval_for(key, key, Some(i), s)?
+                        }
+                        Val::Expr { txt } if vocab.is_some() => {
+                            o[i] = self.eval_for(key, key, Some(i), txt)?
+                        }
                         _ => return self.err(format!("'{key}' must be (x, y, z)")),
                     }
                 }
@@ -451,16 +756,47 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     return Err(err("name the shape: color \"<hex>\" on <shape>".into()));
                 }
             }
+            "let" => {
+                if !stack.is_empty() {
+                    return Err(err("let is only allowed at the top level".into()));
+                }
+                let name = c.ident("a let name")?;
+                // A duplicate catches first; re-use of a statement name reads "Name",
+                // matching what the other statement arms say.
+                if doc.lets.iter().any(|l| l.name == name) {
+                    return Err(err(format!("let '{name}' is defined more than once")));
+                }
+                if name_is_used(&doc, &name) {
+                    return Err(err(format!("Name '{name}' is used more than once")));
+                }
+                c.sym('=')?;
+                let tree = expr_sum(&mut c)?;
+                let canon = expr_txt(&tree);
+                let value = match eval_expr(&canon, &let_scope(&doc)) {
+                    Ok(v) if v.is_finite() => v,
+                    Ok(_) => return Err(err(format!("let '{name}': value is not finite"))),
+                    Err(m) => return Err(err(format!("let '{name}': {m}"))),
+                };
+                doc.lets.push(Let {
+                    name,
+                    expr: canon,
+                    value,
+                });
+            }
             "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "mesh" | "group"
             | "extend" => {
                 let id = c.ident("a shape name")?;
+                // Lets share the statement-name space with shapes, in either direction.
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
                 // `extend` takes a positional region name before its (required) dir/len.
                 let region = if kw == "extend" {
                     Some(c.ident("a region name")?)
                 } else {
                     None
                 };
-                let mut a = c.attrs()?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
                 let opens = c.is_sym('{');
                 let op = if a.flag("subtract") {
                     Op::Subtract
@@ -472,35 +808,33 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 };
                 let blend = a.num_or("blend", 0.0)?;
                 let suppressed = a.flag("suppressed");
-                let transform = Transform {
-                    translate: a.vec3("at")?.unwrap_or([0.0; 3]),
-                    rotate: a.vec3("rotate")?.unwrap_or([0.0; 3]),
-                };
+                // The kind's numbers read first so consumers record in statement order
+                // (a driven `size` records before a driven `at`).
                 let kind = match kw.as_str() {
                     "box" => NodeKind::Box {
                         size: a
                             .vec3("size")?
                             .ok_or_else(|| err("box needs size=(x, y, z)".into()))?,
-                        round: a.num_or("round", 0.0)?,
+                        round: a.expr_num_or("round", "round", 0.0)?,
                     },
                     "cylinder" => NodeKind::Cylinder {
-                        radius: a.req_num("r")?,
-                        height: a.req_num("h")?,
-                        round: a.num_or("round", 0.0)?,
+                        radius: a.req_expr_num("r", "radius")?,
+                        height: a.req_expr_num("h", "height")?,
+                        round: a.expr_num_or("round", "round", 0.0)?,
                     },
                     "sphere" => NodeKind::Sphere {
-                        radius: a.req_num("r")?,
+                        radius: a.req_expr_num("r", "radius")?,
                     },
                     "capsule" => NodeKind::Capsule {
-                        radius: a.req_num("r")?,
-                        length: a.req_num("length")?,
+                        radius: a.req_expr_num("r", "radius")?,
+                        length: a.req_expr_num("length", "length")?,
                     },
                     "torus" => NodeKind::Torus {
-                        major: a.req_num("major")?,
-                        minor: a.req_num("minor")?,
+                        major: a.req_expr_num("major", "major")?,
+                        minor: a.req_expr_num("minor", "minor")?,
                     },
                     "extrude" => {
-                        let height = a.req_num("h")?;
+                        let height = a.req_expr_num("h", "height")?;
                         let profile = match a.take("profile") {
                             Some(Some(Val::List(items))) => items
                                 .into_iter()
@@ -565,6 +899,12 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                         modifiers: Vec::new(),
                     },
                 };
+                // Placement reads after the kind, for the same consumer order.
+                let transform = Transform {
+                    translate: a.vec3("at")?.unwrap_or([0.0; 3]),
+                    rotate: a.vec3("rotate")?.unwrap_or([0.0; 3]),
+                };
+                doc.consumed.append(&mut a.consumed);
                 a.finish()?;
                 let node = Node {
                     id,
@@ -601,6 +941,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             }
             "region" => {
                 let id = c.ident("a region name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
                 c.sym('=')?;
                 let mut selectors = Vec::new();
                 loop {
@@ -644,8 +987,11 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             }
             "support" => {
                 let id = c.ident("a support name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs()?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
                 let fixed = match a.string("fixed")? {
                     None => [true; 3],
                     Some(s) => {
@@ -660,8 +1006,11 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             }
             "load" => {
                 let id = c.ident("a load name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs()?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
                 let case = a.string("case")?.unwrap_or_else(|| "Load 1".into());
                 let kind = if let Some(v) = a.vec3("force")? {
                     LoadKind::Force { vector: v }
@@ -688,7 +1037,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                             ))
                         }
                     };
-                    let total = a.num("total")?;
+                    let total = a.expr_num("total", "total")?;
                     LoadKind::Distributed {
                         expr: src,
                         dir,
@@ -699,6 +1048,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                         "load needs force=(x, y, z), pressure=value, or fn=...".into()
                     ));
                 };
+                doc.consumed.append(&mut a.consumed);
                 a.finish()?;
                 doc.loads.push(Load {
                     id,
@@ -709,10 +1059,14 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             }
             "temperature" => {
                 let id = c.ident("a temperature name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs()?;
-                let celsius = a.req_num("temp")?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
+                let celsius = a.req_compound_num("temp", "celsius")?;
                 let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
+                doc.consumed.append(&mut a.consumed);
                 a.finish()?;
                 doc.temperatures.push(Temperature {
                     id,
@@ -733,7 +1087,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     "network" => FillMode::Network,
                     m => return Err(err(format!("unknown fill mode '{m}'"))),
                 };
-                let mut a = c.attrs()?;
+                let mut a = c.attrs("", &let_scope(&doc))?;
                 let d = Fill::default();
                 let (rho_min, rho_max) = a.pair("rho")?.unwrap_or((d.rho_min, d.rho_max));
                 let fill = Fill {
@@ -753,9 +1107,10 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 doc.fill = Some(fill);
             }
             "solve" => {
-                let mut a = c.attrs()?;
+                let mut a = c.attrs("", &let_scope(&doc))?;
                 doc.solve.size = match a.take("size") {
-                    None | Some(Some(Val::Ident(_))) => None,
+                    None => None,
+                    Some(Some(Val::Ident(s))) if s == "auto" => None,
                     Some(Some(Val::Num(v))) => Some(v),
                     Some(_) => return Err(err("size must be a number or 'auto'".into())),
                 };
@@ -775,7 +1130,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             }
             "custommaterial" => {
                 let id = c.ident("a material id")?;
-                let mut a = c.attrs()?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
                 let mat = Material {
                     name: a.string("name")?.unwrap_or_else(|| id.clone()),
                     id,
@@ -842,6 +1197,31 @@ fn push_node(doc: &mut Document, stack: &mut [(Node, Vec<Node>, Vec<Modifier>)],
     }
 }
 
+/// The scope in force after the lets parsed so far: names and values in declaration
+/// order, so a consumer expression sees exactly the lets preceding its statement.
+fn let_scope(doc: &Document) -> Vec<(String, f64)> {
+    doc.lets.iter().map(|l| (l.name.clone(), l.value)).collect()
+}
+
+fn node_uses(node: &Node, id: &str) -> bool {
+    let mut any = node.id == *id;
+    if let NodeKind::Group { children, .. } = &node.kind {
+        any |= children.iter().any(|c| node_uses(c, id));
+    }
+    any
+}
+
+/// Whether `id` is already a statement name in the document (shapes recursively,
+/// then regions, supports, loads, temperatures). Custom materials sit outside this
+/// name space.
+fn name_is_used(doc: &Document, id: &str) -> bool {
+    doc.root.iter().any(|n| node_uses(n, id))
+        || doc.regions.iter().any(|r| r.id == *id)
+        || doc.supports.iter().any(|s| s.id == *id)
+        || doc.loads.iter().any(|l| l.id == *id)
+        || doc.temperatures.iter().any(|t| t.id == *id)
+}
+
 fn parse_axis(c: &mut Cursor) -> Result<Axis, ParseError> {
     match c.ident("x, y or z")?.as_str() {
         "x" => Ok(Axis::X),
@@ -872,8 +1252,9 @@ fn parse_modifier(kw: &str, c: &mut Cursor) -> Result<Modifier, ParseError> {
             axis: parse_axis(c)?,
         },
         "linear" => {
+            // step is fixed at declaration: no lets scope and no recorded consumers.
             let count = num(c)? as u32;
-            let mut a = c.attrs()?;
+            let mut a = c.attrs("", &[])?;
             let step = a.vec3("step")?.ok_or_else(|| ParseError {
                 line: c.line,
                 message: "linear needs step=(x, y, z)".into(),
@@ -882,8 +1263,9 @@ fn parse_modifier(kw: &str, c: &mut Cursor) -> Result<Modifier, ParseError> {
             Modifier::Linear { count, step }
         }
         "circular" => {
+            // axis/angle behave the same as linear's step.
             let count = num(c)? as u32;
-            let mut a = c.attrs()?;
+            let mut a = c.attrs("", &[])?;
             let axis = match a.string("axis")?.as_deref() {
                 None | Some("z") => Axis::Z,
                 Some("x") => Axis::X,
@@ -915,12 +1297,49 @@ fn q(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Prints numbers as the expressions that drove them, so a let document round-trips
+/// its arithmetic instead of the frozen values of one evaluation.
+struct Printer<'a> {
+    consumed: &'a [Consumer],
+}
+
+impl<'a> Printer<'a> {
+    /// The printed form of one number: the consumer expression when the statement
+    /// recorded one, else the plain value.
+    fn num_for(&self, id: &str, attr: &str, comp: Option<usize>, v: f64) -> String {
+        match self.consumed.iter().find(|c| c.target == id && c.attr == attr && c.comp == comp) {
+            Some(c) => c.expr.clone(),
+            None => n(v),
+        }
+    }
+
+    /// The printed form of a 3-vector, per component.
+    fn v3_for(&self, id: &str, attr: &str, v: [f64; 3]) -> String {
+        let parts: Vec<String> = (0..3)
+            .map(|i| self.num_for(id, attr, Some(i), v[i]))
+            .collect();
+        format!("({}, {}, {})", parts[0], parts[1], parts[2])
+    }
+
+    /// Whether any component of this attribute was driven (for the plain-number
+    /// conditionals that must not drop a driven zero).
+    fn driven(&self, id: &str, attr: &str) -> bool {
+        self.consumed.iter().any(|c| c.target == id && c.attr == attr)
+    }
+}
+
 /// Print a document in canonical `.fsm` form.
 pub fn print(doc: &Document) -> String {
     let mut o = String::new();
+    let p = Printer {
+        consumed: &doc.consumed,
+    };
     let _ = writeln!(o, "fieldsmith {FORMAT_VERSION}");
     let _ = writeln!(o, "name {}", q(&doc.name));
     let _ = writeln!(o, "material {}", doc.material);
+    for l in &doc.lets {
+        let _ = writeln!(o, "let {} = {}", l.name, l.expr);
+    }
     for m in &doc.custom_materials {
         let mut line = format!(
             "custommaterial {} name={} e={} nu={} yield={} density={} wall={}",
@@ -942,7 +1361,7 @@ pub fn print(doc: &Document) -> String {
         o.push('\n');
     }
     for node in &doc.root {
-        print_node(&mut o, node, 0);
+        print_node(&mut o, node, 0, &p);
     }
     if !doc.regions.is_empty()
         || !doc.supports.is_empty()
@@ -980,7 +1399,7 @@ pub fn print(doc: &Document) -> String {
     }
     for l in &doc.loads {
         let kind = match &l.kind {
-            LoadKind::Force { vector } => format!("force={}", v3(*vector)),
+            LoadKind::Force { vector } => format!("force={}", p.v3_for(&l.id, "force", *vector)),
             LoadKind::Pressure { mpa } => format!("pressure={}", n(*mpa)),
             LoadKind::Distributed { expr, dir, total } => {
                 let mut k = format!("fn={}", q(expr));
@@ -989,7 +1408,7 @@ pub fn print(doc: &Document) -> String {
                     LoadDir::Local { v } => k += &format!(" local={}", v3(*v)),
                 }
                 if let Some(t) = total {
-                    k += &format!(" total={}", n(*t));
+                    k += &format!(" total={}", p.num_for(&l.id, "total", None, *t));
                 }
                 k
             }
@@ -1002,7 +1421,7 @@ pub fn print(doc: &Document) -> String {
             "temperature {} {} temp={} case={}",
             t.id,
             t.region,
-            n(t.celsius),
+            p.num_for(&t.id, "celsius", None, t.celsius),
             q(&t.case)
         );
     }
@@ -1047,15 +1466,15 @@ pub fn print(doc: &Document) -> String {
     o
 }
 
-fn print_node(o: &mut String, node: &Node, depth: usize) {
+fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
     let ind = "  ".repeat(depth);
     let mut line = String::new();
     let _ = write!(line, "{ind}");
     match &node.kind {
         NodeKind::Box { size, round } => {
-            let _ = write!(line, "box {} size={}", node.id, v3(*size));
-            if *round != 0.0 {
-                let _ = write!(line, " round={}", n(*round));
+            let _ = write!(line, "box {} size={}", node.id, p.v3_for(&node.id, "size", *size));
+            if *round != 0.0 || p.driven(&node.id, "round") {
+                let _ = write!(line, " round={}", p.num_for(&node.id, "round", None, *round));
             }
         }
         NodeKind::Cylinder {
@@ -1067,23 +1486,23 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
                 line,
                 "cylinder {} r={} h={}",
                 node.id,
-                n(*radius),
-                n(*height)
+                p.num_for(&node.id, "radius", None, *radius),
+                p.num_for(&node.id, "height", None, *height)
             );
-            if *round != 0.0 {
-                let _ = write!(line, " round={}", n(*round));
+            if *round != 0.0 || p.driven(&node.id, "round") {
+                let _ = write!(line, " round={}", p.num_for(&node.id, "round", None, *round));
             }
         }
         NodeKind::Sphere { radius } => {
-            let _ = write!(line, "sphere {} r={}", node.id, n(*radius));
+            let _ = write!(line, "sphere {} r={}", node.id, p.num_for(&node.id, "radius", None, *radius));
         }
         NodeKind::Capsule { radius, length } => {
             let _ = write!(
                 line,
                 "capsule {} r={} length={}",
                 node.id,
-                n(*radius),
-                n(*length)
+                p.num_for(&node.id, "radius", None, *radius),
+                p.num_for(&node.id, "length", None, *length)
             );
         }
         NodeKind::Torus { major, minor } => {
@@ -1091,18 +1510,18 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
                 line,
                 "torus {} major={} minor={}",
                 node.id,
-                n(*major),
-                n(*minor)
+                p.num_for(&node.id, "major", None, *major),
+                p.num_for(&node.id, "minor", None, *minor)
             );
         }
         NodeKind::Extrude { profile, height } => {
             let pts: Vec<String> = profile
                 .iter()
-                .map(|p| {
-                    if p.bulge != 0.0 {
-                        format!("({}, {}, {})", n(p.x), n(p.y), n(p.bulge))
+                .map(|pt| {
+                    if pt.bulge != 0.0 {
+                        format!("({}, {}, {})", n(pt.x), n(pt.y), n(pt.bulge))
                     } else {
-                        format!("({}, {})", n(p.x), n(p.y))
+                        format!("({}, {})", n(pt.x), n(pt.y))
                     }
                 })
                 .collect();
@@ -1110,7 +1529,7 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
                 line,
                 "extrude {} h={} profile=[{}]",
                 node.id,
-                n(*height),
+                p.num_for(&node.id, "height", None, *height),
                 pts.join(", ")
             );
         }
@@ -1158,11 +1577,11 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
             let _ = write!(line, "group {}", node.id);
         }
     }
-    if node.transform.translate != [0.0; 3] {
-        let _ = write!(line, " at={}", v3(node.transform.translate));
+    if node.transform.translate != [0.0; 3] || p.driven(&node.id, "at") {
+        let _ = write!(line, " at={}", p.v3_for(&node.id, "at", node.transform.translate));
     }
-    if node.transform.rotate != [0.0; 3] {
-        let _ = write!(line, " rotate={}", v3(node.transform.rotate));
+    if node.transform.rotate != [0.0; 3] || p.driven(&node.id, "rotate") {
+        let _ = write!(line, " rotate={}", p.v3_for(&node.id, "rotate", node.transform.rotate));
     }
     match node.op {
         Op::Add => {}
@@ -1189,7 +1608,7 @@ fn print_node(o: &mut String, node: &Node, depth: usize) {
             let _ = writeln!(o, "{ind}color \"{c}\" on {}", node.id);
         }
         for c in children {
-            print_node(o, c, depth + 1);
+            print_node(o, c, depth + 1, p);
         }
         let ind2 = "  ".repeat(depth + 1);
         for m in modifiers {
@@ -1276,6 +1695,258 @@ solve size=2.5 modes=3
     fn validates_sample() {
         let d = parse(SAMPLE).unwrap();
         assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    const LET_SAMPLE: &str = r#"fieldsmith 1
+name "Bracket"
+material petg
+let wall_t = 4
+let bolt_pitch = 2 * wall_t + 2
+
+box beam size=(100, 2 * wall_t, 2 * wall_t) at=(50, wall_t, wall_t)
+cylinder pin r=wall_t h=bolt_pitch rotate=(90, 0, 0)
+sphere knob r=wall_t / 2
+
+region root = beam.nx
+region tip = beam.px
+support clamp root
+load push tip force=(0, 0, -(wall_t * 25)) case="Load 1"
+temperature hot tip temp=80 + wall_t case="Thermal 1"
+solve size=2.5
+"#;
+
+    const PLAIN_BRACKET: &str = r#"fieldsmith 1
+name "Bracket"
+material petg
+
+box beam size=(100, 8, 8) at=(50, 4, 4)
+cylinder pin r=4 h=10 rotate=(90, 0, 0)
+sphere knob r=2
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -100)
+temperature hot tip temp=84
+solve size=2.5
+"#;
+
+    #[test]
+    fn let_document_round_trips_canonically() {
+        let d = parse(LET_SAMPLE).unwrap();
+        let p = print(&d);
+        assert_eq!(p, LET_SAMPLE, "printer output differs:\n{p}");
+        for _ in 0..2 {
+            let d = parse(&p).unwrap();
+            assert_eq!(print(&d), LET_SAMPLE, "printer output drifted");
+        }
+    }
+
+    #[test]
+    fn lets_substitute_and_record_consumers() {
+        let d = parse(LET_SAMPLE).unwrap();
+        assert_eq!(d.lets.len(), 2);
+        assert_eq!(d.lets[0].name, "wall_t");
+        assert_eq!(d.lets[0].value, 4.0);
+        assert_eq!(d.lets[0].expr, "4");
+        assert_eq!(d.lets[1].name, "bolt_pitch");
+        assert_eq!(d.lets[1].value, 10.0);
+        assert_eq!(d.lets[1].expr, "2 * wall_t + 2");
+        let got: Vec<(String, String, Option<usize>, String)> = d
+            .consumed
+            .iter()
+            .map(|k| (k.target.clone(), k.attr.clone(), k.comp, k.expr.clone()))
+            .collect();
+        let want = vec![
+            ("beam", "size", Some(1), "2 * wall_t"),
+            ("beam", "size", Some(2), "2 * wall_t"),
+            ("beam", "at", Some(1), "wall_t"),
+            ("beam", "at", Some(2), "wall_t"),
+            ("pin", "radius", None, "wall_t"),
+            ("pin", "height", None, "bolt_pitch"),
+            ("knob", "radius", None, "wall_t / 2"),
+            ("push", "force", Some(2), "-(wall_t * 25)"),
+            ("hot", "celsius", None, "80 + wall_t"),
+        ]
+        .into_iter()
+        .map(|(t, a, c, e)| (t.to_string(), a.to_string(), c, e.to_string()))
+        .collect::<Vec<_>>();
+        assert_eq!(got, want, "consumers in parse order");
+    }
+
+    #[test]
+    fn let_document_matches_the_substituted_document() {
+        let let_doc = parse(LET_SAMPLE).unwrap();
+        let plain = parse(PLAIN_BRACKET).unwrap();
+        // The lets/consumed records differ by design; the numbers they produce must not.
+        let mut stripped = let_doc.clone();
+        stripped.lets.clear();
+        stripped.consumed.clear();
+        assert_eq!(stripped, plain, "let substitution must be value-exact");
+    }
+
+    #[test]
+    fn expression_precedence_and_scopes() {
+        let value_of = |body: &str| {
+            parse(&format!("fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"))
+                .unwrap()
+                .lets
+                .last()
+                .expect("at least one let")
+                .value
+        };
+        assert_eq!(value_of("let a = 2 + 3 * 4"), 14.0);
+        assert_eq!(value_of("let a = (2 + 3) * 4"), 20.0);
+        assert_eq!(value_of("let a = 10 - 3 - 2"), 5.0);
+        assert_eq!(value_of("let a = -2 * 3"), -6.0);
+        assert_eq!(value_of("let a = 20 / 2 / 5"), 2.0);
+        assert_eq!(value_of("let a = 5 - 2 * (3 + 1)"), -3.0);
+        // Lets are in scope only after their line.
+        assert_eq!(value_of("let a = 2\nlet b = a + 1"), 3.0);
+    }
+    #[test]
+    fn let_errors_are_named() {
+        let with_lets = |body: &str| {
+            parse(&format!("fieldsmith 1\nname \"t\"\nmaterial petg\n{body}\n"))
+                .err()
+                .map(|e| e.message)
+                .expect("expected a parse error")
+        };
+        // Unknown names, duplicates, collisions, forward references.
+        assert!(
+            with_lets("let w = q + 1").contains("no let named 'q'"),
+            "undefined variable"
+        );
+        assert!(
+            with_lets("let w = 1\nlet w = 2")
+                .contains("let 'w' is defined more than once"),
+            "duplicate let"
+        );
+        assert!(
+            with_lets("let beam = 4\nbox beam size=(4, 4, 4)")
+                .contains("Name 'beam' is used more than once"),
+            "let colliding with a later shape"
+        );
+        assert!(
+            with_lets("box beam size=(4, 4, 4)\nlet beam = 2")
+                .contains("Name 'beam' is used more than once"),
+            "let colliding with an earlier shape"
+        );
+        assert!(
+            with_lets("box beam size=(w, 4, 4)\nlet w = 4")
+                .contains("no let named 'w'"),
+            "forward reference"
+        );
+        // Bad arithmetic fails at its own line.
+        assert!(
+            with_lets("let z = 4 / 0").contains("let 'z': division by zero"),
+            "divide by zero in a let"
+        );
+        assert!(
+            with_lets("let big = 1e308 * 10")
+                .contains("let 'big': value is not finite"),
+            "non-finite let value"
+        );
+        assert!(
+            with_lets("let w = 4\nbox beam size=(100, w / 0, 4)")
+                .contains("'size' on 'beam': division by zero"),
+            "divide by zero in a consumer"
+        );
+        assert!(
+            with_lets("let w = 1e308\nbox beam size=(w * w, 4, 4)")
+                .contains("'size' on 'beam': value is not finite"),
+            "non-finite consumer value"
+        );
+        // Only top-level lets.
+        assert!(
+            with_lets("group g {\n  let w = 4\n  box inner size=(4, w, 4)\n}")
+                .contains("let is only allowed at the top level"),
+            "let inside a group"
+        );
+        // Non-consumer vocabulary refuses expression values.
+        assert!(
+            with_lets("let w = 4\nfill gyroid sheet cell=w")
+                .contains("'cell' must be a number"),
+            "fill cell"
+        );
+        assert!(
+            with_lets("let w = 4\nbox beam size=(4, 4, 4) blend=w")
+                .contains("'blend' must be a number"),
+            "blend"
+        );
+        assert!(
+            with_lets("let w = 4\nsolve size=w")
+                .contains("size must be a number or 'auto'"),
+            "solve size"
+        );
+        assert!(
+            with_lets("let w = 4\nsolve modes=w")
+                .contains("modes must be a count"),
+            "solve modes"
+        );
+        assert!(
+            with_lets("let w = 4\nload push t pressure=w")
+                .contains("'pressure' must be a number"),
+            "load pressure"
+        );
+        assert!(
+            with_lets("let w = 4\ntemperature hot t temp=w")
+                .contains("'temp' must be a number"),
+            "temperature value"
+        );
+        // Tokenizer: unknown characters still fail before any expression work.
+        assert!(
+            with_lets("let w!x = 4").contains("unexpected character"),
+            "bad let name"
+        );
+    }
+    #[test]
+    fn const_folded_arithmetic_needs_no_let() {
+        let d = parse(
+            "fieldsmith 1\nname \"t\"\nmaterial petg\nbox beam size=(2 - 1, 2 + 2, 2 * 6)",
+        )
+        .unwrap();
+        assert!(d.lets.is_empty());
+        assert!(d.consumed.is_empty());
+        assert!(print(&d).contains("size=(1, 4, 12)"), "{}", print(&d));
+    }
+
+    #[test]
+    fn json_round_trips_lets_and_consumers() {
+        let d = parse(LET_SAMPLE).unwrap();
+        let json = serde_json::to_string(&d).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, d);
+        // Let-less documents keep today's JSON shape.
+        let plain_json = serde_json::to_string(&parse(PLAIN_BRACKET).unwrap()).unwrap();
+        assert!(!plain_json.contains("consumed"), "empty fields stay omitted");
+    }
+
+    #[test]
+    fn validate_catches_stale_let_and_consumer_records() {
+        // A json-built document bypasses the parse-time checks, so validate() is the
+        // backstop for hand-edited lets and consumers.
+        let mut d = parse(LET_SAMPLE).unwrap();
+        d.lets[0].name = "wall_t2".into();
+        let errors = d.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("does not evaluate") && e.contains("wall_t")),
+            "{errors:?}"
+        );
+        let mut d = parse(LET_SAMPLE).unwrap();
+        d.consumed[0].target = "ghost".into();
+        let errors = d.validate();
+        assert!(errors.iter().any(|e| e.contains("references 'ghost'")), "{errors:?}");
+        let mut d = parse(LET_SAMPLE).unwrap();
+        d.lets[0].name = "push".into();
+        let errors = d.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Name 'push' is used more than once")),
+            "{errors:?}"
+        );
     }
 
     #[test]

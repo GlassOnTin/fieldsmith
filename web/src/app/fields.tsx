@@ -3,6 +3,12 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { store } from '../doc/store';
 import type { Document } from '../doc/types';
+import { ui } from './ui';
+
+/** A record the expression table holds. `driven` carries the expression, so the row
+ * refuses edits and the hint names what sweeps instead (M: .fsm let-variables). */
+const drivenNote = (label: string, expr: string): string =>
+  `${label} is written by an expression ('${expr}') — sweep the let that drives it`;
 
 /** Evaluate a small arithmetic expression: numbers, + − * / ( ), unary minus. */
 export function evalExpr(src: string): number | null {
@@ -74,6 +80,7 @@ interface NumProps {
   onCommit?: () => void;
   label?: string;
   testId?: string;
+  title?: string;
 }
 
 function clampV(v: number, p: NumProps) {
@@ -109,6 +116,7 @@ export function NumberInput(p: NumProps) {
         value={text}
         aria-label={p.label}
         data-testid={p.testId}
+        title={p.title}
         spellcheck={false}
         onFocus={(e) => {
           setFocused(true);
@@ -200,23 +208,31 @@ export function NumRow(props: {
   undoLabel: string;
   testId?: string;
   title?: string;
+  driven?: string | null;
 }) {
   const value = props.get(store.doc);
   const apply = (v: number, live: boolean) => {
+    if (props.driven) {
+      // An expression writes this number: editing it here would be overwritten at the
+      // next let sweep. The sweep panel edits the let that drives it.
+      ui.notify(drivenNote(props.label, props.driven), 'error');
+      return;
+    }
     if (live) store.transient((d) => props.set(d, v));
     else store.transact(props.undoLabel, (d) => props.set(d, v));
   };
   return (
     <>
-      <ScrubLabel value={value} step={props.step} min={props.min} max={props.max} integer={props.integer} onChange={apply} title={props.title}>
+      <ScrubLabel value={value} step={props.step} min={props.min} max={props.max} integer={props.integer} onChange={apply} title={props.driven ? drivenNote(props.label, props.driven) : props.title}>
         {props.label}
       </ScrubLabel>
-      <NumberInput value={value} unit={props.unit} min={props.min} max={props.max} step={props.step} integer={props.integer} onChange={apply} label={props.label} testId={props.testId} />
+      <NumberInput value={value} unit={props.unit} min={props.min} max={props.max} step={props.step} integer={props.integer} onChange={apply} label={props.label} testId={props.testId} title={props.driven ? drivenNote(props.label, props.driven) : undefined} />
     </>
   );
 }
 
-/** Three numeric inputs for a vector. */
+/** Three numeric inputs for a vector. `driven(i)` returns the driving expression for
+ * component i (or null), so each axis refuses on its own. */
 export function VecRow(props: {
   label: string;
   unit?: string;
@@ -226,9 +242,11 @@ export function VecRow(props: {
   min?: number;
   undoLabel: string;
   testId?: string;
+  driven?: (i: number) => string | null;
 }) {
   const v = props.get(store.doc);
   const axes = ['x', 'y', 'z'] as const;
+  const note = (i: number) => props.driven?.(i) ?? null;
   return (
     <>
       <label class="plain">{props.label}</label>
@@ -243,7 +261,12 @@ export function VecRow(props: {
             min={props.min}
             label={`${props.label} ${a}`}
             testId={props.testId ? `${props.testId}-${a}` : undefined}
+            title={note(i) ? drivenNote(`${props.label} ${a}`, note(i)!) : undefined}
             onChange={(x, live) => {
+              if (note(i)) {
+                ui.notify(drivenNote(`${props.label} ${a}`, note(i)!), 'error');
+                return;
+              }
               const f = (d: Document) => {
                 const cur = [...props.get(d)] as [number, number, number];
                 cur[i] = x;

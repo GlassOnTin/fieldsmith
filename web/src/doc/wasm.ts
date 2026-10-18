@@ -7,6 +7,7 @@
 // chosen variant is fetched.
 import type * as W from '../pkg/fieldsmith_wasm.js';
 import type { Document, Face, Material, Vec3 } from './types';
+import { withLetTables } from './types';
 
 /** The bound API (the two builds differ only in their init entry points). */
 let w: Omit<typeof W, 'default' | 'initSync'>;
@@ -46,7 +47,9 @@ export function loadWasm(opts: { pool?: number } = {}): Promise<void> {
 export type ParseResult = { ok: Document } | { error: { line: number; message: string } };
 
 export function parseFsm(text: string): ParseResult {
-  return JSON.parse(w.parse_fsm(text));
+  const r = JSON.parse(w.parse_fsm(text));
+  if ('ok' in r) withLetTables(r.ok);
+  return r;
 }
 
 export function printFsm(doc: Document): string {
@@ -323,7 +326,9 @@ export interface SidecarManifest {
  * side effect. Throws naming the reason — an unreadable archive or a doc/manifest
  * disagreement — with the failing entry or hash named. */
 export function loadFsmz(bytes: Uint8Array): { doc: Document; manifest: SidecarManifest } {
-  return JSON.parse(w.loadFsmz(bytes));
+  const r = JSON.parse(w.loadFsmz(bytes));
+  withLetTables(r.doc);
+  return r;
 }
 
 /** Write the `.fsmz` sidecar for the document. Throws naming the hash when a mesh grid is

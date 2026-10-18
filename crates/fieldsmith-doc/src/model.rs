@@ -18,6 +18,15 @@ pub struct Document {
     /// one thermal case. See [`Temperature`].
     #[serde(default)]
     pub temperatures: Vec<Temperature>,
+    /// Named scalar parameters (`let w = 4`) in source order, with the values the
+    /// parser evaluated. See [`Let`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lets: Vec<Let>,
+    /// Records where a `let` expression was consumed by a statement, so re-prints keep
+    /// the link (`size=(100, 2 * wall_t, …)`) and edits of a driven number can refuse
+    /// in favour of the driving let. See [`Consumer`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumed: Vec<Consumer>,
     /// Material id from the library (see [`crate::materials`]) or a custom material id.
     pub material: String,
     pub custom_materials: Vec<crate::materials::Material>,
@@ -34,12 +43,38 @@ impl Default for Document {
             supports: Vec::new(),
             loads: Vec::new(),
             temperatures: Vec::new(),
+            lets: Vec::new(),
+            consumed: Vec::new(),
             material: "petg".into(),
             custom_materials: Vec::new(),
             fill: None,
             solve: SolveSettings::default(),
         }
     }
+}
+
+/// A named scalar parameter: `let wall_t = 4` or `let bolt_pitch = 2 * wall_t + 2`.
+/// `expr` is the canonical expression text the printer keeps (so re-prints keep the
+/// link, and [`crate::param`] can re-evaluate it); `value` is what the parser
+/// evaluated — downstream statements never see the expression, only the number.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Let {
+    pub name: String,
+    pub expr: String,
+    pub value: f64,
+}
+
+/// One expression consumption: statement `target`'s attribute `attr` (with a component
+/// index for vector attributes) holds `expr`, so its current number derives from the
+/// lets it names. There is no stored value here — the number always lives on, and edits
+/// always target, the statement itself; consumers only record which numbers read which
+/// expressions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Consumer {
+    pub target: String,
+    pub attr: String,
+    pub comp: Option<usize>,
+    pub expr: String,
 }
 
 /// How a node combines with everything before it in its group.
@@ -660,6 +695,58 @@ impl Document {
                 errs.push(format!("Name '{id}' is used more than once"));
             }
         }
+        // Lets share the name space with statement ids (the parser checks both
+        // directions as statements are read; this is the backstop for json-built docs).
+        for l in &self.lets {
+            if !crate::fsm::is_ident(&l.name) {
+                errs.push(format!(
+                    "let '{}' is not a valid name (letters, digits, _; not starting with a digit)",
+                    l.name
+                ));
+            }
+            // Loads, supports and temperatures are in no `seen` set of their own at
+            // this point, so check them directly.
+            if !seen.insert(l.name.clone())
+                || self.loads.iter().any(|x| x.id == l.name)
+                || self.supports.iter().any(|x| x.id == l.name)
+                || self.temperatures.iter().any(|x| x.id == l.name)
+            {
+                errs.push(format!("Name '{}' is used more than once", l.name));
+            }
+        }
+        // Consumers name existing statements, and their canonical expressions must
+        // still evaluate against the lets — json surgery can leave both stale.
+        let let_values: Vec<(String, f64)> =
+            self.lets.iter().map(|l| (l.name.clone(), l.value)).collect();
+        for l in &self.lets {
+            let spec = format!("let '{}'", l.name);
+            match crate::fsm::eval_expr(&l.expr, &let_values) {
+                Ok(v) if v.is_finite() => {}
+                Ok(_) => errs.push(format!("The {spec} value is not finite")),
+                Err(m) => errs.push(format!("The {spec} does not evaluate: {m}")),
+            }
+        }
+        for c in &self.consumed {
+            let named = ids.contains(&c.target)
+                || self.loads.iter().any(|l| l.id == c.target)
+                || self.temperatures.iter().any(|t| t.id == c.target);
+            if !named {
+                errs.push(format!(
+                    "An expression consumer references '{}', which does not exist",
+                    c.target
+                ));
+                continue;
+            }
+            let spec = match c.comp {
+                Some(n) => format!("{}.{}.{}", c.target, c.attr, n),
+                None => format!("{}.{}", c.target, c.attr),
+            };
+            match crate::fsm::eval_expr(&c.expr, &let_values) {
+                Ok(v) if v.is_finite() => {}
+                Ok(_) => errs.push(format!("The expression for '{spec}' value is not finite")),
+                Err(m) => errs.push(format!("The expression for '{spec}' does not evaluate: {m}")),
+            }
+        }
         let region_ids: Vec<&str> = self.regions.iter().map(|r| r.id.as_str()).collect();
         for r in &self.regions {
             if !seen.insert(r.id.clone()) {
@@ -1165,13 +1252,15 @@ impl Document {
         }
     }
 
-    /// A fresh unique id with the given prefix (`box1`, `box2`, …).
+    /// A fresh unique id with the given prefix (`box1`, `box2`, …). Lets share the
+    /// name space, so their names are taken too.
     pub fn fresh_id(&self, prefix: &str) -> String {
         let mut taken: std::collections::HashSet<String> = self.node_ids().into_iter().collect();
         taken.extend(self.regions.iter().map(|r| r.id.clone()));
         taken.extend(self.supports.iter().map(|r| r.id.clone()));
         taken.extend(self.loads.iter().map(|r| r.id.clone()));
         taken.extend(self.temperatures.iter().map(|r| r.id.clone()));
+        taken.extend(self.lets.iter().map(|l| l.name.clone()));
         (1..)
             .map(|i| format!("{prefix}{i}"))
             .find(|c| !taken.contains(c))

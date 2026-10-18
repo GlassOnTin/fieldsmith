@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 
 /// The envelope contract version. Bumping it is a named change — v2 (2026-10-14, M16)
 /// adds the `sweep` question: `{"kind": "sweep", "param": "<id>.<attr>[.<n>]",
-/// "values": [...], …}` with the per-point rungs/tolerance defaults. v1 requests are
-/// refused with a line naming the change; see `respond`.
+/// "values": [...], …}` with the per-point rungs/tolerance defaults, and (2026-10-18)
+/// the sweep param may also be a bare `let` name, which recomputes the expressions
+/// that reference it at each point. v1 requests are refused with a line naming the
+/// change; see `respond`.
 pub const APIV: u32 = 2;
 
 // ---------------------------------------------------------------- request ----
@@ -76,7 +78,9 @@ pub enum QuestionSpec {
     /// a per-point budget is outside this grammar (each point runs to its tolerance or
     /// a shared schedule's cap). The param must resolve against the parsed document
     /// (unknown id, non-numeric attr: request error naming what failed, see
-    /// `fieldsmith_doc::param`).
+    /// `fieldsmith_doc::param`); it may be a statement attribute `id.attr.n` or a bare
+    /// `let` name. A bare `let` drives whole expressions — a dotted attribute a `let`
+    /// writes is refused with "sweep the let that drives it".
     Sweep {
         param: String,
         values: Vec<f64>,

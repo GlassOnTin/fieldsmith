@@ -1,6 +1,7 @@
 // Document edits used by the UI. All functions mutate a draft inside `store.transact`.
 import type { Document, Modifier, Node, NodeKind, Op, Vec3 } from './types';
 import { allIds, containerOf, findNode, freshId, walk } from './types';
+import { pruneConsumers } from './param';
 
 /** Shape types the user creates from scratch; `mesh`/`extend` arrive via import and
  *  sidecar load only, so they are not in the Add menu. */
@@ -91,6 +92,7 @@ export function removeNode(doc: Document, id: string): Node | null {
   walk([n], (m) => gone.add(m.id));
   for (const r of doc.regions) r.selectors = r.selectors.filter((s) => !gone.has(s.shape));
   if (doc.fill) doc.fill.protect = doc.fill.protect.filter((p) => !gone.has(p));
+  pruneConsumers(doc, gone);
   return n;
 }
 
@@ -137,17 +139,19 @@ export const ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function renameId(doc: Document, from: string, to: string): string | null {
   if (!ID_RE.test(to)) return 'Names start with a letter and use letters, digits and _ only.';
   if (from === to) return null;
-  const taken = new Set<string>();
-  walk(doc.root, (n) => taken.add(n.id));
-  doc.regions.forEach((r) => taken.add(r.id));
-  doc.supports.forEach((r) => taken.add(r.id));
-  doc.loads.forEach((r) => taken.add(r.id));
+  // One name space over statements and lets (allIds), in either direction: a rename to
+  // a let name would produce a .fsm the parser refuses ("used more than once").
+  const taken = allIds(doc);
   if (taken.has(to)) return `“${to}” is already used.`;
+  const rewire = () => {
+    for (const c of doc.consumed ?? []) if (c.target === from) c.target = to;
+  };
   const node = findNode(doc, from);
   if (node) {
     node.id = to;
     for (const r of doc.regions) for (const s of r.selectors) if (s.shape === from) s.shape = to;
     if (doc.fill) doc.fill.protect = doc.fill.protect.map((p) => (p === from ? to : p));
+    rewire();
     return null;
   }
   const region = doc.regions.find((r) => r.id === from);
@@ -165,6 +169,7 @@ export function renameId(doc: Document, from: string, to: string): string | null
   const load = doc.loads.find((r) => r.id === from);
   if (load) {
     load.id = to;
+    rewire();
     return null;
   }
   return `Nothing is called “${from}”.`;

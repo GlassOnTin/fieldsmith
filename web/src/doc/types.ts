@@ -126,6 +126,26 @@ export interface Material {
   source: string;
 }
 
+/** One named scalar (M: .fsm let-variables): the expression as written (canonical text,
+ * const-folded where the whole side was literal) and the value it evaluated to at parse.
+ * A sweep rewrites `value` and keeps `expr`, so the applied value survives. */
+export interface Let {
+  name: string;
+  expr: string;
+  value: number;
+}
+
+/** One recorded expression read: the statement attribute an expression drives and the
+ * expression to recompute when a swept `let` changes. `target` is "" for readers bound
+ * to nothing addressable — fill and solve refuse expressions at parse, so in practice
+ * every consumer names a node, load or temperature. */
+export interface Consumer {
+  target: string;
+  attr: string;
+  comp: number | null;
+  expr: string;
+}
+
 export interface Document {
   name: string;
   root: Node[];
@@ -137,6 +157,11 @@ export interface Document {
   custom_materials: Material[];
   fill: Fill | null;
   solve: { size: number | null; modes: number | null; t_ref: number | null };
+  /** Named scalars and the recorded expression reads. Optional because the Rust side
+   * omits both when empty (serde skip_serializing_if) — plain documents carry neither
+   * key in their JSON; backfilled by [`withLetTables`] at every intake site. */
+  lets?: Let[];
+  consumed?: Consumer[];
 }
 
 /** A fixed boundary temperature (°C) on a labelled region, one thermal case (M14): the
@@ -174,7 +199,17 @@ export function emptyDocument(): Document {
     custom_materials: [],
     fill: null,
     solve: { size: null, modes: null, t_ref: null },
+    lets: [],
+    consumed: [],
   };
+}
+
+/** Backfill the let tables on a document that crossed the wasm boundary (the Rust side
+ * omits both when empty). Mutates and returns the doc. */
+export function withLetTables<T extends Document>(doc: T): T {
+  doc.lets ??= [];
+  doc.consumed ??= [];
+  return doc;
 }
 
 /** Fixed display-colour palette for the Inspector (canonical sRGB `#RRGGBB`). Free-form
@@ -231,6 +266,11 @@ export function allIds(doc: Document): Set<string> {
   for (const r of doc.regions) s.add(r.id);
   for (const r of doc.supports) s.add(r.id);
   for (const r of doc.loads) s.add(r.id);
+  // Temperatures missed this list before the let tables landed; an id is one name
+  // space over statements and lets (either direction is "used more than once"), so
+  // fresh ids avoid everything named.
+  for (const t of doc.temperatures) s.add(t.id);
+  for (const l of doc.lets ?? []) s.add(l.name);
   return s;
 }
 

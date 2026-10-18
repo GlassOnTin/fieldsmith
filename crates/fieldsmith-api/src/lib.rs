@@ -675,4 +675,73 @@ load push tip force=(0, 0, -100)";
         // The sweep envelope itself stays ok regardless of the per-point verdicts.
         assert_eq!(body["status"], "ok");
     }
+
+    const LET_DOC: &str = "fieldsmith 1
+name \"sweep test\"
+custommaterial steel200 name=\"Steel\" e=200000 nu=0.3 yield=250 density=7.85
+material steel200
+let w = 10
+box beam size=(100, 10, w) at=(50, 5, 5)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -100)";
+
+    fn sweep_request_doc(doc: &str, param: &str, values: &str, extra: &str) -> String {
+        format!(
+            "{{\"apiv\": 2, \"doc\": {doc:?}, \"question\": {{\"kind\": \"sweep\", \
+             \"param\": {param:?}, \"values\": {values}{extra}}}}}"
+        )
+    }
+
+    /// Wall-clock columns differ between two runs of the same physics; drop them and
+    /// the cost fit they feed everywhere below the outcome so the comparison stays
+    /// physical.
+    fn strip_wall_ms(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("wall_ms");
+                map.remove("total_ms");
+                map.remove("cost_fit");
+                map.values_mut().for_each(strip_wall_ms);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_wall_ms),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn let_sweep_matches_the_node_path_sweep() {
+        // With w = 10 the let document is the same cantilever; sweeping the let and
+        // sweeping the node path it drives must produce the same numbers.
+        let body = envelope(&sweep_request_doc(LET_DOC, "w", "[6, 10]", FAST_RUNGS));
+        let plain = envelope(&sweep_request("beam.size.2", "[6, 10]", FAST_RUNGS));
+        assert_eq!(body["status"], "ok", "let sweep runs");
+        assert_eq!(body["sweep"]["param"], "w");
+        let pts = body["sweep"]["points"].as_array().expect("points");
+        let want = plain["sweep"]["points"].as_array().expect("plain points");
+        assert_eq!(pts.len(), want.len());
+        for (p, q) in pts.iter().zip(want.iter()) {
+            assert_eq!(p["value"], q["value"]);
+            let mut a = p["outcome"].clone();
+            let mut b = q["outcome"].clone();
+            strip_wall_ms(&mut a);
+            strip_wall_ms(&mut b);
+            assert_eq!(a, b, "outcomes minus wall-clock must match");
+        }
+    }
+
+    #[test]
+    fn sweeping_a_driven_attr_refuses_with_the_let_hint() {
+        let e = envelope(&sweep_request_doc(
+            LET_DOC,
+            "beam.size.2",
+            "[6, 10]",
+            FAST_RUNGS,
+        ));
+        assert_eq!(e["status"], "error");
+        let text = e["error"].as_str().expect("error text");
+        assert!(text.contains("written by an expression"), "{text}");
+        assert!(text.contains("sweep the let that drives it"), "{text}");
+    }
 }
