@@ -2,8 +2,8 @@
 //! number of one named statement, `<id>.<attr>[.<index>]`, or one `let` by bare id
 //! (`w`), which re-evaluates the lets and every expression that references them. Ids
 //! resolve against the parsed document — bare ids are lets and never resolve to a
-//! statement; dotted addresses run nodes, then loads, then temperatures — and a number
-//! that a declared expression writes refuses a direct edit ("sweep the let that drives
+//! statement; dotted addresses run nodes, then loads, temperatures, convections — and a
+//! number that a declared expression writes refuses a direct edit ("sweep the let that drives
 //! it"). The addressable attributes are the model's own numeric fields, plus the
 //! placement transform (`at`, `rotate`); everything else (region and support selectors,
 //! extrude profile vertices, mesh and extend internals, solve settings) is outside the
@@ -210,8 +210,19 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             )),
         };
     }
+    if doc.convections.iter().any(|c| c.id == *id) {
+        return match (attr, addr.comp) {
+            ("h" | "tinf", None) => Ok(()),
+            ("h" | "tinf", Some(_)) => {
+                Err(format!("param {addr}: h and tinf take no component index"))
+            }
+            _ => Err(format!(
+                "param {addr}: convection {id:?} has no numeric parameter {attr:?} — h, tinf"
+            )),
+        };
+    }
     Err(format!(
-        "param {addr}: no node, load or temperature named {id:?}"
+        "param {addr}: no node, load, temperature or convection named {id:?}"
     ))
 }
 
@@ -347,6 +358,14 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
     }
     if let Some(t) = doc.temperatures.iter_mut().find(|t| t.id == target) {
         t.celsius = v;
+        return;
+    }
+    if let Some(c) = doc.convections.iter_mut().find(|c| c.id == target) {
+        match (attr, comp) {
+            ("h", None) => c.h = v,
+            ("tinf", None) => c.t_inf = v,
+            _ => unreachable!("the writer was checked against this statement"),
+        }
         return;
     }
     unreachable!("the writer was checked against this document");
@@ -574,5 +593,47 @@ temperature hot root temp=80 + w";
             panic!("box")
         };
         assert_eq!(size[0], 120.0);
+    }
+
+    const CONV_DOC: &str = "\
+fieldsmith 1
+name \"params\"
+custommaterial steel200 name=\"Steel\" e=200000 nu=0.3 yield=250 density=7.85
+material steel200
+let hw = 0.01
+box beam size=(100, 10, 10) at=(50, 5, 5)
+region hotface = beam.px
+temperature fixer hotface temp=80
+convection air hotface h=2 * hw tinf=25";
+
+    fn conv_doc() -> Document {
+        fsm::parse(CONV_DOC).expect("parse")
+    }
+
+    #[test]
+    fn resolves_applies_and_refuses_convection_params() {
+        let d = conv_doc();
+        for addr in ["air.h", "air.tinf"] {
+            resolve(&d, &ParamAddr::parse(addr).unwrap()).unwrap_or_else(|e| panic!("{addr}: {e}"));
+        }
+        // A component index is refused; so is an attribute the band does not carry.
+        let e = resolve(&d, &ParamAddr::parse("air.h.0").unwrap()).unwrap_err();
+        assert!(e.contains("take no component index"), "{e}");
+        let e = resolve(&d, &ParamAddr::parse("air.pressure").unwrap()).unwrap_err();
+        assert!(e.contains("no numeric parameter \"pressure\" — h, tinf"), "{e}");
+        let e = resolve(&d, &ParamAddr::parse("ghost.h").unwrap()).unwrap_err();
+        assert!(
+            e.contains("no node, load, temperature or convection named \"ghost\""),
+            "{e}"
+        );
+        // Plain edits land on the fields.
+        let mut d = conv_doc();
+        apply(&mut d, &ParamAddr::parse("air.tinf").unwrap(), 60.0).expect("apply");
+        assert_eq!(d.convections[0].t_inf, 60.0);
+        // A driven h refuses a direct write; sweeping its let recomputes it.
+        let e = apply(&mut d, &ParamAddr::parse("air.h").unwrap(), 0.1).unwrap_err();
+        assert!(e.contains("written by an expression"), "{e}");
+        apply(&mut d, &ParamAddr::parse("hw").unwrap(), 0.02).expect("sweep the let");
+        assert_eq!(d.convections[0].h, 0.04);
     }
 }

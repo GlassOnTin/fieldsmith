@@ -1,13 +1,13 @@
-// Setup lens: regions, supports, loads and temperatures on top of the shape model. Clicking
-// a surface makes a region (with the region selected, further clicks join its selector
-// list); supports, loads and temperatures attach to regions and supports/loads draw as
-// glyphs where the analysed mesh actually supports them.
+// Setup lens: regions, supports, loads, temperatures and convections on top of the shape
+// model. Clicking a surface makes a region (with the region selected, further clicks join
+// its selector list); supports, loads and temperatures attach to regions and
+// supports/loads draw as glyphs where the analysed mesh actually supports them.
 import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
-import type { Document, Face, Load, Node, Region, Support, Temperature } from '../doc/types';
+import type { Convection, Document, Face, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
 import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
@@ -63,6 +63,11 @@ function temperatureIn(d: Document, id: string): Temperature {
   if (!t) throw new Error(`missing temperature ${id}`);
   return t;
 }
+function convectionIn(d: Document, id: string): Convection {
+  const c = d.convections.find((x) => x.id === id);
+  if (!c) throw new Error(`missing convection ${id}`);
+  return c;
+}
 
 /** Region id the current selection refers to (a region, or its support/load/temperature). */
 function selectedRegion(doc: Document): string | null {
@@ -73,6 +78,7 @@ function selectedRegion(doc: Document): string | null {
     if (s.kind === 'support') return supportIn(doc, s.id).region;
     if (s.kind === 'load') return loadIn(doc, s.id).region;
     if (s.kind === 'temperature') return temperatureIn(doc, s.id).region;
+    if (s.kind === 'convection') return convectionIn(doc, s.id).region;
   } catch {
     return null;
   }
@@ -481,23 +487,22 @@ analysis.subscribe(() => ui.emit());
 
 // ---- add / select helpers -------------------------------------------------------------
 
-function addAnalysis(kind: 'support' | 'load' | 'temperature') {
+function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection') {
   const rid = selectedRegion(store.doc);
   if (!rid) {
     ui.notify('Create a region first: click a surface in the model.', 'error');
     return;
   }
+  const label = kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : kind === 'convection' ? 'Add convection' : 'Add temperature';
   let id = '';
-  store.transact(
-    kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : 'Add temperature',
-    (d) => {
-      id = freshId(d, kind);
-      if (kind === 'support') d.supports.push({ id, region: rid, fixed: [true, true, true] });
-      else if (kind === 'load')
-        d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
-      else d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
-    }
-  );
+  store.transact(label, (d) => {
+    id = freshId(d, kind);
+    if (kind === 'support') d.supports.push({ id, region: rid, fixed: [true, true, true] });
+    else if (kind === 'load')
+      d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
+    else if (kind === 'temperature') d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
+    else d.convections.push({ id, region: rid, h: 5e-6, t_inf: 20, case: 'Thermal 1' });
+  });
   store.select({ kind, id });
 }
 
@@ -516,7 +521,7 @@ function SectionHead(props: { label: string; add?: () => void; title?: string; t
   );
 }
 
-function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature'; id: string; swatch?: string; meta: string }) {
+function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature' | 'convection'; id: string; swatch?: string; meta: string }) {
   const selected = store.selection?.kind === props.kind && store.selection.id === props.id;
   return (
     <div
@@ -529,7 +534,7 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
-        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : '↓'}</span>
+        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : '↓'}</span>
       )}
       <span class="row-name">{props.id}</span>
       <span class="meta">{props.meta}</span>
@@ -580,6 +585,18 @@ function SetupTree() {
       )}
       {doc.temperatures.map((t) => (
         <AnalysisRow key={t.id} kind="temperature" id={t.id} meta={`${t.celsius} °C · ${t.case}`} />
+      ))}
+      <SectionHead
+        label="Convections"
+        add={() => addAnalysis('convection')}
+        title="Add convective boundary on the selected region"
+        testId="add-convection"
+      />
+      {doc.convections.length === 0 && (
+        <div class="hint">Select a region, then add a convective boundary.</div>
+      )}
+      {doc.convections.map((c) => (
+        <AnalysisRow key={c.id} kind="convection" id={c.id} meta={`h ${c.h} · ${c.t_inf} °C · ${c.case}`} />
       ))}
     </>
   );
@@ -651,10 +668,12 @@ function removeFace(regionId: string, index: number) {
       const gone = new Set<string>([regionId]);
       for (const l of d.loads) if (l.region === regionId) gone.add(l.id);
       for (const t of d.temperatures) if (t.region === regionId) gone.add(t.id);
+      for (const c of d.convections) if (c.region === regionId) gone.add(c.id);
       d.regions = d.regions.filter((x) => x.id !== regionId);
       d.supports = d.supports.filter((s) => s.region !== regionId);
       d.loads = d.loads.filter((l) => l.region !== regionId);
       d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
+      d.convections = d.convections.filter((c) => c.region !== regionId);
       if (d.fill) d.fill.protect = d.fill.protect.filter((p) => p !== regionId);
       pruneConsumers(d, gone);
     }
@@ -1149,6 +1168,69 @@ function TemperatureInspector({ id }: { id: string }) {
   );
 }
 
+function ConvectionInspector({ id }: { id: string }) {
+  useApp();
+  const c = store.doc.convections.find((x) => x.id === id);
+  if (!c) return null;
+  return (
+    <div class="insp" data-inspector="convection">
+      <div class="insp-heading">
+        <span class="kind">Convection</span>
+        <span class="row-name">{c.id}</span>
+      </div>
+      <NameField id={c.id} />
+      <div class="field-grid">
+        <label class="plain">Region</label>
+        <RegionPicker
+          value={c.region}
+          testId="convection-region"
+          commit={(rid) =>
+            store.transact('Set convection region', (d) => void (convectionIn(d, id).region = rid))
+          }
+        />
+        <NumRow
+          label="Heat-transfer coeff"
+          unit="W/(mm²·K)"
+          get={(d) => convectionIn(d, id).h}
+          set={(d, v) => {
+            convectionIn(d, id).h = v;
+          }}
+          undoLabel="Set convection h"
+          testId="convection-h"
+          step={1e-5}
+          title="Heat loss per unit area, h·(T − ambient), in W/(mm²·K) — natural convection in air (5 W/(m²·K)) is 5e-6 in these units"
+          driven={drivenExpr(store.doc, id, 'h')}
+        />
+        <NumRow
+          label="Ambient"
+          unit="°C"
+          get={(d) => convectionIn(d, id).t_inf}
+          set={(d, v) => {
+            convectionIn(d, id).t_inf = v;
+          }}
+          undoLabel="Set convection ambient"
+          testId="convection-tinf"
+          step={10}
+          title="Ambient or coolant temperature the region loses heat to"
+          driven={drivenExpr(store.doc, id, 'tinf')}
+        />
+        <TextInputRow
+          label="Case"
+          value={c.case}
+          commit={(v) => store.transact('Set convection case', (d) => void (convectionIn(d, id).case = v))}
+          testId="convection-case"
+          title="Named thermal case; a case name cannot also be a load case"
+        />
+      </div>
+      <div class="hint" style={{ gridColumn: '1 / -1' }}>
+        The region loses heat as h·(T − ambient), h in W/(mm²·K) (5 W/(m²·K) free convection in
+        air is 5e-6); a case of nothing but convection still settles (body → ambient), and a
+        fixed temperature on the same region wins there.
+      </div>
+    </div>
+  );
+}
+
 // ---- registration ---------------------------------------------------------------------
 
 viewportExtensions.push({
@@ -1161,6 +1243,7 @@ inspectors['region'] = (id) => <RegionInspector id={id} />;
 inspectors['support'] = (id) => <SupportInspector id={id} />;
 inspectors['load'] = (id) => <LoadInspector id={id} />;
 inspectors['temperature'] = (id) => <TemperatureInspector id={id} />;
+inspectors['convection'] = (id) => <ConvectionInspector id={id} />;
 
 extraCommands.push(() => {
   if (store.lens !== 'setup') return [];
@@ -1185,6 +1268,13 @@ extraCommands.push(() => {
       label: 'Add temperature',
       enabled: () => !!selectedRegion(store.doc),
       run: () => addAnalysis('temperature'),
+    },
+    {
+      id: 'setup.add-convection',
+      group: 'Setup',
+      label: 'Add convection',
+      enabled: () => !!selectedRegion(store.doc),
+      run: () => addAnalysis('convection'),
     },
   ];
 });

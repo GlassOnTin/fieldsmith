@@ -5,8 +5,8 @@
 use fieldsmith_solve::p2::P2Mesh;
 use fieldsmith_solve::pcg::SolverOptions;
 use fieldsmith_solve::{
-    element_laplace, element_thermal_integrals, nodal_stress_thermal, solve_conduction,
-    thermal_load, ThermalRefData,
+    element_laplace, element_robin, element_thermal_integrals, nodal_stress_thermal,
+    solve_conduction, thermal_load, RobinBc, ThermalRefData,
 };
 
 const V: [[f64; 3]; 4] = [
@@ -18,6 +18,97 @@ const V: [[f64; 3]; 4] = [
 
 fn unit_tet() -> P2Mesh {
     P2Mesh::from_linear(&V, &[[0, 1, 2, 3]])
+}
+
+/// The unit cube as the six Freudenthal tets off the main diagonal A→H, all with
+/// positive orientation.
+fn cube_mesh() -> P2Mesh {
+    let v = [
+        [0.0, 0.0, 0.0], // 0 A
+        [1.0, 0.0, 0.0], // 1 B
+        [0.0, 1.0, 0.0], // 2 C
+        [0.0, 0.0, 1.0], // 3 D
+        [1.0, 1.0, 0.0], // 4 E
+        [1.0, 0.0, 1.0], // 5 F
+        [0.0, 1.0, 1.0], // 6 G
+        [1.0, 1.0, 1.0], // 7 H
+    ];
+    let tets: [[u32; 4]; 6] = [
+        [0, 1, 4, 7],
+        [0, 5, 1, 7],
+        [0, 4, 2, 7],
+        [0, 2, 6, 7],
+        [0, 3, 5, 7],
+        [0, 6, 3, 7],
+    ];
+    let m = P2Mesh::from_linear(&v, &tets);
+    for t in &m.tets {
+        let p = |i: usize| m.nodes[t[i] as usize];
+        let (u, vw) = (
+            [p(1)[0] - p(0)[0], p(1)[1] - p(0)[1], p(1)[2] - p(0)[2]],
+            (
+                [p(2)[0] - p(0)[0], p(2)[1] - p(0)[1], p(2)[2] - p(0)[2]],
+                [p(3)[0] - p(0)[0], p(3)[1] - p(0)[1], p(3)[2] - p(0)[2]],
+            ),
+        );
+        let (w, z) = vw;
+        let vol6 = u[0] * (w[1] * z[2] - w[2] * z[1]) - u[1] * (w[0] * z[2] - w[2] * z[0])
+            + u[2] * (w[0] * z[1] - w[1] * z[0]);
+        assert!(vol6 > 0.0, "negative orientation at {t:?}: {vol6}");
+    }
+    m
+}
+
+/// The mesh node id of the midside of the edge joining vertices `p` and `q`.
+fn midside(mesh: &P2Mesh, p: u32, q: u32) -> u32 {
+    let key = if p < q { [p, q] } else { [q, p] };
+    let k = mesh
+        .mid_edge
+        .iter()
+        .position(|&e| e == key)
+        .expect("midside edge in table");
+    mesh.nverts as u32 + k as u32
+}
+
+/// The hull triangles as the solver's facet node lists `[c0, c1, c2, m01, m12, m20]`:
+/// corner triples met once by the tets. Facet winding is irrelevant to the Robin term
+/// (it integrates the surface metric, not the normal).
+fn hull_facets(mesh: &P2Mesh) -> Vec<[u32; 6]> {
+    let faces = |t: &[u32; 10]| {
+        [
+            [t[0], t[1], t[2]],
+            [t[0], t[1], t[3]],
+            [t[0], t[2], t[3]],
+            [t[1], t[2], t[3]],
+        ]
+    };
+    let mut count: std::collections::HashMap<[u32; 3], usize> = Default::default();
+    for t in &mesh.tets {
+        for f in faces(t) {
+            let mut k = f;
+            k.sort_unstable();
+            *count.entry(k).or_insert(0) += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for t in &mesh.tets {
+        for f in faces(t) {
+            let mut k = f;
+            k.sort_unstable();
+            if count[&k] != 1 {
+                continue;
+            }
+            out.push([
+                f[0],
+                f[1],
+                f[2],
+                midside(mesh, f[0], f[1]),
+                midside(mesh, f[1], f[2]),
+                midside(mesh, f[2], f[0]),
+            ]);
+        }
+    }
+    out
 }
 
 /// One interior node: four corner tets around E inside the unit tet ABCD. The boundary is
@@ -202,7 +293,7 @@ fn conduction_reproduces_linear_field_exactly() {
             d[mesh.nverts + k] = None;
         }
     }
-    let (t, report) = solve_conduction(&mesh, &d, SolverOptions::default()).unwrap();
+    let (t, report) = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations > 0, "expected real iterations");
     for (i, ti) in t.iter().enumerate() {
@@ -219,8 +310,176 @@ fn conduction_reproduces_linear_field_exactly() {
 fn conduction_names_the_unsolvable_case() {
     let mesh = star_mesh();
     let d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
-    let e = solve_conduction(&mesh, &d, SolverOptions::default()).unwrap_err();
+    let e = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap_err();
     assert!(e.contains("at least one temperature region"), "{e}");
+}
+
+// ---------------------------------------------------------------------------
+// Convection (Robin): the surface-mass integrals, then the solve against an
+// analytically known profile.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn robin_element_integrals_are_the_partition_of_unity() {
+    // The unit tet's face spanned by (0,0,0), (1,0,0), (0,1,0): area 0.5. In the P2
+    // nodal order its nodes are the corners 0,1,2 and the midsides 01,12,20 = 4,5,6
+    // (edges (0,1),(1,2),(0,2) are the first three in P2Mesh's edge order).
+    let mesh = unit_tet();
+    let (m, l) = element_robin(&mesh, &[0, 1, 2, 4, 5, 6]);
+    let sum_l: f64 = l.iter().sum();
+    let sum_m: f64 = m.iter().flat_map(|r| r.iter()).sum();
+    assert!((sum_l - 0.5).abs() < 1e-12, "Σl = {sum_l}");
+    assert!((sum_m - 0.5).abs() < 1e-12, "ΣΣm = {sum_m}");
+    for a in 0..6 {
+        let row_sum: f64 = m[a].iter().sum();
+        assert!(
+            (row_sum - l[a]).abs() < 1e-12,
+            "row {a}: {row_sum} vs {}",
+            l[a]
+        );
+        assert!(m[a][a] > 0.0);
+        for (b, &mab) in m[a].iter().enumerate() {
+            assert!((mab - m[b][a]).abs() < 1e-14, "asymmetric {a},{b}");
+        }
+    }
+}
+
+#[test]
+fn convection_bar_matches_the_analytic_profile() {
+    // The 1D wall: T(0) = 100 fixed, air at 20 with h·k = 1 across x = 1. The flux is
+    // q = (100 − 20)/(L/k + 1/h) = 80/2 = 40, the field T = 100 − 40·x, so the surface
+    // sits at 60 = (20 + 100)/2. The linear profile lies in the P2 space and satisfies
+    // every equation pointwise, so the discrete solve must reproduce it to solver
+    // accuracy.
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    assert_eq!(wall.len(), 2, "the x = 1 face is two triangles");
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let (t, report) = solve_conduction(
+        &mesh,
+        &d,
+        &[RobinBc {
+            h: 1.0,
+            t_inf: 20.0,
+            facets: wall,
+        }],
+        opts,
+    )
+    .unwrap();
+    assert!(report.converged, "{report:?}");
+    assert!(report.iterations > 0, "expected real iterations");
+    for (i, ti) in t.iter().enumerate() {
+        let want = 100.0 - 40.0 * mesh.nodes[i][0];
+        assert!(
+            (ti - want).abs() < 1e-9,
+            "node {i} at {:?}: {ti} vs {want}",
+            mesh.nodes[i]
+        );
+    }
+}
+
+#[test]
+fn convection_only_body_settles_to_t_inf() {
+    // No Dirichlet: the h > 0 band on the whole boundary lifts the Laplacian's constant
+    // mode, and T ≡ t_inf satisfies every equation exactly.
+    let mesh = star_mesh();
+    let facets = hull_facets(&mesh);
+    assert_eq!(facets.len(), 4, "the unit tet's four faces");
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let (t, report) = solve_conduction(
+        &mesh,
+        &vec![None; mesh.nodes.len()],
+        &[RobinBc {
+            h: 1.0,
+            t_inf: 42.0,
+            facets,
+        }],
+        opts,
+    )
+    .unwrap();
+    assert!(report.converged, "{report:?}");
+    for (i, ti) in t.iter().enumerate() {
+        assert!((ti - 42.0).abs() < 1e-9, "node {i}: {ti} vs 42",);
+    }
+}
+
+#[test]
+fn zero_convection_band_is_a_no_op() {
+    // h = 0 contributes h·MΓ = 0 and h·t_inf·l = 0: the result and the iteration count
+    // must match the empty band bit for bit.
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    let band = RobinBc {
+        h: 0.0,
+        t_inf: 20.0,
+        facets: wall,
+    };
+    let (t0, r0) = solve_conduction(&mesh, &d, &[band], SolverOptions::default()).unwrap();
+    let (t1, r1) = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap();
+    assert_eq!(t0, t1);
+    assert_eq!(r0.iterations, r1.iterations);
+}
+
+#[test]
+fn convection_band_validates() {
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    for h in [-1.0, f64::NAN] {
+        let e = solve_conduction(
+            &mesh,
+            &d,
+            &[RobinBc {
+                h,
+                t_inf: 20.0,
+                facets: wall.clone(),
+            }],
+            SolverOptions::default(),
+        )
+        .unwrap_err();
+        assert!(e.contains("h must be finite"), "h = {h}: {e}");
+    }
+    let e = solve_conduction(
+        &mesh,
+        &d,
+        &[RobinBc {
+            h: 1.0,
+            t_inf: f64::NAN,
+            facets: wall,
+        }],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("t_inf must be finite"), "{e}");
 }
 
 #[test]

@@ -8,6 +8,12 @@
 //! known values into the right-hand side, and solves the free system with the same
 //! two-level P2→P1 structure as the elastic solve, block size 1.
 //!
+//! Convection (Robin) bands break the conductivity-independence: their boundary
+//! condition `k ∂T/∂n = h(T_inf − T)` scales with the ratio `h/k`, and this solve pins
+//! `k = 1` W/(mm·K) (the materials sheet carries no conductivity today) — so a band's
+//! `h` is read per that unit conductivity and mixed Dirichlet/Robin fields carry the
+//! unit-solid's Biot number, not the real part's. Pure-Dirichlet cases are unaffected.
+//!
 //! Thermal quantities: the element Laplacian, the thermal load
 //! f[a·3+i] = (3λ+2μ)·α·∫ ΔT·∂φa/∂x_i dV (degree-3-exact quadrature — the integrand is
 //! degree 3, one higher than the P2 stiffness), and nothing else; stress recovery with
@@ -16,9 +22,10 @@
 use crate::assemble::{element_map, RefData};
 use crate::p2::P2Mesh;
 use crate::pcg::{SolveReport, SolverOptions};
+use crate::V3;
 use faer::prelude::*;
 use faer::Side;
-use fenics_element::FiniteElement;
+use fenics_element::{interval_quadrature, FiniteElement, P2Triangle};
 
 // ---------------------------------------------------------------------------
 // Scalar CSR (the conduction system is one DOF per node).
@@ -352,34 +359,80 @@ fn pcg_scalar(
 // Conduction solve.
 // ---------------------------------------------------------------------------
 
-/// Steady conduction on the P2 mesh with Dirichlet temperatures per node
-/// (`Some(t)` = fixed °C, `None` = insulated). Returns nodal temperature (°C).
-/// At least one fixed node is required — a wholly insulated body is unsolvable.
+/// A convection (Robin) band: `h·(T − t_inf)` per unit area across the listed boundary
+/// facets, added to the conduction system as `K += h·MΓ`, `b += h·t_inf·∫φ dΓ` — the weak
+/// form of `k ∂T/∂n = h(T_inf − T)` at the pinned conductivity `k = 1` W/(mm·K) (the
+/// module comment names the consequence for mixed Dirichlet/Robin fields). `h` in
+/// W/(mm²·K), `t_inf` in °C. Facet nodes follow [`crate::regions`]'s P2 facet order
+/// `[c0, c1, c2, m01, m12, m20]`; only the surface metric enters the term, so facet
+/// winding is irrelevant.
+#[derive(Clone, Debug)]
+pub struct RobinBc {
+    pub h: f64,
+    pub t_inf: f64,
+    pub facets: Vec<[u32; 6]>,
+}
+
+/// Steady conduction on the P2 mesh with Dirichlet temperatures per node (`Some(t)` =
+/// fixed °C, `None` = insulated) and optional convection (Robin) bands. Returns nodal
+/// temperature (°C). Solvable iff at least one node is fixed or one band has h > 0 —
+/// a wholly insulated body is unsolvable (the Laplacian's constant mode).
 pub fn solve_conduction(
     mesh: &P2Mesh,
     d: &[Option<f64>],
+    robin: &[RobinBc],
     opts: SolverOptions,
 ) -> Result<(Vec<f64>, SolveReport), String> {
     faer::set_global_parallelism(faer::Parallelism::None);
     let n = mesh.nodes.len();
     assert_eq!(d.len(), n, "one temperature statement (or None) per node");
+    for (bi, bc) in robin.iter().enumerate() {
+        if !(bc.h.is_finite() && bc.h >= 0.0) {
+            return Err(format!(
+                "convection band {bi}: h must be finite and ≥ 0 (got {})",
+                bc.h
+            ));
+        }
+        if !bc.t_inf.is_finite() {
+            return Err(format!(
+                "convection band {bi}: t_inf must be finite (got {})",
+                bc.t_inf
+            ));
+        }
+    }
     let fixed: Vec<bool> = d.iter().map(|x| x.is_some()).collect();
-    if !fixed.iter().any(|&f| f) {
+    if !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0) {
         return Err(
-            "conduction has no fixed temperature — every face would be insulated; place at \
-             least one temperature region"
+            "conduction has no fixed temperature and no convection band with h > 0 — every \
+             face would be insulated; place at least one temperature region or a convection"
                 .into(),
         );
     }
     let mut a = assemble_laplace(mesh);
+    // Assemble the Robin terms (before the Dirichlet lift, so a shared Dirichlet/Robin
+    // node's row is driven by the prescribed value — Dirichlet wins).
+    let mut load = vec![0.0; n];
+    for bc in robin {
+        for f in &bc.facets {
+            let (m, l) = element_robin(mesh, f);
+            for i in 0..6 {
+                let ni = f[i] as usize;
+                load[ni] += bc.h * bc.t_inf * l[i];
+                for j in 0..6 {
+                    a.add(ni, f[j], bc.h * m[i][j]);
+                }
+            }
+        }
+    }
     // Lift the Dirichlet values into the right-hand side: solve A_ff x = −A_fd·s_d, then
     // write the fixed values back. Symmetric one-sided lift (full matrix times the
-    // Dirichlet vector, fixed rows of the rhs zeroed) keeps A symmetric for PCG.
+    // Dirichlet vector, fixed rows of the rhs zeroed) keeps A symmetric for PCG; the
+    // convection load joins the free rows here.
     let s: Vec<f64> = d.iter().map(|x| x.unwrap_or(0.0)).collect();
     let mut b = vec![0.0; n];
     a.mul(&s, &mut b);
-    for (bi, &f) in b.iter_mut().zip(&fixed) {
-        *bi = if f { 0.0 } else { -*bi };
+    for (bi, (li, &f)) in b.iter_mut().zip(load.iter().zip(&fixed)) {
+        *bi = if f { 0.0 } else { -*bi + *li };
     }
     apply_dirichlet(&mut a, &fixed);
     let pre = ScalarTwoLevel::new(&a, &fixed, mesh.nverts, &mesh.mid_edge)?;
@@ -439,6 +492,51 @@ pub fn assemble_laplace(mesh: &P2Mesh) -> Csr {
         }
     }
     a
+}
+
+/// Local Robin (convection) integrals for one boundary facet, on the facet's own
+/// isoparametric map: `(m, l)` with `m[a][b] = ∫φa φb dΓ` and `l[a] = ∫φa dΓ`. The mass
+/// integrand is degree 4 on an affine facet, one past [`fenics_element::triangle_quadrature`]'s
+/// degree-3 cap, so each direction carries a 3-point Gauss–Legendre rule through the Duffy
+/// map ξ = (u, v·(1−u)) — exact to degree 4, 9 points per facet. The rule is exact on any
+/// affine facet regardless of winding (only |t1×t2| enters); a curved facet's jacobian
+/// would need a higher rule, and no supported geometry produces one.
+pub fn element_robin(mesh: &P2Mesh, nodes: &[u32; 6]) -> ([[f64; 6]; 6], [f64; 6]) {
+    let p: [V3; 6] = nodes.map(|f| mesh.nodes[f as usize]);
+    let gl = interval_quadrature(5);
+    let elem = P2Triangle;
+    let mut m = [[0.0f64; 6]; 6];
+    let mut l = [0.0f64; 6];
+    for wu in &gl.points {
+        let u = wu.point[0];
+        for wv in &gl.points {
+            let v = wv.point[0];
+            // Duffy: the (ξ, η) triangle swept as v·(1−u) for fixed u, jacobian 1−u.
+            let xi = [u, v * (1.0 - u)];
+            let s = wu.weight * wv.weight * (1.0 - u);
+            let n = elem.evaluate_basis(&xi);
+            let dn = elem.evaluate_gradients(&xi);
+            let mut t1 = [0.0f64; 3];
+            let mut t2 = [0.0f64; 3];
+            for (k, &dnk) in dn.iter().enumerate() {
+                for c in 0..3 {
+                    t1[c] += dnk[0] * p[k][c];
+                    t2[c] += dnk[1] * p[k][c];
+                }
+            }
+            let cx = t1[1] * t2[2] - t1[2] * t2[1];
+            let cy = t1[2] * t2[0] - t1[0] * t2[2];
+            let cz = t1[0] * t2[1] - t1[1] * t2[0];
+            let j = (cx * cx + cy * cy + cz * cz).sqrt();
+            for a in 0..6 {
+                l[a] += s * j * n[a];
+                for b in 0..6 {
+                    m[a][b] += s * j * n[a] * n[b];
+                }
+            }
+        }
+    }
+    (m, l)
 }
 
 /// Reference data for the degree-3 integrand of the thermal load

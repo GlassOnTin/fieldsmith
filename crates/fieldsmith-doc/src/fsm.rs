@@ -1075,6 +1075,26 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     case,
                 });
             }
+            "convection" => {
+                let id = c.ident("a convection name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
+                let region = c.ident("a region name")?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
+                let h = a.req_compound_num("h", "h")?;
+                let t_inf = a.req_compound_num("tinf", "tinf")?;
+                let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
+                doc.consumed.append(&mut a.consumed);
+                a.finish()?;
+                doc.convections.push(Convection {
+                    id,
+                    region,
+                    h,
+                    t_inf,
+                    case,
+                });
+            }
             "fill" => {
                 let family = match c.ident("a lattice family")?.as_str() {
                     "gyroid" => Family::Gyroid,
@@ -1212,14 +1232,15 @@ fn node_uses(node: &Node, id: &str) -> bool {
 }
 
 /// Whether `id` is already a statement name in the document (shapes recursively,
-/// then regions, supports, loads, temperatures). Custom materials sit outside this
-/// name space.
+/// then regions, supports, loads, temperatures, convections). Custom materials sit
+/// outside this name space.
 fn name_is_used(doc: &Document, id: &str) -> bool {
     doc.root.iter().any(|n| node_uses(n, id))
         || doc.regions.iter().any(|r| r.id == *id)
         || doc.supports.iter().any(|s| s.id == *id)
         || doc.loads.iter().any(|l| l.id == *id)
         || doc.temperatures.iter().any(|t| t.id == *id)
+        || doc.convections.iter().any(|c| c.id == *id)
 }
 
 fn parse_axis(c: &mut Cursor) -> Result<Axis, ParseError> {
@@ -1367,6 +1388,7 @@ pub fn print(doc: &Document) -> String {
         || !doc.supports.is_empty()
         || !doc.loads.is_empty()
         || !doc.temperatures.is_empty()
+        || !doc.convections.is_empty()
     {
         o.push('\n');
     }
@@ -1423,6 +1445,17 @@ pub fn print(doc: &Document) -> String {
             t.region,
             p.num_for(&t.id, "celsius", None, t.celsius),
             q(&t.case)
+        );
+    }
+    for c in &doc.convections {
+        let _ = writeln!(
+            o,
+            "convection {} {} h={} tinf={} case={}",
+            c.id,
+            c.region,
+            p.num_for(&c.id, "h", None, c.h),
+            p.num_for(&c.id, "tinf", None, c.t_inf),
+            q(&c.case)
         );
     }
     if let Some(f) = &doc.fill {
@@ -2316,6 +2349,165 @@ load w face pressure=0.25 case="Load 1""#,
         assert!(e.message.contains("tref wants a °C value"), "{}", e.message);
         let e = parse(&text("tref=wat")).unwrap_err();
         assert!(e.message.contains("tref must be a number"), "{}", e.message);
+    }
+
+    #[test]
+    fn convection_round_trips() {
+        let text = r#"fieldsmith 1
+name "t"
+material petg
+
+let air_h = 1e-5
+
+box b size=(40, 10, 10)
+region fin = b.py
+region hotface = b.px
+convection wall fin h=2 * air_h tinf=20 case="Thermal 2"
+convection bath hotface h=0.1 tinf=90
+solve size=2.5 tref=20
+"#;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        // Cases print explicitly, and a driven h prints its expression.
+        assert!(
+            canon.contains(r#"convection wall fin h=2 * air_h tinf=20 case="Thermal 2""#)
+                && canon.contains(r#"convection bath hotface h=0.1 tinf=90 case="Thermal 1""#),
+            "{canon}"
+        );
+        // Convection-only case names join the thermal case list.
+        assert_eq!(d.thermal_cases(), ["Thermal 2", "Thermal 1"]);
+        assert_eq!(d.convections[0].h, 2e-5);
+        assert_eq!(d.convections[0].t_inf, 20.0);
+        assert_eq!(d.convections[1].case, "Thermal 1");
+        // The driven h recorded a consumer, so the param writer routes edits through it.
+        assert!(
+            d.consumed
+                .iter()
+                .any(|c| c.target == "wall" && c.attr == "h" && c.comp.is_none() && c.expr == "2 * air_h"),
+            "{:?}",
+            d.consumed
+        );
+        // tinf= is a plain number here, so it did not record one.
+        assert!(
+            !d.consumed
+                .iter()
+                .any(|c| c.target == "bath" && c.attr == "tinf"),
+            "{:?}",
+            d.consumed
+        );
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    #[test]
+    fn convections_validate_with_named_errors() {
+        let base = |extra: &str| {
+            parse(&format!(
+                r#"fieldsmith 1
+name "t"
+material petg
+
+box b size=(40, 10, 10)
+region face = b.px
+{extra}
+"#
+            ))
+            .unwrap()
+        };
+
+        // A convection on a region the document never declares.
+        let e = base("convection hot ghost h=0.1 tinf=20").validate().join(" | ");
+        assert!(e.contains("refers to missing region 'ghost'"), "{e}");
+
+        // Negative h, and a NaN the parser cannot express, are caught by name.
+        let e = base("convection hot face h=-0.1 tinf=20").validate().join(" | ");
+        assert!(e.contains("h= must be a finite number ≥ 0"), "{e}");
+        let mut d = base("convection hot face h=0.1 tinf=20");
+        d.convections[0].h = f64::NAN;
+        let e = d.validate().join(" | ");
+        assert!(e.contains("h= must be a finite number ≥ 0"), "{e}");
+        let mut d = base("convection hot face h=0.1 tinf=20");
+        d.convections[0].t_inf = f64::NAN;
+        let e = d.validate().join(" | ");
+        assert!(e.contains("tinf= is not a finite number"), "{e}");
+
+        // Two unequal bands on one region in one case would double-assemble.
+        let e = base("convection hot face h=0.1 tinf=20\nconvection cold face h=0.2 tinf=20")
+            .validate()
+            .join(" | ");
+        assert!(e.contains("set conflicting values"), "{e}");
+        // Two equal bands agree, so nothing fights.
+        assert!(
+            base("convection hot face h=0.1 tinf=20\nconvection same face h=0.1 tinf=20")
+                .validate()
+                .is_empty()
+        );
+
+        // A case name claimed by both a load and a convection cannot be solved honestly.
+        let e = base(
+            r#"convection hot face h=0.1 tinf=20 case="Load 1"
+load w face pressure=0.25 case="Load 1""#,
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("claimed by load 'w' and convection 'hot'"),
+            "{e}"
+        );
+
+        // A fixed temperature on the same region is legal — the fixed value wins there.
+        assert!(
+            base("convection hot face h=0.1 tinf=20\ntemperature wall face temp=80")
+                .validate()
+                .is_empty()
+        );
+
+        // A custom material without a= is refused even for convection-only thermal work.
+        let e = base(
+            "custommaterial bare name=\"Bare\" e=70000 nu=0.33 yield=230 density=2.67 wall=0.4 source=\"fixture\"\nmaterial bare\nconvection hot face h=0.1 tinf=20",
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("thermal-expansion coefficient") && e.contains("bare"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn convection_parse_errors_are_named() {
+        let body = |line: &str| {
+            format!(
+                "fieldsmith 1\nname \"t\"\nmaterial petg\nbox b size=(40, 10, 10)\n\
+                 region face = b.px\n{line}\n"
+            )
+        };
+        let e = parse(&body("convection band face tinf=20")).unwrap_err();
+        assert!(e.message.contains("missing 'h='"), "{}", e.message);
+        let e = parse(&body("convection band face h=0.1")).unwrap_err();
+        assert!(e.message.contains("missing 'tinf='"), "{}", e.message);
+        // A bare let name is refused — the sweepable address is the let itself.
+        assert!(
+            parse(&body("let w = 4\nconvection band face h=w tinf=20"))
+                .unwrap_err()
+                .message
+                .contains("'h' must be a number"),
+            "bare let name as h"
+        );
+        assert!(
+            parse(&body("let w = 4\nconvection w face h=1 tinf=20"))
+                .unwrap_err()
+                .message
+                .contains("Name 'w' is used more than once"),
+            "let name collision"
+        );
+        assert!(
+            parse(&body("convection band face h=q + 1 tinf=20"))
+                .unwrap_err()
+                .message
+                .contains("'h' on 'band': no let named 'q'"),
+            "undefined name in h"
+        );
     }
 
     #[test]

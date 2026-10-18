@@ -4,7 +4,8 @@
 // it. A bare id is a let address and never a statement name — shapes are swept through
 // their attribute addresses, and an attribute a let's expression writes is refused with
 // "sweep the let that drives it". Ids resolve against the document — nodes first, then
-// loads, then temperatures — and applying a value is an edit of that one number.
+// loads, then temperatures, then convections — and applying a value is an edit of that
+// one number.
 // Placement (`at`, `rotate`) is addressable on any node; everything else the grammar
 // does not name (region selectors, profile vertices, mesh internals, solve settings,
 // fill fields) is refused in the error text rather than left to the caller. The error
@@ -117,8 +118,8 @@ function attrsNote(kind: Node['kind']): string {
 }
 
 /** Resolve the address against what the document actually names — a bare id against the
- * let table, a dotted one against nodes first, then loads, then temperatures — and
- * check the attribute's component rule. No mutation. */
+ * let table, a dotted one against nodes first, then loads, then temperatures, then
+ * convections — and check the attribute's component rule. No mutation. */
 export function resolveAddr(doc: Document, addr: ParamAddr): void {
   const { id, attr } = addr;
   // A bare id is a let address and never a statement name: shapes are swept
@@ -180,7 +181,19 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
     noIndex(addr, attr);
     return;
   }
-  throw new Error(`param ${addrText(addr)}: no node, load or temperature named ${JSON.stringify(id)}`);
+  const conv = doc.convections.find((c) => c.id === id);
+  if (conv) {
+    if (attr !== 'h' && attr !== 'tinf') {
+      throw new Error(
+        `param ${addrText(addr)}: convection ${JSON.stringify(id)} has no numeric parameter ${JSON.stringify(attr)} — h, tinf`,
+      );
+    }
+    noIndex(addr, attr);
+    return;
+  }
+  throw new Error(
+    `param ${addrText(addr)}: no node, load, temperature or convection named ${JSON.stringify(id)}`,
+  );
 }
 
 /** Apply one numeric value to the addressed parameter. The address must have resolved
@@ -295,6 +308,11 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   }
   const temp = doc.temperatures.find((t) => t.id === target);
   if (temp) temp.celsius = v;
+  const conv = doc.convections.find((c) => c.id === target);
+  if (conv) {
+    if (attr === 'h') conv.h = v;
+    else if (attr === 'tinf') conv.t_inf = v;
+  }
 }
 
 // Expression evaluation, the fsm.rs twin --------------------------------------
@@ -501,12 +519,14 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
     return load.kind.total ?? null;
   }
   const temp = doc.temperatures.find((t) => t.id === addr.id);
-  return temp ? temp.celsius : null;
+  if (temp) return temp.celsius;
+  const conv = doc.convections.find((c) => c.id === addr.id);
+  return conv ? (addr.attr === 'h' ? conv.h : conv.t_inf) : null;
 }
 
 /** Every addressable parameter of the document, in resolve order — nodes in walk
- * order (kind numbers first, then at/rotate), then loads, then temperatures, then the
- * lets. This is the picker's list. */
+ * order (kind numbers first, then at/rotate), then loads, then temperatures, then
+ * convections, then the lets. This is the picker's list. */
 export function addressableParams(doc: Document): { addr: string; value: number | null }[] {
   const out: { addr: string; value: number | null }[] = [];
   const push = (id: string, attr: string, comp: number | null, value: number | null) =>
@@ -539,6 +559,10 @@ export function addressableParams(doc: Document): { addr: string; value: number 
     else push(l.id, 'total', null, l.kind.total ?? null);
   }
   for (const t of doc.temperatures) push(t.id, 'celsius', null, t.celsius);
+  for (const c of doc.convections) {
+    push(c.id, 'h', null, c.h);
+    push(c.id, 'tinf', null, c.t_inf);
+  }
   // Lets last, and only their names — a bare id is refused for any statement name, so
   // the two blocks cannot collide.
   for (const l of doc.lets ?? []) out.push({ addr: l.name, value: l.value });

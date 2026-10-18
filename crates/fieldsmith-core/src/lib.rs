@@ -17,7 +17,7 @@ use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
-    solve_conduction, thermal_load, von_mises, Material, P2Mesh, Problem, SolveReport,
+    solve_conduction, thermal_load, von_mises, Material, P2Mesh, Problem, RobinBc, SolveReport,
     SolverOptions, Stress, ThermalRefData,
 };
 use serde::Serialize;
@@ -513,6 +513,36 @@ pub fn case_temperatures(
     Ok(d)
 }
 
+/// Robin bands for one thermal case: every convection statement named for the case
+/// resolves its region to surface facets ([`RobinBc`]). A region that does not touch the
+/// surface is a setup error, the same naming as temperatures. Temperature statements may
+/// sit on the same regions — their Dirichlet lift overrides the convective values there,
+/// which is the intended hot-wall-plus-coolant combination.
+pub fn case_convections(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<Vec<RobinBc>, SetupError> {
+    let mut bands = Vec::new();
+    for c in doc.convections.iter().filter(|c| c.case == name) {
+        let fs = region_facets(doc, &c.region, mesh, facets, h)?;
+        if fs.is_empty() {
+            return Err(SetupError(format!(
+                "convection '{}': region '{}' does not touch the part's surface",
+                c.id, c.region
+            )));
+        }
+        bands.push(RobinBc {
+            h: c.h,
+            t_inf: c.t_inf,
+            facets: fs.iter().map(|&i| facets[i].nodes).collect(),
+        });
+    }
+    Ok(bands)
+}
+
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
 /// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
 /// runs.
@@ -556,13 +586,13 @@ pub fn run_case(
     })
 }
 
-/// Solve one thermal case: steady conduction from the case's temperature regions
-/// ([`solve_conduction`]), then the elastic solve driven by the thermal-expansion
-/// load from the document's reference temperature (`solve tref=`, default 20 °C).
-/// Stress recovery carries the thermal term; the nodal temperature and the conduction
-/// report travel on the result. A thermal case runs without mechanical loads — mixed
-/// cases are named for later. Shared by the static path and the verifier's
-/// resolved-model runs.
+/// Solve one thermal case: steady conduction from the case's temperature regions and
+/// convection bands ([`solve_conduction`]), then the elastic solve driven by the
+/// thermal-expansion load from the document's reference temperature (`solve tref=`,
+/// default 20 °C). Stress recovery carries the thermal term; the nodal temperature and
+/// the conduction report travel on the result. A thermal case runs without mechanical
+/// loads — mixed cases are named for later. Shared by the static path and the
+/// verifier's resolved-model runs.
 #[allow(clippy::too_many_arguments)]
 pub fn run_thermal_case(
     doc: &Document,
@@ -576,7 +606,9 @@ pub fn run_thermal_case(
     h: f64,
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
-    let (t, creport) = solve_conduction(mesh, &d, SolverOptions::default()).map_err(SetupError)?;
+    let robin = case_convections(doc, mesh, facets, &name, h)?;
+    let (t, creport) =
+        solve_conduction(mesh, &d, &robin, SolverOptions::default()).map_err(SetupError)?;
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
@@ -649,7 +681,11 @@ fn prepare(
             "add a support: the part needs something to hold it".into(),
         ));
     }
-    if need_loads && doc.loads.is_empty() && doc.temperatures.is_empty() {
+    if need_loads
+        && doc.loads.is_empty()
+        && doc.temperatures.is_empty()
+        && doc.convections.is_empty()
+    {
         return Err(SetupError("add a load".into()));
     }
     let mat = material_of(doc)?;
@@ -999,10 +1035,7 @@ support clamp root fixed=xyz
         assert_eq!(shapes.len(), fs.len(), "one shape per frequency");
         for (i, s) in shapes.iter().enumerate() {
             assert!(!s.is_empty(), "shape {i} empty");
-            assert!(
-                s.iter().any(|v| v.abs() > 1e-9),
-                "shape {i} is flat"
-            );
+            assert!(s.iter().any(|v| v.abs() > 1e-9), "shape {i} is flat");
         }
         assert_ne!(
             shapes[0], shapes[1],
@@ -1168,6 +1201,113 @@ temperature warm ghost temp=80
         assert_eq!(
             err.0,
             "temperature 'warm': region 'ghost' does not touch the part's surface"
+        );
+    }
+
+    /// Convection through the pipeline (§7 item 3): a fixed hot face at x=0 and an air
+    /// band on x=40. The exact 1-D wall: flux q = (100−20)/(L/k + 1/h) = 80/50 = 1.6 with
+    /// k = 1 (the solver's pin), so T = 100 − 1.6·x and the surface sits at 36 °C. The
+    /// linear profile satisfies every discrete equation pointwise (the solve-level bar
+    /// test proves the mechanism), so the pipeline must reproduce it to PCG accuracy.
+    const CONVECTION: &str = "\
+name \"Cooled bar\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region root_face = bar.nx
+region air = bar.px
+support clamp root_face fixed=xyz
+temperature root root_face temp=100 case=\"Steady\"
+convection air_band air h=0.1 tinf=20 case=\"Steady\"
+";
+
+    #[test]
+    fn convection_band_drives_the_thermal_case() {
+        let d = parse(CONVECTION);
+        let a = analyse(&d, Resolution::Size(2.0), now).expect("analyse");
+        let th = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Steady")
+            .expect("thermal case");
+        let t = th.temperature.as_ref().expect("temperature field");
+        for (n, p) in a.mesh.nodes.iter().enumerate() {
+            let want = 100.0 - 1.6 * p[0];
+            assert!(
+                (t[n] - want).abs() < 1e-6,
+                "node at ({:.3}, {:.3}, {:.3}): {} °C, analytic wall says {:.4}",
+                p[0],
+                p[1],
+                p[2],
+                t[n],
+                want
+            );
+        }
+        // Free lateral faces stay insulated; the band's facets alone set the flux.
+        let cr = th.conduction.as_ref().expect("conduction report");
+        assert!(cr.converged && cr.iterations > 0);
+        // The gradient field still drives measurable expansion.
+        assert!(th.max_displacement > 0.0, "thermal expansion displaced nothing");
+    }
+
+    /// A temperature and a convection may name the same region and case: the fixed value
+    /// wins (its lift runs over the band's assembly, and all the band's nodes lie on the
+    /// fixed face), so T ≡ 80 — the hot-wall-washed-by-coolant shape.
+    const CONVECTION_CLAMPED: &str = "\
+name \"Washed wall\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region root_face = bar.nx
+region wash = bar.px
+support clamp root_face fixed=xyz
+temperature fixed_root wash temp=80 case=\"Steady\"
+convection wash_band wash h=0.1 tinf=20 case=\"Steady\"
+";
+
+    #[test]
+    fn temperature_wins_where_it_overlaps_a_convection() {
+        let d = parse(CONVECTION_CLAMPED);
+        let a = analyse(&d, Resolution::Size(2.0), now).expect("analyse");
+        let th = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Steady")
+            .expect("thermal case");
+        let t = th.temperature.as_ref().expect("temperature field");
+        let max_dev = t
+            .iter()
+            .zip(&a.mesh.nodes)
+            .map(|(&tn, _)| (tn - 80.0).abs())
+            .fold(0.0, f64::max);
+        assert!(
+            max_dev < 1e-6,
+            "the fixed value must win on the band's own nodes; worst deviation {max_dev}"
+        );
+    }
+
+    /// A convection whose region never reaches the surface is named like a temperature's.
+    const CONVECTION_ABSENT: &str = "\
+name \"Absent convection\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+group g {
+  box bar size=(40, 10, 10) at=(20, 5, 5)
+  sphere inner r=2 at=(20, 5, 5)
+}
+region root_face = bar.nx
+region ghost = inner.all
+support clamp root_face fixed=xyz
+convection bath ghost h=1e-5 tinf=50
+";
+
+    #[test]
+    fn convection_off_the_surface_is_named() {
+        let d = parse(CONVECTION_ABSENT);
+        let err = analyse(&d, Resolution::Size(2.0), now).expect_err("no-touch");
+        assert_eq!(
+            err.0,
+            "convection 'bath': region 'ghost' does not touch the part's surface"
         );
     }
 }

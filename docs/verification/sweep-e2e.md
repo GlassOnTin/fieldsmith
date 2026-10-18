@@ -1,6 +1,6 @@
 # Sweep e2e — the results lens’ parameter sweep (M16 slice 3)
 
-**Result: PASS**  ·  2026-10-17T14:33:15.639Z
+**Result: PASS**  ·  2026-10-18T05:01:16.524Z
 
 The five-point question on the Cantilever V1 (`beam.size.2` 8 → 12 mm, rungs
 30000/150000 asked explicitly on both sides): the native `fieldsmith api --csv` run once,
@@ -9,11 +9,11 @@ then the same question driven through the Results lens in the live app.
 ## Evidence A — the byte contract (CSV file ↔ in-page envelope mirror)
 
 - Native: `fieldsmith api --csv <tmp>` reading the request on stdin; exit 0,
-  9215 ms whole. Omitting `rungs` would ask the native three-rung default
+  9165 ms whole. Omitting `rungs` would ask the native three-rung default
   (`question.rs` `DEFAULT_RUNGS` = 30000/150000/750000) — the request pins the ladder
   coarse/refined pair the web mirrors, so the two sides answer the same question.
 - `sweepCsvFromEnvelope(JSON.parse(stdout))` in the page (web/src/app/sweep.ts) reproduces
-  the CLI's CSV file byte for byte: pass (mirror 664 chars, file 664 chars).
+  the CLI's CSV file byte for byte: pass (mirror 650 chars, file 650 chars).
 - Why that must hold: the CSV file and the JSON envelope are printed from one typed
   response, so their float values are the same doubles; both writers use
   shortest-round-trip decimal text, and parsing it returns those same doubles;
@@ -35,16 +35,16 @@ then the same question driven through the Results lens in the live app.
 
 | point (mm) | dofs | elements | wall r1 (ms) | deflection (mm) | vm (MPa) |
 | :-- | --: | --: | --: | --: | --: |
-| 8 | 194445 | 41868 | 1586.179868 | 0.39066861588109364 | 91.91007662342635 |
-| 9 | 184173 | 39644 | 1502.3139479999998 | 0.2748421438885008 | 73.83946607323199 |
-| 10 | 202473 | 43988 | 1702.5766770000002 | 0.20073674735070385 | 61.48445501842035 |
-| 11 | 196581 | 42700 | 1664.6002879999999 | 0.1511276411885594 | 51.49186401720839 |
-| 12 | 187575 | 40640 | 1502.417189 | 0.11666994594760402 | 43.65586159504041 |
+| 8 | 194445 | 41868 | 1551.754179 | 0.39066861588109364 | 91.91007662342635 |
+| 9 | 184173 | 39644 | 1469.873091 | 0.2748421438885008 | 73.83946607323199 |
+| 10 | 202473 | 43988 | 1680.061289 | 0.20073674735070385 | 61.48445501842035 |
+| 11 | 196581 | 42700 | 1648.3898159999999 | 0.1511276411885594 | 51.49186401720839 |
+| 12 | 187575 | 40640 | 1490.581134 | 0.11666994594760402 | 43.65586159504041 |
 
 ## Evidence B — the live UI sweep
 
 - Loaded through the store, Results lens, ladder ready; the panel's parameter select
-  steps to `beam.size.2`, from/to committed to 8/12 on blur. Sweep run: 9349 ms.
+  steps to `beam.size.2`, from/to committed to 8/12 on blur. Sweep run: 10104 ms.
 - Rows streamed: 5 with progress shown mid-run; export through the real click
   → download flow (Cantilever V1-sweep.csv).
 
@@ -56,20 +56,20 @@ then the same question driven through the Results lens in the live app.
 | web CSV header = the CLI header | pass | "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status" |
 | web CSV row count = the CLI row count | pass | 7 vs 7 lines |
 | integer/status columns equal, tracked floats within solve-drift | pass | 5 data rows, 35 compared cells, gates direct 1e-7 / derived 1e-6, max observed drift direct 6.01e-11 / derived 1.09e-7 relative |
-| row 0 wall columns recorded | pass | native 1586.179868 ms vs web 1598.5750000476837 ms (row 0, refined rung) |
+| row 0 wall columns recorded | pass | native 1551.754179 ms vs web 1663.625 ms (row 0, refined rung) |
 | native point 0 deflection is the ship literal | pass | 0.39066861588109364 |
 | web point 0 deflection within solve-drift of the ship literal | pass | 0.3906686158626879 vs 0.39066861588109364 (rel 4.71e-11) |
 | beam.size.2 is still 10 after the sweep | pass | 10 |
 | export names the document | pass | Cantilever V1-sweep.csv |
 | no console errors | pass |  |
 - What the panel showed while the run went (value | row text):
-  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 271 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1844 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 194445 dofs · 41868 elements · wall 1599 ms · deflect 0.3907 mm · 91.9101 MPa
-  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 271 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1844 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 184173 dofs · 39644 elements · wall 1542 ms · deflect 0.2748 mm · 73.8395 MPa
-  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 271 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1844 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 202473 dofs · 43988 elements · wall 1782 ms · deflect 0.2007 mm · 61.4845 MPa
-  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 271 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1844 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 196581 dofs · 42700 elements · wall 1764 ms · deflect 0.1511 mm · 51.4919 MPa
-  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 271 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1844 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 187575 dofs · 40640 elements · wall 1561 ms · deflect 0.1167 mm · 43.6559 MPa
+  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 303 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1903 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 194445 dofs · 41868 elements · wall 1664 ms · deflect 0.3907 mm · 91.9101 MPa
+  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 303 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1903 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 184173 dofs · 39644 elements · wall 1607 ms · deflect 0.2748 mm · 73.8395 MPa
+  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 303 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1903 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 202473 dofs · 43988 elements · wall 1867 ms · deflect 0.2007 mm · 61.4845 MPa
+  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 303 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1903 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 196581 dofs · 42700 elements · wall 1930 ms · deflect 0.1511 mm · 51.4919 MPa
+  - Rungsfieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not boundsrung 0coarse mesh · 45123 dofs · 9024 elements · wall 303 msrung 1refined · 150k DOF · 202473 dofs · 43988 elements · wall 1903 ms · case envelope vs rung 0 (estimate): defl +0.0% · vm +11.5% | 187575 dofs · 40640 elements · wall 1657 ms · deflect 0.1167 mm · 43.6559 MPa
 
-- Wall columns: native 1586.179868 ms vs web 1598.5750000476837 ms (row 0, refined rung). Column 3 (wall_ms) is each engine's own clock. Columns
+- Wall columns: native 1551.754179 ms vs web 1663.625 ms (row 0, refined rung). Column 3 (wall_ms) is each engine's own clock. Columns
   4–7 are gated (the solve-drift contract, Limits): 35 cells compared across
   the five data rows — columns 0/1/2/8 exact, 4/5 within 1e-7, 6/7 within
   1e-6 — 0 mismatched, largest observed drift
@@ -80,11 +80,11 @@ then the same question driven through the Results lens in the live app.
 
 ```csv
 value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status
-8,194445,41868,1598.5750000476837,0.3906686158626879,91.91007661790529,0.00028965910752881815,0.09873661647823584,ok
-9,184173,39644,1542.1099999547005,0.27484214388072675,73.83946607096517,0.000269755982025618,0.08887243888680711,ok
-10,202473,43988,1781.9350000023842,0.2007367473508361,61.48445501823126,0.00027730030800738275,0.11489173043320122,ok
-11,196581,42700,1764.3299999833107,0.15112764118732241,51.491864016710004,0.0002980052818040602,0.1273747424231885,ok
-12,187575,40640,1561.1800000071526,0.11666994594564993,43.65586159410244,0.00031080742832269515,0.13433039529625276,ok
+8,194445,41868,1663.625,0.3906686158626879,91.91007661790529,0.00028965910752881815,0.09873661647823584,ok
+9,184173,39644,1607.2900000214577,0.27484214388072675,73.83946607096517,0.000269755982025618,0.08887243888680711,ok
+10,202473,43988,1867.0699999928474,0.2007367473508361,61.48445501823126,0.00027730030800738275,0.11489173043320122,ok
+11,196581,42700,1930.1349999904633,0.15112764118732241,51.491864016710004,0.0002980052818040602,0.1273747424231885,ok
+12,187575,40640,1657.1200000047684,0.11666994594564993,43.65586159410244,0.00031080742832269515,0.13433039529625276,ok
 ```
 
 ## Method

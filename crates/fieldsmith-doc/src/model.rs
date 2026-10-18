@@ -18,6 +18,11 @@ pub struct Document {
     /// one thermal case. See [`Temperature`].
     #[serde(default)]
     pub temperatures: Vec<Temperature>,
+    /// Convective (Robin) boundaries, placed like temperatures: one region, the heat-
+    /// transfer coefficient `h` and the ambient temperature `t_inf`, one thermal case.
+    /// See [`Convection`].
+    #[serde(default)]
+    pub convections: Vec<Convection>,
     /// Named scalar parameters (`let w = 4`) in source order, with the values the
     /// parser evaluated. See [`Let`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -43,6 +48,7 @@ impl Default for Document {
             supports: Vec::new(),
             loads: Vec::new(),
             temperatures: Vec::new(),
+            convections: Vec::new(),
             lets: Vec::new(),
             consumed: Vec::new(),
             material: "petg".into(),
@@ -425,6 +431,26 @@ pub struct Temperature {
     pub case: String,
 }
 
+/// A convective (Robin) boundary: the region's facets lose heat as `h·(T − t_inf)` per
+/// unit area, `h` in W/(mm²·K) and the ambient/coolant temperature `t_inf` in °C. A
+/// thermal case with no temperature region at all still solves when one convection with
+/// `h > 0` is present: the band lifts the conduction matrix's constant mode and the body
+/// settles to `t_inf`. A region may also carry a temperature in the same case — on shared
+/// nodes the fixed value wins (its facets are driven, not convected).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Convection {
+    pub id: String,
+    pub region: String,
+    /// Heat-transfer coefficient (W/(mm²·K)); 5 W/(m²·K) natural convection in air is
+    /// 5e-6 in these units. Read against the solver's pinned solid conductivity
+    /// k = 1 W/(mm·K) — the materials sheet carries no conductivity today.
+    pub h: f64,
+    /// Ambient/coolant temperature (°C).
+    pub t_inf: f64,
+    /// Thermal case name. A convection applies in the thermal case of the same name.
+    pub case: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
@@ -669,12 +695,18 @@ impl Document {
     }
 
     /// Thermal case names in first-appearance order (M14). Parses give every temperature
-    /// the default case "Thermal 1", so an unnamed thermal field is one case.
+    /// the default case "Thermal 1", so an unnamed thermal field is one case; convection
+    /// bands join the same name space.
     pub fn thermal_cases(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for t in &self.temperatures {
             if !out.contains(&t.case) {
                 out.push(t.case.clone());
+            }
+        }
+        for c in &self.convections {
+            if !out.contains(&c.case) {
+                out.push(c.case.clone());
             }
         }
         out
@@ -710,6 +742,7 @@ impl Document {
                 || self.loads.iter().any(|x| x.id == l.name)
                 || self.supports.iter().any(|x| x.id == l.name)
                 || self.temperatures.iter().any(|x| x.id == l.name)
+                || self.convections.iter().any(|x| x.id == l.name)
             {
                 errs.push(format!("Name '{}' is used more than once", l.name));
             }
@@ -729,7 +762,8 @@ impl Document {
         for c in &self.consumed {
             let named = ids.contains(&c.target)
                 || self.loads.iter().any(|l| l.id == c.target)
-                || self.temperatures.iter().any(|t| t.id == c.target);
+                || self.temperatures.iter().any(|t| t.id == c.target)
+                || self.convections.iter().any(|v| v.id == c.target);
             if !named {
                 errs.push(format!(
                     "An expression consumer references '{}', which does not exist",
@@ -910,14 +944,63 @@ impl Document {
                 }
             }
         }
+        // Convections (Robin), placed like temperatures: the same case-clash naming, and
+        // the same one-value-per-region freedom. A fixed temperature on a region wins
+        // over a convection there (its lift runs last), which is legal — a hot wall
+        // washed by coolant and a cooled wall with h on other faces are the common
+        // forms — so no clash is named for that pair.
+        for c in &self.convections {
+            if !region_ids.contains(&c.region.as_str()) {
+                errs.push(format!(
+                    "Convection '{}' refers to missing region '{}'",
+                    c.id, c.region
+                ));
+            }
+            if !(c.h.is_finite() && c.h >= 0.0) {
+                errs.push(format!(
+                    "Convection '{}' h= must be a finite number ≥ 0 (got {})",
+                    c.id, c.h
+                ));
+            }
+            if !c.t_inf.is_finite() {
+                errs.push(format!("Convection '{}' tinf= is not a finite number", c.id));
+            }
+            for l in &self.loads {
+                if l.case == c.case {
+                    errs.push(format!(
+                        "Case '{}' is claimed by load '{}' and convection '{}' — mixed \
+                         mechanical and thermal cases are not supported yet (give one of \
+                         them another case name)",
+                        c.case, l.id, c.id
+                    ));
+                }
+            }
+        }
+        // Two convections on one region in one thermal case can only coexist when they
+        // agree; differing values would double-assemble the surface term.
+        for (i, a) in self.convections.iter().enumerate() {
+            for b in &self.convections[..i] {
+                if a.case == b.case
+                    && a.region == b.region
+                    && (a.h != b.h || a.t_inf != b.t_inf)
+                {
+                    errs.push(format!(
+                        "Convections '{}' and '{}' set conflicting values (h {} and {}) on \
+                         region '{}' in thermal case '{}' — one value per region per case",
+                        a.id, b.id, a.h, b.h, a.region, a.case
+                    ));
+                }
+            }
+        }
         if let Some(t) = self.solve.t_ref {
             if !t.is_finite() {
                 errs.push("solve tref= is not a finite number".into());
             }
         }
         // The thermal flow refuses a material with no sourced expansion coefficient
-        // rather than solving with an assumed one.
-        if !self.temperatures.is_empty() {
+        // rather than solving with an assumed one — convection bands drive the same
+        // expansion recovery, so they open the gate too.
+        if !self.temperatures.is_empty() || !self.convections.is_empty() {
             if let Some(m) = crate::materials::find(self, &self.material) {
                 if m.alpha.is_none() {
                     errs.push(format!(

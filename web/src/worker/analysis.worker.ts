@@ -189,15 +189,18 @@ async function doHydrate(entries: HydrateEntry[]) {
 
 async function run(doc: Document) {
   // Setup validation before wasm: an incomplete study is not a failure, and the badge
-  // renders these as a neutral hint rather than the red 'analysis failed'. A document
-  // with temperature statements runs without loads: the thermal cases drive it.
-  if (!doc.supports.length || (!doc.loads.length && !doc.temperatures.length)) {
+  // renders these as a neutral hint rather than the red 'analysis failed'. Temperature or
+  // convection statements run without loads: the thermal cases drive them.
+  if (
+    !doc.supports.length ||
+    (!doc.loads.length && !doc.temperatures.length && !doc.convections.length)
+  ) {
     post({
       type: 'error',
       kind: 'setup',
       message: !doc.supports.length
         ? 'add a support: the part needs something to hold it'
-        : 'add a load or a temperature',
+        : 'add a load or a fixed temperature or convection',
     });
     return;
   }

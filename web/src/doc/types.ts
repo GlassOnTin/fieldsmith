@@ -138,7 +138,7 @@ export interface Let {
 /** One recorded expression read: the statement attribute an expression drives and the
  * expression to recompute when a swept `let` changes. `target` is "" for readers bound
  * to nothing addressable — fill and solve refuse expressions at parse, so in practice
- * every consumer names a node, load or temperature. */
+ * every consumer names a node, load, temperature or convection. */
 export interface Consumer {
   target: string;
   attr: string;
@@ -153,6 +153,9 @@ export interface Document {
   supports: Support[];
   loads: Load[];
   temperatures: Temperature[];
+  /** Convective (Robin) bands; the Rust side always serializes the key, and stale
+   * intakes (old saved JSON) are backfilled by [withLetTables]. */
+  convections: Convection[];
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
@@ -171,6 +174,21 @@ export interface Temperature {
   id: string;
   region: string;
   celsius: number;
+  case: string;
+}
+
+/** A convective (Robin) boundary: the region's facets lose heat as `h·(T − t_inf)` per
+ * unit area, with `h` in W/(mm²·K) (5 W/(m²·K) natural convection in air is 5e-6 in
+ * these units) read against the solver's pinned solid conductivity k = 1 W/(mm·K), and
+ * the ambient or coolant temperature in °C. A case with no temperature region still
+ * solves with one `h > 0` — the band lifts the conduction matrix's constant mode and
+ * the body settles to `t_inf`. A region may also carry a Temperature in the same case:
+ * on shared nodes the fixed value wins (its facets are driven, not convected). */
+export interface Convection {
+  id: string;
+  region: string;
+  h: number;
+  t_inf: number;
   case: string;
 }
 
@@ -195,6 +213,7 @@ export function emptyDocument(): Document {
     supports: [],
     loads: [],
     temperatures: [],
+    convections: [],
     material: 'petg',
     custom_materials: [],
     fill: null,
@@ -205,10 +224,12 @@ export function emptyDocument(): Document {
 }
 
 /** Backfill the let tables on a document that crossed the wasm boundary (the Rust side
- * omits both when empty). Mutates and returns the doc. */
+ * omits both when empty) and the convections list of a document saved before the
+ * convection statements existed. Mutates and returns the doc. */
 export function withLetTables<T extends Document>(doc: T): T {
   doc.lets ??= [];
   doc.consumed ??= [];
+  doc.convections ??= [];
   return doc;
 }
 
@@ -270,6 +291,7 @@ export function allIds(doc: Document): Set<string> {
   // space over statements and lets (either direction is "used more than once"), so
   // fresh ids avoid everything named.
   for (const t of doc.temperatures) s.add(t.id);
+  for (const c of doc.convections) s.add(c.id);
   for (const l of doc.lets ?? []) s.add(l.name);
   return s;
 }
