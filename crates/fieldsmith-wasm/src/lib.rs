@@ -1008,6 +1008,23 @@ impl GradedOut {
         Float64Array::from(t.unwrap_or(&[]))
     }
 
+    /// Graded nodal displacement of one thermal case, 3 per node (mm). Empty on an
+    /// out-of-range index; the caller checks `length` and `metaJson().thermalCases.length`.
+    #[wasm_bindgen(js_name = thermalU)]
+    pub fn thermal_u(&self, case: usize) -> Float64Array {
+        let u = self.g.thermal_cases.get(case).map(|c| c.u.as_slice());
+        Float64Array::from(u.unwrap_or(&[]))
+    }
+
+    /// Graded element-centroid von Mises of one thermal case (MPa) — the readout
+    /// statistic per V3.md. Empty on an out-of-range index; the caller checks `length`
+    /// and `metaJson().thermalCases.length`.
+    #[wasm_bindgen(js_name = thermalVmElem)]
+    pub fn thermal_vm_elem(&self, case: usize) -> Float64Array {
+        let vm = self.g.thermal_cases.get(case).map(|c| c.vm_elem.as_slice());
+        Float64Array::from(vm.unwrap_or(&[]))
+    }
+
     /// Per-element class: 0 solid (skin, protected), 1 lattice, 2 void.
     pub fn class(&self) -> Uint8Array {
         Uint8Array::from(&self.g.class[..])

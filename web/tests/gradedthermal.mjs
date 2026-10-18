@@ -13,9 +13,12 @@
 // family pins the wasm bridge on the 40 × 10 × 10 bar with a graded gyroid-sheet core:
 //
 //   solid path — the thermal case still rides `meta.cases` with its nodal field;
-//   graded path — the mechanical `cases` carry no thermal entry, the case moves to
-//   `meta.thermal_cases`, and `thermalTemperature` delivers the field at exactly the
-//   mesh's node count with both faces pinned (100 / 0 °C).
+//   graded path — the raw wasm meta's mechanical `cases` carry no thermal entry, the
+//   case lives in `meta.thermal_cases`, and `thermalTemperature` delivers the field at
+//   exactly the mesh's node count with both faces pinned (100 / 0 °C). The ladder's
+//   worker merges the two lists into one packed level case list (mechanical first,
+//   thermal after — the solid path's order); the lens render is pinned by the
+//   gradedresults family (V33).
 //
 // The fixture does not assert a specific interior profile: with a lattice core whose φ
 // map is mesh-dependent, the exact field is the native tests' business. What is asserted
@@ -195,16 +198,15 @@ export async function gradedthermalTest(browser, url, { screens, docsDir }) {
       '',
       '`web/tests/gradedthermal.mjs`, driven by `node tests/run-e2e.mjs --only',
       'gradedthermal`. The fixtures call the wasm module directly in the page',
-      '(`analyse` + `analyseGraded` at h = 8 mm) and compare the returned arrays — the',
-      'ladder\'s packed levels do not yet carry a graded thermal field, see Limits.',
+      '(`analyse` + `analyseGraded` at h = 8 mm) to compare the returned arrays outside',
+      'the lens; the Results render on the real packed level is the gradedresults family',
+      '(V33).',
       '',
       '## Limits',
       '',
-      '- The Results lens does not yet render the graded thermal field: the worker\'s',
-      '  packed level has only `meta.cases` slots, which stay mechanical for a fill',
-      '  document, so the case is reachable through the wasm getters and',
-      '  `meta.thermal_cases` but shows nothing in the UI display. Surfacing it',
-      '  (case picker + legend on graded levels) is the named open UI work.',
+      '- This fixture drives the wasm handle directly, so it pins the bridge, not the',
+      '  lens: the case picker, temperature legend and stress captions on a graded',
+      '  level are asserted by the gradedresults family (V33).',
       '- The conductivity map is the linear-in-φ Voigt-style read; at homogenised mesh',
       '  sizes it over-reads k (the wall tortuosity is under-resolved). No measured',
       '  conduction law exists yet; the solver tests pin the sub-cell behaviour the map',

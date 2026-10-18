@@ -531,11 +531,11 @@ export async function bracketTest(browser, url, { screens, docsDir }) {
   });
 
   await step('Results lens: the temperature mode on a thermal doc', async () => {
-    // The graded re-solve is mechanical only (its cases are the mechanical cases; no
-    // thermal field exists at that mesh), so the lattice fill is dropped in the same
-    // transaction and every level then carries the nodal field. A single Dirichlet
-    // region on an all-insulated domain would give a uniform field, so the two hole
-    // regions take the two ends of the gradient, as in examples/bracket-thermal.fsm.
+    // This step pins the SOLID path's thermal render: the fill is dropped in the same
+    // transaction so every level solves as a solid document. The graded core's thermal
+    // render is the gradedresults family (V33). A single Dirichlet region on an
+    // all-insulated domain would give a uniform field, so the two hole regions take the
+    // two ends of the gradient, as in examples/bracket-thermal.fsm.
     await page.evaluate(() => {
       const F = window.fieldsmith;
       F.store.transact('thermal render', (d) => {

@@ -559,12 +559,21 @@ pub fn graded_of(
             thermal_cases.push(case);
         }
     }
+    // The envelope covers every case — mechanical and thermal — matching the solid
+    // path's semantics (analyse folds over `cases` after its thermal block pushed the
+    // thermal cases in). Without this a load-free graded document reads a zero envelope.
+    let all_cases = cases.iter().chain(&thermal_cases);
     let nn = base.mesh.nodes.len();
     let envelope = (0..nn)
-        .map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max))
+        .map(|i| all_cases.clone().map(|c| c.von_mises[i]).fold(0.0, f64::max))
         .collect();
     let envelope_elem = (0..base.mesh.tets.len())
-        .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
+        .map(|e| {
+            all_cases
+                .clone()
+                .map(|c| c.vm_elem[e])
+                .fold(0.0, f64::max)
+        })
         .collect();
 
     Ok(Graded {
@@ -1060,5 +1069,60 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             graded < 0.75 * solid,
             "graded dissipation {graded} not clearly below the solid {solid}"
         );
+    }
+
+    /// Envelope semantics: the solid path documents the tracked stress as the envelope
+    /// over every case — mechanical and thermal (analyse folds its envelope over `cases`
+    /// after pushing thermal cases into it). The graded path must match, or the two
+    /// levels of the same document disagree about worst-case stress. Sourced from a
+    /// load-free document: the only stress on the part is thermal, so the graded
+    /// envelope is exactly the thermal cases' own max.
+    const THERMAL_ONLY_BAR: &str = "\
+name \"Fill thermal-only bar\"
+custommaterial steel200 e=200000 nu=0.3 yield=250 density=7.85 a=1.2e-5
+material steel200
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region cap = bar.nx
+region tip = bar.px
+support clamp cap fixed=xyz
+temperature hot cap temp=100 case=\"Thermal 1\"
+temperature cold tip temp=0
+fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
+";
+
+    #[test]
+    fn graded_envelope_covers_the_thermal_case() {
+        let d = parse(THERMAL_ONLY_BAR);
+        let (base, g) = graded(&d, Resolution::Size(8.0), now).expect("graded analysis");
+
+        // The document has no loads, so the graded path runs no mechanical re-solves and
+        // every stress on the part comes from the thermal case.
+        assert!(g.cases.is_empty(), "load-free document graded a mechanical case");
+        assert_eq!(g.thermal_cases.len(), 1);
+        let thermal = &g.thermal_cases[0];
+        assert!(
+            thermal.solve.converged && thermal.conduction.as_ref().unwrap().converged,
+            "graded thermal case did not converge"
+        );
+
+        // Guard degeneracy: the clamped cap blocks the expansion, so the field carries
+        // real stress — without this the equality below would pass on an empty solve.
+        assert!(
+            thermal.max_vm_elem > 1e-6,
+            "graded thermal vm degenerate: {:.3e} MPa",
+            thermal.max_vm_elem
+        );
+
+        // The envelope over {nothing} ∪ {thermal} with non-negative von Mises is the
+        // thermal case's own field — bit-exact, the fold is the same f64::max.
+        assert_eq!(g.envelope_elem.len(), thermal.vm_elem.len(), "element count");
+        assert_eq!(g.envelope.len(), thermal.von_mises.len(), "node count");
+        for (e, (env, vm)) in g.envelope_elem.iter().zip(&thermal.vm_elem).enumerate() {
+            assert_eq!(env, vm, "envelope_elem[{e}] {env} vs thermal {vm}");
+        }
+        for (i, (env, vm)) in g.envelope.iter().zip(&thermal.von_mises).enumerate() {
+            assert_eq!(env, vm, "envelope[{i}] {env} vs thermal {vm}");
+        }
+        assert_eq!(g.envelope_elem.len(), base.mesh.tets.len(), "envelope_elem spans the mesh");
     }
 }

@@ -32,7 +32,15 @@ function post(m: WorkerOut, transfers?: ArrayBuffer[]) {
  * measurement — covers the wasm mesh+solve and the copies to the main thread. */
 function pack(
   label: string,
-  out: AnalysisHandle & { class?: () => Uint8Array; fillParamSpec?: () => Float64Array; fillParamDims?: () => Uint32Array; fillParamData?: () => Float32Array },
+  out: AnalysisHandle & {
+    class?: () => Uint8Array;
+    fillParamSpec?: () => Float64Array;
+    fillParamDims?: () => Uint32Array;
+    fillParamData?: () => Float32Array;
+    thermalU?: (i: number) => Float64Array;
+    thermalVmElem?: (i: number) => Float64Array;
+    thermalTemperature?: (i: number) => Float64Array;
+  },
   keep = false,
   t0 = performance.now(),
 ): LevelResult {
@@ -45,6 +53,27 @@ function pack(
     vmElem.push(out.vmElem(c).slice());
     const t = out.temperature(c);
     temperature.push(t.length ? t : null);
+  }
+  // Fill levels: the wasm meta keeps the graded thermal cases in `thermal_cases` while
+  // the solid level's thermal cases ride its own `cases`. Pack them into the same level
+  // slots — mechanical first, thermal after, the solid path's own order — so the Results
+  // lens sees one case list with the same index space and names on every level, and the
+  // temperature slots carry the graded conduction fields (the per-node max across slots
+  // keeps the envelope semantics). A level without thermal slots must not fall through
+  // silently: an empty field would read as "no thermal stress" downstream.
+  const thermalCases = meta.thermal_cases ?? [];
+  for (let i = 0; i < thermalCases.length; i++) {
+    if (!out.thermalU || !out.thermalVmElem || !out.thermalTemperature) {
+      throw new Error(`level '${label}': meta carries thermal case '${thermalCases[i].name}' but the handle has no thermal getters`);
+    }
+    u.push(out.thermalU(i).slice());
+    vmElem.push(out.thermalVmElem(i).slice());
+    const t = out.thermalTemperature(i);
+    temperature.push(t.length ? t : null);
+  }
+  if (thermalCases.length) {
+    meta.cases = [...meta.cases, ...thermalCases];
+    delete meta.thermal_cases;
   }
   const nodes = out.nodes().slice();
   // The mode shapes (solid handle only — the graded handle has none): one concatenated

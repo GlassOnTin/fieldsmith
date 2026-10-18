@@ -417,7 +417,9 @@ export interface AnalysisMeta {
   /** Fill levels only: the fill's thermal cases re-solved through the core — conduction on
    * the fill's per-element conductivity map, expansion on the graded moduli — in
    * `doc.thermalCases()` order (serde name). Empty without temperature/convection/flux
-   * statements. `cases` stays the mechanical re-solves. */
+   * statements. `cases` stays the mechanical re-solves on the raw wasm meta; the worker
+   * appends these to the packed level's `cases` (mechanical first, thermal after — the
+   * solid path's own order) so the Results lens sees one list. */
   thermal_cases?: CaseSummary[];
   /** Fill levels only: solid-reference per-case maxima in `cases` order (serde name). */
   solid_cases?: CaseMax[];
@@ -497,6 +499,13 @@ export interface GradedHandle extends AnalysisHandle {
    * through the fill's per-element conductivity map. Empty for a mechanical index or a
    * document without thermal statements; case indices span `meta.thermal_cases`. */
   thermalTemperature(ci: number): Float64Array;
+  /** Nodal displacement of one graded thermal case, 3 per node (mm). The Results lens
+   * reads these through the worker's packed level (thermal cases are appended to the
+   * level's `cases`); the direct getter is for the e2e fixtures. */
+  thermalU(ci: number): Float64Array;
+  /** Element-centroid von Mises of one graded thermal case (MPa), the readout statistic
+   * per V3.md. Packed into the level's `cases` by the worker; direct getter for e2e. */
+  thermalVmElem(ci: number): Float64Array;
   /** Per-element class: 0 solid (skin, protected), 1 lattice, 2 void. */
   class(): Uint8Array;
   /** Per-element material fraction of the fill (1 solid, 0 void; the modulus input). */
