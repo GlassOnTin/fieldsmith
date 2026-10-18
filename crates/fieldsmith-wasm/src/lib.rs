@@ -759,6 +759,30 @@ impl AnalysisOut {
         };
         Float64Array::from(t)
     }
+
+    /// How many mode shapes this analysis carries (0 without a `solve modes=` on the
+    /// document). Shapes are mass-normalised displacements, one per requested mode.
+    #[wasm_bindgen(js_name = modeShapeCount)]
+    pub fn mode_shape_count(&self) -> usize {
+        self.a.modes.as_ref().map_or(0, |m| m.shapes.len())
+    }
+
+    /// One mode shape's nodal displacements, 3 per node (same modal mass per mode — the
+    /// eigensolver's shapes are re-anchored against the assembled mass matrix, so the
+    /// amplitude scale is shared across modes and meshes). Empty when this analysis ran
+    /// without modes or the index is out of range — the caller checks `modeShapeCount`
+    /// and `length` rather than a nullable handle.
+    #[wasm_bindgen(js_name = modeShape)]
+    pub fn mode_shape(&self, mode: usize) -> Float64Array {
+        let shape = self
+            .a
+            .modes
+            .as_ref()
+            .and_then(|m| m.shapes.get(mode))
+            .map(|s| s.as_slice())
+            .unwrap_or(&[]);
+        Float64Array::from(shape)
+    }
 }
 
 #[derive(Serialize)]

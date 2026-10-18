@@ -45,6 +45,15 @@ class Ui {
    * lower bound is 0 for stress/deflection and the data minimum for temperature. */
   resultsRange: { mode: 'stress' | 'deflection' | 'temperature'; levelKey: string; lo: number; hi: number } | null =
     null;
+  // Mode-shape animation (a modal run's shapes in the Results lens; not undoable).
+  /** Which mode animates, 0-based; −1 = none — the mesh shows the static results.
+   * Reset to −1 after any solve whose run carries fewer shapes. */
+  resultsModeShape = -1;
+  /** The animation phase in radians; cycles 0 → 2π. The shown displacement is
+   * φ_k · cos(phase) and the colour is |φ_k · cos(phase)|. */
+  resultsModePhase = 0;
+  /** Play the phase forward (a rAF ticker in results.tsx advances it per frame). */
+  resultsModePlay = false;
   // Make lens display state (not undoable).
   /** Export mesh spacing (mm). */
   makeH = 0.25;

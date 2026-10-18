@@ -445,6 +445,12 @@ export interface AnalysisHandle {
   vmElemEnvelope(): Float64Array;
   /** Nodal temperature of one case (°C); empty when the case is mechanical. */
   temperature(ci: number): Float64Array;
+  /** Mass-normalised mode shapes the run solved (solid handle only): how many. 0 without
+   * a `solve modes=` on the document; the graded handle carries none. */
+  modeShapeCount?(): number;
+  /** One mode shape's nodal displacements, 3 per node — empty when absent or the index is
+   * out of range. */
+  modeShape?(index: number): Float64Array;
   free(): void;
 }
 
@@ -577,6 +583,9 @@ export interface LevelResult {
   temperature: (Float64Array | null)[];
   /** Max over cases of element-centroid von Mises (MPa). */
   vmElemEnvelope: Float64Array;
+  /** Modal runs only: the mass-normalised mode shapes concatenated, one 3-per-node block
+   * per mode (block k spans k·3·nodes .. (k+1)·3·nodes, mesh-node order); null otherwise. */
+  modeShapes: Float64Array | null;
   /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */
   class: Uint8Array | null;
   /** Fill levels only: the graded parameter grid for the bound texture. */

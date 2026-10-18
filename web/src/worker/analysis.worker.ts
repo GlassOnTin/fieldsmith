@@ -46,6 +46,23 @@ function pack(
     const t = out.temperature(c);
     temperature.push(t.length ? t : null);
   }
+  const nodes = out.nodes().slice();
+  // The mode shapes (solid handle only — the graded handle has none): one concatenated
+  // buffer, block k the shape of mode k. Every shape matches the mesh's node count.
+  let modeShapes: Float64Array | null = null;
+  const modeCount = out.modeShapeCount?.() ?? 0;
+  if (modeCount > 0) {
+    const per = nodes.length;
+    const all = new Float64Array(modeCount * per);
+    for (let k = 0; k < modeCount; k++) {
+      const s = out.modeShape ? out.modeShape(k) : new Float64Array(0);
+      if (s.length !== per) {
+        throw new Error(`mode shape ${k + 1}: ${s.length} components, expected ${per}`);
+      }
+      all.set(s, k * per);
+    }
+    modeShapes = all;
+  }
   const fillParam =
     out.fillParamData && out.fillParamSpec && out.fillParamDims
       ? {
@@ -57,7 +74,7 @@ function pack(
   const r: LevelResult = {
     label,
     meta,
-    nodes: out.nodes().slice(),
+    nodes,
     surfaceFacets: out.surfaceFacets().slice(),
     surfaceOwner: out.surfaceOwner().slice(),
     surfaceRegion: out.surfaceRegion().slice(),
@@ -67,6 +84,7 @@ function pack(
     vmElem,
     temperature,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
+    modeShapes,
     class: out.class ? out.class().slice() : null,
     fillParam,
     runMs: performance.now() - t0,
@@ -79,6 +97,7 @@ function pack(
 function transfersOf(r: LevelResult): ArrayBuffer[] {
   const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem];
   for (const t of r.temperature) if (t) ls.push(t);
+  if (r.modeShapes) ls.push(r.modeShapes);
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
   return ls.map((a) => a.buffer as ArrayBuffer);
 }

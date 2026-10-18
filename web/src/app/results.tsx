@@ -71,11 +71,11 @@ function effCase(lvl: LevelResult): number {
   return c >= 0 && c < lvl.meta.cases.length ? c : -1;
 }
 
-/** Quantity of one facet for the current display mode. */
-function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number): { value: number; unit: string } {
+/** Quantity of one facet for the current display mode. `u` is the displacement the shown
+ * mesh carries (the static field, or the mode shape while one animates — shownDisp). */
+function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u: Float64Array): { value: number; unit: string } {
   const owner = lvl.surfaceOwner[f];
   if (mode === 'deflection' || mode === 'vectors') {
-    const u = lvl.u[ci >= 0 ? ci : 0];
     const n0 = lvl.surfaceFacets[6 * f], n1 = lvl.surfaceFacets[6 * f + 1], n2 = lvl.surfaceFacets[6 * f + 2];
     let m = 0;
     for (const n of [n0, n1, n2]) {
@@ -229,17 +229,95 @@ const MODE_NAMES: Record<ResultMode, string> = {
   temperature: 'temperature',
 };
 
+// ---- mode-shape animation ------------------------------------------------------------
+
+/** Display peak of an animated mode shape, as a fraction of the model's bounding-box
+ * diagonal. A mass-normalised shape's absolute scale is arbitrary (mode 1 of a small steel
+ * beam lands at 10²–10³ "mm"), so it is meaningless as a displacement: the panel instead
+ * shows it peak-normalised at this fraction, and the scale knob exaggerates it from there
+ * like a real deflection. */
+const SHAPE_DISPLAY_FRACTION = 0.05;
+
+/** The run's shape for mode k, a view into the concatenated shape buffer; null when the
+ * run carries none or k is out of range. Block k spans k·3·nodes..(k+1)·3·nodes. */
+function shapeOf(lvl: LevelResult, k: number): Float64Array | null {
+  const all = lvl.modeShapes;
+  if (!all || k < 0) return null;
+  const per = lvl.nodes.length; // 3 components per node
+  const end = (k + 1) * per;
+  return all.length < end ? null : all.subarray(k * per, end);
+}
+
+/** Peak corner-average displacement magnitude over the surface facets — the animation's
+ * colour cap. Phase-independent: the ramp reads the same whatever the shown phase. */
+function shapeRampMax(lvl: LevelResult, shape: Float64Array): number {
+  let best = 0;
+  for (let f = 0; f < lvl.surfaceRegion.length; f++) {
+    let m = 0;
+    for (let j = 0; j < 3; j++) {
+      const n = lvl.surfaceFacets[6 * f + j];
+      m += Math.hypot(shape[3 * n], shape[3 * n + 1], shape[3 * n + 2]);
+    }
+    if (m > best) best = m;
+  }
+  return Math.max(1e-12, best / 3);
+}
+
+/** The shape the lens currently animates, or null — no modes, picker Off, or an index the
+ * latest solve no longer carries (syncResults resets a stale index). */
+function animatingShape(lvl: LevelResult): Float64Array | null {
+  return ui.resultsModeShape >= 0 ? shapeOf(lvl, ui.resultsModeShape) : null;
+}
+
+/** The displacement the shown mesh carries: the shape modulated by cos(phase) while one
+ * animates, else the static case's u. facetValue reads this too, so the click probe
+ * reports the field on screen, not the static one under it. */
+function shownDisp(lvl: LevelResult): { u: Float64Array; animating: boolean; rampMax: number; caption: string | null } {
+  const ci = effCase(lvl);
+  const shape = animatingShape(lvl);
+  if (!shape) return { u: lvl.u[ci >= 0 ? ci : 0], animating: false, rampMax: 0, caption: null };
+  // Peak-normalised display amplitude: φ / max|φ| · fraction·diagonal (SHAPE_DISPLAY_FRACTION).
+  let peak = 1e-12;
+  for (let i = 0; i < shape.length; i += 3) {
+    const m = Math.hypot(shape[i], shape[i + 1], shape[i + 2]);
+    if (m > peak) peak = m;
+  }
+  const norm = ((modelDiag(lvl) || 100) * SHAPE_DISPLAY_FRACTION) / peak;
+  const c = Math.cos(ui.resultsModePhase) * norm;
+  const u = new Float64Array(shape.length);
+  for (let i = 0; i < shape.length; i++) u[i] = shape[i] * c;
+  return {
+    u,
+    animating: true,
+    rampMax: shapeRampMax(lvl, shape) * norm,
+    caption: `mode ${ui.resultsModeShape + 1}, relative amplitude: colour is |φ·cos(phase)| of the shown shape`,
+  };
+}
+
+/** The legend range the panel and rebuild share: while a shape animates, the shape's own
+ * 0..peak (the static resultsRange is keyed to the static fields and must not reach it);
+ * otherwise the static range as the mode chips choose it. */
+function shownRange(lvl: LevelResult, shown: { animating: boolean; rampMax: number }) {
+  const levelKey = `${analysis.state.resultsFor ?? ''}:${lvl.label}`;
+  return shown.animating
+    ? { lo: 0, hi: shown.rampMax, auto: true, levelKey, unit: 'mm' }
+    : rangeFor(lvl, ui.resultsMode, effCase(lvl));
+}
+
 function rebuild(lvl: LevelResult) {
   const ci = effCase(lvl);
-  const mode = ui.resultsMode;
+  const shown = shownDisp(lvl);
+  // While a shape animates the mesh is that shape, so the colour is its magnitude and the
+  // static chip modes stress/safety/temperature/vectors (element data, not shape data) stand down.
+  const mode: ResultMode = shown.animating ? 'deflection' : ui.resultsMode;
   const scale = ui.resultsScale;
   const nFacets = lvl.surfaceRegion.length;
-  const u = lvl.u[ci >= 0 ? ci : 0];
+  const u = shown.u;
   const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
-  const vmax = modeMax(lvl, mode, ci);
+  const vmax = shown.animating ? shown.rampMax : modeMax(lvl, mode, ci);
   // Null range (safety / vectors) means "not adjustable"; those modes colour by their own
   // math and never touch the ramped normaliser below.
-  const rng = rangeFor(lvl, mode, ci);
+  const rng = shownRange(lvl, shown);
   const rngLo = rng ? rng.lo : 0;
   const denom = rng ? Math.max(1e-12, rng.hi - rng.lo) : vmax;
   const yieldMpa = lvl.meta.yield_strength;
@@ -330,10 +408,61 @@ function rebuild(lvl: LevelResult) {
   }
 }
 
+// ---- play ticker ----------------------------------------------------------------------
+
+/** One full mode cycle in ms (2π per CYCLE_MS); a cycle per ~1.2 s reads the deformation
+ * without strobing at coarse frame rates. */
+const CYCLE_MS = 1200;
+let playRaf = 0;
+let playLast = 0;
+
+function playTick(t: number) {
+  // The pause runs inside a rAF-scheduled sync that shares this animation frame, so a
+  // tick registered before it fires once more here: drop the late arrival instead of
+  // advancing past the pause. Re-verify the full ownership condition, not just the
+  // toggle — a state-change pause (run replaced, another lens) keeps resultsModePlay on.
+  const owner = analysis.latest;
+  if (store.lens !== 'results' || !ui.resultsModePlay || !owner || animatingShape(owner) === null) {
+    playRaf = 0;
+    playLast = 0;
+    return;
+  }
+  const dt = playLast ? t - playLast : 0;
+  playLast = t;
+  playRaf = requestAnimationFrame(playTick);
+  // ui.set no-ops an unchanged phase (the dt=0 first tick) and the emit is what re-runs
+  // syncResults — the rebuild there is the frame's work.
+  ui.set('resultsModePhase', (ui.resultsModePhase + (dt / CYCLE_MS) * 2 * Math.PI) % (2 * Math.PI));
+}
+
+/** Start or stop the play ticker as the lens state asks. Runs each syncResults pass, so
+ * the play toggle and every pause-by-state-change (shape off, run replaced, another lens)
+ * are covered by the same check — no separate stop call site. */
+function ensureTicker(lvl: LevelResult | null) {
+  const want = store.lens === 'results' && lvl && ui.resultsModePlay && animatingShape(lvl) !== null;
+  if (want && !playRaf) {
+    playLast = 0;
+    playRaf = requestAnimationFrame(playTick);
+  } else if (!want && playRaf) {
+    cancelAnimationFrame(playRaf);
+    playRaf = 0;
+  }
+}
+
 function syncResults(vp: Viewport) {
   if (!resultHost) {
     resultHost = vp;
     vp.overlays.add(resultGroup);
+  }
+  // e2e accessors for the rebuilt geometry. Attached lazily: main.tsx assigns
+  // window.fieldsmith after this module's side-effect import, so a module-top attach
+  // would capture an undefined hook (the same order ViewportHost works around).
+  const w = window as unknown as { fieldsmith?: { results?: { positions(): Float32Array | null; colors(): Float32Array | null } } };
+  if (w.fieldsmith && !w.fieldsmith.results) {
+    w.fieldsmith.results = {
+      positions: () => (resultMesh ? (resultMesh.geometry.getAttribute('position')?.array as Float32Array | undefined) ?? null : null),
+      colors: () => (resultMesh ? (resultMesh.geometry.getAttribute('color')?.array as Float32Array | undefined) ?? null : null),
+    };
   }
   const nextShow = store.lens !== 'results';
   if (vp.showField !== nextShow) {
@@ -341,11 +470,20 @@ function syncResults(vp: Viewport) {
     vp.invalidate();
   }
   const lvl = analysis.latest;
+  // A stale animation knob (a new solve carried fewer or no shapes) must not animate on
+  // the wrong mesh: reset before the sig, and let this pass's emit re-run sync.
+  if (ui.resultsModeShape >= 0 && (!lvl || !shapeOf(lvl, ui.resultsModeShape))) {
+    ui.set('resultsModeShape', -1);
+    ui.set('resultsModePlay', false);
+    ui.set('resultsModePhase', 0);
+    return;
+  }
+  ensureTicker(lvl);
   const on = store.lens === 'results' && !!lvl;
   const sig = on
     ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsCase}|${ui.resultsScale}|${
         ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
-      }`
+      }|${ui.resultsModeShape}|${ui.resultsModePhase}|${ui.resultsModePlay ? 'p' : 's'}`
     : 'off';
   if (sig !== resultSig) {
     resultSig = sig;
@@ -403,7 +541,8 @@ function onClickResults(_hit: unknown, e: PointerEvent): boolean {
   }
   const f = hits[0].faceIndex ?? -1;
   if (f < 0 || f >= lvl.surfaceRegion.length) return false;
-  const { value, unit } = facetValue(lvl, ui.resultsMode, effCase(lvl), f);
+  const shown = shownDisp(lvl);
+  const { value, unit } = facetValue(lvl, shown.animating ? 'deflection' : ui.resultsMode, effCase(lvl), f, shown.u);
   const p = hits[0].point;
   ui.set('probe', { value, unit, point: [p.x, p.y, p.z] });
   return true;
@@ -599,10 +738,14 @@ function ResultsPanel() {
   if (store.lens !== 'results') return null;
   const s = analysis.state;
   const lvl = s.levels[s.levels.length - 1];
+  const shown = lvl ? shownDisp(lvl) : null;
+  const animating = shown?.animating ?? false;
   const ci = lvl ? effCase(lvl) : -1;
-  const mode = ui.resultsMode;
-  const legend = lvl ? legendLabels(lvl, mode, ci, modeMax(lvl, mode, ci), lvl.meta.yield_strength) : null;
-  const rng = lvl ? rangeFor(lvl, mode, ci) : null;
+  const mode: ResultMode = animating ? 'deflection' : ui.resultsMode;
+  const hi = animating && shown ? shown.rampMax : lvl ? modeMax(lvl, mode, ci) : 0;
+  const legend = lvl ? legendLabels(lvl, mode, ci, hi, lvl.meta.yield_strength) : null;
+  if (legend && animating) legend.caption = shown?.caption ?? '';
+  const rng = lvl ? shownRange(lvl, shown!) : null;
   // Arrow-key step inside the legend inputs: a tenth of the top bound, on the input's decade.
   const rangeStep = rng ? Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rng.hi))) - 1) : 1;
   return (
@@ -655,7 +798,7 @@ function ResultsPanel() {
           </div>
           {legend && legend.caption && (
             <div class="legend-block" data-testid="legend">
-              {isRamped(mode) && rng ? (
+              {isRamped(mode) && rng && !animating ? (
                 <div class="legend-range">
                   <NumberInput
                     value={rng.lo}
@@ -771,6 +914,54 @@ function ResultsPanel() {
                   <span class="num">{fmt(f, 2)} Hz</span>
                 </Fragment>
               ))}
+              {lvl.modeShapes && (
+                <>
+                  {/* Full-span row: the Off + 6-mode picker is as wide as the mode chips above. */}
+                  <div class="show-row">
+                    <Seg<string>
+                      value={String(ui.resultsModeShape)}
+                      options={[
+                        { value: '-1', label: 'Off' },
+                        ...lvl.meta.modes.frequencies.slice(0, 6).map((f, i) => ({ value: String(i), label: `${i + 1}: ${fmt(f, 2)} Hz` })),
+                      ]}
+                      onChange={(v) => {
+                        const k = Number.parseInt(v, 10);
+                        ui.set('resultsModeShape', k);
+                        if (k < 0 && ui.resultsModePlay) ui.set('resultsModePlay', false);
+                      }}
+                      testId="modes-shape"
+                    />
+                  </div>
+                  {ui.resultsModeShape >= 0 && (
+                    <>
+                      <span class="plain">Phase</span>
+                      <div class="scale-row">
+                        {/* Degrees in the panel (a phase is spoken in turns), radians in the
+                            knob: 360° multiplies back to exactly 2π within one ulp, and cos
+                            differs from 1 only quadratically there, so the 2π build is
+                            bit-identical to the 0 build. */}
+                        <NumberInput
+                          value={Math.round(((ui.resultsModePhase * 180) / Math.PI) * 10) / 10}
+                          min={0}
+                          max={360}
+                          step={5}
+                          unit="°"
+                          onChange={(d) => ui.set('resultsModePhase', (d * Math.PI) / 180)}
+                          testId="modes-phase"
+                        />
+                        <button
+                          type="button"
+                          class="mini-btn"
+                          data-testid="modes-play"
+                          onClick={() => ui.set('resultsModePlay', !ui.resultsModePlay)}
+                        >
+                          {ui.resultsModePlay ? 'Pause' : 'Play'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           )}
           {lvl.meta.fill && (

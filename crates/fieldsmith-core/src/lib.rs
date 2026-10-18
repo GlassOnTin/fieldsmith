@@ -993,6 +993,21 @@ support clamp root fixed=xyz
             fs.windows(2).all(|w| w[0] <= w[1]),
             "frequencies descending: {fs:?}"
         );
+        // Every mode carries a shape, and the shapes differ (M-ordering is not degenerate
+        // here: a repeated frequency would come back as two distinct vectors anyway).
+        let shapes = &run.modal.shapes;
+        assert_eq!(shapes.len(), fs.len(), "one shape per frequency");
+        for (i, s) in shapes.iter().enumerate() {
+            assert!(!s.is_empty(), "shape {i} empty");
+            assert!(
+                s.iter().any(|v| v.abs() > 1e-9),
+                "shape {i} is flat"
+            );
+        }
+        assert_ne!(
+            shapes[0], shapes[1],
+            "the first two shapes would animate identically"
+        );
         // The static path through the same document still wants a load.
         let err = analyse_full(&d, Resolution::Size(1.5), now, None).expect_err("no loads");
         assert_eq!(err.0, "add a load");
@@ -1002,6 +1017,7 @@ support clamp root fixed=xyz
         let modes = a.modes.as_ref().expect("modes");
         assert_eq!(modes.frequencies.len(), 2);
         assert!(modes.frequencies.iter().all(|f| *f > 0.0));
+        assert_eq!(modes.shapes.len(), 2, "one shape per requested mode");
         // provenance stays the static pipeline's: mesh + static solves (no modal time).
         assert!(
             (a.provenance.total_ms - a.provenance.mesh_ms - a.provenance.solve_ms).abs() < 50.0,

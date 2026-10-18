@@ -35,14 +35,23 @@ impl Default for ModeOptions {
     }
 }
 
-/// Frequencies of the first modes. Mode shapes are kept out of the serialisable result: the
-/// readouts (CLI, Results lens) show frequencies, and the shapes are not visualised in v0.3.
+/// Frequencies of the first modes, with their shapes carried in memory for the Results
+/// mode animation. Shapes stay out of the serialisable summary (skipped): the CLI readouts
+/// and api responses remain frequencies only, and the wasm page reads shapes through the
+/// typed-array getters.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModalResult {
     /// Natural frequencies in Hz, ascending.
     pub frequencies: Vec<f64>,
     /// ω² eigenvalues (rad/s)², same order.
     pub eigenvalues: Vec<f64>,
+    /// Mass-normalised mode shape per mode, same order, 3 components per node
+    /// (corners first, then midsides — the mesh's own numbering). Normalised against the
+    /// assembled density matrix: φᵀ M φ = 1, so the amplitudes are physical and shared
+    /// across meshes; supports hold exactly. Skipped in serialisation (heavy arrays
+    /// travel through the wasm getters).
+    #[serde(skip)]
+    pub shapes: Vec<Vec<f64>>,
     /// Set by the caller: `solve_modes` runs clock-free because std's clocks panic on
     /// wasm32 (core measures the call with its `Clock`; tests leave it 0).
     pub solve_ms: f64,
@@ -125,9 +134,28 @@ pub fn solve_modes(
         opts.tol,
         &inner,
     )?;
+    // The eigensolver normalises its shapes against the scaled mass it iterates on
+    // (φᵀ sM φ = 1, s the K/M diagonal ratio), so they arrive carrying modal mass 1/s —
+    // a matrix-dependent scale no caller can reason about. One matvec each re-anchors
+    // against the assembled (unfolded) mass: φᵀ M φ = 1, exact zeros on the supported
+    // components stay zeros. Frequencies are Rayleigh scale-invariant and already fixed.
+    let shapes = modes
+        .iter()
+        .enumerate()
+        .map(|(i, mode)| {
+            let mphi = fenics_solver::cg::spmv(&m, &mode.mode_shape);
+            let mass = fenics_solver::cg::dot(&mode.mode_shape, &mphi);
+            if !(mass > 0.0) || !mass.is_finite() {
+                return Err(format!("modal shape {}: modal mass {mass} not positive", i + 1));
+            }
+            let scale = mass.sqrt().recip();
+            Ok(mode.mode_shape.iter().map(|&v| v * scale).collect::<Vec<f64>>())
+        })
+        .collect::<Result<Vec<Vec<f64>>, String>>()?;
     Ok(ModalResult {
         frequencies: modes.iter().map(|m| m.frequency_hz).collect(),
         eigenvalues: modes.iter().map(|m| m.eigenvalue).collect(),
+        shapes,
         solve_ms: 0.0,
     })
 }
@@ -189,6 +217,63 @@ mod tests {
             "f(16ρ)/f(ρ) = {}, expected 1/4",
             denser / base
         );
+    }
+
+    /// The shapes the run returns: one per mode, one component per P2 node, mass-normalised
+    /// against this solve's own assembled mass matrix, zero everywhere a support holds the
+    /// part, different modes different shapes. The mass-normalisation is what makes the
+    /// Results amplitude shared across modes and meshes (a unit-modal-mass φ moves ~ the
+    /// same physical distance whatever the density).
+    #[test]
+    fn shapes_are_mass_normalised_and_respect_supports() {
+        let mesh = one_tet();
+        let fixed = fixed_corners(&mesh);
+        let young = vec![200_000.0; mesh.tets.len()];
+        let opts = ModeOptions {
+            count: 2,
+            ..ModeOptions::default()
+        };
+        let r = solve_modes(&mesh, &young, 0.3, 7.85e-9, &fixed, &opts).expect("modal run");
+        assert_eq!(r.shapes.len(), 2);
+
+        let cells: Vec<[usize; 10]> = mesh
+            .tets
+            .iter()
+            .map(|t| t.map(|n| n as usize))
+            .collect();
+        let m = fenics_assembly::assemble_elasticity_mass_p2_3d(&mesh.nodes, &cells, 7.85e-9);
+
+        let len = 3 * mesh.nodes.len();
+        for (i, shape) in r.shapes.iter().enumerate() {
+            assert_eq!(
+                shape.len(),
+                len,
+                "shape {i} has {} components, expected {len}",
+                shape.len()
+            );
+            let mphi = fenics_solver::cg::spmv(&m, shape);
+            let mass = fenics_solver::cg::dot(shape, &mphi);
+            assert!(
+                (mass - 1.0).abs() < 1e-9,
+                "shape {i}: modal mass {mass}, expected 1"
+            );
+            // Every clamped corner is motionless, all three components.
+            for n in 0..mesh.nverts {
+                for c in 0..3 {
+                    assert!(
+                        shape[3 * n + c].abs() < 1e-9,
+                        "shape {i}: clamped corner node {n} component {c} moves ({})",
+                        shape[3 * n + c]
+                    );
+                }
+            }
+            let max = shape.iter().fold(0.0f64, |a, &v| a.max(v.abs()));
+            assert!(max > 1e-9, "shape {i} is flat");
+        }
+        // Distinct modes are mass-orthogonal: φ₁ᵀ M φ₂ ≈ 0.
+        let m1 = fenics_solver::cg::spmv(&m, &r.shapes[1]);
+        let cross = fenics_solver::cg::dot(&r.shapes[0], &m1);
+        assert!(cross.abs() < 1e-9, "shape 0 · M · shape 1 = {cross}");
     }
 
     #[test]
