@@ -5,8 +5,9 @@
 use fieldsmith_solve::p2::P2Mesh;
 use fieldsmith_solve::pcg::SolverOptions;
 use fieldsmith_solve::{
-    element_flux, element_laplace, element_robin, element_thermal_integrals, nodal_stress_thermal,
-    solve_conduction, thermal_load, HeatFluxBc, RobinBc, ThermalRefData,
+    assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
+    element_thermal_integrals, nodal_stress_thermal, solve_conduction, thermal_load, HeatFluxBc,
+    RobinBc, ThermalRefData,
 };
 
 const V: [[f64; 3]; 4] = [
@@ -135,6 +136,142 @@ fn star_mesh() -> P2Mesh {
         assert!(vol6 > 0.0, "negative orientation at {t:?}: {vol6}");
     }
     m
+}
+
+/// Unit conductivity: one entry per element. The engine pins the solid's k at
+/// 1 W/(mm·K) (module header), so every pre-existing test runs the pinned solve with
+/// all-ones `k`.
+fn ones_k(mesh: &P2Mesh) -> Vec<f64> {
+    vec![1.0; mesh.tets.len()]
+}
+
+/// The 2 × 1 × 1 slab as two unit cubes sharing the x = 1 face: cube 1's six
+/// Freudenthal tets first, cube 2's the same pattern relabelled by the unit-x
+/// translation. Interface corners (1, 4, 5, 7) and every interface-plane midside keep
+/// one shared index, so the two domains conform.
+fn slab_mesh() -> P2Mesh {
+    let v = [
+        [0.0, 0.0, 0.0], // 0
+        [1.0, 0.0, 0.0], // 1  shared interface corner
+        [0.0, 1.0, 0.0], // 2
+        [0.0, 0.0, 1.0], // 3
+        [1.0, 1.0, 0.0], // 4  shared
+        [1.0, 0.0, 1.0], // 5  shared
+        [0.0, 1.0, 1.0], // 6
+        [1.0, 1.0, 1.0], // 7  shared
+        [2.0, 0.0, 0.0], // 8
+        [2.0, 1.0, 0.0], // 9
+        [2.0, 0.0, 1.0], // 10
+        [2.0, 1.0, 1.0], // 11
+    ];
+    let tets: [[u32; 4]; 12] = [
+        [0, 1, 4, 7],
+        [0, 5, 1, 7],
+        [0, 4, 2, 7],
+        [0, 2, 6, 7],
+        [0, 3, 5, 7],
+        [0, 6, 3, 7],
+        [1, 8, 9, 11],
+        [1, 10, 8, 11],
+        [1, 9, 4, 11],
+        [1, 4, 7, 11],
+        [1, 5, 10, 11],
+        [1, 7, 5, 11],
+    ];
+    let m = P2Mesh::from_linear(&v, &tets);
+    for t in &m.tets {
+        let p = |i: usize| m.nodes[t[i] as usize];
+        let (u, v, w) = (
+            [p(1)[0] - p(0)[0], p(1)[1] - p(0)[1], p(1)[2] - p(0)[2]],
+            [p(2)[0] - p(0)[0], p(2)[1] - p(0)[1], p(2)[2] - p(0)[2]],
+            [p(3)[0] - p(0)[0], p(3)[1] - p(0)[1], p(3)[2] - p(0)[2]],
+        );
+        let vol6 = u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+            + u[2] * (v[0] * w[1] - v[1] * w[0]);
+        assert!(vol6 > 0.0, "negative orientation at {t:?}: {vol6}");
+    }
+    m
+}
+
+/// Per-layer conductivity: k1 where the corner-centroid sits at x < 1 (cube 1's
+/// centroid is 0.75), k2 beyond (1.75) — both far from the shared plane at x = 1.
+fn slab_k(mesh: &P2Mesh, k1: f64, k2: f64) -> Vec<f64> {
+    mesh.tets
+        .iter()
+        .map(|t| {
+            let cx = (mesh.nodes[t[0] as usize][0]
+                + mesh.nodes[t[1] as usize][0]
+                + mesh.nodes[t[2] as usize][0]
+                + mesh.nodes[t[3] as usize][0])
+                / 4.0;
+            if cx < 1.0 {
+                k1
+            } else {
+                k2
+            }
+        })
+        .collect()
+}
+
+/// Dirichlet faces of the slab: x = 0 held at 100 °C, x = 2 at 0 °C (corners and
+/// their midsides alike — all those nodes sit on the planes exactly).
+fn slab_d(mesh: &P2Mesh) -> Vec<Option<f64>> {
+    mesh.nodes
+        .iter()
+        .map(|p| {
+            if p[0] == 0.0 {
+                Some(100.0)
+            } else if p[0] == 2.0 {
+                Some(0.0)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// ∇T of the affine field through a tet's four corner temperatures — exact for
+/// piecewise-affine profiles, which the two-layer Dirichlet solves below produce.
+fn affine_gradient(mesh: &P2Mesh, e: usize, t: &[f64]) -> [f64; 3] {
+    let tt = &mesh.tets[e];
+    let x = [0usize, 1, 2, 3].map(|i| mesh.nodes[tt[i] as usize]);
+    let tv = [t[tt[0] as usize], t[tt[1] as usize], t[tt[2] as usize], t[tt[3] as usize]];
+    let rhs = [tv[1] - tv[0], tv[2] - tv[0], tv[3] - tv[0]];
+    let rows = [0usize, 1, 2].map(|r| {
+        [
+            x[r + 1][0] - x[0][0],
+            x[r + 1][1] - x[0][1],
+            x[r + 1][2] - x[0][2],
+        ]
+    });
+    let det = |m: &[[f64; 3]; 3]| {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
+    let denom = det(&rows);
+    let mut g = [0.0f64; 3];
+    for (j, gj) in g.iter_mut().enumerate() {
+        let mj = [
+            [if j == 0 { rhs[0] } else { rows[0][0] }, if j == 1 { rhs[0] } else { rows[0][1] }, if j == 2 { rhs[0] } else { rows[0][2] }],
+            [if j == 0 { rhs[1] } else { rows[1][0] }, if j == 1 { rhs[1] } else { rows[1][1] }, if j == 2 { rhs[1] } else { rows[1][2] }],
+            [if j == 0 { rhs[2] } else { rows[2][0] }, if j == 1 { rhs[2] } else { rows[2][1] }, if j == 2 { rhs[2] } else { rows[2][2] }],
+        ];
+        *gj = det(&mj) / denom;
+    }
+    g
+}
+
+/// Dissipation ∫ k|∇T|² dV term by term from a solved field via the corner-affine
+/// recovery — the quadratic form the Dirichlet conduction problem minimises, exact
+/// here because the profiles are elementwise-affine.
+fn dissipation(mesh: &P2Mesh, t: &[f64], k: &[f64]) -> f64 {
+    (0..mesh.tets.len())
+        .map(|e| {
+            let g = affine_gradient(mesh, e, t);
+            k[e] * (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) * mesh.tet_volume(e).abs()
+        })
+        .sum()
 }
 
 #[test]
@@ -293,7 +430,7 @@ fn conduction_reproduces_linear_field_exactly() {
             d[mesh.nverts + k] = None;
         }
     }
-    let (t, report) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
+    let (t, report) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations > 0, "expected real iterations");
     for (i, ti) in t.iter().enumerate() {
@@ -310,7 +447,7 @@ fn conduction_reproduces_linear_field_exactly() {
 fn conduction_names_the_unsolvable_case() {
     let mesh = star_mesh();
     let d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
-    let e = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap_err();
+    let e = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap_err();
     assert!(e.contains("at least one temperature region"), "{e}");
     assert!(e.contains("every face would be insulated"), "{e}");
 }
@@ -370,6 +507,7 @@ fn convection_bar_matches_the_analytic_profile() {
     let (t, report) = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[RobinBc {
             h: 1.0,
             t_inf: 20.0,
@@ -405,6 +543,7 @@ fn convection_only_body_settles_to_t_inf() {
     let (t, report) = solve_conduction(
         &mesh,
         &vec![None; mesh.nodes.len()],
+        &ones_k(&mesh),
         &[RobinBc {
             h: 1.0,
             t_inf: 42.0,
@@ -439,8 +578,8 @@ fn zero_convection_band_is_a_no_op() {
         t_inf: 20.0,
         facets: wall,
     };
-    let (t0, r0) = solve_conduction(&mesh, &d, &[band], &[], SolverOptions::default()).unwrap();
-    let (t1, r1) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
+    let (t0, r0) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[band], &[], SolverOptions::default()).unwrap();
+    let (t1, r1) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
     assert_eq!(t0, t1);
     assert_eq!(r0.iterations, r1.iterations);
 }
@@ -461,6 +600,7 @@ fn convection_band_validates() {
         let e = solve_conduction(
             &mesh,
             &d,
+            &ones_k(&mesh),
             &[RobinBc {
                 h,
                 t_inf: 20.0,
@@ -475,6 +615,7 @@ fn convection_band_validates() {
     let e = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[RobinBc {
             h: 1.0,
             t_inf: f64::NAN,
@@ -534,6 +675,7 @@ fn heatflux_bar_matches_the_analytic_profile() {
     let (t, report) = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[HeatFluxBc { q: 2.0, facets: wall }],
         opts,
@@ -570,6 +712,7 @@ fn heatflux_on_fixed_face_is_silent() {
     let (t0, r0) = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[HeatFluxBc {
             q: 10.0,
@@ -578,7 +721,7 @@ fn heatflux_on_fixed_face_is_silent() {
         SolverOptions::default(),
     )
     .unwrap();
-    let (t1, r1) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
+    let (t1, r1) = solve_conduction(&mesh, &d, &ones_k(&mesh), &[], &[], SolverOptions::default()).unwrap();
     assert_eq!(t0, t1);
     assert_eq!(r0.iterations, r1.iterations);
 }
@@ -591,6 +734,7 @@ fn heatflux_band_validates() {
     let e = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[HeatFluxBc {
             q: f64::NAN,
@@ -612,6 +756,7 @@ fn flux_only_body_names_its_gap() {
     let e = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[HeatFluxBc {
             q: 1.0,
@@ -641,6 +786,7 @@ fn flux_bands_superpose() {
     let (t0, _) = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[
             HeatFluxBc {
@@ -662,6 +808,7 @@ fn flux_bands_superpose() {
     let (t1, _) = solve_conduction(
         &mesh,
         &d,
+        &ones_k(&mesh),
         &[],
         &[HeatFluxBc {
             q: 2.0,
@@ -736,5 +883,100 @@ fn thermal_stress_subtraction_only_touches_the_diagonal() {
             // same arithmetic path as the un-subtracted stress: must agree to the bit
             assert!((s_el[0][k] - s_th[0][k]).abs() == 0.0, "shear {k} moved");
         }
+    }
+}
+
+#[test]
+fn conduction_two_domain_series_matches_the_layer_analytic() {
+    // Two layers k = 1 and k = 0.1 with faces held at 100 and 0: the true profile is
+    // affine in each layer and continuous across the interface, so it lies in the P2
+    // space on this mesh and the solve must reproduce it exactly. Flux
+    // q = ΔT / Σ(Lᵢ/kᵢ) = 100/11, and the interface plane sits at T = 100 − q = 1000/11
+    // ≈ 90.9091 — a single-domain k = 1 solve reads 50 there, so the value pins the
+    // per-element conductivity end to end.
+    let mesh = slab_mesh();
+    let k = slab_k(&mesh, 1.0, 0.1);
+    let d = slab_d(&mesh);
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let (t, report) = solve_conduction(&mesh, &d, &k, &[], &[], opts).unwrap();
+    assert!(report.converged, "{report:?}");
+    let q = 100.0 / 11.0;
+    let t_int = 1000.0 / 11.0;
+    for (i, &ti) in t.iter().enumerate() {
+        let x = mesh.nodes[i][0];
+        let want = if x <= 1.0 { 100.0 - q * x } else { t_int * (2.0 - x) };
+        assert!(
+            (ti - want).abs() < 1e-9,
+            "node {i} at {:?}: {ti} vs {want}",
+            mesh.nodes[i]
+        );
+    }
+}
+
+#[test]
+fn conduction_series_resistance_survives_the_elementwise_k() {
+    // Dissipation equivalence with both faces held: the series solve dissipates
+    // ΔT²/R with R = 1/1 + 1/0.1 = 11, the homogenised layer (k = 2/11 everywhere,
+    // series resistances added) dissipates the same, and reversing the layer order
+    // does too — 10⁴/11 ≈ 909.09 in all three. Ignoring the per-element k entirely
+    // would land at 12.5 (the uniform k = 1 profile), failing loudly.
+    let mesh = slab_mesh();
+    let d = slab_d(&mesh);
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let k_series = slab_k(&mesh, 1.0, 0.1);
+    let k_reversed = slab_k(&mesh, 0.1, 1.0);
+    let k_homog = vec![2.0 / 11.0; mesh.tets.len()];
+    let (t_series, _) = solve_conduction(&mesh, &d, &k_series, &[], &[], opts).unwrap();
+    let (t_homog, _) = solve_conduction(&mesh, &d, &k_homog, &[], &[], opts).unwrap();
+    let (t_reversed, _) = solve_conduction(&mesh, &d, &k_reversed, &[], &[], opts).unwrap();
+    let s = dissipation(&mesh, &t_series, &k_series);
+    let hm = dissipation(&mesh, &t_homog, &k_homog);
+    let r = dissipation(&mesh, &t_reversed, &k_reversed);
+    let want = 10_000.0 / 11.0;
+    for (name, got) in [("series", s), ("homogenised k = 2/11", hm), ("reversed", r)] {
+        assert!(
+            (got - want).abs() < 1e-6 * want,
+            "{name} dissipation {got} vs {want}"
+        );
+    }
+}
+
+#[test]
+fn unit_k_assembly_is_bit_identical_to_the_unscaled_assembly() {
+    // 1.0 · x carries every finite value through exactly (IEEE), so the all-ones
+    // conductivity is the unscaled assembly bit for bit — the whole pre-existing suite,
+    // the two bit-equality no-op tests included, then runs unchanged through the scaled
+    // path.
+    let mesh = slab_mesh();
+    let a0 = assemble_laplace(&mesh);
+    let a1 = assemble_laplace_k(&mesh, &ones_k(&mesh));
+    assert_eq!(a0.vals, a1.vals, "1.0·entry must carry every value exactly");
+    assert_eq!(a0.cols, a1.cols);
+    assert_eq!(a0.row_ptr, a1.row_ptr);
+}
+
+#[test]
+fn conduction_validates_the_conductivity_vector() {
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let mut k = ones_k(&mesh);
+    for bad in [0.0, -1.0, f64::NAN] {
+        k[3] = bad;
+        let e = solve_conduction(&mesh, &d, &k, &[], &[], SolverOptions::default())
+            .unwrap_err();
+        assert!(
+            e.contains("element 3") && e.contains("finite and > 0"),
+            "bad k {bad}: {e}"
+        );
     }
 }

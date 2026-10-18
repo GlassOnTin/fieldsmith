@@ -27,8 +27,9 @@ pub use stress::{
     element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, von_mises, Stress,
 };
 pub use thermal::{
-    assemble_laplace, element_flux, element_laplace, element_robin, element_thermal_integrals,
-    solve_conduction, thermal_load, Csr, HeatFluxBc, RobinBc, ThermalRefData,
+    assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
+    element_thermal_integrals, solve_conduction, thermal_load, Csr, HeatFluxBc, RobinBc,
+    ThermalRefData,
 };
 
 pub type V3 = [f64; 3];

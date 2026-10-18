@@ -45,8 +45,8 @@ use fieldsmith_solve::P2Mesh;
 
 use crate::Facet;
 use crate::{
-    case_force_report, case_names, fixed_mask, material_of, run_case, Analysis, CaseResult, Clock,
-    Resolution, SetupError,
+    case_force_report, case_names, fixed_mask, material_of, run_case, run_thermal_case, Analysis,
+    CaseResult, Clock, Resolution, SetupError,
 };
 
 /// Fit band of the stiffness laws, densities in `[RHO_LO, RHO_HI]`.
@@ -56,6 +56,25 @@ pub const RHO_HI: f64 = 0.40;
 /// Stiffness floor for fully void elements, relative to the solid modulus. Enclosed void stays
 /// solvable; the envelope still reads its stress, but the void's strain energy is noise.
 const VOID_SCALE: f64 = 1e-6;
+
+/// Conduction floor for void elements, relative to the pinned solid conductivity: analog of
+/// [`VOID_SCALE`], keeping an enclosed void's Laplace rows solvable. Still-air conduction
+/// (~2.6e-8 W/(mm·K)) is not modelled — a void reads as effectively insulated.
+const K_VOID_SCALE: f64 = 1e-6;
+
+/// Relative conductivity of one graded element ([`fieldsmith_solve::solve_conduction`]'s `k`): solid
+/// elements conduct at the pinned unit, everything else at its material fraction φ floored
+/// at [`K_VOID_SCALE`]. Linear-in-φ is the Voigt-style map — near-exact where the mesh
+/// resolves the walls (sub-cell), over-reading k where a coarse mesh homogenises tortuous
+/// walls (the same caveat the stiffness law documents for its sub-cell end). No conduction
+/// law is measured, so the map pretends no fitted constant.
+pub fn conductivity_of(class: u8, phi: f64) -> f64 {
+    if class == CLASS_SOLID {
+        1.0
+    } else {
+        phi.max(K_VOID_SCALE)
+    }
+}
 
 /// Jittered samples per element when measuring its material fraction (φ). 32 bounds the
 /// per-element sampling noise to ~±0.09 at φ = 0.3, which averages out over the thousands of
@@ -207,6 +226,10 @@ pub struct Graded {
     pub rho_design: [f64; 2],
     /// Graded re-solve, one per solid case, same order.
     pub cases: Vec<CaseResult>,
+    /// Thermal cases re-solved through the graded core, in `doc.thermal_cases()` order: the
+    /// conduction solve carries the fill's per-element conductivity map, the expansion solve
+    /// the graded moduli. Same case type as the solid path's thermal results.
+    pub thermal_cases: Vec<CaseResult>,
     /// Envelope over the graded cases: nodal and per-element von Mises.
     pub envelope: Vec<f64>,
     pub envelope_elem: Vec<f64>,
@@ -506,6 +529,36 @@ pub fn graded_of(
         case.load_reports = reports;
         cases.push(case);
     }
+
+    // Thermal cases re-solved through the graded core: conduction runs on the fill's
+    // per-element conductivity map (solid pinned at 1, lattice/void scaled by φ — see
+    // `conductivity_of`), the expansion solve on the graded moduli. The boundary statements
+    // keep their unit-solid reading, same contract as the static path's thermal block.
+    let thermal_names = doc.thermal_cases();
+    let mut thermal_cases = Vec::new();
+    if !thermal_names.is_empty() {
+        let alpha = mat.alpha.ok_or_else(|| {
+            SetupError(format!(
+                "The thermal flow needs a thermal-expansion coefficient and material '{}' \
+                 states none — pick a material whose sheet states a CTE, or give a custom \
+                 material an a= value",
+                doc.material
+            ))
+        })?;
+        // Rebuilt from the stored classes and fractions (same call the wasm test uses), so
+        // the map reproduced from the result matches the one this block solved with exactly.
+        let k_elem: Vec<f64> = class
+            .iter()
+            .zip(&rho_elem)
+            .map(|(&c, &phi)| conductivity_of(c, phi))
+            .collect();
+        for name in thermal_names {
+            let case = run_thermal_case(
+                doc, &base.mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &k_elem,
+            )?;
+            thermal_cases.push(case);
+        }
+    }
     let nn = base.mesh.nodes.len();
     let envelope = (0..nn)
         .map(|i| cases.iter().map(|c| c.von_mises[i]).fold(0.0, f64::max))
@@ -522,6 +575,7 @@ pub fn graded_of(
         rho_elem,
         rho_design,
         cases,
+        thermal_cases,
         envelope,
         envelope_elem,
         sigma_ref,
@@ -889,5 +943,122 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             }
         }
         assert!(near_solid > 0, "no elements near the stub");
+    }
+
+    /// Tension bar (the fill fixture) with two Dirichlet temperature faces driving a
+    /// steady thermal case: cap at 100 °C, tip at 0 °C. `a=` is required — the graded
+    /// thermal block runs the same analyse-time CTE guard the static path does.
+    const THERMAL_BAR: &str = "\
+name \"Fill thermal bar\"
+custommaterial steel200 e=200000 nu=0.3 yield=250 density=7.85 a=1.2e-5
+material steel200
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region cap = bar.nx
+region tip = bar.px
+support clamp cap fixed=xyz
+load pull tip force=(1200, 0, 0)
+temperature hot cap temp=100 case=\"Thermal 1\"
+temperature cold tip temp=0
+fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
+";
+
+    /// Corner-affine ∇T recovery on a P2 element — same helper as the solve crate's
+    /// thermal tests, where it is exact for the piecewise-affine profiles these cases
+    /// carry.
+    fn affine_gradient(mesh: &P2Mesh, e: usize, t: &[f64]) -> [f64; 3] {
+        let tt = &mesh.tets[e];
+        let x = [0usize, 1, 2, 3].map(|i| mesh.nodes[tt[i] as usize]);
+        let tv = [t[tt[0] as usize], t[tt[1] as usize], t[tt[2] as usize], t[tt[3] as usize]];
+        let rhs = [tv[1] - tv[0], tv[2] - tv[0], tv[3] - tv[0]];
+        let rows = [0usize, 1, 2].map(|r| {
+            [
+                x[r + 1][0] - x[0][0],
+                x[r + 1][1] - x[0][1],
+                x[r + 1][2] - x[0][2],
+            ]
+        });
+        let det = |m: &[[f64; 3]; 3]| {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        };
+        let denom = det(&rows);
+        let mut g = [0.0f64; 3];
+        for (j, gj) in g.iter_mut().enumerate() {
+            let mj = [
+                [if j == 0 { rhs[0] } else { rows[0][0] }, if j == 1 { rhs[0] } else { rows[0][1] }, if j == 2 { rhs[0] } else { rows[0][2] }],
+                [if j == 0 { rhs[1] } else { rows[1][0] }, if j == 1 { rhs[1] } else { rows[1][1] }, if j == 2 { rhs[1] } else { rows[1][2] }],
+                [if j == 0 { rhs[2] } else { rows[2][0] }, if j == 1 { rhs[2] } else { rows[2][1] }, if j == 2 { rhs[2] } else { rows[2][2] }],
+            ];
+            *gj = det(&mj) / denom;
+        }
+        g
+    }
+
+    /// Dissipation ∫ k|∇T|² dV term by term via the corner-affine recovery.
+    fn dissipation(mesh: &P2Mesh, t: &[f64], k: &[f64]) -> f64 {
+        (0..mesh.tets.len())
+            .map(|e| {
+                let g = affine_gradient(mesh, e, t);
+                k[e] * (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) * mesh.tet_volume(e).abs()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn graded_thermal_flow_goes_through_the_core() {
+        let d = parse(THERMAL_BAR);
+        let (base, g) = graded(&d, Resolution::Size(1.5), now).expect("graded analysis");
+
+        // Wiring: the graded result carries one result per document thermal case, in
+        // document order, each with the mesh's temperature field.
+        let names = d.thermal_cases();
+        assert_eq!(names, ["Thermal 1"]);
+        assert_eq!(g.thermal_cases.len(), names.len());
+        let solid_t = base
+            .cases
+            .iter()
+            .find(|c| c.name == "Thermal 1")
+            .expect("solid thermal case")
+            .temperature
+            .as_ref()
+            .expect("solid temperature");
+        let graded_t = g.thermal_cases[0].temperature.as_ref().expect("graded temperature");
+        assert!(
+            g.thermal_cases[0].solve.converged
+                && g.thermal_cases[0].conduction.as_ref().unwrap().converged,
+            "graded thermal case did not converge"
+        );
+        assert_eq!(graded_t.len(), base.mesh.nodes.len(), "temperature node count");
+
+        // The solid case's field is the affine 100 − 2.5·x (face spacing 40), so its
+        // dissipation is the analytic ∫k|∇T|²dV = 1·2.5²·4000 = 25000; check the FE field
+        // reproduces it before trusting the graded comparison.
+        let nn = base.mesh.nodes.len();
+        let solid = dissipation(&base.mesh, solid_t, &vec![1.0; nn]);
+        let q = 2.5f64;
+        let want = q * q * 4000.0;
+        assert!(
+            (solid - want).abs() < 5e-6 * want,
+            "solid dissipation {solid} vs analytic {want}"
+        );
+
+        // The graded field's dissipation with the fill's per-element map (rebuilt from the
+        // stored classes and fractions, the same source the solve used) is strictly smaller
+        // — k_rel = φ ≤ 1 everywhere and the quadratic-form bound says the graded solve's
+        // minimiser over the same trial space dissipates no more than the solid field's
+        // restriction to it.
+        let k_elem: Vec<f64> = g
+            .class
+            .iter()
+            .zip(&g.rho_elem)
+            .map(|(&c, &phi)| conductivity_of(c, phi))
+            .collect();
+        assert!(k_elem.iter().all(|k| *k > 0.0 && *k <= 1.0 + 1e-12));
+        let graded = dissipation(&base.mesh, graded_t, &k_elem);
+        assert!(
+            graded < 0.75 * solid,
+            "graded dissipation {graded} not clearly below the solid {solid}"
+        );
     }
 }

@@ -9,10 +9,14 @@
 //! two-level P2→P1 structure as the elastic solve, block size 1.
 //!
 //! Convection (Robin) bands break the conductivity-independence: their boundary
-//! condition `k ∂T/∂n = h(T_inf − T)` scales with the ratio `h/k`, and this solve pins
-//! `k = 1` W/(mm·K) (the materials sheet carries no conductivity today) — so a band's
-//! `h` is read per that unit conductivity and mixed Dirichlet/Robin fields carry the
-//! unit-solid's Biot number, not the real part's. Pure-Dirichlet cases are unaffected.
+//! condition `k ∂T/∂n = h(T_inf − T)` scales with the ratio `h/k`, and the unit
+//! conductivity keeps `k = 1` W/(mm·K) (the materials sheet carries no conductivity
+//! today) — so a band's `h` is read per that unit conductivity and mixed
+//! Dirichlet/Robin fields carry the unit-solid's Biot number, not the real part's.
+//! Pure-Dirichlet cases are unaffected. [`solve_conduction`] carries the per-element
+//! `k` explicitly (one conductivity per element, relative to that unit solid):
+//! all-ones is the pinned solve bit for bit, and a graded TPMS core passes its fill's
+//! material map while the boundary statements keep their unit-solid reading.
 //!
 //! Thermal quantities: the element Laplacian, the thermal load
 //! f[a·3+i] = (3λ+2μ)·α·∫ ΔT·∂φa/∂x_i dV (degree-3-exact quadrature — the integrand is
@@ -391,9 +395,17 @@ pub struct HeatFluxBc {
 /// prescribed heat-flux bands. Returns nodal temperature (°C). Solvable iff at least
 /// one node is fixed or one band has h > 0 — a wholly insulated body is unsolvable (the
 /// Laplacian's constant mode), and heat flux alone does not fix the level either.
+///
+/// `k` is one conductivity per element (mesh order), relative to the pinned unit solid:
+/// each element's Laplace block is scaled by its k, while the Robin and flux terms are
+/// not — at the unit-solid reading the boundary statements carry their `h`/`q` against
+/// k = 1 (module header). All-ones reproduces the pinned solve bit for bit; a graded
+/// TPMS core passes its fill's material map, and the interface condition (flux
+/// continuous) falls out of the shared weak form.
 pub fn solve_conduction(
     mesh: &P2Mesh,
     d: &[Option<f64>],
+    k: &[f64],
     robin: &[RobinBc],
     flux: &[HeatFluxBc],
     opts: SolverOptions,
@@ -424,6 +436,15 @@ pub fn solve_conduction(
         }
     }
     let fixed: Vec<bool> = d.iter().map(|x| x.is_some()).collect();
+    assert_eq!(k.len(), mesh.tets.len(), "one conductivity per element");
+    for (e, &ke) in k.iter().enumerate() {
+        if !(ke.is_finite() && ke > 0.0) {
+            return Err(format!(
+                "conduction conductivity: element {e} carries k = {ke} — k must be finite \
+                 and > 0 (the value scales the element's Laplace block)"
+            ));
+        }
+    }
     if !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0) {
         return Err(if flux.is_empty() {
             "conduction has no fixed temperature and no convection band with h > 0 — every \
@@ -436,7 +457,7 @@ pub fn solve_conduction(
                 .into()
         });
     }
-    let mut a = assemble_laplace(mesh);
+    let mut a = assemble_laplace_k(mesh, k);
     // Assemble the Robin terms (before the Dirichlet lift, so a shared Dirichlet/Robin
     // node's row is driven by the prescribed value — Dirichlet wins).
     let mut load = vec![0.0; n];
@@ -517,16 +538,26 @@ pub fn element_laplace(mesh: &P2Mesh, e: usize, rd: &RefData) -> [[f64; 10]; 10]
     l
 }
 
-/// Global Laplace matrix (no boundary conditions applied).
+/// Global Laplace matrix at unit conductivity, no boundary conditions applied —
+/// [`assemble_laplace_k`] with k ≡ 1. Multiplication by 1.0 is exact (IEEE), so the
+/// entries match an unscaled assembly bit for bit.
 pub fn assemble_laplace(mesh: &P2Mesh) -> Csr {
+    assemble_laplace_k(mesh, &vec![1.0; mesh.tets.len()])
+}
+
+/// Global Laplace matrix (no boundary conditions applied) scaled elementwise by `k`,
+/// one conductivity per element in mesh order — the graded cores' per-element material
+/// map. All-ones is bit-identical to the unscaled assembly.
+pub fn assemble_laplace_k(mesh: &P2Mesh, k: &[f64]) -> Csr {
+    assert_eq!(k.len(), mesh.tets.len(), "one conductivity per element");
     let rd = RefData::new();
     let mut a = Csr::from_elements(mesh.nodes.len(), mesh.tets.iter().copied());
-    for e in 0..mesh.tets.len() {
+    for (e, &ke) in k.iter().enumerate() {
         let le = element_laplace(mesh, e, &rd);
         let t = &mesh.tets[e];
         for i in 0..10 {
             for j in 0..10 {
-                a.add(t[i] as usize, t[j], le[i][j]);
+                a.add(t[i] as usize, t[j], ke * le[i][j]);
             }
         }
     }

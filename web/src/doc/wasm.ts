@@ -414,6 +414,11 @@ export interface AnalysisMeta {
   cases: CaseSummary[];
   yield_strength: number;
   poisson: number;
+  /** Fill levels only: the fill's thermal cases re-solved through the core — conduction on
+   * the fill's per-element conductivity map, expansion on the graded moduli — in
+   * `doc.thermalCases()` order (serde name). Empty without temperature/convection/flux
+   * statements. `cases` stays the mechanical re-solves. */
+  thermal_cases?: CaseSummary[];
   /** Fill levels only: solid-reference per-case maxima in `cases` order (serde name). */
   solid_cases?: CaseMax[];
   /** Fill levels only: the fill spec, masses and the achieved density window. */
@@ -488,6 +493,10 @@ export interface FillInfo {
  * maxima are in `metaJson().solidCases`; all displacement/stress getters are the graded
  * solve. Typed arrays are views into wasm memory — copy before transferring (`arr.slice()`). */
 export interface GradedHandle extends AnalysisHandle {
+  /** Nodal temperature of one graded thermal case (°C) — the conduction field solved
+   * through the fill's per-element conductivity map. Empty for a mechanical index or a
+   * document without thermal statements; case indices span `meta.thermal_cases`. */
+  thermalTemperature(ci: number): Float64Array;
   /** Per-element class: 0 solid (skin, protected), 1 lattice, 2 void. */
   class(): Uint8Array;
   /** Per-element material fraction of the fill (1 solid, 0 void; the modulus input). */

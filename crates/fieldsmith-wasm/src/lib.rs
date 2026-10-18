@@ -816,6 +816,10 @@ struct GradedMeta {
     provenance: Provenance,
     /// The graded re-solve, one per load case, same order as the solid cases.
     cases: Vec<fieldsmith_core::CaseResult>,
+    /// Graded thermal cases (conduction through the fill's per-element conductivity map,
+    /// expansion on the graded moduli), in `doc.thermalCases()` order; empty without
+    /// `temperature`/`convection`/`flux` statements.
+    thermal_cases: Vec<fieldsmith_core::CaseResult>,
     /// Solid-reference per-case maxima (before the fill was applied).
     solid_cases: Vec<CaseSummary>,
     fill: FillInfo,
@@ -865,6 +869,7 @@ impl GradedOut {
         to_json(&GradedMeta {
             provenance: self.base.provenance.clone(),
             cases: self.g.cases.clone(),
+            thermal_cases: self.g.thermal_cases.clone(),
             solid_cases: self
                 .base
                 .cases
@@ -981,12 +986,26 @@ impl GradedOut {
         Float64Array::from(&self.g.envelope_elem[..])
     }
 
-    /// Nodal temperature of one case (°C) — always empty. The graded re-solve is mechanical
-    /// only (the `cases` here are those cases), so no thermal field exists at this mesh; the
-    /// caller checks `length` and treats an empty vector as "no temperature field in this
-    /// run". Indexing the solid reference's carriers would misalign with `metaJson().cases`.
+    /// Nodal temperature of one mechanical case (°C) — always empty: the graded `cases` are
+    /// the mechanical re-solves, and a document's thermal statements re-solve through the
+    /// core and surface via `thermalTemperature` (their per-case reports ride
+    /// `metaJson().thermalCases`). The caller checks `length` rather than a nullable handle.
     pub fn temperature(&self, _case: usize) -> Float64Array {
         Float64Array::from(&[][..])
+    }
+
+    /// Nodal temperature of one graded thermal case (°C) — the conduction field solved
+    /// through the fill's per-element conductivity map. Empty when the index is out of
+    /// range or the document authored no thermal statements; the caller checks `length`
+    /// and `metaJson().thermalCases.length` rather than a nullable handle.
+    #[wasm_bindgen(js_name = thermalTemperature)]
+    pub fn thermal_temperature(&self, case: usize) -> Float64Array {
+        let t = self
+            .g
+            .thermal_cases
+            .get(case)
+            .and_then(|c| c.temperature.as_deref());
+        Float64Array::from(t.unwrap_or(&[]))
     }
 
     /// Per-element class: 0 solid (skin, protected), 1 lattice, 2 void.

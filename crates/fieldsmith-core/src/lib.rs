@@ -623,7 +623,8 @@ pub fn run_case(
 /// default 20 °C). Stress recovery carries the thermal term; the nodal temperature and
 /// the conduction report travel on the result. A thermal case runs without mechanical
 /// loads — mixed cases are named for later. Shared by the static path and the
-/// verifier's resolved-model runs.
+/// verifier's resolved-model runs. `k` is one conductivity per element (all-ones = the
+/// pinned unit solid); the graded path passes the fill's per-element map.
 #[allow(clippy::too_many_arguments)]
 pub fn run_thermal_case(
     doc: &Document,
@@ -635,12 +636,13 @@ pub fn run_thermal_case(
     facets: &[Facet],
     name: String,
     h: f64,
+    k: &[f64],
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
     let robin = case_convections(doc, mesh, facets, &name, h)?;
     let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
-    let (t, creport) = solve_conduction(mesh, &d, &robin, &flux, SolverOptions::default())
-        .map_err(SetupError)?;
+    let (t, creport) =
+        solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default()).map_err(SetupError)?;
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
@@ -907,9 +909,13 @@ pub fn analyse_full(
             ))
         })?;
         let t_thermal = clock();
+        // Unit conductivity: the static path's conduction semantics stay the pinned
+        // k ≡ 1 solve; the graded re-resolve (fill.rs) passes the core's per-element map.
+        let ones_k = vec![1.0; mesh.tets.len()];
         for name in thermal_cases {
-            let case =
-                run_thermal_case(doc, &mesh, &young, mat.nu, alpha, &fixed, &facets, name, h)?;
+            let case = run_thermal_case(
+                doc, &mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &ones_k,
+            )?;
             iterations += case.solve.iterations;
             cases.push(case);
         }
