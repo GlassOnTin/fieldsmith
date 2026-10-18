@@ -9,8 +9,11 @@
 //!   block symmetric Gauss–Seidel smoothing on the P2 system and an exact (sparse Cholesky,
 //!   faer) solve on the embedded P1 system.
 //! * [`stress`] recovers nodal stresses by volume-weighted averaging.
+//! * [`bounds::compliance`] reads the raw-force compliance fᵀu: by Galerkin orthogonality
+//!   this is a(u,u) ≥ 0 and a certified lower bound C_h ≤ C_true on the exact compliance.
 
 pub mod assemble;
+pub mod bounds;
 pub mod bsr;
 pub mod modal;
 pub mod p2;
@@ -19,6 +22,7 @@ pub mod stress;
 pub mod thermal;
 
 pub use assemble::assemble;
+pub use bounds::compliance;
 pub use bsr::Bsr;
 pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;

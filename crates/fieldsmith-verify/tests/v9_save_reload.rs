@@ -48,6 +48,12 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
             "{label}: {} deflection",
             ca.name
         );
+        assert_eq!(
+            ca.compliance.to_bits(),
+            cb.compliance.to_bits(),
+            "{label}: {} raw-force compliance",
+            ca.name
+        );
     }
     for (ea, eb) in a.envelope_elem.iter().zip(b.envelope_elem.iter()) {
         assert_eq!(ea.to_bits(), eb.to_bits(), "{label}: envelope element vm");
@@ -78,6 +84,11 @@ fn assert_same_graded(a: &Graded, b: &Graded, label: &str) {
             ca.max_displacement.to_bits(),
             cb.max_displacement.to_bits(),
             "{label}: graded deflection"
+        );
+        assert_eq!(
+            ca.compliance.to_bits(),
+            cb.compliance.to_bits(),
+            "{label}: graded raw-force compliance"
         );
     }
 }

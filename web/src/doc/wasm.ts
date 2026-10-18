@@ -376,6 +376,9 @@ export interface CaseSummary {
   max_von_mises: number;
   max_vm_elem: number;
   max_displacement: number;
+  /** The raw-force compliance fᵀu the solve saw, in N·mm — fieldsmith-solve's
+   * certified lower-bound readout (`bounds` module). */
+  compliance: number;
   solve: SolveReport;
   /** Applied-load provenance when the case has resolved loads (serde field of
    * fieldsmith_core::CaseResult; absent on older bundles). */

@@ -16,10 +16,9 @@ use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
-    element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
+    compliance, element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
     solve_conduction, thermal_load, von_mises, HeatFluxBc, Material, P2Mesh, Problem, RobinBc,
-    SolveReport,
-    SolverOptions, Stress, ThermalRefData,
+    SolveReport, SolverOptions, Stress, ThermalRefData,
 };
 use serde::Serialize;
 
@@ -71,6 +70,14 @@ pub struct CaseResult {
     pub max_von_mises: f64,
     pub max_vm_elem: f64,
     pub max_displacement: f64,
+    /// The raw-force compliance fᵀu of the load vector the solve actually saw:
+    /// mechanical loads on a mechanical case, the thermal-expansion pseudo-load on a
+    /// thermal case. By Galerkin orthogonality this is a(u_h, u_h) ≥ 0 for a converged
+    /// solve, and a certified lower bound C_h ≤ C_true on the exact compliance —
+    /// strict when the exact solution leaves the P2 span, exact when the mesh
+    /// represents it. Meaningful only with `solve.converged`
+    /// (fieldsmith-solve's `bounds` tests pin the theorem).
+    pub compliance: f64,
     pub solve: SolveReport,
     /// Provenance of each load in this case, in document order: the applied resultant
     /// and moment, and the face-fit numbers of distributed loads. Empty for the
@@ -605,6 +612,7 @@ pub fn run_case(
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
+        compliance: compliance(&problem.force, &u),
         u,
         stress,
         von_mises: vm,
@@ -641,8 +649,8 @@ pub fn run_thermal_case(
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
     let robin = case_convections(doc, mesh, facets, &name, h)?;
     let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
-    let (t, creport) =
-        solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default()).map_err(SetupError)?;
+    let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
+        .map_err(SetupError)?;
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
@@ -668,6 +676,7 @@ pub fn run_thermal_case(
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
+        compliance: compliance(&problem.force, &u),
         u,
         stress,
         von_mises: vm,
@@ -1046,6 +1055,67 @@ load pull two force=(100, 0, 0)
         }
     }
 
+    /// A mechanical case's compliance readout (the solver-side bound): fᵀu of the load
+    /// vector the solve actually saw — here the 10 N pull. The pipelined mesh's surface
+    /// nodes carry distance-field noise, so the native assert stakes a band around the
+    /// exact c²·V/E; exactness is pinned to solver precision in fieldsmith-solve's
+    /// bounds tests.
+    const PULL: &str = "\
+name \"Pulled bar\"
+material petg
+box beam size=(40, 10, 10) at=(20, 5, 5)
+region pin = beam.nx
+region rest = beam.ny
+region base = beam.nz
+region pull = beam.px
+support pin_x pin fixed=x
+support rest_y rest fixed=y
+support base_z base fixed=z
+load pull pull force=(10, 0, 0)
+";
+
+    #[test]
+    fn case_compliance_is_the_bound_on_the_raw_load() {
+        let d = parse(PULL);
+        let young = materials::find(&d, "petg").expect("petg").e;
+        // c = F/A = 10 N over the 100 mm² px face = 0.1 MPa; the uniform-tension
+        // compliance is c²·V/E = F²·L/(E·A).
+        let want = 10.0 * 10.0 * 40.0 / (young * 100.0);
+        let a = analyse(&d, Resolution::Size(2.0), now).expect("analyse");
+        let case = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Load 1")
+            .expect("load case");
+        assert!(case.solve.converged, "the bound presumes a converged solve");
+        // The load the solve saw: 10 N on x (the provenance report's own resultant).
+        assert!(
+            (case.load_reports[0].resultant[0] - 10.0).abs() < 1e-9,
+            "resultant {:?}",
+            case.load_reports[0].resultant
+        );
+        assert!(case.compliance > 0.0, "compliance is not positive");
+        assert!(
+            (case.compliance - want).abs() < 0.02 * want,
+            "compliance {} vs c²·V/E {}",
+            case.compliance,
+            want
+        );
+        // Peak pull-direction displacement ≈ c·L/E, through the same surface noise.
+        let ux = (0..a.mesh.nodes.len())
+            .map(|i| case.u[3 * i])
+            .fold(0.0f64, f64::max);
+        let want_ux = 10.0 * 40.0 / (100.0 * young);
+        println!(
+            "  PULL: E = {young}, c²·V/E = {want:.8}, compliance = {:.8}, peak u_x = {ux:.4e} vs c·L/E = {want_ux:.4e}",
+            case.compliance
+        );
+        assert!(
+            (ux - want_ux).abs() < 0.02 * want_ux,
+            "peak u_x {ux} vs c·L/E {want_ux}"
+        );
+    }
+
     /// Modal on an unloaded cantilever (M8): supports alone define the constraints, so a
     /// document without loads still produces frequencies, ascending.
     const FREE: &str = "\
@@ -1173,6 +1243,8 @@ load pull hot force=(10, 0, 0)
             th.max_displacement > 0.0,
             "thermal expansion displaced nothing"
         );
+        // The thermal pseudo-load's own compliance: a(u,u) ≥ 0 for this converged solve.
+        assert!(th.compliance > 0.0, "thermal compliance");
         // Provenance: the thermal leg is timed beside the static one.
         assert!(
             a.provenance.thermal_ms > 0.0
@@ -1286,7 +1358,10 @@ convection air_band air h=0.1 tinf=20 case=\"Steady\"
         let cr = th.conduction.as_ref().expect("conduction report");
         assert!(cr.converged && cr.iterations > 0);
         // The gradient field still drives measurable expansion.
-        assert!(th.max_displacement > 0.0, "thermal expansion displaced nothing");
+        assert!(
+            th.max_displacement > 0.0,
+            "thermal expansion displaced nothing"
+        );
     }
 
     /// The flux twin of CONVECTION: a prescribed inflow of q = 2 W/mm² on the far face
@@ -1327,7 +1402,10 @@ heatflux inflow hot q=2 case=\"Steady\"
         }
         let cr = th.conduction.as_ref().expect("conduction report");
         assert!(cr.converged && cr.iterations > 0);
-        assert!(th.max_displacement > 0.0, "thermal expansion displaced nothing");
+        assert!(
+            th.max_displacement > 0.0,
+            "thermal expansion displaced nothing"
+        );
     }
 
     /// A temperature and a convection may name the same region and case: the fixed value
