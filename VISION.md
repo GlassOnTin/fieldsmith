@@ -135,10 +135,14 @@ Engineers only use a tool whose numbers they can defend.
   and the source path that pin its behaviour. Documentation, interface, and code stay coupled:
   every formula links the case exercising it, every case links back to the formula and the
   file, and every on-screen number links to both.
-- **The 5 s find standard.** Documentation and interface are held to one question: from
-  wherever the task starts (a number, a control, a paragraph, a `.fsm` line), what the task
-  needs — the setting, the formula, the verification case, the implementing code — is found
-  within about five seconds, through explicit cross-references and the command palette.
+- **The 5S standard for documentation and interface** (Toyota Production System):
+  *sort* — the UI and the docs carry only what earns its place, dead controls and stale text
+  are removed; *set in order* — a place for everything: each on-screen number and control
+  links to its governing formula, its verification case (`V#`), and the code path, and each
+  paragraph and case links back; *shine* — documents, panels, and links are cleaned as the
+  code moves, and a stale range or broken link is a defect, not a chore; *standardise* — the
+  same linkage conventions everywhere, stated once and repeated; *sustain* — the coupling is
+  audited on a cadence in CI like any other verification, not on request.
 - **Stated model limits**: linear elastic, small strain, isotropic homogenisation, and steady
   conduction assumptions are stated in the UI and reports alongside the numbers.
 
@@ -309,8 +313,8 @@ In priority order beyond the v0.5 foundation cleanup:
 6. One field representation; geometry, regions, physics, and lattices compose.
 7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.
 8. Quiet interface, loud geometry.
-9. The 5 s find standard: for the task at hand, the governing formula, the verification case,
-   and the code behind any number are found within about five seconds.
+9. 5S in documentation and interface — sort, set in order, shine, standardise, sustain: a
+   place for everything, the clutter gone, the links audited.
 
 ---
 
