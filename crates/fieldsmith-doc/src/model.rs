@@ -23,6 +23,10 @@ pub struct Document {
     /// See [`Convection`].
     #[serde(default)]
     pub convections: Vec<Convection>,
+    /// Prescribed surface heat fluxes (Neumann), placed like convections: one region,
+    /// the signed flux `q`, one thermal case. See [`HeatFlux`].
+    #[serde(default)]
+    pub heat_fluxes: Vec<HeatFlux>,
     /// Named scalar parameters (`let w = 4`) in source order, with the values the
     /// parser evaluated. See [`Let`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -49,6 +53,7 @@ impl Default for Document {
             loads: Vec::new(),
             temperatures: Vec::new(),
             convections: Vec::new(),
+            heat_fluxes: Vec::new(),
             lets: Vec::new(),
             consumed: Vec::new(),
             material: "petg".into(),
@@ -451,6 +456,23 @@ pub struct Convection {
     pub case: String,
 }
 
+/// A prescribed surface heat flux (Neumann) boundary: the region's facets carry heat
+/// flux `q` per unit area, positive into the solid, negative out. `q` in W/mm² (1 kW/m²
+/// is 1e-3 here), read against the solver's pinned solid conductivity k = 1 W/(mm·K).
+/// A flux band adds only to the right-hand side: it drives the field but does not fix
+/// its level, so a case needs a temperature region or an `h > 0` convection as well.
+/// Two flux statements on one region in one case superpose (their `q` adds), which is
+/// legal by construction; a region may also carry a temperature or convection.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeatFlux {
+    pub id: String,
+    pub region: String,
+    /// Heat flux per unit area (W/mm²), positive into the solid.
+    pub q: f64,
+    /// Thermal case name. A heat flux applies in the thermal case of the same name.
+    pub case: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Family {
@@ -709,6 +731,11 @@ impl Document {
                 out.push(c.case.clone());
             }
         }
+        for f in &self.heat_fluxes {
+            if !out.contains(&f.case) {
+                out.push(f.case.clone());
+            }
+        }
         out
     }
 
@@ -743,6 +770,7 @@ impl Document {
                 || self.supports.iter().any(|x| x.id == l.name)
                 || self.temperatures.iter().any(|x| x.id == l.name)
                 || self.convections.iter().any(|x| x.id == l.name)
+                || self.heat_fluxes.iter().any(|x| x.id == l.name)
             {
                 errs.push(format!("Name '{}' is used more than once", l.name));
             }
@@ -763,7 +791,8 @@ impl Document {
             let named = ids.contains(&c.target)
                 || self.loads.iter().any(|l| l.id == c.target)
                 || self.temperatures.iter().any(|t| t.id == c.target)
-                || self.convections.iter().any(|v| v.id == c.target);
+                || self.convections.iter().any(|v| v.id == c.target)
+                || self.heat_fluxes.iter().any(|v| v.id == c.target);
             if !named {
                 errs.push(format!(
                     "An expression consumer references '{}', which does not exist",
@@ -976,6 +1005,32 @@ impl Document {
                 }
             }
         }
+        // Heat fluxes (Neumann), placed like convections: the same case-clash naming,
+        // and — no range beyond finiteness, the sign is the convention (positive into
+        // the solid). Two flux statements on one region in one case superpose by
+        // construction (their `q` adds into the same load vector), so no clash is named
+        // for that pair.
+        for f in &self.heat_fluxes {
+            if !region_ids.contains(&f.region.as_str()) {
+                errs.push(format!(
+                    "Heat flux '{}' refers to missing region '{}'",
+                    f.id, f.region
+                ));
+            }
+            if !f.q.is_finite() {
+                errs.push(format!("Heat flux '{}' q= is not a finite number", f.id));
+            }
+            for l in &self.loads {
+                if l.case == f.case {
+                    errs.push(format!(
+                        "Case '{}' is claimed by load '{}' and heat flux '{}' — mixed \
+                         mechanical and thermal cases are not supported yet (give one of \
+                         them another case name)",
+                        f.case, l.id, f.id
+                    ));
+                }
+            }
+        }
         // Two convections on one region in one thermal case can only coexist when they
         // agree; differing values would double-assemble the surface term.
         for (i, a) in self.convections.iter().enumerate() {
@@ -998,9 +1053,12 @@ impl Document {
             }
         }
         // The thermal flow refuses a material with no sourced expansion coefficient
-        // rather than solving with an assumed one — convection bands drive the same
-        // expansion recovery, so they open the gate too.
-        if !self.temperatures.is_empty() || !self.convections.is_empty() {
+        // rather than solving with an assumed one — convection bands and heat fluxes
+        // drive the same expansion recovery, so they open the gate too.
+        if !self.temperatures.is_empty()
+            || !self.convections.is_empty()
+            || !self.heat_fluxes.is_empty()
+        {
             if let Some(m) = crate::materials::find(self, &self.material) {
                 if m.alpha.is_none() {
                     errs.push(format!(

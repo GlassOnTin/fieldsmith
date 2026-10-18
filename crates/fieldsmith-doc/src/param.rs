@@ -2,7 +2,8 @@
 //! number of one named statement, `<id>.<attr>[.<index>]`, or one `let` by bare id
 //! (`w`), which re-evaluates the lets and every expression that references them. Ids
 //! resolve against the parsed document — bare ids are lets and never resolve to a
-//! statement; dotted addresses run nodes, then loads, temperatures, convections — and a
+//! statement; dotted addresses run nodes, then loads, temperatures, convections, heat
+//! fluxes — and a
 //! number that a declared expression writes refuses a direct edit ("sweep the let that drives
 //! it"). The addressable attributes are the model's own numeric fields, plus the
 //! placement transform (`at`, `rotate`); everything else (region and support selectors,
@@ -221,8 +222,17 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             )),
         };
     }
+    if doc.heat_fluxes.iter().any(|f| f.id == *id) {
+        return match (attr, addr.comp) {
+            ("q", None) => Ok(()),
+            ("q", Some(_)) => Err(format!("param {addr}: q takes no component index")),
+            _ => Err(format!(
+                "param {addr}: heat flux {id:?} has no numeric parameter {attr:?} — q"
+            )),
+        };
+    }
     Err(format!(
-        "param {addr}: no node, load, temperature or convection named {id:?}"
+        "param {addr}: no node, load, temperature, convection or heat flux named {id:?}"
     ))
 }
 
@@ -366,6 +376,10 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
             ("tinf", None) => c.t_inf = v,
             _ => unreachable!("the writer was checked against this statement"),
         }
+        return;
+    }
+    if let Some(f) = doc.heat_fluxes.iter_mut().find(|f| f.id == target) {
+        f.q = v;
         return;
     }
     unreachable!("the writer was checked against this document");
@@ -603,8 +617,12 @@ material steel200
 let hw = 0.01
 box beam size=(100, 10, 10) at=(50, 5, 5)
 region hotface = beam.px
+region coldface = beam.nx
 temperature fixer hotface temp=80
-convection air hotface h=2 * hw tinf=25";
+convection air hotface h=2 * hw tinf=25
+let qv = 1e-3
+heatflux lead coldface q=10 * qv
+";
 
     fn conv_doc() -> Document {
         fsm::parse(CONV_DOC).expect("parse")
@@ -623,7 +641,9 @@ convection air hotface h=2 * hw tinf=25";
         assert!(e.contains("no numeric parameter \"pressure\" — h, tinf"), "{e}");
         let e = resolve(&d, &ParamAddr::parse("ghost.h").unwrap()).unwrap_err();
         assert!(
-            e.contains("no node, load, temperature or convection named \"ghost\""),
+            e.contains(
+                "no node, load, temperature, convection or heat flux named \"ghost\"",
+            ),
             "{e}"
         );
         // Plain edits land on the fields.
@@ -635,5 +655,22 @@ convection air hotface h=2 * hw tinf=25";
         assert!(e.contains("written by an expression"), "{e}");
         apply(&mut d, &ParamAddr::parse("hw").unwrap(), 0.02).expect("sweep the let");
         assert_eq!(d.convections[0].h, 0.04);
+    }
+
+    #[test]
+    fn resolves_applies_and_refuses_heatflux_params() {
+        let d = conv_doc();
+        resolve(&d, &ParamAddr::parse("lead.q").unwrap()).unwrap_or_else(|e| panic!("q: {e}"));
+        // A component index is refused; so is an attribute the statement does not carry.
+        let e = resolve(&d, &ParamAddr::parse("lead.q.0").unwrap()).unwrap_err();
+        assert!(e.contains("q takes no component index"), "{e}");
+        let e = resolve(&d, &ParamAddr::parse("lead.h").unwrap()).unwrap_err();
+        assert!(e.contains("no numeric parameter \"h\" — q"), "{e}");
+        // A driven q refuses a direct write; sweeping its let recomputes it.
+        let mut d = conv_doc();
+        let e = apply(&mut d, &ParamAddr::parse("lead.q").unwrap(), 0.5).unwrap_err();
+        assert!(e.contains("written by an expression"), "{e}");
+        apply(&mut d, &ParamAddr::parse("qv").unwrap(), 2e-3).expect("sweep the let");
+        assert_eq!(d.heat_fluxes[0].q, 0.02);
     }
 }

@@ -1095,6 +1095,24 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     case,
                 });
             }
+            "heatflux" => {
+                let id = c.ident("a heat flux name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
+                let region = c.ident("a region name")?;
+                let mut a = c.attrs(&id, &let_scope(&doc))?;
+                let q = a.req_compound_num("q", "q")?;
+                let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
+                doc.consumed.append(&mut a.consumed);
+                a.finish()?;
+                doc.heat_fluxes.push(HeatFlux {
+                    id,
+                    region,
+                    q,
+                    case,
+                });
+            }
             "fill" => {
                 let family = match c.ident("a lattice family")?.as_str() {
                     "gyroid" => Family::Gyroid,
@@ -1232,8 +1250,8 @@ fn node_uses(node: &Node, id: &str) -> bool {
 }
 
 /// Whether `id` is already a statement name in the document (shapes recursively,
-/// then regions, supports, loads, temperatures, convections). Custom materials sit
-/// outside this name space.
+/// then regions, supports, loads, temperatures, convections, heat fluxes). Custom
+/// materials sit outside this name space.
 fn name_is_used(doc: &Document, id: &str) -> bool {
     doc.root.iter().any(|n| node_uses(n, id))
         || doc.regions.iter().any(|r| r.id == *id)
@@ -1241,6 +1259,7 @@ fn name_is_used(doc: &Document, id: &str) -> bool {
         || doc.loads.iter().any(|l| l.id == *id)
         || doc.temperatures.iter().any(|t| t.id == *id)
         || doc.convections.iter().any(|c| c.id == *id)
+        || doc.heat_fluxes.iter().any(|f| f.id == *id)
 }
 
 fn parse_axis(c: &mut Cursor) -> Result<Axis, ParseError> {
@@ -1389,6 +1408,7 @@ pub fn print(doc: &Document) -> String {
         || !doc.loads.is_empty()
         || !doc.temperatures.is_empty()
         || !doc.convections.is_empty()
+        || !doc.heat_fluxes.is_empty()
     {
         o.push('\n');
     }
@@ -1456,6 +1476,16 @@ pub fn print(doc: &Document) -> String {
             p.num_for(&c.id, "h", None, c.h),
             p.num_for(&c.id, "tinf", None, c.t_inf),
             q(&c.case)
+        );
+    }
+    for f in &doc.heat_fluxes {
+        let _ = writeln!(
+            o,
+            "heatflux {} {} q={} case={}",
+            f.id,
+            f.region,
+            p.num_for(&f.id, "q", None, f.q),
+            q(&f.case)
         );
     }
     if let Some(f) = &doc.fill {
@@ -2507,6 +2537,158 @@ load w face pressure=0.25 case="Load 1""#,
                 .message
                 .contains("'h' on 'band': no let named 'q'"),
             "undefined name in h"
+        );
+    }
+
+    #[test]
+    fn heatflux_round_trips() {
+        let text = r#"fieldsmith 1
+name "t"
+material petg
+
+let qv = 1e-3
+
+box b size=(40, 10, 10)
+region hotface = b.px
+region coldface = b.nx
+heatflux lead hotface q=2 * qv case="Thermal 2"
+heatflux outflow coldface q=-0.5 case="Thermal 1"
+solve size=2.5 tref=20
+"#;
+        let d = parse(text).unwrap();
+        let canon = print(&d);
+        assert_eq!(parse(&canon).unwrap(), d, "second parse differs:\n{canon}");
+        // Cases print explicitly, and a driven q prints its expression.
+        assert!(
+            canon.contains(r#"heatflux lead hotface q=2 * qv case="Thermal 2""#)
+                && canon.contains(r#"heatflux outflow coldface q=-0.5 case="Thermal 1""#),
+            "{canon}"
+        );
+        // Heat-flux-only case names join the thermal case list.
+        assert_eq!(d.thermal_cases(), ["Thermal 2", "Thermal 1"]);
+        assert_eq!(d.heat_fluxes[0].q, 2e-3);
+        assert_eq!(d.heat_fluxes[1].q, -0.5);
+        // The driven q recorded a consumer, so the param writer routes edits through it.
+        assert!(
+            d.consumed.iter().any(|c| c.target == "lead"
+                && c.attr == "q"
+                && c.comp.is_none()
+                && c.expr == "2 * qv"),
+            "{:?}",
+            d.consumed
+        );
+        // The plain-number q did not record one.
+        assert!(
+            !d.consumed
+                .iter()
+                .any(|c| c.target == "outflow" && c.attr == "q"),
+            "{:?}",
+            d.consumed
+        );
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    #[test]
+    fn heatflux_validate_with_named_errors() {
+        let base = |extra: &str| {
+            parse(&format!(
+                r#"fieldsmith 1
+name "t"
+material petg
+
+box b size=(40, 10, 10)
+region face = b.px
+{extra}
+"#
+            ))
+            .unwrap()
+        };
+
+        // A heat flux on a region the document never declares.
+        let e = base("heatflux hot ghost q=0.1").validate().join(" | ");
+        assert!(e.contains("refers to missing region 'ghost'"), "{e}");
+
+        // A NaN the parser cannot express is caught by name; −q is legal (outflow).
+        let mut d = base("heatflux hot face q=0.1");
+        d.heat_fluxes[0].q = f64::NAN;
+        let e = d.validate().join(" | ");
+        assert!(e.contains("q= is not a finite number"), "{e}");
+        assert!(base("heatflux out face q=-0.4").validate().is_empty());
+
+        // Two flux statements on one region in one case superpose — nothing fights.
+        assert!(
+            base("heatflux a face q=0.1\nheatflux b face q=0.2")
+                .validate()
+                .is_empty()
+        );
+
+        // A case name claimed by both a load and a heat flux cannot be solved honestly.
+        let e = base(
+            r#"heatflux hot face q=0.1 case="Load 1"
+load w face pressure=0.25 case="Load 1""#,
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("claimed by load 'w' and heat flux 'hot'"),
+            "{e}"
+        );
+
+        // A fixed temperature or a convection on the same region is legal.
+        assert!(
+            base("heatflux hot face q=0.1\ntemperature wall face temp=80")
+                .validate()
+                .is_empty()
+        );
+        assert!(
+            base("heatflux hot face q=0.1\nconvection bath face h=0.1 tinf=20")
+                .validate()
+                .is_empty()
+        );
+
+        // A custom material without a= is refused even for flux-only thermal work.
+        let e = base(
+            "custommaterial bare name=\"Bare\" e=70000 nu=0.33 yield=230 density=2.67 wall=0.4 source=\"fixture\"\nmaterial bare\nheatflux hot face q=0.1",
+        )
+        .validate()
+        .join(" | ");
+        assert!(
+            e.contains("thermal-expansion coefficient") && e.contains("bare"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn heatflux_parse_errors_are_named() {
+        let body = |line: &str| {
+            format!(
+                "fieldsmith 1\nname \"t\"\nmaterial petg\nbox b size=(40, 10, 10)\n\
+                 region face = b.px\n{line}\n"
+            )
+        };
+        let e = parse(&body("heatflux hot face")).unwrap_err();
+        assert!(e.message.contains("missing 'q='"), "{}", e.message);
+        // A bare let name is refused — the sweepable address is the let itself.
+        assert!(
+            parse(&body("let qv = 1e-3\nheatflux band face q=qv"))
+                .unwrap_err()
+                .message
+                .contains("'q' must be a number"),
+            "bare let name as q"
+        );
+        assert!(
+            parse(&body("let w = 4\nheatflux w face q=1"))
+                .unwrap_err()
+                .message
+                .contains("Name 'w' is used more than once"),
+            "let name collision"
+        );
+        assert!(
+            parse(&body("heatflux band face q=q + 1"))
+                .unwrap_err()
+                .message
+                .contains("'q' on 'band': no let named 'q'"),
+            "undefined name in q"
         );
     }
 

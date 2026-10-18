@@ -13,7 +13,7 @@ export const LENSES: { id: Lens; label: string; key: string }[] = [
 
 /** What is selected: a model node, or an analysis item (region / support / load /
  * temperature). */
-export type Selection = { kind: 'node'; id: string } | { kind: 'region'; id: string } | { kind: 'support'; id: string } | { kind: 'load'; id: string } | { kind: 'temperature'; id: string } | { kind: 'convection'; id: string } | null;
+export type Selection = { kind: 'node'; id: string } | { kind: 'region'; id: string } | { kind: 'support'; id: string } | { kind: 'load'; id: string } | { kind: 'temperature'; id: string } | { kind: 'convection'; id: string } | { kind: 'heatflux'; id: string } | null;
 
 type Listener = () => void;
 
@@ -163,7 +163,9 @@ export class Store {
               ? this.doc.temperatures.some((r) => r.id === s.id)
               : s.kind === 'convection'
                 ? this.doc.convections.some((r) => r.id === s.id)
-                : this.doc.loads.some((r) => r.id === s.id);
+                : s.kind === 'heatflux'
+                  ? this.doc.heat_fluxes.some((r) => r.id === s.id)
+                  : this.doc.loads.some((r) => r.id === s.id);
     if (!exists) this.selection = null;
   }
 

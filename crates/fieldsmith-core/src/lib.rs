@@ -17,7 +17,8 @@ use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
-    solve_conduction, thermal_load, von_mises, Material, P2Mesh, Problem, RobinBc, SolveReport,
+    solve_conduction, thermal_load, von_mises, HeatFluxBc, Material, P2Mesh, Problem, RobinBc,
+    SolveReport,
     SolverOptions, Stress, ThermalRefData,
 };
 use serde::Serialize;
@@ -543,6 +544,35 @@ pub fn case_convections(
     Ok(bands)
 }
 
+/// Prescribed heat-flux bands for one thermal case: every heatflux statement named for
+/// the case resolves its region to surface facets ([`HeatFluxBc`]), the same naming as
+/// convections. Flux bands only add to the right-hand side, so two of them on one
+/// region superpose legally — unlike convections, there is no per-region value to
+/// conflict.
+pub fn case_heat_fluxes(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<Vec<HeatFluxBc>, SetupError> {
+    let mut bands = Vec::new();
+    for c in doc.heat_fluxes.iter().filter(|c| c.case == name) {
+        let fs = region_facets(doc, &c.region, mesh, facets, h)?;
+        if fs.is_empty() {
+            return Err(SetupError(format!(
+                "heat flux '{}': region '{}' does not touch the part's surface",
+                c.id, c.region
+            )));
+        }
+        bands.push(HeatFluxBc {
+            q: c.q,
+            facets: fs.iter().map(|&i| facets[i].nodes).collect(),
+        });
+    }
+    Ok(bands)
+}
+
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
 /// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
 /// runs.
@@ -586,8 +616,9 @@ pub fn run_case(
     })
 }
 
-/// Solve one thermal case: steady conduction from the case's temperature regions and
-/// convection bands ([`solve_conduction`]), then the elastic solve driven by the
+/// Solve one thermal case: steady conduction from the case's temperature regions,
+/// convection bands, and prescribed heat fluxes ([`solve_conduction`]), then the elastic
+/// solve driven by the
 /// thermal-expansion load from the document's reference temperature (`solve tref=`,
 /// default 20 °C). Stress recovery carries the thermal term; the nodal temperature and
 /// the conduction report travel on the result. A thermal case runs without mechanical
@@ -607,8 +638,9 @@ pub fn run_thermal_case(
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
     let robin = case_convections(doc, mesh, facets, &name, h)?;
-    let (t, creport) =
-        solve_conduction(mesh, &d, &robin, SolverOptions::default()).map_err(SetupError)?;
+    let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
+    let (t, creport) = solve_conduction(mesh, &d, &robin, &flux, SolverOptions::default())
+        .map_err(SetupError)?;
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
@@ -685,6 +717,7 @@ fn prepare(
         && doc.loads.is_empty()
         && doc.temperatures.is_empty()
         && doc.convections.is_empty()
+        && doc.heat_fluxes.is_empty()
     {
         return Err(SetupError("add a load".into()));
     }
@@ -1247,6 +1280,47 @@ convection air_band air h=0.1 tinf=20 case=\"Steady\"
         let cr = th.conduction.as_ref().expect("conduction report");
         assert!(cr.converged && cr.iterations > 0);
         // The gradient field still drives measurable expansion.
+        assert!(th.max_displacement > 0.0, "thermal expansion displaced nothing");
+    }
+
+    /// The flux twin of CONVECTION: a prescribed inflow of q = 2 W/mm² on the far face
+    /// drives T = 100 + 2x through the same bar, so the driven face sits at 180 °C.
+    const HEATFLUX: &str = "\
+name \"Heated bar\"
+custommaterial alu e=70000 nu=0.33 a=2.3e-5 yield=250 density=2.7
+material alu
+box bar size=(40, 10, 10) at=(20, 5, 5)
+region root_face = bar.nx
+region hot = bar.px
+support clamp root_face fixed=xyz
+temperature root root_face temp=100 case=\"Steady\"
+heatflux inflow hot q=2 case=\"Steady\"
+";
+
+    #[test]
+    fn heatflux_band_drives_the_thermal_case() {
+        let d = parse(HEATFLUX);
+        let a = analyse(&d, Resolution::Size(2.0), now).expect("analyse");
+        let th = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Steady")
+            .expect("thermal case");
+        let t = th.temperature.as_ref().expect("temperature field");
+        for (n, p) in a.mesh.nodes.iter().enumerate() {
+            let want = 100.0 + 2.0 * p[0];
+            assert!(
+                (t[n] - want).abs() < 1e-6,
+                "node at ({:.3}, {:.3}, {:.3}): {} °C, analytic wall says {:.4}",
+                p[0],
+                p[1],
+                p[2],
+                t[n],
+                want
+            );
+        }
+        let cr = th.conduction.as_ref().expect("conduction report");
+        assert!(cr.converged && cr.iterations > 0);
         assert!(th.max_displacement > 0.0, "thermal expansion displaced nothing");
     }
 

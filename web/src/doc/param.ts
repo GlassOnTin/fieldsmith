@@ -4,7 +4,7 @@
 // it. A bare id is a let address and never a statement name — shapes are swept through
 // their attribute addresses, and an attribute a let's expression writes is refused with
 // "sweep the let that drives it". Ids resolve against the document — nodes first, then
-// loads, then temperatures, then convections — and applying a value is an edit of that
+// loads, then temperatures, then convections, then heat fluxes — and applying a value is an edit of that
 // one number.
 // Placement (`at`, `rotate`) is addressable on any node; everything else the grammar
 // does not name (region selectors, profile vertices, mesh internals, solve settings,
@@ -191,8 +191,18 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
     noIndex(addr, attr);
     return;
   }
+  const flux = doc.heat_fluxes.find((f) => f.id === id);
+  if (flux) {
+    if (attr !== 'q') {
+      throw new Error(
+        `param ${addrText(addr)}: heat flux ${JSON.stringify(id)} has no numeric parameter ${JSON.stringify(attr)} — q`,
+      );
+    }
+    noIndex(addr, attr);
+    return;
+  }
   throw new Error(
-    `param ${addrText(addr)}: no node, load, temperature or convection named ${JSON.stringify(id)}`,
+    `param ${addrText(addr)}: no node, load, temperature, convection or heat flux named ${JSON.stringify(id)}`,
   );
 }
 
@@ -313,6 +323,8 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
     if (attr === 'h') conv.h = v;
     else if (attr === 'tinf') conv.t_inf = v;
   }
+  const flux = doc.heat_fluxes.find((f) => f.id === target);
+  if (flux) flux.q = v;
 }
 
 // Expression evaluation, the fsm.rs twin --------------------------------------
@@ -521,12 +533,14 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
   const temp = doc.temperatures.find((t) => t.id === addr.id);
   if (temp) return temp.celsius;
   const conv = doc.convections.find((c) => c.id === addr.id);
-  return conv ? (addr.attr === 'h' ? conv.h : conv.t_inf) : null;
+  if (conv) return addr.attr === 'h' ? conv.h : conv.t_inf;
+  const flux = doc.heat_fluxes.find((f) => f.id === addr.id);
+  return flux ? flux.q : null;
 }
 
 /** Every addressable parameter of the document, in resolve order — nodes in walk
  * order (kind numbers first, then at/rotate), then loads, then temperatures, then
- * convections, then the lets. This is the picker's list. */
+ * convections, then the heat fluxes, then the lets. This is the picker's list. */
 export function addressableParams(doc: Document): { addr: string; value: number | null }[] {
   const out: { addr: string; value: number | null }[] = [];
   const push = (id: string, attr: string, comp: number | null, value: number | null) =>
@@ -563,6 +577,7 @@ export function addressableParams(doc: Document): { addr: string; value: number 
     push(c.id, 'h', null, c.h);
     push(c.id, 'tinf', null, c.t_inf);
   }
+  for (const f of doc.heat_fluxes) push(f.id, 'q', null, f.q);
   // Lets last, and only their names — a bare id is refused for any statement name, so
   // the two blocks cannot collide.
   for (const l of doc.lets ?? []) out.push({ addr: l.name, value: l.value });

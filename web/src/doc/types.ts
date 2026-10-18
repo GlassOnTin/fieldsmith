@@ -156,6 +156,8 @@ export interface Document {
   /** Convective (Robin) bands; the Rust side always serializes the key, and stale
    * intakes (old saved JSON) are backfilled by [withLetTables]. */
   convections: Convection[];
+  /** Prescribed heat-flux (Neumann) bands; backfilled like the convections. */
+  heat_fluxes: HeatFlux[];
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
@@ -192,6 +194,20 @@ export interface Convection {
   case: string;
 }
 
+/** A prescribed heat-flux (Neumann) boundary: the region's facets gain heat at `q` per
+ * unit area, positive into the solid, negative out — the only boundary data besides a
+ * Temperature or a Convection. `q` is in W/mm² against the solver's pinned conductiv-
+ * ity k = 1 W/(mm·K); 1 kW/m² of solar loading is 1e-3 here. A flux band carries no
+ * matrix term, so a case whose only boundary data is heat flux has no steady solution
+ * (the level is free); it needs a Temperature or an `h > 0` Convection somewhere.
+ * Two flux bands on one region in one case superpose legally — their `q` adds. */
+export interface HeatFlux {
+  id: string;
+  region: string;
+  q: number;
+  case: string;
+}
+
 export const FACE_LABEL: Record<Face, string> = {
   all: 'All faces',
   px: '+X face',
@@ -214,6 +230,7 @@ export function emptyDocument(): Document {
     loads: [],
     temperatures: [],
     convections: [],
+    heat_fluxes: [],
     material: 'petg',
     custom_materials: [],
     fill: null,
@@ -224,12 +241,14 @@ export function emptyDocument(): Document {
 }
 
 /** Backfill the let tables on a document that crossed the wasm boundary (the Rust side
- * omits both when empty) and the convections list of a document saved before the
- * convection statements existed. Mutates and returns the doc. */
+ * omits both when empty), the convections list of a document saved before the
+ * convection statements existed, and likewise the heat_fluxes list. Mutates and
+ * returns the doc. */
 export function withLetTables<T extends Document>(doc: T): T {
   doc.lets ??= [];
   doc.consumed ??= [];
   doc.convections ??= [];
+  doc.heat_fluxes ??= [];
   return doc;
 }
 
@@ -292,6 +311,7 @@ export function allIds(doc: Document): Set<string> {
   // fresh ids avoid everything named.
   for (const t of doc.temperatures) s.add(t.id);
   for (const c of doc.convections) s.add(c.id);
+  for (const f of doc.heat_fluxes) s.add(f.id);
   for (const l of doc.lets ?? []) s.add(l.name);
   return s;
 }

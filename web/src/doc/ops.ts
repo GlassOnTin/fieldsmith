@@ -135,8 +135,8 @@ export function nudgeNode(doc: Document, id: string, delta: -1 | 1): boolean {
 
 export const ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Rename any id (node, region, support, load, temperature, convection), updating every
- * reference. */
+/** Rename any id (node, region, support, load, temperature, convection, heat flux),
+ * updating every reference. */
 export function renameId(doc: Document, from: string, to: string): string | null {
   if (!ID_RE.test(to)) return 'Names start with a letter and use letters, digits and _ only.';
   if (from === to) return null;
@@ -162,6 +162,7 @@ export function renameId(doc: Document, from: string, to: string): string | null
     for (const l of doc.loads) if (l.region === from) l.region = to;
     for (const t of doc.temperatures) if (t.region === from) t.region = to;
     for (const c of doc.convections) if (c.region === from) c.region = to;
+    for (const f of doc.heat_fluxes) if (f.region === from) f.region = to;
     return null;
   }
   const sup = doc.supports.find((r) => r.id === from);
@@ -184,6 +185,12 @@ export function renameId(doc: Document, from: string, to: string): string | null
   const conv = doc.convections.find((r) => r.id === from);
   if (conv) {
     conv.id = to;
+    rewire();
+    return null;
+  }
+  const flux = doc.heat_fluxes.find((r) => r.id === from);
+  if (flux) {
+    flux.id = to;
     rewire();
     return null;
   }

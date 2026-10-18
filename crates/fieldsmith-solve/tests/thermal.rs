@@ -5,8 +5,8 @@
 use fieldsmith_solve::p2::P2Mesh;
 use fieldsmith_solve::pcg::SolverOptions;
 use fieldsmith_solve::{
-    element_laplace, element_robin, element_thermal_integrals, nodal_stress_thermal,
-    solve_conduction, thermal_load, RobinBc, ThermalRefData,
+    element_flux, element_laplace, element_robin, element_thermal_integrals, nodal_stress_thermal,
+    solve_conduction, thermal_load, HeatFluxBc, RobinBc, ThermalRefData,
 };
 
 const V: [[f64; 3]; 4] = [
@@ -293,7 +293,7 @@ fn conduction_reproduces_linear_field_exactly() {
             d[mesh.nverts + k] = None;
         }
     }
-    let (t, report) = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap();
+    let (t, report) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
     assert!(report.converged, "{report:?}");
     assert!(report.iterations > 0, "expected real iterations");
     for (i, ti) in t.iter().enumerate() {
@@ -310,8 +310,9 @@ fn conduction_reproduces_linear_field_exactly() {
 fn conduction_names_the_unsolvable_case() {
     let mesh = star_mesh();
     let d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
-    let e = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap_err();
+    let e = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap_err();
     assert!(e.contains("at least one temperature region"), "{e}");
+    assert!(e.contains("every face would be insulated"), "{e}");
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +375,7 @@ fn convection_bar_matches_the_analytic_profile() {
             t_inf: 20.0,
             facets: wall,
         }],
+        &[],
         opts,
     )
     .unwrap();
@@ -408,6 +410,7 @@ fn convection_only_body_settles_to_t_inf() {
             t_inf: 42.0,
             facets,
         }],
+        &[],
         opts,
     )
     .unwrap();
@@ -436,8 +439,8 @@ fn zero_convection_band_is_a_no_op() {
         t_inf: 20.0,
         facets: wall,
     };
-    let (t0, r0) = solve_conduction(&mesh, &d, &[band], SolverOptions::default()).unwrap();
-    let (t1, r1) = solve_conduction(&mesh, &d, &[], SolverOptions::default()).unwrap();
+    let (t0, r0) = solve_conduction(&mesh, &d, &[band], &[], SolverOptions::default()).unwrap();
+    let (t1, r1) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
     assert_eq!(t0, t1);
     assert_eq!(r0.iterations, r1.iterations);
 }
@@ -463,6 +466,7 @@ fn convection_band_validates() {
                 t_inf: 20.0,
                 facets: wall.clone(),
             }],
+            &[],
             SolverOptions::default(),
         )
         .unwrap_err();
@@ -476,10 +480,199 @@ fn convection_band_validates() {
             t_inf: f64::NAN,
             facets: wall,
         }],
+        &[],
         SolverOptions::default(),
     )
     .unwrap_err();
     assert!(e.contains("t_inf must be finite"), "{e}");
+}
+
+// ---------------------------------------------------------------------------
+// Heat flux (Neumann): the lump integral, the solve against an analytically
+// known profile, and the bands' effect on fixed rows and each other.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn flux_lump_integrals_partition_the_face() {
+    // element_flux is element_robin's lump row without the matrix. On the P2 face trace
+    // each corner function is its own λ(2λ−1) — mean zero over the face — and each
+    // edge-midside function is 4λiλj — mean A/3 — so a uniform q lands entirely on the
+    // three midsides and conserves q·A.
+    let mesh = unit_tet();
+    let l = element_flux(&mesh, &[0, 1, 2, 4, 5, 6]);
+    let sum_l: f64 = l.iter().sum();
+    assert!((sum_l - 0.5).abs() < 1e-12, "Σl = {sum_l}");
+    for x in l[0..3].iter() {
+        assert!(x.abs() < 1e-14, "corner lumps: {l:?}");
+    }
+    for x in l[3..6].iter() {
+        assert!((x - 1.0 / 6.0).abs() < 1e-12, "midside lumps: {l:?}");
+    }
+}
+
+#[test]
+fn heatflux_bar_matches_the_analytic_profile() {
+    // The 1D wall with a prescribed inflow instead of a convection: T(0) = 100 fixed,
+    // q = +2 W/mm² across x = 1 heats the solid, so ∂T/∂n = q/k = 2 gives T = 100 + 2x
+    // with the far face at 102. The profile lies in the P2 space and satisfies every
+    // equation pointwise, so the discrete solve must reproduce it to solver accuracy.
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    assert_eq!(wall.len(), 2, "the x = 1 face is two triangles");
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let (t, report) = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[HeatFluxBc { q: 2.0, facets: wall }],
+        opts,
+    )
+    .unwrap();
+    assert!(report.converged, "{report:?}");
+    assert!(report.iterations > 0, "expected real iterations");
+    for (i, ti) in t.iter().enumerate() {
+        let want = 100.0 + 2.0 * mesh.nodes[i][0];
+        assert!(
+            (ti - want).abs() < 1e-9,
+            "node {i} at {:?}: {ti} vs {want}",
+            mesh.nodes[i]
+        );
+    }
+}
+
+#[test]
+fn heatflux_on_fixed_face_is_silent() {
+    // A flux band on the fixed face contributes q·l only to lifted rows, and the lift
+    // zeroes the fixed rows' rhs: the field and the iteration count must match the
+    // flux-free solve bit for bit.
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall0 = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 0.0))
+        .collect::<Vec<_>>();
+    assert!(!wall0.is_empty(), "the x = 0 face has facets");
+    let (t0, r0) = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[HeatFluxBc {
+            q: 10.0,
+            facets: wall0,
+        }],
+        SolverOptions::default(),
+    )
+    .unwrap();
+    let (t1, r1) = solve_conduction(&mesh, &d, &[], &[], SolverOptions::default()).unwrap();
+    assert_eq!(t0, t1);
+    assert_eq!(r0.iterations, r1.iterations);
+}
+
+#[test]
+fn heatflux_band_validates() {
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = vec![Some(100.0); mesh.nodes.len()];
+    let wall = hull_facets(&mesh);
+    let e = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[HeatFluxBc {
+            q: f64::NAN,
+            facets: wall,
+        }],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("q must be finite"), "{e}");
+}
+
+#[test]
+fn flux_only_body_names_its_gap() {
+    // No fixed node, no convection, only a heat flux: still unsolvable, and the error
+    // must say why a flux does not rescue it (the two-variant gate message).
+    let mesh = star_mesh();
+    let facets = hull_facets(&mesh);
+    let d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
+    let e = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[HeatFluxBc {
+            q: 1.0,
+            facets,
+        }],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("a heat flux q alone does not fix the field's level"), "{e}");
+}
+
+#[test]
+fn flux_bands_superpose() {
+    // Two bands stacked on the same face add their q to the load vector; one band with
+    // q = 0.5 + 1.5 must land on the same field to roundoff (the load sums are not
+    // bit-identical, so exact equality is not the bar).
+    let mesh = cube_mesh();
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(100.0) } else { None })
+        .collect();
+    let wall = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    let (t0, _) = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[
+            HeatFluxBc {
+                q: 0.5,
+                facets: wall.clone(),
+            },
+            HeatFluxBc {
+                q: 1.5,
+                facets: wall,
+            },
+        ],
+        SolverOptions::default(),
+    )
+    .unwrap();
+    let wall2 = hull_facets(&mesh)
+        .into_iter()
+        .filter(|f| f[..3].iter().all(|&c| mesh.nodes[c as usize][0] == 1.0))
+        .collect::<Vec<_>>();
+    let (t1, _) = solve_conduction(
+        &mesh,
+        &d,
+        &[],
+        &[HeatFluxBc {
+            q: 2.0,
+            facets: wall2,
+        }],
+        SolverOptions::default(),
+    )
+    .unwrap();
+    for (a, b) in t0.iter().zip(t1.iter()) {
+        assert!((a - b).abs() < 1e-9, "{a} vs {b}");
+    }
 }
 
 #[test]

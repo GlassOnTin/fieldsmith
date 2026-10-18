@@ -373,14 +373,29 @@ pub struct RobinBc {
     pub facets: Vec<[u32; 6]>,
 }
 
+/// A prescribed surface heat flux (Neumann) band: `q` per unit area across the listed
+/// boundary facets, added to the conduction system as `b += q·∫φ dΓ` — `q` positive
+/// heats the solid through that facet, negative draws heat out, and only the surface
+/// metric enters, so facet winding is irrelevant (as with [`RobinBc`]). `q` in W/mm².
+/// A flux band carries no matrix term, so it does not lift the Laplacian's constant
+/// mode: a body whose only boundary data is heat flux has no steady solution (the
+/// solvability gate still requires a fixed temperature or an `h > 0` convection).
+#[derive(Clone, Debug)]
+pub struct HeatFluxBc {
+    pub q: f64,
+    pub facets: Vec<[u32; 6]>,
+}
+
 /// Steady conduction on the P2 mesh with Dirichlet temperatures per node (`Some(t)` =
-/// fixed °C, `None` = insulated) and optional convection (Robin) bands. Returns nodal
-/// temperature (°C). Solvable iff at least one node is fixed or one band has h > 0 —
-/// a wholly insulated body is unsolvable (the Laplacian's constant mode).
+/// fixed °C, `None` = insulated), optional convection (Robin) bands, and optional
+/// prescribed heat-flux bands. Returns nodal temperature (°C). Solvable iff at least
+/// one node is fixed or one band has h > 0 — a wholly insulated body is unsolvable (the
+/// Laplacian's constant mode), and heat flux alone does not fix the level either.
 pub fn solve_conduction(
     mesh: &P2Mesh,
     d: &[Option<f64>],
     robin: &[RobinBc],
+    flux: &[HeatFluxBc],
     opts: SolverOptions,
 ) -> Result<(Vec<f64>, SolveReport), String> {
     faer::set_global_parallelism(faer::Parallelism::None);
@@ -400,13 +415,26 @@ pub fn solve_conduction(
             ));
         }
     }
+    for (bi, bc) in flux.iter().enumerate() {
+        if !bc.q.is_finite() {
+            return Err(format!(
+                "heat flux band {bi}: q must be finite (got {})",
+                bc.q
+            ));
+        }
+    }
     let fixed: Vec<bool> = d.iter().map(|x| x.is_some()).collect();
     if !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0) {
-        return Err(
+        return Err(if flux.is_empty() {
             "conduction has no fixed temperature and no convection band with h > 0 — every \
              face would be insulated; place at least one temperature region or a convection"
-                .into(),
-        );
+                .into()
+        } else {
+            "conduction has no fixed temperature and no convection band with h > 0 — a heat \
+             flux q alone does not fix the field's level; place at least one temperature \
+             region or a convection"
+                .into()
+        });
     }
     let mut a = assemble_laplace(mesh);
     // Assemble the Robin terms (before the Dirichlet lift, so a shared Dirichlet/Robin
@@ -421,6 +449,17 @@ pub fn solve_conduction(
                 for j in 0..6 {
                     a.add(ni, f[j], bc.h * m[i][j]);
                 }
+            }
+        }
+    }
+    // Heat-flux bands join the same load vector — the facet integral is the flux's
+    // whole contribution; no matrix term. Facets on fixed rows are lifted to zero with
+    // the rest of the right-hand side.
+    for bc in flux {
+        for f in &bc.facets {
+            let l = element_flux(mesh, f);
+            for i in 0..6 {
+                load[f[i] as usize] += bc.q * l[i];
             }
         }
     }
@@ -537,6 +576,13 @@ pub fn element_robin(mesh: &P2Mesh, nodes: &[u32; 6]) -> ([[f64; 6]; 6], [f64; 6
         }
     }
     (m, l)
+}
+
+/// Nodal surface-flux integrals for one boundary facet: `flux[a] = ∫φa dΓ` — the facet
+/// mass row [`element_robin`] returns, the prescribed surface heat flux's whole weak
+/// contribution (no matrix term). Same quadrature, same winding irrelevance.
+pub fn element_flux(mesh: &P2Mesh, nodes: &[u32; 6]) -> [f64; 6] {
+    element_robin(mesh, nodes).1
 }
 
 /// Reference data for the degree-3 integrand of the thermal load

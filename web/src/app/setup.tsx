@@ -1,13 +1,13 @@
-// Setup lens: regions, supports, loads, temperatures and convections on top of the shape
-// model. Clicking a surface makes a region (with the region selected, further clicks join
-// its selector list); supports, loads and temperatures attach to regions and
+// Setup lens: regions, supports, loads, temperatures, convections and heat fluxes on top
+// of the shape model. Clicking a surface makes a region (with the region selected, further
+// clicks join its selector list); supports, loads and temperatures attach to regions and
 // supports/loads draw as glyphs where the analysed mesh actually supports them.
 import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
-import type { Convection, Document, Face, Load, Node, Region, Support, Temperature } from '../doc/types';
+import type { Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
 import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
@@ -68,6 +68,11 @@ function convectionIn(d: Document, id: string): Convection {
   if (!c) throw new Error(`missing convection ${id}`);
   return c;
 }
+function heatfluxIn(d: Document, id: string): HeatFlux {
+  const f = d.heat_fluxes.find((x) => x.id === id);
+  if (!f) throw new Error(`missing heat flux ${id}`);
+  return f;
+}
 
 /** Region id the current selection refers to (a region, or its support/load/temperature). */
 function selectedRegion(doc: Document): string | null {
@@ -79,6 +84,7 @@ function selectedRegion(doc: Document): string | null {
     if (s.kind === 'load') return loadIn(doc, s.id).region;
     if (s.kind === 'temperature') return temperatureIn(doc, s.id).region;
     if (s.kind === 'convection') return convectionIn(doc, s.id).region;
+    if (s.kind === 'heatflux') return heatfluxIn(doc, s.id).region;
   } catch {
     return null;
   }
@@ -487,13 +493,13 @@ analysis.subscribe(() => ui.emit());
 
 // ---- add / select helpers -------------------------------------------------------------
 
-function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection') {
+function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection' | 'heatflux') {
   const rid = selectedRegion(store.doc);
   if (!rid) {
     ui.notify('Create a region first: click a surface in the model.', 'error');
     return;
   }
-  const label = kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : kind === 'convection' ? 'Add convection' : 'Add temperature';
+  const label = kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : kind === 'convection' ? 'Add convection' : kind === 'heatflux' ? 'Add heat flux' : 'Add temperature';
   let id = '';
   store.transact(label, (d) => {
     id = freshId(d, kind);
@@ -501,7 +507,8 @@ function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection') {
     else if (kind === 'load')
       d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
     else if (kind === 'temperature') d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
-    else d.convections.push({ id, region: rid, h: 5e-6, t_inf: 20, case: 'Thermal 1' });
+    else if (kind === 'convection') d.convections.push({ id, region: rid, h: 5e-6, t_inf: 20, case: 'Thermal 1' });
+    else d.heat_fluxes.push({ id, region: rid, q: 1e-3, case: 'Thermal 1' });
   });
   store.select({ kind, id });
 }
@@ -521,7 +528,7 @@ function SectionHead(props: { label: string; add?: () => void; title?: string; t
   );
 }
 
-function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature' | 'convection'; id: string; swatch?: string; meta: string }) {
+function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature' | 'convection' | 'heatflux'; id: string; swatch?: string; meta: string }) {
   const selected = store.selection?.kind === props.kind && store.selection.id === props.id;
   return (
     <div
@@ -534,7 +541,7 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
-        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : '↓'}</span>
+        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : props.kind === 'heatflux' ? '→' : '↓'}</span>
       )}
       <span class="row-name">{props.id}</span>
       <span class="meta">{props.meta}</span>
@@ -597,6 +604,18 @@ function SetupTree() {
       )}
       {doc.convections.map((c) => (
         <AnalysisRow key={c.id} kind="convection" id={c.id} meta={`h ${c.h} · ${c.t_inf} °C · ${c.case}`} />
+      ))}
+      <SectionHead
+        label="Heat fluxes"
+        add={() => addAnalysis('heatflux')}
+        title="Add heat flux on the selected region"
+        testId="add-heatflux"
+      />
+      {doc.heat_fluxes.length === 0 && (
+        <div class="hint">Select a region, then add a heat flux.</div>
+      )}
+      {doc.heat_fluxes.map((f) => (
+        <AnalysisRow key={f.id} kind="heatflux" id={f.id} meta={`q ${f.q} · ${f.case}`} />
       ))}
     </>
   );
@@ -669,11 +688,13 @@ function removeFace(regionId: string, index: number) {
       for (const l of d.loads) if (l.region === regionId) gone.add(l.id);
       for (const t of d.temperatures) if (t.region === regionId) gone.add(t.id);
       for (const c of d.convections) if (c.region === regionId) gone.add(c.id);
+      for (const f of d.heat_fluxes) if (f.region === regionId) gone.add(f.id);
       d.regions = d.regions.filter((x) => x.id !== regionId);
       d.supports = d.supports.filter((s) => s.region !== regionId);
       d.loads = d.loads.filter((l) => l.region !== regionId);
       d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
       d.convections = d.convections.filter((c) => c.region !== regionId);
+      d.heat_fluxes = d.heat_fluxes.filter((f) => f.region !== regionId);
       if (d.fill) d.fill.protect = d.fill.protect.filter((p) => p !== regionId);
       pruneConsumers(d, gone);
     }
@@ -1231,6 +1252,56 @@ function ConvectionInspector({ id }: { id: string }) {
   );
 }
 
+function HeatFluxInspector({ id }: { id: string }) {
+  useApp();
+  const f = store.doc.heat_fluxes.find((x) => x.id === id);
+  if (!f) return null;
+  return (
+    <div class="insp" data-inspector="heatflux">
+      <div class="insp-heading">
+        <span class="kind">Heat flux</span>
+        <span class="row-name">{f.id}</span>
+      </div>
+      <NameField id={f.id} />
+      <div class="field-grid">
+        <label class="plain">Region</label>
+        <RegionPicker
+          value={f.region}
+          testId="heatflux-region"
+          commit={(rid) =>
+            store.transact('Set heat flux region', (d) => void (heatfluxIn(d, id).region = rid))
+          }
+        />
+        <NumRow
+          label="Flux q"
+          unit="W/mm²"
+          get={(d) => heatfluxIn(d, id).q}
+          set={(d, v) => {
+            heatfluxIn(d, id).q = v;
+          }}
+          undoLabel="Set heat flux q"
+          testId="heatflux-q"
+          step={1e-3}
+          title="Heat entering per unit area in W/mm²; positive is into the solid, negative is out (1 kW/m² is 1e-3)"
+          driven={drivenExpr(store.doc, id, 'q')}
+        />
+        <TextInputRow
+          label="Case"
+          value={f.case}
+          commit={(v) => store.transact('Set heat flux case', (d) => void (heatfluxIn(d, id).case = v))}
+          testId="heatflux-case"
+          title="Named thermal case; a case name cannot also be a load case"
+        />
+      </div>
+      <div class="hint" style={{ gridColumn: '1 / -1' }}>
+        The region absorbs q per unit area into the conduction solve; q alone does not fix the
+        field's level, so the case also needs a fixed temperature or a convection somewhere.
+        Fluxes superpose on one region, and a fixed temperature on the same region wins there.
+      </div>
+    </div>
+  );
+}
+
 // ---- registration ---------------------------------------------------------------------
 
 viewportExtensions.push({
@@ -1244,6 +1315,7 @@ inspectors['support'] = (id) => <SupportInspector id={id} />;
 inspectors['load'] = (id) => <LoadInspector id={id} />;
 inspectors['temperature'] = (id) => <TemperatureInspector id={id} />;
 inspectors['convection'] = (id) => <ConvectionInspector id={id} />;
+inspectors['heatflux'] = (id) => <HeatFluxInspector id={id} />;
 
 extraCommands.push(() => {
   if (store.lens !== 'setup') return [];
@@ -1275,6 +1347,13 @@ extraCommands.push(() => {
       label: 'Add convection',
       enabled: () => !!selectedRegion(store.doc),
       run: () => addAnalysis('convection'),
+    },
+    {
+      id: 'setup.add-heatflux',
+      group: 'Setup',
+      label: 'Add heat flux',
+      enabled: () => !!selectedRegion(store.doc),
+      run: () => addAnalysis('heatflux'),
     },
   ];
 });

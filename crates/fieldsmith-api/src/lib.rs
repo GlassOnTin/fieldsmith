@@ -563,7 +563,7 @@ load push tip force=(0, 0, -100)";
         assert!(e["error"]
             .as_str()
             .expect("error text")
-            .contains("no node, load, temperature or convection named \"nothere\""));
+            .contains(r#"no node, load, temperature, convection or heat flux named "nothere""#));
     }
 
     #[test]
