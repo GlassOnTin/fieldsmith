@@ -95,6 +95,9 @@ A first-time user can complete a full design-to-print loop without reading a man
   and downstream results update automatically.
 - **Keyboard-first and discoverable.** `Ctrl K` opens the command palette for every action;
   every control shows its shortcut on hover.
+- **Every control and number explains itself.** Each result, load type, and stated model limit
+  carries a link to the governing formula and the verification case (`V#`) that pins its
+  behaviour; the inspector shows units and assumptions beside the value it edits.
 - **Undo everything.** Every edit is a reversible document transaction.
 
 ### Visual principles
@@ -123,8 +126,19 @@ Engineers only use a tool whose numbers they can defend.
   (`V6`) and checked against resolved full-lattice beam solves (`V7`, within 2.1 %).
 - **Integrated mass**: part mass comes from integrating occupancy of the final field, never
   from multiplying solid mass by a nominal target density.
-- **Executable verification suite**: `docs/verification/` (`V1`–`V25`) compares Fieldsmith
+- **Executable verification suite**: `docs/verification/` (`V1`–`V34`) compares Fieldsmith
   against closed-form elasticity, beam, plate-hole, modal, thermal, and mesh benchmarks in CI.
+- **Documentation at the manual standard of the reference codes** (*Ansys Fluent*, *Abaqus*,
+  *FreeFem++*, Stéphane Popinet's *Gerris* / *Basilisk*): every solver, element space, grading
+  law, and constitutive model documents its mathematical foundation — the derivation, its
+  assumptions, and where its discretisation is exact — alongside the verification case (`V#`)
+  and the source path that pin its behaviour. Documentation, interface, and code stay coupled:
+  every formula links the case exercising it, every case links back to the formula and the
+  file, and every on-screen number links to both.
+- **The 5 s find standard.** Documentation and interface are held to one question: from
+  wherever the task starts (a number, a control, a paragraph, a `.fsm` line), what the task
+  needs — the setting, the formula, the verification case, the implementing code — is found
+  within about five seconds, through explicit cross-references and the command palette.
 - **Stated model limits**: linear elastic, small strain, isotropic homogenisation, and steady
   conduction assumptions are stated in the UI and reports alongside the numbers.
 
@@ -151,7 +165,7 @@ Engineers only use a tool whose numbers they can defend.
 │   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
 │   ├─ fieldsmith-mcp     stdio MCP server over fieldsmith-api              │
 │   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
-│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V25)        │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V34)        │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -232,7 +246,7 @@ Two commercial categories border Fieldsmith:
   single-material linear static, modal, and steady thermo-elastic analysis) while adding
   properties nTop does not offer: zero-install browser execution, open AGPL source, a diffable
   text format, fitted and verified Gibson–Ashby laws in the repo (`V6`, `V7`), face-segmented
-  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V25`).
+  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V34`).
 
 ### Roadmap priorities
 
@@ -291,10 +305,12 @@ In priority order beyond the v0.5 foundation cleanup:
 2. Live preview and progressive background compute, never a blocking wizard.
 3. Direct manipulation in the viewport; exact expressions in the inspector.
 4. Every number carries units, provenance, and stated model assumptions.
-5. Verification cases (`V1`–`V25`) are executable tests in CI.
+5. Verification cases (`V1`–`V34`) are executable tests in CI.
 6. One field representation; geometry, regions, physics, and lattices compose.
 7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.
 8. Quiet interface, loud geometry.
+9. The 5 s find standard: for the task at hand, the governing formula, the verification case,
+   and the code behind any number are found within about five seconds.
 
 ---
 
