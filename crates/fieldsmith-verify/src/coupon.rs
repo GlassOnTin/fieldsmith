@@ -293,6 +293,10 @@ pub struct CouponResult {
     pub e_int: Option<f64>,
     /// Apparent modulus over the whole coupon (MPa): the boundary-layer diagnostic.
     pub e_full: Option<f64>,
+    /// Interior Poisson ratio ν = −εyy-slope/εxx-slope over the same band (the cubic
+    /// tensor's second constant for the anisotropic law; the engine's isotropic law's
+    /// ν stays the material's). `None` when the band's lateral regression degenerates.
+    pub nu_int: Option<f64>,
     /// Volume-weighted interior mean σxx (MPa).
     pub sxx_int: f64,
     /// Volume-weighted σxx over the whole coupon (MPa).
@@ -661,6 +665,50 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     } else {
         None // band too wide: the interior band degenerates
     };
+    // The interior lateral strain: the same displacement regression with (y, u_y) over
+    // the x-band's cells (the rigid fixtures sit outside the band; the platens' slip
+    // leaves u_y affine in y there).
+    let eps_yy = {
+        let (mut sw, mut sy, mut su, mut syy, mut syu) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        for (e, t) in mesh.tets.iter().enumerate() {
+            let (mut cy, mut uc) = (0.0f64, 0.0f64);
+            let mut cx = 0.0f64;
+            for k in 0..4 {
+                let p = mesh.nodes[t[k] as usize];
+                cy += p[1];
+                uc += u[3 * t[k] as usize + 1];
+                cx += p[0];
+            }
+            cy /= 4.0;
+            uc /= 4.0;
+            cx /= 4.0;
+            if cx < band || cx > l - band {
+                continue;
+            }
+            let v = mesh.tet_volume(e).abs();
+            sw += v;
+            sy += cy * v;
+            su += uc * v;
+            syy += cy * cy * v;
+            syu += cy * uc * v;
+        }
+        if sw <= 0.0 {
+            None
+        } else {
+            let ybar = sy / sw;
+            let ubar = su / sw;
+            let num = syu - sw * ybar * ubar;
+            let den = syy - sw * ybar * ybar;
+            if den < 1e-12 * syy + 1e-14 {
+                None
+            } else {
+                Some(num / den)
+            }
+        }
+    };
+    let nu_int = eps_yy
+        .zip(eps_int)
+        .map(|(y, x)| -y / x);
     let eps_full = strain_slope(&mesh, &u, 0.0, l);
     let e_star_int = eps_int.map(|e| macro_stress / e.abs());
     let e_star_full = eps_full.map(|e| macro_stress / e.abs());
@@ -770,6 +818,7 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         eps_full,
         e_int: e_star_int,
         e_full: e_star_full,
+        nu_int,
         sxx_int: sxx / vol,
         sxx_all: sxx_all / vol_all,
         ident_energy_err: err_int,
