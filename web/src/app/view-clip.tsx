@@ -18,14 +18,17 @@ function ClipPanel() {
     const b = vp?.bounds;
     if (!clip.on) {
       // Auto-direction: cut the half nearest the camera so the section opens toward the
-      // viewer. The cap normal (−n) then faces the camera and lights properly.
+      // viewer. The cap normal (−n) then faces the camera and lights properly. The plane
+      // lands mid-part: t = 0 is the no-cut rest state by design (the driver routes it
+      // inert for a bit-identical rest frame), so engaging the section must move off it
+      // or the toggle would read as a dead button.
       let dir: 1 | -1 = 1;
       if (b && vp) {
         const cam = vp.camera.position.toArray();
         const mid = (b[0][clip.axis] + b[1][clip.axis]) / 2;
         dir = cam[clip.axis] > mid ? -1 : 1;
       }
-      ui.set('clip', { ...clip, on: true, dir });
+      ui.set('clip', { ...clip, on: true, dir, t: 0.5 });
     } else {
       ui.set('clip', { ...clip, on: false, t: 0 });
     }

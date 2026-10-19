@@ -253,16 +253,32 @@ export async function sectionTest(browser, url, { screens, docsDir }) {
     }
   };
 
-  // ---- (a) no-op at rest, round-trip -----------------------------------------------------
+  // ---- (a) engaging cut is visible; the t = 0 rest state keeps the intact part ------------
   await stash('__capOff');
   await page.locator('[data-testid="clip-toggle"]').click();
-  await page.waitForFunction(() => window.fieldsmith.ui.clip.on === true, null, { timeout: 5000 });
+  await page.waitForFunction(() => window.fieldsmith.ui.clip.t > 0, null, { timeout: 5000 });
   const t0 = await uiClip();
   const plane0 = await expectedPlane();
   const uni0 = await uniforms();
   assertPlane(uni0, plane0);
   check('toggle-on auto-picks a direction (dir ±1)', t0.dir === 1 || t0.dir === -1, JSON.stringify(t0));
+  check(
+    'toggle-on lands mid-part (t = 0.5, a visible cut, not the no-cut rest state)',
+    Math.abs(t0.t - 0.5) < 1e-9,
+    JSON.stringify(t0),
+  );
 
+  await stash('__capOn05');
+  const dOn = await diffCaps('__capOff', '__capOn05');
+  check(
+    'the engaged section visibly cuts part of the frame',
+    dOn.inChanged > 0 && dOn.maxIn > 0,
+    `in-bounds max Δ ${dOn.maxIn}/255, changed ${dOn.inChanged}/${dOn.inBox}`,
+  );
+
+  // The t = 0 rest state: reachable via the slider, keeps the intact part bit-exactly.
+  await setClip('0');
+  await page.waitForFunction(() => Math.abs(window.fieldsmith.ui.clip.t) < 1e-9, null, { timeout: 5000 });
   await stash('__capOn0');
   const d0 = await diffCaps('__capOff', '__capOn0');
   check(
