@@ -463,9 +463,10 @@ fn v34_certified_lower_bound() {
         )
         .section(
             "Coverage and limits",
-            "- The dual/equilibrated upper end C(σ*) = ∫σ*:A⁻¹:σ* ≥ C_true (dual stress \
-             recovery with face-traction equilibration) is not implemented: this gate \
-             certifies the lower end only, so the bracket is one-sided.\n\
+            "- The upper end carries its own recovery and gate: fieldsmith-solve's \
+             `dual` module certifies the complementary side up to the P2 interpolation \
+             defect (V35); this report is the lower end's gate and its own coverage \
+             statement is unchanged here.\n\
              - Rung-level tracked wiring (TrackedValues / RungChange / Tolerance, the api \
              verb, sweep CSV, worker mirror, e2e) is not covered here and is deferred \
              until the upper end lands — tracking one end alone would publish half a \
