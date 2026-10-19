@@ -15,7 +15,7 @@ The expected path for most readers: run it from a clone of this repository.
     bash scripts/build-wasm.sh                # one-time wasm build; re-run after rust changes
     npm --prefix web -- run dev               # then open http://localhost:5173
 
-The dev server hot-reloads the app on edits and serves the threaded build — the wasm
+The dev server hot-reloads the app on edits and serves the threaded build; the wasm
 packages land in the browser through two response headers Vite sends on every file:
 
     Cross-Origin-Opener-Policy: same-origin
@@ -38,7 +38,7 @@ from the latest [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/relea
     python3 -m http.server 8931 --bind 127.0.0.1    # then open http://127.0.0.1:8931
 
 What you should see is the app itself. A **directory listing** means the server is rooted
-at the wrong folder — the unpacked `fieldsmith-*-web` directory carries `index.html` at
+at the wrong folder: the unpacked `fieldsmith-*-web` directory carries `index.html` at
 its top; the repository (or the folder you downloaded into) does not.
 
 If the port is already taken, `http.server` exits with "Address already in use", and then
