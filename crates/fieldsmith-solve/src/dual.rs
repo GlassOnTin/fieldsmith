@@ -283,6 +283,25 @@ pub fn upper_compliance(
     }
 
     // ---- system dimensions ----
+    // Row (d) count up front: every family writes into one matrix, and the (d) rows'
+    // ordinals are known before the first entry is assembled.
+    let rows_d = {
+        let mut n = 0usize;
+        for (id, pres) in prescribed_t.iter().enumerate() {
+            if !(count[id] == 1 && pres.is_none()) {
+                continue;
+            }
+            for cc in 0..3 {
+                let pinned = corners[id]
+                    .iter()
+                    .all(|&node| problem.fixed[node as usize] & (1 << cc) != 0);
+                if !pinned {
+                    n += 6;
+                }
+            }
+        }
+        n
+    };
     let e_count = mesh.tets.len();
     let n_sigma = 60 * e_count; // P2 stress: 6 components × the element's 10 P2 nodes
     let mut f_int = 0usize;
@@ -303,7 +322,8 @@ pub fn upper_compliance(
     let rows_a = 3 * mesh.nodes.len();
     let rows_b = 18 * f_int; // H(div): the facet's 6 P2 nodes × 3 components
     let rows_c = 18 * f_pin;
-    let rows_total = rows_a + rows_b + rows_c;
+    let rows_total = rows_a + rows_b + rows_c + rows_d;
+    let rows_c_end = rows_a + rows_b + rows_c; // rows [rows_c_end..rows_total] are the (d) family
 
     if rows_total > 12_000 {
         return Err(format!(
@@ -642,31 +662,9 @@ pub fn upper_compliance(
     // supports; refused by the residual check otherwise. The row (c)/(d) traces together
     // pin the full facet traction: pinned components to the prescribed reaction (free),
     // unpinned ones to zero.
-    let rows_d = {
-        let mut n = 0usize;
-        for (id, pres) in prescribed_t.iter().enumerate() {
-            if !(count[id] == 1 && pres.is_none()) {
-                continue;
-            }
-            for cc in 0..3 {
-                let pinned = corners[id]
-                    .iter()
-                    .all(|&node| problem.fixed[node as usize] & (1 << cc) != 0);
-                if !pinned {
-                    n += 6;
-                }
-            }
-        }
-        n
-    };
-    let mut c_mat_d = FMat::<f64>::zeros(rows_total + rows_d, n_sigma);
-    for r in 0..rows_total {
-        for j in 0..n_sigma {
-            c_mat_d[(r, j)] = c_mat[(r, j)];
-        }
-    }
-    let mut rhs_d = vec![0.0f64; rows_total + rows_d];
-    rhs_d[..rows_total].copy_from_slice(&rhs);
+    // ---- row (d): unpinned-component Γ_D traces vanish ----
+    // (the comment block above the original count moved up; the count now precedes the
+    // assembly so every family writes into one matrix.)
     {
         let mut dd = 0usize;
         for e in 0..e_count {
@@ -695,7 +693,7 @@ pub fn upper_compliance(
                             id,
                         )
                         .expect("facet node shape exists");
-                        let row = rows_total + dd;
+                        let row = rows_c_end + dd;
                         dd += 1;
                         for k in 0..6 {
                             if nt[k][cc] == 0.0 {
@@ -707,7 +705,7 @@ pub fn upper_compliance(
                                 };
                                 let mom = facet_pair(sq, mq, phi.0, phi.1, area[id]);
                                 if mom != 0.0 {
-                                    c_mat_d[(row, sid(e, q, k))] += nt[k][cc] * mom;
+                                    c_mat[(row, sid(e, q, k))] += nt[k][cc] * mom;
                                 }
                             }
                         }
@@ -718,11 +716,6 @@ pub fn upper_compliance(
         }
         let _ = dd;
     }
-    // The certification system is (a)+(b)+(c)+(d); solve and witness on it.
-    let c_mat = c_mat_d;
-    let rhs = rhs_d;
-    let rows_total = rows_total + rows_d;
-
     // Stage 1: any feasible point, via dense least squares (over-determined) or the
     // minimum-norm normal equations (under-determined).
     let rhs_mat = FMat::<f64>::from_fn(rows_total, 1, |i, _| rhs[i]);
