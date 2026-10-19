@@ -54,6 +54,19 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
             "{label}: {} raw-force compliance",
             ca.name
         );
+        match (&ca.compliance_upper, &cb.compliance_upper) {
+            (None, None) => {}
+            (Some(x), Some(y)) => assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "{label}: {} recovered-stress upper bound",
+                ca.name
+            ),
+            _ => panic!(
+                "{label}: {} compliance_upper present in one analysis only",
+                ca.name
+            ),
+        }
     }
     for (ea, eb) in a.envelope_elem.iter().zip(b.envelope_elem.iter()) {
         assert_eq!(ea.to_bits(), eb.to_bits(), "{label}: envelope element vm");
@@ -90,6 +103,15 @@ fn assert_same_graded(a: &Graded, b: &Graded, label: &str) {
             cb.compliance.to_bits(),
             "{label}: graded raw-force compliance"
         );
+        match (&ca.compliance_upper, &cb.compliance_upper) {
+            (None, None) => {}
+            (Some(x), Some(y)) => assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "{label}: graded recovered-stress upper bound"
+            ),
+            _ => panic!("{label}: graded compliance_upper mismatch"),
+        }
     }
 }
 
@@ -123,8 +145,8 @@ fn save_reload_graded_resolve_is_bit_identical() {
     let base2 = analyse(&reloaded, res, now).expect("solid analysis after reload");
     assert_same_results(&base1, &base2, "solid reference of the filled bracket");
 
-    let g1 = graded_of(&filled, &base1, now).expect("graded");
-    let g2 = graded_of(&reloaded, &base2, now).expect("graded after reload");
+    let g1 = graded_of(&filled, &base1, now, false).expect("graded");
+    let g2 = graded_of(&reloaded, &base2, now, false).expect("graded after reload");
     assert_same_graded(&g1, &g2, "graded bracket");
 }
 

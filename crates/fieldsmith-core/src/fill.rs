@@ -338,7 +338,7 @@ pub fn graded(
     clock: Clock,
 ) -> Result<(Analysis, Graded), SetupError> {
     let base = crate::analyse(doc, res, clock)?;
-    let g = graded_of(doc, &base, clock)?;
+    let g = graded_of(doc, &base, clock, false)?;
     Ok((base, g))
 }
 
@@ -348,6 +348,7 @@ pub fn graded_of(
     doc: &fieldsmith_doc::Document,
     base: &Analysis,
     clock: Clock,
+    equilibrate: bool,
 ) -> Result<Graded, SetupError> {
     let t0 = clock();
     let spec = doc
@@ -522,11 +523,15 @@ pub fn graded_of(
     let facets: Vec<Facet> = base.surface.iter().map(|&nodes| Facet { nodes }).collect();
     let h = base.provenance.element_size;
     let fixed = fixed_mask(doc, &base.mesh, &facets, h)?;
+    let mut node_key: std::collections::HashMap<[u64; 3], u8> = std::collections::HashMap::new();
+    for (i, p) in base.mesh.nodes.iter().enumerate() {
+        node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
+    }
     let mut cases = Vec::new();
     for name in case_names(doc) {
-        let (force, reports, _) = case_force_report(doc, &base.mesh, &facets, &name, h)?;
-        // The graded re-solve does not recover the upper end: the equilibration rides
-        // the solid path's flag, and this path has no prescribed-traction map of its own.
+        let (force, reports, prescribed_map) =
+            case_force_report(doc, &base.mesh, &facets, &name, h)?;
+        let prescribed = crate::prescribed_fn(&node_key, &prescribed_map);
         let mut case = run_case(
             &base.mesh,
             &young,
@@ -534,8 +539,8 @@ pub fn graded_of(
             &fixed,
             force,
             name,
-            false,
-            &|_| None,
+            equilibrate,
+            &prescribed,
         )?;
         case.load_reports = reports;
         cases.push(case);
@@ -565,7 +570,17 @@ pub fn graded_of(
             .collect();
         for name in thermal_names {
             let case = run_thermal_case(
-                doc, &base.mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &k_elem, false,
+                doc,
+                &base.mesh,
+                &young,
+                mat.nu,
+                alpha,
+                &fixed,
+                &facets,
+                name,
+                h,
+                &k_elem,
+                equilibrate,
             )?;
             thermal_cases.push(case);
         }

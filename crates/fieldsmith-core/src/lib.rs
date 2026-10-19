@@ -918,6 +918,39 @@ pub fn analyse_modes(
     })
 }
 
+/// The recovery's boundary-classification closure from the fixed mask and the load
+/// builder's prescribed per-facet tractions: a loaded facet keeps its constant traction,
+/// a supported side's reaction is free, every other boundary facet is traction-free.
+/// Node positions key by exact f64 bits (the nodes are the solve's mesh).
+pub(crate) fn prescribed_fn<'a>(
+    node_key: &'a std::collections::HashMap<[u64; 3], u8>,
+    loaded: &'a std::collections::HashMap<[u64; 9], V3>,
+) -> impl Fn([V3; 3]) -> Option<V3> + 'a {
+    move |ps: [V3; 3]| {
+        let mut key: Vec<u64> = ps.iter().flat_map(|p| p.map(|c| c.to_bits())).collect();
+        key.sort_unstable();
+        let mut key2 = [0u64; 9];
+        key2.copy_from_slice(&key);
+        match loaded.get(&key2) {
+            Some(t) => Some(*t),
+            None => {
+                // No prescribed traction: a facet on a supported side is Dirichlet
+                // (its reaction is free), every other boundary facet is traction-free.
+                let pinned = ps.iter().any(|p| {
+                    node_key
+                        .get(&[p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
+                        .is_some_and(|&m| m != 0)
+                });
+                if pinned {
+                    None
+                } else {
+                    Some([0.0, 0.0, 0.0])
+                }
+            }
+        }
+    }
+}
+
 /// Full analysis: static cases, plus — when `modes` is set — the first mode frequencies
 /// solved on the same mesh (one meshing serves both). `analyse` is the static-only case.
 pub fn analyse_full(
@@ -949,36 +982,12 @@ pub fn analyse_full(
     let mut iterations = 0;
     for name in case_names(doc) {
         let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
-        // Node positions → the fixed mask, keyed by exact f64 bits (the nodes are the
-        // solve's own mesh).
         let mut node_key: std::collections::HashMap<[u64; 3], u8> =
             std::collections::HashMap::new();
         for (i, p) in mesh.nodes.iter().enumerate() {
             node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
         }
-        let prescribed = |ps: [V3; 3]| {
-            let mut key: Vec<u64> = ps.iter().flat_map(|p| p.map(|c| c.to_bits())).collect();
-            key.sort_unstable();
-            let mut key2 = [0u64; 9];
-            key2.copy_from_slice(&key);
-            match prescribed_map.get(&key2) {
-                Some(t) => Some(*t),
-                None => {
-                    // No prescribed traction: a facet on a supported side is Dirichlet
-                    // (its reaction is free), every other boundary facet is traction-free.
-                    let pinned = ps.iter().any(|p| {
-                        node_key
-                            .get(&[p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
-                            .is_some_and(|&m| m != 0)
-                    });
-                    if pinned {
-                        None
-                    } else {
-                        Some([0.0, 0.0, 0.0])
-                    }
-                }
-            }
-        };
+        let prescribed = prescribed_fn(&node_key, &prescribed_map);
         let mut case = run_case(
             &mesh,
             &young,
