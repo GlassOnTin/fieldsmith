@@ -5,31 +5,41 @@ its geometry is an SDF-like field, and every measurement (volume, stress, printe
 from integrating that field, not from a boundary representation. You shape a part, load it,
 and grow its interior to fit the load, all in the browser, with no server.
 
-## Try it
+## Run the web app
 
-Two paths, no install beyond the first command on either.
+Download the static web bundle from the latest
+[GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) (`fieldsmith-*-web.tar.gz`)
+and serve the unpacked folder with any static file server:
 
-Run the solver from a terminal (the example document is in `examples/`):
+    tar -xzf fieldsmith-*-web.tar.gz
+    cd fieldsmith-*-web
+    python3 -m http.server 8000        # then open http://localhost:8000
 
-    fieldsmith check  examples/bracket-filled.fsm
-    fieldsmith solve  examples/bracket.fsm --report
-    fieldsmith export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
-
-Static Linux archives (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, with
-`fieldsmith` and `fieldsmith-mcp`) and a static web bundle (`fieldsmith-*-web.tar.gz`)
-publish on [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) per `v*` tag.
-
-Open the app in a browser: unzip the web bundle and serve it statically. Any static file
-server works on one thread; the threaded build needs two response headers on every file the
-host serves:
+No install beyond unpacking. Without extra host headers the app runs on one worker thread
+(meshing and export take several times longer than the threaded build); the threaded build
+needs two response headers on every file the host serves:
 
     Cross-Origin-Opener-Policy: same-origin
     Cross-Origin-Embedder-Policy: require-corp
 
-The Vite dev and preview servers send both. A static host without them still gives a working
-app on one thread, with meshing and export several times slower; the budget numbers in
+The Vite dev and preview servers send both; the budget numbers in
 [docs/verification/budgets.md](docs/verification/budgets.md) are measured on the threaded
-build.
+build. From source instead of the bundle:
+
+    git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
+    npm --prefix web install                  # once
+    bash scripts/build-wasm.sh                # build the WebAssembly analysis
+    npm --prefix web -- run dev               # serves the app locally
+
+## Run the CLI solver
+
+Static Linux archives (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, carrying
+`fieldsmith` and `fieldsmith-mcp`) publish on the same release page. The example documents
+live in `examples/`:
+
+    fieldsmith check  examples/bracket-filled.fsm
+    fieldsmith solve  examples/bracket.fsm --report
+    fieldsmith export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
 
 ## The document
 
@@ -91,18 +101,14 @@ By what you want to do:
 | automate or distribute | each verb's help text (`fieldsmith --help`, and the `fieldsmith-mcp` binary's own help) |
 | build it | the next section |
 
-## Building from source
+## Building the release artefacts
 
-To build from source:
+The full build, including the verification suite:
 
-    git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
     cargo test -p fieldsmith-verify           # verification cases (V1–V38; V24/V25 in scripts/)
-    npm --prefix web install                  # once
+    npm --prefix web install                  # once (if not done in Run the web app)
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
-
-For development, `bash scripts/build-wasm.sh && npm --prefix web -- run dev` serves the app
-locally.
 
 `build-wasm.sh` produces two packages of the same crate: `web/src/pkg` (single thread,
 stable toolchain) and `web/src/pkg-mt` (shared memory plus a rayon pool on Web Workers;
