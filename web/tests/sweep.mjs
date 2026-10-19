@@ -256,7 +256,7 @@ export async function sweepTest(browser, url, { screens, docsDir }) {
     const SOLVE_DRIFT_REL = 1e-7;
     const CHANGE_DRIFT_REL = 1e-6;
     const gateTxt = (g) => g.toExponential().replace('e+', 'e');
-    const CSV_COLS = ['value', 'dofs', 'elements', 'wall_ms', 'deflection_mm', 'vm_mpa', 'deflection_change_rel', 'vm_change_rel', 'status'];
+    const CSV_COLS = ['value', 'dofs', 'elements', 'wall_ms', 'deflection_mm', 'vm_mpa', 'compliance_nmm', 'deflection_change_rel', 'vm_change_rel', 'compliance_change_rel', 'status'];
     const driftRel = (x, y) => (x === y ? 0 : Math.abs(x - y) / Math.max(Math.abs(x), Math.abs(y)));
     const cmp = { header: false, lines: 0, cells: 0, mismatched: 0, mismatch: '', walls: '', maxDrift: 0, maxChangeDrift: 0 };
     const a = cliCsv.split('\n');
@@ -274,7 +274,7 @@ export async function sweepTest(browser, url, { screens, docsDir }) {
       if (i === 0) continue; // header line: compared by the header check
       for (let c = 0; c < ca.length; c++) {
         if (c === 3) continue;
-        if (c === 0 || c === 1 || c === 2 || c === 8) {
+        if (c === 0 || c === 1 || c === 2 || c === 10) {
           if (ca[c] === cb[c]) {
             if (c !== 0) cmp.cells++;
           } else {
@@ -285,7 +285,7 @@ export async function sweepTest(browser, url, { screens, docsDir }) {
         }
         const na = Number(ca[c]);
         const nb = Number(cb[c]);
-        const gate = c === 6 || c === 7 ? CHANGE_DRIFT_REL : SOLVE_DRIFT_REL;
+        const gate = c === 7 || c === 8 || c === 9 ? CHANGE_DRIFT_REL : SOLVE_DRIFT_REL;
         if (!Number.isFinite(na) || !Number.isFinite(nb)) {
           cmp.mismatched++;
           if (!cmp.mismatch) cmp.mismatch = `row ${i - 1} col ${c} (${CSV_COLS[c]}): not a finite number, native "${ca[c]}" vs web "${cb[c]}"`;
@@ -297,7 +297,7 @@ export async function sweepTest(browser, url, { screens, docsDir }) {
           if (!cmp.mismatch) cmp.mismatch = `row ${i - 1} col ${c} (${CSV_COLS[c]}): rel ${rel.toExponential(2)} > gate ${gate}, native ${ca[c]} vs web ${cb[c]}`;
         } else {
           cmp.cells++;
-          if (c === 6 || c === 7) {
+          if (c === 7 || c === 8 || c === 9) {
             if (rel > cmp.maxChangeDrift) cmp.maxChangeDrift = rel;
           } else if (rel > cmp.maxDrift) cmp.maxDrift = rel;
         }

@@ -34,7 +34,7 @@ export interface SweepState {
 
 /** The CLI's own header (crates/fieldsmith-api/src/sweep_csv.rs::CSV_HEADER); the web
  * writer and the envelope mirror below produce the same first line byte for byte. */
-export const SWEEP_CSV_HEADER = 'value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status';
+export const SWEEP_CSV_HEADER = 'value,dofs,elements,wall_ms,deflection_mm,vm_mpa,compliance_nmm,deflection_change_rel,vm_change_rel,compliance_change_rel,status';
 
 /** One CSV row: the last rung's measured cells, printed the way Rust prints them
  * (`f64::to_string` — rustFloat reproduces it inside the decimal window both files name;
@@ -42,7 +42,13 @@ export const SWEEP_CSV_HEADER = 'value,dofs,elements,wall_ms,deflection_mm,vm_mp
  * columns print as integers on both sides. */
 function csvRow(
   value: string,
-  last: { dofs: number; elements: number; wall_ms: number; tracked: { deflection_mm: number; vm_mpa: number }; change: { deflection_rel: number; vm_rel: number } | null | undefined },
+  last: {
+    dofs: number;
+    elements: number;
+    wall_ms: number;
+    tracked: { deflection_mm: number; vm_mpa: number; compliance_nmm: number };
+    change: { deflection_rel: number; vm_rel: number; compliance_rel: number } | null | undefined;
+  },
   status: string,
 ): string {
   return [
@@ -52,20 +58,23 @@ function csvRow(
     rustFloat(last.wall_ms),
     rustFloat(last.tracked.deflection_mm),
     rustFloat(last.tracked.vm_mpa),
+    rustFloat(last.tracked.compliance_nmm),
     last.change ? rustFloat(last.change.deflection_rel) : '',
     last.change ? rustFloat(last.change.vm_rel) : '',
+    last.change ? rustFloat(last.change.compliance_rel) : '',
     status,
   ].join(',');
 }
 
-/** The sweep answer as the API envelope serializes it: `RungRecord` with the tracked
+/** The sweep answer as the API envelope serializes it (the tracking mirror carries
+ * compliance_nmm/compliance_rel beside deflection and von Mises): `RungRecord` with the tracked
  * maxima and (null on rung 0, no baseline) the change estimate. */
 interface EnvelopeRecord {
   dofs: number;
   elements: number;
   wall_ms: number;
-  tracked: { deflection_mm: number; vm_mpa: number };
-  change: { deflection_rel: number; vm_rel: number } | null | undefined;
+  tracked: { deflection_mm: number; vm_mpa: number; compliance_nmm: number };
+  change: { deflection_rel: number; vm_rel: number; compliance_rel: number } | null | undefined;
 }
 
 interface SweepEnvelope {

@@ -16,8 +16,7 @@
 
 use crate::schema::Response;
 
-pub const CSV_HEADER: &str =
-    "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status";
+pub const CSV_HEADER: &str = "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,compliance_nmm,deflection_change_rel,vm_change_rel,compliance_change_rel,status";
 
 /// Build the sweep CSV from the response. One row per point, in response order: the
 /// point's `value`, its last rung record's `dofs`, `elements`, `wall_ms` and tracked
@@ -40,6 +39,7 @@ pub fn sweep_csv(resp: &Response) -> Result<String, String> {
         // change columns: absent on a single-rung point (no baseline)
         let chd = last.change.as_ref().map(|c| c.deflection_rel.to_string());
         let chv = last.change.as_ref().map(|c| c.vm_rel.to_string());
+        let chc = last.change.as_ref().map(|c| c.compliance_rel.to_string());
         let status = if p.outcome.met.is_some() {
             "met"
         } else if p.outcome.unmet.is_some() {
@@ -55,8 +55,10 @@ pub fn sweep_csv(resp: &Response) -> Result<String, String> {
                 last.wall_ms.to_string(),
                 last.tracked.deflection_mm.to_string(),
                 last.tracked.vm_mpa.to_string(),
+                last.tracked.compliance_nmm.to_string(),
                 chd.unwrap_or_default(),
                 chv.unwrap_or_default(),
+                chc.unwrap_or_default(),
                 status.to_string(),
             ]
             .join(","),
@@ -105,8 +107,11 @@ load push tip force=(0, 0, -100)";
         for row in [&lines[1], &lines[2]] {
             let cols: Vec<&str> = row.split(',').collect();
             assert_eq!(cols.len(), CSV_HEADER.split(',').count());
-            assert!(!cols[7].is_empty(), "vm_change_rel present: {row}");
-            assert_eq!(cols[8], "ok", "no tolerance declared: {row}");
+            assert!(!cols[7].is_empty(), "deflection_change_rel present: {row}");
+            assert!(!cols[8].is_empty(), "vm_change_rel present: {row}");
+            assert!(!cols[9].is_empty(), "compliance_change_rel present: {row}");
+            assert!(cols[6].parse::<f64>().is_ok(), "compliance_nmm: {row}");
+            assert_eq!(cols[10], "ok", "no tolerance declared: {row}");
             // dofs/elements are integers, wall/tracked floats — the format contract.
             assert!(cols[1].parse::<u64>().is_ok(), "dofs: {row}");
             assert!(cols[3].parse::<f64>().is_ok(), "wall_ms: {row}");
@@ -175,7 +180,7 @@ load push tip force=(0, 0, -100)";
                 .find(vm_needle)
                 .expect("vm literal follows deflection inside tracked");
             let vm_start = pos + d_end + vm_idx + vm_needle.len();
-            let v_end = reply.body[vm_start..].find('}').expect("tracked closes");
+            let v_end = reply.body[vm_start..].find(',').expect("vm literal ends");
             let wire_v = &reply.body[vm_start..vm_start + v_end];
             let cols: Vec<&str> = lines[i + 1].split(',').collect();
             assert_eq!(

@@ -48,8 +48,9 @@ const USAGE: &str =
           solve, modes, sweep (M16). Reads the costs store for seeding;
           [--csv FILE] writes the sweep answer as one CSV row per
           point (value,dofs,elements,wall_ms,deflection_mm,vm_mpa,
-          deflection_change_rel,vm_change_rel,status — the last
-          rung's numbers); a non-sweep envelope is a named error and
+          compliance_nmm,deflection_change_rel,vm_change_rel,
+          compliance_change_rel,status — the last rung's numbers); a
+          non-sweep envelope is a named error and
           writes nothing.
   session FILE [--bind A] [--port N] [--once] [--rate R]
           host M15 jobs for a worker: bind (default 127.0.0.1),

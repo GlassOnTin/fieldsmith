@@ -657,10 +657,12 @@ export type ExportDone = { meta: ExportMeta };
 export interface SweepTracked {
   deflection_mm: number;
   vm_mpa: number;
+  compliance_nmm: number;
 }
 export interface SweepChange {
   deflection_rel: number;
   vm_rel: number;
+  compliance_rel: number;
 }
 export interface SweepRecord {
   rung: number;

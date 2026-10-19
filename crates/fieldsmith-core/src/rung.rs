@@ -19,6 +19,9 @@ pub struct TrackedValues {
     pub deflection_mm: f64,
     /// Max over cases of element-centroid von Mises (MPa) — the V3.md stress readout.
     pub vm_mpa: f64,
+    /// Max over cases of the raw-force compliance fᵀu (N·mm) — the certified lower
+    /// bound [`crate::CaseResult::compliance`] carries (fieldsmith_solve::bounds).
+    pub compliance_nmm: f64,
 }
 
 impl TrackedValues {
@@ -28,6 +31,7 @@ impl TrackedValues {
             deflection_mm: 1e-9f64
                 .max(cases.iter().map(|c| c.max_displacement).fold(0.0, f64::max)),
             vm_mpa: 1e-9f64.max(cases.iter().map(|c| c.max_vm_elem).fold(0.0, f64::max)),
+            compliance_nmm: 1e-9f64.max(cases.iter().map(|c| c.compliance).fold(0.0, f64::max)),
         }
     }
 }
@@ -42,10 +46,14 @@ pub struct RungChange {
     pub deflection_rel: f64,
     /// Von Mises change as a fraction of the previous rung's value.
     pub vm_rel: f64,
+    /// Compliance change as a fraction of the previous rung's value.
+    pub compliance_rel: f64,
     /// Deflection change in absolute mm.
     pub deflection_mm: f64,
     /// Von Mises change in absolute MPa.
     pub vm_mpa: f64,
+    /// Compliance change in absolute N·mm.
+    pub compliance_nmm: f64,
 }
 
 impl RungChange {
@@ -54,8 +62,10 @@ impl RungChange {
         RungChange {
             deflection_rel: (cur.deflection_mm - prev.deflection_mm) / prev.deflection_mm,
             vm_rel: (cur.vm_mpa - prev.vm_mpa) / prev.vm_mpa,
+            compliance_rel: (cur.compliance_nmm - prev.compliance_nmm) / prev.compliance_nmm,
             deflection_mm: cur.deflection_mm - prev.deflection_mm,
             vm_mpa: cur.vm_mpa - prev.vm_mpa,
+            compliance_nmm: cur.compliance_nmm - prev.compliance_nmm,
         }
     }
 }
@@ -74,6 +84,10 @@ pub enum Tolerance {
     VonMisesMpa(f64),
     /// Von Mises change as a fraction of the current value.
     VonMisesRel(f64),
+    /// Absolute compliance box (N·mm).
+    ComplianceNmm(f64),
+    /// Compliance change as a fraction of the current value.
+    ComplianceRel(f64),
 }
 
 impl Tolerance {
@@ -99,11 +113,19 @@ impl Tolerance {
         }
         let deflection = matches!(qty.as_str(), "deflection" | "defl");
         let vm = matches!(qty.as_str(), "vm" | "vonmises");
-        match (unit.trim().to_ascii_lowercase().as_str(), deflection, vm) {
-            ("mm", true, _) => Ok(Tolerance::DeflectionMm(value)),
-            ("%", true, _) => Ok(Tolerance::DeflectionRel(value / 100.0)),
-            ("mpa", _, true) => Ok(Tolerance::VonMisesMpa(value)),
-            ("%", false, true) => Ok(Tolerance::VonMisesRel(value / 100.0)),
+        let compliance = qty == "compliance" || qty == "compl";
+        match (
+            unit.trim().to_ascii_lowercase().as_str(),
+            deflection,
+            vm,
+            compliance,
+        ) {
+            ("mm", true, _, _) => Ok(Tolerance::DeflectionMm(value)),
+            ("%", true, _, _) => Ok(Tolerance::DeflectionRel(value / 100.0)),
+            ("mpa", _, true, _) => Ok(Tolerance::VonMisesMpa(value)),
+            ("%", _, true, _) => Ok(Tolerance::VonMisesRel(value / 100.0)),
+            ("nmm", _, _, true) => Ok(Tolerance::ComplianceNmm(value)),
+            ("%", _, _, true) => Ok(Tolerance::ComplianceRel(value / 100.0)),
             _ => Err(bad()),
         }
     }
@@ -115,6 +137,8 @@ impl Tolerance {
             Tolerance::DeflectionRel(v) => change.deflection_rel.abs() <= *v,
             Tolerance::VonMisesMpa(v) => change.vm_mpa.abs() <= *v,
             Tolerance::VonMisesRel(v) => change.vm_rel.abs() <= *v,
+            Tolerance::ComplianceNmm(v) => change.compliance_nmm.abs() <= *v,
+            Tolerance::ComplianceRel(v) => change.compliance_rel.abs() <= *v,
         }
     }
 }
@@ -267,10 +291,12 @@ load push tip force=(0, 0, -100)
         let prev = TrackedValues {
             deflection_mm: 2.0,
             vm_mpa: 100.0,
+            compliance_nmm: 80.0,
         };
         let cur = TrackedValues {
             deflection_mm: 2.02,
             vm_mpa: 98.0,
+            compliance_nmm: 81.6,
         };
         let ch = RungChange::of(prev, cur);
         assert!((ch.deflection_rel - 0.01).abs() < 1e-9);
@@ -280,6 +306,7 @@ load push tip force=(0, 0, -100)
         // Zero floor: the badge's 1e-9 keeps % defined where a raw 0 would divide by zero.
         let zero = RungChange::of(
             TrackedValues {
+                compliance_nmm: 0.0,
                 deflection_mm: 1e-9,
                 vm_mpa: 1e-9,
             },
@@ -331,10 +358,12 @@ load push tip force=(0, 0, -100)
         assert!(Tolerance::parse("deflection:-1mm").is_err());
         let ch = RungChange::of(
             TrackedValues {
+                compliance_nmm: 80.0,
                 deflection_mm: 2.0,
                 vm_mpa: 100.0,
             },
             TrackedValues {
+                compliance_nmm: 81.2,
                 deflection_mm: 2.04,
                 vm_mpa: 101.5,
             },
@@ -343,6 +372,25 @@ load push tip force=(0, 0, -100)
         assert!(!Tolerance::DeflectionRel(0.01).met(&ch));
         assert!(Tolerance::DeflectionMm(0.05).met(&ch));
         assert!(!Tolerance::DeflectionMm(0.03).met(&ch));
+        assert!(
+            (ch.compliance_rel - 0.015).abs() < 1e-9,
+            "{:?}",
+            ch.compliance_rel
+        );
+        assert!((ch.compliance_nmm - 1.2).abs() < 1e-9);
+        assert!(
+            Tolerance::parse("compliance:0.5nmm") == Ok(Tolerance::ComplianceNmm(0.5)),
+            "parse nmm"
+        );
+        assert!(
+            Tolerance::parse("compl:1%") == Ok(Tolerance::ComplianceRel(0.01)),
+            "parse compl %"
+        );
+        assert!(Tolerance::parse("compliance:0.5mm").is_err());
+        assert!(Tolerance::ComplianceRel(0.05).met(&ch));
+        assert!(!Tolerance::ComplianceRel(0.01).met(&ch));
+        assert!(Tolerance::ComplianceNmm(2.0).met(&ch));
+        assert!(!Tolerance::ComplianceNmm(1.0).met(&ch));
         assert!(Tolerance::VonMisesMpa(2.0).met(&ch));
         assert!(!Tolerance::VonMisesMpa(1.0).met(&ch));
     }

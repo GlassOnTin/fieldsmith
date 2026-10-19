@@ -427,7 +427,7 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
         return;
       }
       const records: SweepRecord[] = [];
-      let prev: { d: number; v: number } | null = null;
+      let prev: { d: number; v: number; c: number } | null = null;
       for (let r = 0; r < rungs.length; r++) {
         const t0 = performance.now();
         try {
@@ -438,16 +438,23 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
           // vacuum-flat case still produces a finite change estimate next rung.
           const defl = Math.max(1e-9, ...meta.cases.map((c) => c.max_displacement));
           const vm = Math.max(1e-9, ...meta.cases.map((c) => c.max_vm_elem));
+          const compl = Math.max(1e-9, ...meta.cases.map((c) => c.compliance));
           records.push({
             rung: r,
             target_dofs: rungs[r],
             dofs: meta.provenance.dofs,
             elements: meta.provenance.elements,
             wall_ms: wall,
-            change: prev ? { deflection_rel: (defl - prev.d) / prev.d, vm_rel: (vm - prev.v) / prev.v } : null,
-            tracked: { deflection_mm: defl, vm_mpa: vm },
+            change: prev
+              ? {
+                  deflection_rel: (defl - prev.d) / prev.d,
+                  vm_rel: (vm - prev.v) / prev.v,
+                  compliance_rel: (compl - prev.c) / prev.c,
+                }
+              : null,
+            tracked: { deflection_mm: defl, vm_mpa: vm, compliance_nmm: compl },
           });
-          prev = { d: defl, v: vm };
+          prev = { d: defl, v: vm, c: compl };
           out.free();
         } catch (e) {
           post({ type: 'sweepError', message: `sweep point ${i + 1} of ${values.length} (param ${addr} = ${rustFloat(value)}): ${errText(e)}` });
