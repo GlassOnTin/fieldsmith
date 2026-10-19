@@ -8,7 +8,7 @@
 //! never writes it — writing stays with the CLI (and later the worker host).
 
 use fieldsmith_core::rung::{CostFit, RungChange, RungRecord, Tolerance};
-use fieldsmith_core::{analyse, Clock, Resolution, SetupError};
+use fieldsmith_core::{analyse_full, Clock, Resolution, SetupError};
 use fieldsmith_doc::Document;
 use serde::Serialize;
 
@@ -72,6 +72,9 @@ pub struct Question {
     pub store_rows: Vec<Row>,
     pub machine: Machine,
     pub clock: Clock,
+    /// Recover the certified upper end per case at each rung (an off-by-default opt-in:
+    /// the equilibration is the dense least-squares recovery, not free).
+    pub equilibrate: bool,
 }
 
 /// Where the runner's events go while it works. The CLI prints prose; the JSON layer
@@ -214,7 +217,7 @@ pub fn run(doc: &Document, q: &Question, sink: &mut dyn Sink) -> Result<Outcome,
             }
         }
         let t0 = std::time::Instant::now();
-        let a = analyse(doc, Resolution::Dofs(target), q.clock)?;
+        let a = analyse_full(doc, Resolution::Dofs(target), q.clock, None, q.equilibrate)?;
         let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let rec = RungRecord::of(i, target, wall_ms, records.last(), &a);
         sink.record(&rec);

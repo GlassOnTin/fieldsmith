@@ -17,8 +17,8 @@ use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     compliance, element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
-    solve_conduction, thermal_load, von_mises, HeatFluxBc, Material, P2Mesh, Problem, RobinBc,
-    SolveReport, SolverOptions, Stress, ThermalRefData,
+    solve_conduction, thermal_load, upper_compliance, von_mises, HeatFluxBc, Material, P2Mesh,
+    Problem, RobinBc, SolveReport, SolverOptions, Stress, ThermalRefData, V3,
 };
 use serde::Serialize;
 
@@ -78,6 +78,11 @@ pub struct CaseResult {
     /// represents it. Meaningful only with `solve.converged`
     /// (fieldsmith-solve's `bounds` tests pin the theorem).
     pub compliance: f64,
+    /// The recovered-stress upper bound C(σ*) (N·mm) when the equilibration ran; absent
+    /// from the canon and the wire unless the caller asked for it. Certified up to the
+    /// P2 interpolation defect (crates/fieldsmith-solve/src/dual.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_upper: Option<f64>,
     pub solve: SolveReport,
     /// Provenance of each load in this case, in document order: the applied resultant
     /// and moment, and the face-fit numbers of distributed loads. Empty for the
@@ -264,15 +269,25 @@ pub struct LoadReport {
 /// over the case's facets (corners 0, each midside a/3) or a distributed density
 /// evaluated at facet centroids. Shared by the solid and graded-fill solve paths, and
 /// by the verifier's resolved-model runs.
+/// The load builder's output: the nodal force vector, the per-load reports, and the
+/// prescribed per-facet constant tractions (keyed by the exact f64 bits of the facet's
+/// three corner node positions, sorted) — the recovery's boundary classification data.
+pub type CaseLoads = (
+    Vec<f64>,
+    Vec<LoadReport>,
+    std::collections::HashMap<[u64; 9], V3>,
+);
+
 pub fn case_force_report(
     doc: &Document,
     mesh: &P2Mesh,
     facets: &[Facet],
     name: &str,
     h: f64,
-) -> Result<(Vec<f64>, Vec<LoadReport>), SetupError> {
+) -> Result<CaseLoads, SetupError> {
     let mut force = vec![0.0; mesh.nodes.len() * 3];
     let mut reports = Vec::new();
+    let mut prescribed: std::collections::HashMap<[u64; 9], V3> = std::collections::HashMap::new();
     for l in doc.loads.iter().filter(|l| l.case == name) {
         // Exact-only: traction integrates over the claimed facets' real area, and chime
         // facets the second pass would add (with their mesh-chord area) belong to no
@@ -411,6 +426,18 @@ pub fn case_force_report(
                     LoadKind::Distributed { .. } => unreachable!("dist is Some here"),
                 },
             };
+            // The facet's constant traction, recorded for the certified recovery's
+            // boundary classification (exact-f64 bit key of the corner node positions;
+            // the nodes are shared with the solve's mesh, so the bits are identical).
+            let mut key: Vec<u64> = fct.nodes[..3]
+                .iter()
+                .map(|&n| mesh.nodes[n as usize])
+                .flat_map(|p| p.map(|c| c.to_bits()))
+                .collect();
+            key.sort_unstable();
+            let mut key2 = [0u64; 9];
+            key2.copy_from_slice(&key);
+            prescribed.insert(key2, t);
             // Uniform traction on a 6-node triangle: corners 0, each midside a/3.
             for &n in &fct.nodes[3..] {
                 for c in 0..3 {
@@ -463,7 +490,7 @@ pub fn case_force_report(
         };
         reports.push(report);
     }
-    Ok((force, reports))
+    Ok((force, reports, prescribed))
 }
 
 /// Nodal force vector for one load case. Verifier-resolved runs and simple callers use
@@ -475,7 +502,7 @@ pub fn case_force(
     name: &str,
     h: f64,
 ) -> Result<Vec<f64>, SetupError> {
-    case_force_report(doc, mesh, facets, name, h).map(|(f, _)| f)
+    case_force_report(doc, mesh, facets, name, h).map(|(f, _, _)| f)
 }
 
 /// Nodal Dirichlet map for one thermal case: every P2 node on a temperature statement's
@@ -583,6 +610,7 @@ pub fn case_heat_fluxes(
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
 /// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
 /// runs.
+#[allow(clippy::too_many_arguments)] // the one case call: mesh, moduli, holds, load, name, and the equilibration's inputs
 pub fn run_case(
     mesh: &P2Mesh,
     young: &[f64],
@@ -590,6 +618,8 @@ pub fn run_case(
     fixed: &[u8],
     force: Vec<f64>,
     name: String,
+    equilibrate: bool,
+    prescribed: &dyn Fn([V3; 3]) -> Option<V3>,
 ) -> Result<CaseResult, SetupError> {
     let problem = Problem {
         mesh: mesh.clone(),
@@ -607,12 +637,22 @@ pub fn run_case(
     let max_d = (0..mesh.nodes.len())
         .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
         .fold(0.0, f64::max);
+    let compliance_upper = if equilibrate {
+        Some(
+            upper_compliance(&problem, prescribed)
+                .map_err(SetupError)?
+                .j,
+        )
+    } else {
+        None
+    };
     Ok(CaseResult {
         name,
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
         compliance: compliance(&problem.force, &u),
+        compliance_upper,
         u,
         stress,
         von_mises: vm,
@@ -645,6 +685,7 @@ pub fn run_thermal_case(
     name: String,
     h: f64,
     k: &[f64],
+    equilibrate: bool,
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
     let robin = case_convections(doc, mesh, facets, &name, h)?;
@@ -677,6 +718,15 @@ pub fn run_thermal_case(
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
         compliance: compliance(&problem.force, &u),
+        compliance_upper: if equilibrate {
+            Some(
+                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
+                    .map_err(SetupError)?
+                    .j,
+            )
+        } else {
+            None
+        },
         u,
         stress,
         von_mises: vm,
@@ -875,6 +925,7 @@ pub fn analyse_full(
     res: Resolution,
     clock: Clock,
     modes: Option<usize>,
+    equilibrate: bool,
 ) -> Result<Analysis, SetupError> {
     let Prepared {
         mesh,
@@ -897,8 +948,47 @@ pub fn analyse_full(
     let mut cases = Vec::new();
     let mut iterations = 0;
     for name in case_names(doc) {
-        let (force, reports) = case_force_report(doc, &mesh, &facets, &name, h)?;
-        let mut case = run_case(&mesh, &young, mat.nu, &fixed, force, name)?;
+        let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
+        // Node positions → the fixed mask, keyed by exact f64 bits (the nodes are the
+        // solve's own mesh).
+        let mut node_key: std::collections::HashMap<[u64; 3], u8> =
+            std::collections::HashMap::new();
+        for (i, p) in mesh.nodes.iter().enumerate() {
+            node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
+        }
+        let prescribed = |ps: [V3; 3]| {
+            let mut key: Vec<u64> = ps.iter().flat_map(|p| p.map(|c| c.to_bits())).collect();
+            key.sort_unstable();
+            let mut key2 = [0u64; 9];
+            key2.copy_from_slice(&key);
+            match prescribed_map.get(&key2) {
+                Some(t) => Some(*t),
+                None => {
+                    // No prescribed traction: a facet on a supported side is Dirichlet
+                    // (its reaction is free), every other boundary facet is traction-free.
+                    let pinned = ps.iter().any(|p| {
+                        node_key
+                            .get(&[p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
+                            .is_some_and(|&m| m != 0)
+                    });
+                    if pinned {
+                        None
+                    } else {
+                        Some([0.0, 0.0, 0.0])
+                    }
+                }
+            }
+        };
+        let mut case = run_case(
+            &mesh,
+            &young,
+            mat.nu,
+            &fixed,
+            force,
+            name,
+            equilibrate,
+            &prescribed,
+        )?;
         case.load_reports = reports;
         iterations += case.solve.iterations;
         cases.push(case);
@@ -922,8 +1012,20 @@ pub fn analyse_full(
         // k ≡ 1 solve; the graded re-resolve (fill.rs) passes the core's per-element map.
         let ones_k = vec![1.0; mesh.tets.len()];
         for name in thermal_cases {
+            // Thermal cases prescribe no boundary traction; the expansion pseudo-load is
+            // the body, the supports' reaction tractions are free.
             let case = run_thermal_case(
-                doc, &mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &ones_k,
+                doc,
+                &mesh,
+                &young,
+                mat.nu,
+                alpha,
+                &fixed,
+                &facets,
+                name,
+                h,
+                &ones_k,
+                equilibrate,
             )?;
             iterations += case.solve.iterations;
             cases.push(case);
@@ -994,7 +1096,7 @@ pub fn analyse_full(
 /// frequencies when the document asks for a modal run. (Explicit callers use
 /// [`analyse_full`].)
 pub fn analyse(doc: &Document, res: Resolution, clock: Clock) -> Result<Analysis, SetupError> {
-    analyse_full(doc, res, clock, doc.solve.modes)
+    analyse_full(doc, res, clock, doc.solve.modes, false)
 }
 
 /// The compiled body field (for callers that need to evaluate it alongside an analysis).
@@ -1095,6 +1197,9 @@ load pull pull force=(10, 0, 0)
             case.load_reports[0].resultant
         );
         assert!(case.compliance > 0.0, "compliance is not positive");
+        // Without the equilibration the upper end is absent from the case and the wire.
+        assert!(case.compliance_upper.is_none(), "absent by default");
+
         assert!(
             (case.compliance - want).abs() < 0.02 * want,
             "compliance {} vs c²·V/E {}",
@@ -1114,6 +1219,48 @@ load pull pull force=(10, 0, 0)
             (ux - want_ux).abs() < 0.02 * want_ux,
             "peak u_x {ux} vs c·L/E {want_ux}"
         );
+    }
+
+    /// The case-level upper bound: with `equilibrate` set, `analyse_full` recovers the
+    /// statically admissible stress field per case and carries C(σ*) ≥ the interpolated
+    /// truth (certified up to the P2 interpolation defect). The pulled bar's exact
+    /// solution is in the span, so the recovered bound is tight: C(σ*) ≥ compliance −
+    /// solver slop, both at the closed form c²·V/E.
+    #[test]
+    fn case_compliance_upper_recovers_the_certified_bracket() {
+        let d = parse(PULL);
+        let young = materials::find(&d, "petg").expect("petg").e;
+        let want = 10.0 * 10.0 * 40.0 / (young * 100.0);
+        // At the analysis-lens resolution the mesh is far beyond the dense recovery's
+        // named budget: the flag asks, the recovery refuses by name, and the analysis
+        // carries the refusal as an error the caller presents.
+        let t_r = std::time::Instant::now();
+        let refused = analyse_full(&d, Resolution::Size(2.0), now, None, true)
+            .expect_err("the dense budget refuses");
+        eprintln!("REFUSAL LEG WALL (ms): {}", t_r.elapsed().as_millis());
+        assert!(refused.0.contains("dense recovery"), "{refused:?}");
+        // The coarse path fits the budget: a bracket on the same closed form.
+        let t_p = std::time::Instant::now();
+        let a = analyse_full(&d, Resolution::Size(10.0), now, None, true).expect("analyse");
+        eprintln!("BRACKET LEG WALL (ms): {}", t_p.elapsed().as_millis());
+        let case = a
+            .cases
+            .iter()
+            .find(|c| c.name == "Load 1")
+            .expect("load case");
+        assert!(case.solve.converged);
+        let up = case.compliance_upper.expect("the flag was set");
+        // In-span: both ends at the closed form; the recovery's witness set held or the
+        // recovery would have refused the whole analysis.
+        assert!(
+            (case.compliance - want).abs() < 0.02 * want,
+            "lower end want={want}"
+        );
+        assert!(
+            (up - want).abs() < 0.02 * want,
+            "upper end: {up} vs want {want}"
+        );
+        assert!(up >= case.compliance - 1e-9, "bracket ordering");
     }
 
     /// Modal on an unloaded cantilever (M8): supports alone define the constraints, so a
@@ -1151,11 +1298,11 @@ support clamp root fixed=xyz
             "the first two shapes would animate identically"
         );
         // The static path through the same document still wants a load.
-        let err = analyse_full(&d, Resolution::Size(1.5), now, None).expect_err("no loads");
+        let err = analyse_full(&d, Resolution::Size(1.5), now, None, false).expect_err("no loads");
         assert_eq!(err.0, "add a load");
         // And with a load, the same document carries the modes on the shared mesh.
         let doc = parse(OVERLAP);
-        let a = analyse_full(&doc, Resolution::Size(3.0), now, Some(2)).expect("analyse");
+        let a = analyse_full(&doc, Resolution::Size(3.0), now, Some(2), false).expect("analyse");
         let modes = a.modes.as_ref().expect("modes");
         assert_eq!(modes.frequencies.len(), 2);
         assert!(modes.frequencies.iter().all(|f| *f > 0.0));

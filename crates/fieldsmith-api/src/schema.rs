@@ -54,6 +54,8 @@ pub enum QuestionSpec {
         tolerance: Option<String>,
         #[serde(default)]
         budget: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        equilibrate: bool,
     },
     /// One static solve at the stated resolution (`dofs` target, or explicit `h` mm;
     /// default like the CLI: 150_000 DOF).
@@ -62,6 +64,8 @@ pub enum QuestionSpec {
         dofs: Option<usize>,
         #[serde(default)]
         h: Option<f64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        equilibrate: bool,
     },
     /// `n` natural frequencies at the stated resolution (no load solving: loads are
     /// ignored the same way the CLI says, supports still apply).
@@ -88,6 +92,8 @@ pub enum QuestionSpec {
         rungs: Option<Vec<usize>>,
         #[serde(default)]
         tolerance: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        equilibrate: bool,
     },
 }
 

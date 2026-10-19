@@ -524,8 +524,19 @@ pub fn graded_of(
     let fixed = fixed_mask(doc, &base.mesh, &facets, h)?;
     let mut cases = Vec::new();
     for name in case_names(doc) {
-        let (force, reports) = case_force_report(doc, &base.mesh, &facets, &name, h)?;
-        let mut case = run_case(&base.mesh, &young, mat.nu, &fixed, force, name)?;
+        let (force, reports, _) = case_force_report(doc, &base.mesh, &facets, &name, h)?;
+        // The graded re-solve does not recover the upper end: the equilibration rides
+        // the solid path's flag, and this path has no prescribed-traction map of its own.
+        let mut case = run_case(
+            &base.mesh,
+            &young,
+            mat.nu,
+            &fixed,
+            force,
+            name,
+            false,
+            &|_| None,
+        )?;
         case.load_reports = reports;
         cases.push(case);
     }
@@ -554,7 +565,7 @@ pub fn graded_of(
             .collect();
         for name in thermal_names {
             let case = run_thermal_case(
-                doc, &base.mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &k_elem,
+                doc, &base.mesh, &young, mat.nu, alpha, &fixed, &facets, name, h, &k_elem, false,
             )?;
             thermal_cases.push(case);
         }

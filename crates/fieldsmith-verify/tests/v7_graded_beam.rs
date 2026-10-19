@@ -185,8 +185,17 @@ fn v7_graded_lattice_beam_deflection() {
         let force =
             case_force(&d, &mesh, &facets, &case_name, h).expect("load touches the resolved mesh");
         let young = vec![mat.e; mesh.tets.len()];
-        let case = run_case(&mesh, &young, mat.nu, &fixed, force, case_name.clone())
-            .expect("resolved solve");
+        let case = run_case(
+            &mesh,
+            &young,
+            mat.nu,
+            &fixed,
+            force,
+            case_name.clone(),
+            false,
+            &|_| None,
+        )
+        .expect("resolved solve");
         assert!(
             case.solve.converged,
             "resolved solve h = {h} did not converge: {:?}",

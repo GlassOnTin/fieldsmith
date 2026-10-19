@@ -642,6 +642,7 @@ pub fn analyse(
     doc_json: &str,
     h: Option<f64>,
     dofs: Option<usize>,
+    equilibrate: Option<bool>,
 ) -> Result<AnalysisOut, JsValue> {
     let doc = doc_from(doc_json)?;
     let res = match (h, dofs) {
@@ -650,7 +651,8 @@ pub fn analyse(
         (None, None) => Resolution::Dofs(150_000),
     };
     let modes = doc.solve.modes;
-    let a = core_analyse_full(&doc, res, clock, modes).map_err(js_err)?;
+    let a =
+        core_analyse_full(&doc, res, clock, modes, equilibrate.unwrap_or(false)).map_err(js_err)?;
     Ok(AnalysisOut { a })
 }
 

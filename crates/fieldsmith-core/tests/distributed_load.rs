@@ -260,8 +260,8 @@ fn constant_density_equals_the_force_load() {
     let (m_f, fc_f) = surface_facets(&d_f, 1.0);
     let (m_q, fc_q) = surface_facets(&d_q, 1.0);
     assert_eq!(m_f.nodes.len(), m_q.nodes.len(), "same mesh both docs");
-    let (f_f, r_f) = case_force_report(&d_f, &m_f, &fc_f, "Load 1", 1.0).unwrap();
-    let (f_q, r_q) = case_force_report(&d_q, &m_q, &fc_q, "Load 1", 1.0).unwrap();
+    let (f_f, r_f, _) = case_force_report(&d_f, &m_f, &fc_f, "Load 1", 1.0).unwrap();
+    let (f_q, r_q, _) = case_force_report(&d_q, &m_q, &fc_q, "Load 1", 1.0).unwrap();
     let scale = f_f.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
     let dmax = f_f
         .iter()
@@ -312,7 +312,7 @@ fn total_rescales_to_the_stated_resultant() {
         ),
     );
     let (mesh, facets) = surface_facets(&d, 1.0);
-    let (_, r) = case_force_report(&d, &mesh, &facets, "Load 1", 1.0).unwrap();
+    let (_, r, _) = case_force_report(&d, &mesh, &facets, "Load 1", 1.0).unwrap();
     let rr = &r[0];
     assert!(
         (rr.resultant[2] + 30.0).abs() < 30.0 * 1e-9,

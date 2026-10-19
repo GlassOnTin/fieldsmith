@@ -19,7 +19,7 @@ pub mod store;
 pub mod sweep_csv;
 
 use fieldsmith_core::rung::Tolerance;
-use fieldsmith_core::{analyse, analyse_modes, fsmz, Resolution, SetupError};
+use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
 use fieldsmith_doc::{fsm, param, Document, NodeKind};
 use fieldsmith_field::expr;
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
@@ -141,6 +141,7 @@ pub fn respond(input: &str) -> Reply {
             rungs,
             tolerance,
             budget,
+            equilibrate,
         } => {
             if doc.fill.is_some() {
                 return error_reply(
@@ -195,6 +196,7 @@ pub fn respond(input: &str) -> Reply {
                 store_rows,
                 machine,
                 clock: question::clock,
+                equilibrate,
             };
             let mut sink = Collect;
             match question::run(&doc, &q, &mut sink) {
@@ -220,7 +222,11 @@ pub fn respond(input: &str) -> Reply {
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
-        QuestionSpec::Solve { dofs, h } => {
+        QuestionSpec::Solve {
+            dofs,
+            h,
+            equilibrate,
+        } => {
             if doc.fill.is_some() {
                 return error_reply(
                     APIV,
@@ -235,7 +241,7 @@ pub fn respond(input: &str) -> Reply {
                 (None, Some(h)) => Resolution::Size(h),
                 (None, None) => Resolution::Dofs(150_000),
             };
-            match analyse(&doc, res, question::clock) {
+            match analyse_full(&doc, res, question::clock, None, equilibrate) {
                 Ok(a) => {
                     let fieldsmith_core::Analysis {
                         provenance, cases, ..
@@ -320,6 +326,7 @@ pub fn respond(input: &str) -> Reply {
             values,
             rungs,
             tolerance,
+            equilibrate,
         } => {
             if doc.fill.is_some() {
                 return error_reply(
@@ -389,6 +396,7 @@ pub fn respond(input: &str) -> Reply {
                 store_rows,
                 machine,
                 clock: question::clock,
+                equilibrate,
             };
             let mut points = Vec::with_capacity(values.len());
             for (i, value) in values.iter().enumerate() {

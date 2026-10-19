@@ -892,6 +892,7 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
 /// --no-store; the store is also what seeds the estimator before the ladder has an
 /// internal fit.
 fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
+    let equilibrate = opt(args, "--equilibrate").is_some();
     if opt(args, "--dofs").is_some() || opt(args, "--h").is_some() {
         return Err(
             "the ladder chooses its own resolutions — drop --dofs/--h, or drop the ladder flags"
@@ -979,6 +980,7 @@ fn solve_ladder(doc: &Document, args: &[String]) -> Result<(), String> {
         store_rows,
         machine: machine.clone(),
         clock,
+        equilibrate,
     };
     let o = question::run(doc, &q, &mut CliSink).map_err(|e| e.0)?;
     let total_ms = o.total_ms;
@@ -1324,6 +1326,7 @@ fn session_question(doc: &Document, args: &[String]) -> Result<QuestionSpec, Str
             rungs,
             tolerance: opt(args, "--tolerance"),
             budget: opt(args, "--budget"),
+            equilibrate: opt(args, "--equilibrate").is_some(),
         });
     }
     let dofs = match opt(args, "--dofs") {
@@ -1346,7 +1349,11 @@ fn session_question(doc: &Document, args: &[String]) -> Result<QuestionSpec, Str
             .map_err(|_| format!("bad --modes value: {s}"))?;
         return Ok(QuestionSpec::Modes { n, dofs, h });
     }
-    Ok(QuestionSpec::Solve { dofs, h })
+    Ok(QuestionSpec::Solve {
+        dofs,
+        h,
+        equilibrate: opt(args, "--equilibrate").is_some(),
+    })
 }
 
 /// The `--rungs` schedule from its CLI string form — the solve and session verbs'

@@ -180,6 +180,18 @@ pub fn upper_compliance(
             return Err("young's modulus must be positive and finite".to_string());
         }
     }
+    // The dense recovery's memory is quadratic in the element count (the S matrix is
+    // rows² ≈ (44·tets)², C is rows×60·tets): the fixtures and the coarse-pipeline path
+    // fit; anything bigger is refused by name rather than by the allocator. The sparse
+    // iterative implementation is the named gap (these docs' closing section).
+    if mesh.tets.len() > 600 {
+        return Err(format!(
+            "the equilibration's dense recovery is quadratic in the element count and \
+             refuses beyond 600 tets ({} present) — the sparse iterative implementation \
+             is a named gap; certify on a coarser path instead",
+            mesh.tets.len()
+        ));
+    }
 
     // ---- facet census: identity, area, orientation, boundary count ----
     let mut facet_of: Vec<[usize; 4]> = vec![[usize::MAX; 4]; mesh.tets.len()];
@@ -292,6 +304,17 @@ pub fn upper_compliance(
     let rows_b = 18 * f_int; // H(div): the facet's 6 P2 nodes × 3 components
     let rows_c = 18 * f_pin;
     let rows_total = rows_a + rows_b + rows_c;
+
+    if rows_total > 12_000 {
+        return Err(format!(
+            "the equilibration's dense solve is quadratic in the constraint rows \
+             ({} computed, budget 12000, the S matrix alone would be {:.1} GB) — the \
+             mesh is past the dense budget; certify on a coarser mesh or await the \
+             sparse iterative implementation (named gap)",
+            rows_total,
+            (rows_total * rows_total * 8) as f64 / 1073741824.0
+        ));
+    }
     let mut c_mat = FMat::<f64>::zeros(rows_total, n_sigma);
     let mut rhs = vec![0.0f64; rows_total];
 
@@ -703,28 +726,24 @@ pub fn upper_compliance(
     // Stage 1: any feasible point, via dense least squares (over-determined) or the
     // minimum-norm normal equations (under-determined).
     let rhs_mat = FMat::<f64>::from_fn(rows_total, 1, |i, _| rhs[i]);
-    let sigma_feasible: FMat<f64> = if rows_total >= n_sigma {
-        c_mat.col_piv_qr().solve_lstsq(&rhs_mat)
-    } else {
+    let sigma_feasible = || -> FMat<f64> {
+        if rows_total >= n_sigma {
+            return c_mat.col_piv_qr().solve_lstsq(&rhs_mat);
+        }
         let mut g = (&c_mat * c_mat.transpose()).to_owned();
-        // A tiny ridge guards rank-deficient row sets; the measured witnesses, not the
-        // ridge, decide certification.
+        // A tiny ridge guards rank-deficient row sets; the measured witnesses, not
+        // the ridge, decide certification.
         let mut gdiag = 0.0f64;
         for i in 0..rows_total {
             gdiag += g[(i, i)];
         }
-        let ridge = 1e-12 * gdiag / rows_total as f64;
         for i in 0..rows_total {
-            g[(i, i)] += ridge;
+            g[(i, i)] += 1e-12 * gdiag / rows_total as f64;
         }
         let lu = faer::linalg::solvers::FullPivLu::<f64>::new(g.as_ref());
         let w = lu.solve(&rhs_mat);
-        (c_mat.transpose() * w).to_owned()
+        (c_mat.transpose() * &w).to_owned()
     };
-
-    // Stage 2: minimise J over the feasible affine set — σ = H⁻¹Cᵀ(CH⁻¹Cᵀ)⁻¹r, the
-    // energy projection, which is exact when the exact field is representable. H is the
-    // per-element complementary Gram (block diagonal), inverted per element.
     let min_j_sigma = || -> Option<FMat<f64>> {
         let mut s_mat = FMat::<f64>::zeros(rows_total, rows_total);
         for e in 0..e_count {
@@ -780,8 +799,14 @@ pub fn upper_compliance(
         for i in 0..rows_total {
             s_mat[(i, i)] += 1e-12 * sdiag / rows_total as f64;
         }
-        let lu = faer::linalg::solvers::FullPivLu::<f64>::new(s_mat.as_ref());
-        let lam = lu.solve(&rhs_mat);
+        // S = C H⁻¹ Cᵀ + ridge is positive semidefinite: Cholesky, not the full-pivot
+        // LU (the pivot search was the recovery's whole cost at these sizes). A
+        // factorisation failure means a rank-deficient row set: fall through to the
+        // plain feasible point.
+        let Ok(cho) = s_mat.as_ref().cholesky(faer::Side::Lower) else {
+            return None;
+        };
+        let lam = cho.solve(&rhs_mat);
         // σ = H⁻¹Cᵀλ
         let mut out = FMat::<f64>::zeros(n_sigma, 1);
         for e in 0..e_count {
@@ -830,14 +855,17 @@ pub fn upper_compliance(
         Some(out)
     };
 
-    let sigma = min_j_sigma().unwrap_or(sigma_feasible);
+    // The min-J projection is primary; the plain feasible point is the lazy fallback
+    // (the min-J system itself needs no feasible start).
+    let mut sigma = min_j_sigma().expect("the min-J projection returns a field");
 
-    // ---- residual witness per row family ----
+    // ---- residual witness per row family, with the plain feasible point as the lazy
+    // fallback before refusing ----
     let mut scale: f64 = 1e-30;
     for v in &rhs {
         scale = scale.max(v.abs());
     }
-    let residual_of = |lo: usize, hi: usize, subtract_rhs: bool| -> f64 {
+    let residual_of = |sigma: &FMat<f64>, lo: usize, hi: usize, subtract_rhs: bool| -> f64 {
         let mut worst = 0.0f64;
         for r in lo..hi {
             let mut acc = 0.0;
@@ -849,10 +877,33 @@ pub fn upper_compliance(
         }
         worst
     };
-    let equilibrium_residual = residual_of(0, rows_a, true);
-    let continuity_residual = residual_of(rows_a, rows_a + rows_b, false);
-    let pin_residual = residual_of(rows_a + rows_b, rows_total, true);
+    let mut equilibrium_residual = residual_of(&sigma, 0, rows_a, true);
+    let mut continuity_residual = residual_of(&sigma, rows_a, rows_a + rows_b, false);
+    let mut pin_residual = residual_of(&sigma, rows_a + rows_b, rows_total, true);
     let tol = 1e-6 * scale + 1e-9;
+    let bad = |eq: f64, co: f64, pi: f64| -> bool {
+        !eq.is_finite() || !co.is_finite() || !pi.is_finite() || eq.max(co).max(pi) > tol
+    };
+    if bad(equilibrium_residual, continuity_residual, pin_residual) {
+        // One lazy fallback: the plain feasible point; certify it if its witnesses pass.
+        let alt = sigma_feasible();
+        let (eq, co, pi) = (
+            residual_of(&alt, 0, rows_a, true),
+            residual_of(&alt, rows_a, rows_a + rows_b, false),
+            residual_of(&alt, rows_a + rows_b, rows_total, true),
+        );
+        if !bad(eq, co, pi) {
+            equilibrium_residual = eq;
+            continuity_residual = co;
+            pin_residual = pi;
+            sigma = alt;
+        } else {
+            // keep the min-J residuals; the refusal loop below reports whichever failed
+            equilibrium_residual = equilibrium_residual.max(eq);
+            continuity_residual = continuity_residual.max(co);
+            pin_residual = pin_residual.max(pi);
+        }
+    }
     for (name, res) in [
         ("equilibrium", equilibrium_residual),
         ("traction continuity", continuity_residual),
@@ -860,7 +911,8 @@ pub fn upper_compliance(
     ] {
         if !res.is_finite() {
             return Err(format!(
-                "the recovered stress field is not finite (the {name} witness is                  {res:.3e}); the recovery system is rank deficient for this mesh and data"
+                "the recovered stress field is not finite (the {name} witness is \
+                 {res:.3e}); the recovery system is rank deficient for this mesh and data"
             ));
         }
         if res > tol {

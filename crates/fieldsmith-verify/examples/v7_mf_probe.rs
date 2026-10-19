@@ -121,7 +121,7 @@ fn law_blend_young(ph: &[f64], mat_e: f64) -> Vec<f64> {
         .collect()
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let d = fieldsmith_verify::doc(DOC);
     let mat = material_of(&d).expect("material");
     let now = || std::time::Instant::now().elapsed().as_secs_f64() * 1000.0;
@@ -168,8 +168,10 @@ fn main() {
                 &fixed,
                 force.clone(),
                 label.to_string(),
+                false,
+                &|_| None,
             )
-            .expect("phi solve");
+            .expect("resolved case");
             let uz = case.u[3 * nearest(&base.mesh, [80.0, 8.0, 8.0]) + 2];
             let err = 100.0 * (uz - resolved) / resolved;
             out.push(format!(
@@ -188,4 +190,6 @@ void {n_void} / lattice {n_lat} / solid {n_solid}, φ sampling {t_ph:.0} s, tota
             println!("    {line}");
         }
     }
+
+    Ok(())
 }

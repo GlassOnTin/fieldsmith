@@ -379,6 +379,8 @@ export interface CaseSummary {
   /** The raw-force compliance fᵀu the solve saw, in N·mm — fieldsmith-solve's
    * certified lower-bound readout (`bounds` module). */
   compliance: number;
+  /** The recovered-stress upper bound when equilibrium analysis was asked; absent otherwise. */
+  compliance_upper?: number | null;
   solve: SolveReport;
   /** Applied-load provenance when the case has resolved loads (serde field of
    * fieldsmith_core::CaseResult; absent on older bundles). */
@@ -464,8 +466,11 @@ export interface AnalysisHandle {
   free(): void;
 }
 
-export function analyse(doc: Document, opts: { h?: number; dofs?: number } = {}): AnalysisHandle {
-  return w.analyse(JSON.stringify(doc), opts.h, opts.dofs);
+export function analyse(
+  doc: Document,
+  opts: { h?: number; dofs?: number; equilibrate?: boolean } = {},
+): AnalysisHandle {
+  return w.analyse(JSON.stringify(doc), opts.h, opts.dofs, opts.equilibrate);
 }
 
 // ---- graded fill analysis -------------------------------------------------------------
