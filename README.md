@@ -5,7 +5,12 @@ Fieldsmith is an implicit-field CAD and analysis tool: a document is a small tex
 its geometry is an SDF-like field, and every measurement (volume, stress, printed mass) comes
 from integrating that field, not from a boundary representation.
 
-**Status:** v0.5.0. The model → setup → solve → fill → export flow works locally and is
+**Status:** v0.5.0 was the last tag; `main` is part-way through the roadmap's deeper-mechanics
+rungs (VISION.md §7): interactive section-plane clipping, `.fsm` let-variables, mode-shape
+display, convection and heat-flux boundary conditions, the graded fill's own thermal
+re-solve, certified compliance brackets, a yield/buckling indicator pair in the Results
+lens, and a cubic anisotropic lattice law fitted to the measured TPMS coupons. The
+model → setup → solve → fill → export flow works locally and is
 verified by the cases in [docs/verification/](docs/verification/); imported meshes
 (GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
 with labelled faces and region-driven extension (V10); a multi-object 3MF imports as
@@ -27,7 +32,7 @@ publish on [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) 
 To build from source:
 
     git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
-    cargo test -p fieldsmith-verify           # verification cases (V1–V23; V24/V25 in scripts/)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V38; V24/V25 in scripts/)
     npm --prefix web install                  # once
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
@@ -70,7 +75,8 @@ in-app export always does.
 `docs/verification/` carries a report per verification case: volumes against closed-form
 answers (V4), the half and quarter plate-with-hole models against Heywood theory (V3), the
 cantilever against theory (V2), the graded lattice's stiffness against a resolved reference
-mesh (V7), and an imported mesh or STEP B-rep against its file's own header, analytic flux
+mesh (V7), the lattice law's direction dependence against rotated coupons (V36), the
+graded fill's thermal re-solve (V32), and an imported mesh or STEP B-rep against its file's own header, analytic flux
 volume, and the slicer that consumes it (V10, V14, [slicer.md](docs/verification/slicer.md)).
 Limits that are not covered get stated in those reports rather than glossed: the graded
 fill's surface carries measured non-manifold spoke edges and interpenetrating wall tiles
@@ -81,9 +87,21 @@ dual contouring closes both analytic and mesh-leaf graded fills (`skin = 0..1.2 
 
 ## Limitations
 
-Linear-elastic, small strain, isotropic material only; homogenisation of the fill is
-isotropic (the actual TPMS sheets are not, and the error against a resolved reference is
-measured, not assumed, in V7). One material per part: the solve is single-material, and a
+Linear-elastic, small strain. The body's material is isotropic per element; the fill's
+lattice elements carry the measured cubic anisotropy law on the five TPMS families whose
+45°/0° coupon ratio V36 measured (13.6–130 % — the isotropic extension was owed, not
+optional), homogenising in the lattice's own axes, with the density exponent the
+family's measured isotropic one (the direction exponents' equality at other densities is
+an assumption, stated in the law); families without a coupon fit — the primitive
+network — keep the isotropic law. The yield and buckling indicators in the Results lens
+are literature-law estimates (Gibson–Ashby open-cell strength and elastic collapse): a
+linear-elastic solver cannot measure plasticity or buckling, and the rigorous buckling
+route (the geometric-stiffness eigenproblem) is tracked, not built. The compliance is a
+certified lower bound (V34) and, on the isotropic route, an equilibrated upper end
+certifies the bracket in between (V35); the cubic-anisotropic route refuses equilibration
+rather than mis-certifying.
+
+One material per part: the solve is single-material, and a
 volume's material label travels with the 3MF export for the slicer (validation reports
 unknown label ids as errors and mixed labels as a warning). STEP import is CLI-only: a
 STEP file is tessellated to a mesh, and there is no B-rep editing. Per-part colours are
@@ -95,15 +113,18 @@ the same linear small-strain model; it takes the same supports and ignores loads
 shapes are computed but not visualised; the in-browser eigensolve completed without a
 memory error at a 190 k-DOF rung, and larger meshes may fail at the wasm memory limit
 with a named error. Thermal analysis is steady conduction with fixed temperatures on
-labelled regions: the region's facet nodes take the stated value, everything else is
-insulated, and each thermal case then expands the part by α·(T − tref), the reference
+labelled regions (`temperature`), plus convection bands (`convection h=`) and prescribed
+heat fluxes (`heatflux q=`) on labelled regions (V29, V30): the region's facet nodes and
+bands carry the stated values, everything else is insulated, and each thermal case then
+expands the part by α·(T − tref), the reference
 being the solve statement's tref (20 °C when unstated). With one isotropic conductivity
 the value of k drops out of the steady solution, so there is no conductivity property to
-set. Materials need a sourced thermal expansion coefficient for thermal cases, which
+set; the graded fill's re-solve instead maps k per element through its material fraction.
+Materials need a sourced thermal expansion coefficient for thermal cases, which
 validation refuses without one (the web setup lens has no editor for a custom material's
-`a=` value, so custom materials state it through the `.fsm` statement); convection,
-radiation, transient heat and per-region conductivity are not modelled. The graded fill re-solves mechanical cases only, so the
-fill lens has no temperature field. Rung-to-rung changes on the refinement ladder are estimates, not
+`a=` value, so custom materials state it through the `.fsm` statement); radiation,
+transient heat and per-region conductivity are not modelled, and the graded fill's
+thermal expansion re-solve keeps the isotropic law. Rung-to-rung changes on the refinement ladder are estimates, not
 bounds: on the V1 cantilever the ratio of remaining error to change spans 13× between
 regimes (V17), and the wall-time estimator reports its own residual instead of none
 (V18). Solving the same document on another
