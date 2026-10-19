@@ -25,9 +25,10 @@
 //!   deg-2 triangle / deg-3 Keast tet rules, and the raw-force compliance equals the
 //!   zeroed-load compliance whenever reactions multiply zero displacement.
 //!
-//! Named gap (VISION §7 item 2): the dual/equilibrated upper end C(σ*) =
-//! ∫σ*:A⁻¹:σ* ≥ C_true that would close a certified bracket is not implemented here —
-//! this module is the lower end only.
+//! The dual/equilibrated upper end lives in the sibling [`crate::dual`] module
+//! (solver level): exact when the exact field is representable and certified up to the
+//! P2 interpolation defect of the test space otherwise. Rung-level tracked wiring of
+//! the bracket remains deferred (VISION §7 item 2).
 //!
 //! Units: mm, N, MPa (as everywhere in the solve crate).
 

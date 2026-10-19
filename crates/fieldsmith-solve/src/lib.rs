@@ -11,10 +11,14 @@
 //! * [`stress`] recovers nodal stresses by volume-weighted averaging.
 //! * [`bounds::compliance`] reads the raw-force compliance fᵀu: by Galerkin orthogonality
 //!   this is a(u,u) ≥ 0 and a certified lower bound C_h ≤ C_true on the exact compliance.
+//! * [`dual::upper_compliance`] recovers an equilibrated stress field σ* whose complementary
+//!   energy carries the upper end against the same load: exact when the exact field is
+//!   representable, and certified up to the P2 interpolation defect otherwise.
 
 pub mod assemble;
 pub mod bounds;
 pub mod bsr;
+pub mod dual;
 pub mod modal;
 pub mod p2;
 pub mod pcg;
@@ -24,6 +28,7 @@ pub mod thermal;
 pub use assemble::assemble;
 pub use bounds::compliance;
 pub use bsr::Bsr;
+pub use dual::{upper_compliance, UpperBound};
 pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
