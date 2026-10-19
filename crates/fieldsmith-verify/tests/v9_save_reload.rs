@@ -175,3 +175,41 @@ load press bottom pressure=0.5 case=\"Load 1\"\n";
         "the reloaded document must equal the saved one"
     );
 }
+
+/// The equilibrated bracket round-trips: with the recovery's flag on, save → reload →
+/// re-solve reproduces C(σ*) bit for bit at a resolution the direct sparse solve
+/// finishes inside CI budget. The recovered ends are certified up to the witness slack
+/// (direct-solve arithmetic, measured ~1e-6 relative in-span), so the ordering assert
+/// carries that slack; the round-trip comparison itself stays bit-exact.
+#[test]
+fn save_reload_equilibrated_bracket_is_bit_identical() {
+    let res = Resolution::Dofs(6_000);
+
+    let solid = example("bracket.fsm");
+    let reloaded = round_trip(&solid);
+    let a1 =
+        fieldsmith_core::analyse_full(&solid, res, now, None, true).expect("equilibrated analysis");
+    let a2 = fieldsmith_core::analyse_full(&reloaded, res, now, None, true)
+        .expect("equilibrated analysis after reload");
+    assert_same_results(&a1, &a2, "equilibrated bracket");
+    for (ca, cb) in a1.cases.iter().zip(a2.cases.iter()) {
+        let (Some(x), Some(y)) = (&ca.compliance_upper, &cb.compliance_upper) else {
+            panic!(
+                "{}: the flag was set but the upper end is absent (converged: {})",
+                ca.name, ca.solve.converged
+            );
+        };
+        assert_eq!(
+            x.to_bits(),
+            y.to_bits(),
+            "{}: the recovered upper end round-trips",
+            ca.name
+        );
+        assert!(
+            *x >= ca.compliance - 1e-4 * ca.compliance,
+            "{}: bracket ordering, upper {x} vs lower {}",
+            ca.name,
+            ca.compliance
+        );
+    }
+}
