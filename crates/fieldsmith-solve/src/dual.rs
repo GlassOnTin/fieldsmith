@@ -1456,6 +1456,7 @@ mod tests {
             material: Material {
                 young: vec![young; mesh.tets.len()],
                 poisson,
+                cubic: None,
             },
             fixed: supports(mesh),
             force,
@@ -1483,6 +1484,7 @@ mod tests {
             material: Material {
                 young: vec![young; mesh.tets.len()],
                 poisson: nu,
+                cubic: None,
             },
             fixed: supports(mesh),
             force: force.to_vec(),
@@ -1600,6 +1602,7 @@ mod tests {
             material: Material {
                 young: vec![100.0; 24],
                 poisson: 0.7,
+                cubic: None,
             },
             force,
         };

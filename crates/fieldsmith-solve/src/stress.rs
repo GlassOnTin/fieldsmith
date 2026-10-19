@@ -127,6 +127,54 @@ pub fn element_stress_cubic(
     out
 }
 
+/// Stress in element `e` at reference point `xi`, routed by the material: the cubic
+/// kernel where the material carries that element's triple, the isotropic one otherwise
+/// (bit-identical to [`element_stress`] on the isotropic route).
+pub fn element_stress_mat(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    mat: &crate::Material,
+    xi: [f64; 3],
+) -> Stress {
+    match mat.cubic.as_ref().and_then(|cs| cs[e].as_ref()) {
+        Some(c) => element_stress_cubic(mesh, u, e, c, xi),
+        None => element_stress(mesh, u, e, mat.young[e], mat.poisson, xi),
+    }
+}
+
+/// [`nodal_stress`] routed by the material (the cubic elements' recovered tensor comes
+/// from [`element_stress_cubic`]).
+pub fn nodal_stress_mat(mesh: &P2Mesh, u: &[f64], mat: &crate::Material) -> Vec<Stress> {
+    let pts = P2Tetrahedron.nodal_coordinates();
+    let mut acc = vec![[0.0f64; 6]; mesh.nodes.len()];
+    let mut w = vec![0.0f64; mesh.nodes.len()];
+    for e in 0..mesh.tets.len() {
+        let vol = mesh.tet_volume(e).abs();
+        for &xi in pts.iter() {
+            let s = element_stress_mat(mesh, u, e, mat, xi);
+            let t = &mesh.tets[e];
+            for &p in t.iter() {
+                for k in 0..6 {
+                    acc[p as usize][k] += vol * s[k];
+                }
+            }
+        }
+        for a in 0..10 {
+            let n = mesh.tets[e][a] as usize;
+            w[n] += vol;
+        }
+    }
+    for (s, wn) in acc.iter_mut().zip(&w) {
+        if *wn > 0.0 {
+            for v in s.iter_mut() {
+                *v /= wn;
+            }
+        }
+    }
+    acc
+}
+
 /// Nodal stresses for every P2 node: element stresses evaluated at the node, averaged over the
 /// elements sharing it with volume weights.
 pub fn nodal_stress(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<Stress> {

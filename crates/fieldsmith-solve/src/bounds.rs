@@ -273,6 +273,7 @@ mod tests {
             material: Material {
                 young: vec![young; mesh.tets.len()],
                 poisson,
+                cubic: None,
             },
             fixed: supports(mesh),
             force,

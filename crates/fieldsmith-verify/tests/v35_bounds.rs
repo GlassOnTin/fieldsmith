@@ -236,6 +236,7 @@ fn solve_of(mesh: &P2Mesh, force: Vec<f64>, young: f64, poisson: f64) -> (Vec<f6
         material: Material {
             young: vec![young; mesh.tets.len()],
             poisson,
+            cubic: None,
         },
         fixed: supports(mesh),
         force,
@@ -265,6 +266,7 @@ fn problem_of(mesh: &P2Mesh, force: &[f64], young: f64, nu: f64) -> Problem {
         material: Material {
             young: vec![young; mesh.tets.len()],
             poisson: nu,
+            cubic: None,
         },
         fixed: supports(mesh),
         force: force.to_vec(),
@@ -294,6 +296,7 @@ fn v35_recovered_stress_upper_bound() {
             material: Material {
                 young: vec![young; 24],
                 poisson: 0.7,
+                cubic: None,
             },
             fixed: vec![0u8; mesh1.nodes.len()],
             force: force1.clone(),

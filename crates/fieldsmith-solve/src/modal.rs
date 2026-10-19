@@ -76,6 +76,7 @@ pub fn solve_modes(
         &Material {
             young: young.to_vec(),
             poisson,
+            cubic: None,
         },
     );
     pcg::apply_dirichlet(&mut bsr, fixed);

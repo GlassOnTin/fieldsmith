@@ -86,7 +86,12 @@ pub fn assemble(mesh: &P2Mesh, mat: &Material) -> Bsr {
     let rd = RefData::new();
     let mut a = Bsr::from_elements(mesh.nodes.len(), mesh.tets.iter().copied());
     for e in 0..mesh.tets.len() {
-        let ke = element_stiffness(mesh, e, mat.young[e], mat.poisson, &rd);
+        // The cubic law's element stiffness when the material carries a triple for it
+        // (the anisotropic lattice route); the isotropic kernel otherwise, unchanged.
+        let ke = match mat.cubic.as_ref().and_then(|cs| cs[e].as_ref()) {
+            Some(c) => crate::ortho::element_stiffness_cubic(mesh, e, c, &rd),
+            None => element_stiffness(mesh, e, mat.young[e], mat.poisson, &rd),
+        };
         let t = &mesh.tets[e];
         for i in 0..10 {
             let row = t[i] as usize;

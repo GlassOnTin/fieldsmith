@@ -30,12 +30,14 @@ pub use assemble::assemble;
 pub use bounds::compliance;
 pub use bsr::Bsr;
 pub use dual::{upper_compliance, UpperBound};
+pub use fenics_assembly::elasticity::ElasticMaterial;
 pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
 pub use stress::{
-    element_stress, element_stress_thermal, min_compressive, nodal_stress, nodal_stress_thermal,
-    principal_stresses, von_mises, Stress,
+    element_stress, element_stress_cubic, element_stress_mat, element_stress_thermal,
+    min_compressive, nodal_stress, nodal_stress_mat, nodal_stress_thermal, principal_stresses,
+    von_mises, Stress,
 };
 pub use thermal::{
     assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
@@ -45,11 +47,27 @@ pub use thermal::{
 
 pub type V3 = [f64; 3];
 
-/// Isotropic material, one Young's modulus per element (graded fill scales it), MPa.
+/// Static-elastic material: one Young's modulus per element (graded fill scales it),
+/// MPa, with optional per-element CUBIC stiffness triples (the anisotropic lattice law,
+/// `ortho`): elements whose slot carries a triple assemble and recover through the cubic
+/// kernel, the rest through the isotropic one (unchanged). `None` (or a missing slot) =
+/// the isotropic path for that element.
 #[derive(Clone, Debug)]
 pub struct Material {
     pub young: Vec<f64>,
     pub poisson: f64,
+    pub cubic: Option<Vec<Option<crate::ortho::CubicMaterial>>>,
+}
+
+impl Material {
+    /// The isotropic-only material (no cubic elements) — every pre-existing caller.
+    pub fn iso(young: Vec<f64>, poisson: f64) -> Material {
+        Material {
+            young,
+            poisson,
+            cubic: None,
+        }
+    }
 }
 
 /// A static linear-elastic problem on a P2 mesh. Units: mm, N, MPa.

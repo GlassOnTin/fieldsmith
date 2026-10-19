@@ -264,6 +264,7 @@ fn solve_of(mesh: &P2Mesh, force: Vec<f64>, young: f64, poisson: f64) -> (Vec<f6
         material: Material {
             young: vec![young; mesh.tets.len()],
             poisson,
+            cubic: None,
         },
         fixed: supports(mesh),
         force,

@@ -17,12 +17,13 @@ use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     compliance, element_stress, element_stress_thermal, min_compressive, nodal_stress,
-    nodal_stress_thermal, solve, solve_conduction, thermal_load, upper_compliance, von_mises,
-    HeatFluxBc, Material, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions, Stress,
-    ThermalRefData, V3,
+    nodal_stress_mat, nodal_stress_thermal, solve, solve_conduction, thermal_load,
+    upper_compliance, von_mises, HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions,
+    Stress, ThermalRefData, V3,
 };
 use serde::Serialize;
 
+pub use fieldsmith_solve::Material;
 pub use regions::{face_frame, region_facets, region_facets_exact, FaceFrame, Facet};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
@@ -204,6 +205,28 @@ pub fn elem_min_compress_principal(
 ) -> Vec<f64> {
     (0..mesh.tets.len())
         .map(|e| min_compressive(&element_stress(mesh, u, e, young[e], poisson, [0.25; 3])))
+        .collect()
+}
+
+/// [`elem_von_mises`] routed by material: cubic elements read the cubic kernel's tensor.
+pub fn elem_von_mises_mat(mesh: &P2Mesh, u: &[f64], mat: &Material) -> Vec<f64> {
+    (0..mesh.tets.len())
+        .map(|e| {
+            von_mises(&fieldsmith_solve::element_stress_mat(
+                mesh, u, e, mat, [0.25; 3],
+            ))
+        })
+        .collect()
+}
+
+/// [`elem_min_compress_principal`] routed by material.
+pub fn elem_min_compress_principal_mat(mesh: &P2Mesh, u: &[f64], mat: &Material) -> Vec<f64> {
+    (0..mesh.tets.len())
+        .map(|e| {
+            min_compressive(&fieldsmith_solve::element_stress_mat(
+                mesh, u, e, mat, [0.25; 3],
+            ))
+        })
         .collect()
 }
 
@@ -659,8 +682,7 @@ pub fn case_heat_fluxes(
 #[allow(clippy::too_many_arguments)] // the one case call: mesh, moduli, holds, load, name, and the equilibration's inputs
 pub fn run_case(
     mesh: &P2Mesh,
-    young: &[f64],
-    poisson: f64,
+    material: &Material,
     fixed: &[u8],
     force: Vec<f64>,
     name: String,
@@ -669,17 +691,33 @@ pub fn run_case(
 ) -> Result<CaseResult, SetupError> {
     let problem = Problem {
         mesh: mesh.clone(),
-        material: Material {
-            young: young.to_vec(),
-            poisson,
-        },
+        material: material.clone(),
         fixed: fixed.to_vec(),
         force,
     };
+    // The equilibrated upper end recovers through the dual stress projection, which is
+    // written for isotropic materials — refuse it on the cubic route rather than emit a
+    // certificate computed through the wrong D (fail closed; the route is tracked).
+    if problem.material.cubic.is_some() && equilibrate {
+        return Err(SetupError(
+            "the equilibrated upper end does not yet route the cubic anisotropic law;              run the fill without equilibration or drop the fill's cubic fit"
+                .into(),
+        ));
+    }
     let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
-    let stress = nodal_stress(mesh, &u, young, poisson);
+    let routed = problem.material.cubic.is_some();
+    let (stress, vm_elem) = if routed {
+        (
+            nodal_stress_mat(mesh, &u, &problem.material),
+            elem_von_mises_mat(mesh, &u, &problem.material),
+        )
+    } else {
+        (
+            nodal_stress(mesh, &u, &problem.material.young, problem.material.poisson),
+            elem_von_mises(mesh, &u, &problem.material.young, problem.material.poisson),
+        )
+    };
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
-    let vm_elem = elem_von_mises(mesh, &u, young, poisson);
     let max_d = (0..mesh.nodes.len())
         .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
         .fold(0.0, f64::max);
@@ -692,7 +730,11 @@ pub fn run_case(
     } else {
         None
     };
-    let sigma_min_elem = elem_min_compress_principal(mesh, &u, young, poisson);
+    let sigma_min_elem = if routed {
+        elem_min_compress_principal_mat(mesh, &u, &problem.material)
+    } else {
+        elem_min_compress_principal(mesh, &u, &problem.material.young, problem.material.poisson)
+    };
     Ok(CaseResult {
         name,
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
@@ -749,6 +791,7 @@ pub fn run_thermal_case(
         material: Material {
             young: young.to_vec(),
             poisson,
+            cubic: None,
         },
         fixed: fixed.to_vec(),
         force,
@@ -1040,8 +1083,7 @@ pub fn analyse_full(
         let prescribed = prescribed_fn(&node_key, &prescribed_map);
         let mut case = run_case(
             &mesh,
-            &young,
-            mat.nu,
+            &Material::iso(young.to_vec(), mat.nu),
             &fixed,
             force,
             name,

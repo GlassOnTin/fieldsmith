@@ -26,6 +26,7 @@
 //! Run: `cargo run -p fieldsmith-verify --release --example v7_mf_probe`
 
 use fieldsmith_core::fill::{graded, law_stiffness};
+use fieldsmith_core::Material;
 use fieldsmith_core::{case_force, fixed_mask, material_of, run_case, Resolution};
 use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_field::expr::{self, Expr};
@@ -163,8 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ] {
             let case = run_case(
                 &base.mesh,
-                &young,
-                mat.nu,
+                &Material::iso(young.to_vec(), mat.nu),
                 &fixed,
                 force.clone(),
                 label.to_string(),

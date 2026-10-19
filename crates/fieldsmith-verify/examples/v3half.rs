@@ -103,6 +103,7 @@ fn main() {
     let material = Material {
         young: vec![mat.e; mesh.tets.len()],
         poisson: mat.nu,
+        cubic: None,
     };
     let mut force = vec![0.0; nn * 3];
     for l in &d.loads {

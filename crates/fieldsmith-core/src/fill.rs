@@ -116,6 +116,102 @@ impl Law {
     }
 }
 
+/// One measured CUBIC anisotropy law (the V36 coupon fits): the C11 value at the fit
+/// density (MPa, E_s = 1000) with the C12 and C44 ratios held there. The density shape
+/// follows the isotropic law's own (c, n) via `law_cubic_at` below.
+#[derive(Clone, Copy, Debug)]
+struct CubicFit {
+    c11_ref: f64,
+    c12_ratio: f64,
+    c44_ratio: f64,
+}
+
+/// Coupon-measured cubic fits per family and mode (V36's release-run compliance
+/// inversion — S11/S12/S44 measured on the 1000 MPa coupons at ρ = 0.22, then C = S⁻¹
+/// in closed form; the values here match that report's cubic section to its quoted
+/// digits). The Zener anisotropy these carry is the measured finding: primitive sheet
+/// Z ≈ 1.63, diamond sheet Z ≈ 0.85 (SOFTER across the diagonal — the opposite sense).
+/// `None` where no coupon fit exists yet: the primitive-network family carries only the
+/// isotropic law until its coupon is measured.
+fn cubic_fit(family: Family, mode: FillMode) -> Option<CubicFit> {
+    Some(match (family, mode) {
+        (Family::Gyroid, FillMode::Sheet) => CubicFit {
+            c11_ref: 102.044,
+            c12_ratio: 0.49095,
+            c44_ratio: 0.27969,
+        },
+        (Family::Primitive, FillMode::Sheet) => CubicFit {
+            c11_ref: 64.782,
+            c12_ratio: 0.51291,
+            c44_ratio: 0.39661,
+        },
+        (Family::Diamond, FillMode::Sheet) => CubicFit {
+            c11_ref: 118.418,
+            c12_ratio: 0.36658,
+            c44_ratio: 0.26803,
+        },
+        (Family::Gyroid, FillMode::Network) => CubicFit {
+            c11_ref: 34.323,
+            c12_ratio: 0.41861,
+            c44_ratio: 0.40345,
+        },
+        (Family::Diamond, FillMode::Network) => CubicFit {
+            c11_ref: 32.484,
+            c12_ratio: 0.48358,
+            c44_ratio: 0.44065,
+        },
+        _ => return None,
+    })
+}
+
+/// The fit density of the V36 coupon runs — where the measured C11_ref values live.
+const RHO_FIT: f64 = 0.22;
+
+/// The cubic material of a lattice element at density φ, from the family's measured
+/// fit and the solid material's (E, ν). C11 follows the family's own isotropic stiffness
+/// shape over the band (`law_extended` clamped at the band top: the measured ramp from 0
+/// applies below, the measured scaling on the band), scaled by the document material's
+/// own modulus and normalized to read exactly the fit value at (RHO_FIT, 1000 MPa).
+/// Above the band a linear bridge carries C11 to the SOLID isotropic C11 at φ = 1, and
+/// the same linear blend carries the C12/C44 ratios from their measured lattice values
+/// to the solid's (C12/C11 = λ/(λ+2μ), C44/C11 = μ/(λ+2μ)) — at φ = 1 the triple IS the
+/// solid's stiffness tensor.
+///
+/// Exponent caveat: the density exponent is the family's measured ISOTROPIC one — the
+/// direction exponents' equality at other densities is an assumption, not a measurement
+/// (V36 measured one density; a rotated-coupon series would settle it). `None` where no
+/// coupon fit exists (the primitive-network family) or the result is not Born-stable.
+pub fn law_cubic_at(
+    family: Family,
+    mode: FillMode,
+    young_mpa: f64,
+    poisson: f64,
+    rho: f64,
+) -> Option<fieldsmith_solve::ortho::CubicMaterial> {
+    let f = cubic_fit(family, mode)?;
+    // The shape law, clamped at the band top — the explicit bridge below owns φ > RHO_HI.
+    let shape = law_extended(family, mode, rho.min(RHO_HI)) / law_extended(family, mode, RHO_FIT);
+    let c11_band = f.c11_ref * (young_mpa / COUPON_E) * shape;
+    // The solid isotropic constants the bridge targets at φ = 1: (λ + 2μ, λ, μ).
+    let m = fieldsmith_solve::ElasticMaterial::new(young_mpa, poisson);
+    let (lam, mu) = (m.lame_lambda(), m.lame_mu());
+    let solid_c11 = lam + 2.0 * mu;
+    let t = ((rho - RHO_HI) / (1.0 - RHO_HI)).clamp(0.0, 1.0);
+    let blend = |measured: f64, solid: f64| measured + t * (solid - measured);
+    let c11 = c11_band + t * (solid_c11 - c11_band);
+    let c12_ratio = blend(f.c12_ratio, lam / solid_c11);
+    let c44_ratio = blend(f.c44_ratio, mu / solid_c11);
+    let out = fieldsmith_solve::ortho::CubicMaterial {
+        c11,
+        c12: c11 * c12_ratio,
+        c44: c11 * c44_ratio,
+    };
+    if !out.is_stable() {
+        return None;
+    }
+    Some(out)
+}
+
 /// Coupon-measured law for a family/mode pair. Provenance and conventions: module header.
 fn law(family: Family, mode: FillMode) -> Law {
     match (family, mode) {
@@ -598,6 +694,36 @@ pub fn graded_of(
     for (i, p) in base.mesh.nodes.iter().enumerate() {
         node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
     }
+    // The anisotropic route: where the family has a measured cubic coupon fit, every
+    // LATTICE element carries its law's triple (VOID_SCALE keeps the void floor the
+    // isotropic route applies, applied to the whole triple so the ratio shape survives).
+    // Solid and void elements stay on the isotropic kernel, and families without a fit
+    // (primitive network) route the whole fill through the isotropic law unchanged.
+    let cubic = cubic_fit(spec.family, spec.mode).map(|_| {
+        let m_solid = fieldsmith_solve::ElasticMaterial::new(mat.e, mat.nu);
+        let solid_c11 = m_solid.lame_lambda() + 2.0 * m_solid.lame_mu();
+        (0..base.mesh.tets.len())
+            .map(|e| {
+                if class[e] != CLASS_LATTICE {
+                    return None;
+                }
+                let phi = rho_elem[e];
+                let law = law_cubic_at(spec.family, spec.mode, mat.e, mat.nu, phi)?;
+                let rel = VOID_SCALE.max(law.c11 / solid_c11);
+                let s = rel / (law.c11 / solid_c11);
+                Some(fieldsmith_solve::ortho::CubicMaterial {
+                    c11: law.c11 * s,
+                    c12: law.c12 * s,
+                    c44: law.c44 * s,
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    let graded_material = crate::Material {
+        young: young.clone(),
+        poisson: mat.nu,
+        cubic,
+    };
     let mut cases = Vec::new();
     for name in case_names(doc) {
         let (force, reports, prescribed_map) =
@@ -605,8 +731,7 @@ pub fn graded_of(
         let prescribed = crate::prescribed_fn(&node_key, &prescribed_map);
         let mut case = run_case(
             &base.mesh,
-            &young,
-            mat.nu,
+            &graded_material,
             &fixed,
             force,
             name,
@@ -881,6 +1006,57 @@ support clamp cap fixed=xyz
 load pull tip force=(1200, 0, 0)
 fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 ";
+
+    #[test]
+    fn the_cubic_law_reads_the_fits_and_bridges_to_the_solid() {
+        // The fit point: (family, ρ = 0.22, E = 1000, ν = 0.3) must reproduce the V36
+        // fit values exactly (C11_ref, the ratios, and the measured Zener).
+        let g_sheet = law_cubic_at(Family::Gyroid, FillMode::Sheet, 1000.0, 0.3, 0.22)
+            .expect("gyroid sheet has a fit");
+        assert!((g_sheet.c11 - 102.044).abs() < 1e-2, "C11 {}", g_sheet.c11);
+        assert!((g_sheet.c12 / g_sheet.c11 - 0.49095).abs() < 1e-4);
+        assert!((g_sheet.c44 / g_sheet.c11 - 0.27969).abs() < 1e-4);
+        let z = 2.0 * g_sheet.c44 / (g_sheet.c11 - g_sheet.c12);
+        assert!((z - 1.0989).abs() < 1e-3, "Zener {z}");
+        // The whole table: stable, and the Zener matches each family's measured value.
+        let want = [
+            (Family::Gyroid, FillMode::Sheet, 1.0989),
+            (Family::Primitive, FillMode::Sheet, 1.6285),
+            (Family::Diamond, FillMode::Sheet, 0.8463),
+            (Family::Gyroid, FillMode::Network, 1.3879),
+            (Family::Diamond, FillMode::Network, 1.7066),
+        ];
+        for &(fam, mode, z_want) in &want {
+            let c = law_cubic_at(fam, mode, 1000.0, 0.3, 0.22).expect("fit exists");
+            assert!(c.is_stable(), "{fam:?}/{mode:?}: {c:?}");
+            let z = 2.0 * c.c44 / (c.c11 - c.c12);
+            assert!(
+                (z - z_want).abs() < 1e-3,
+                "{fam:?}/{mode:?}: Z {z} vs {z_want}"
+            );
+        }
+        // No coupon fit for the primitive network: None, not a guess.
+        assert!(
+            law_cubic_at(Family::Primitive, FillMode::Network, 1000.0, 0.3, 0.22).is_none(),
+            "the primitive network has no V36 coupon fit"
+        );
+        // The solid bridge: at φ = 1 the triple IS the solid's isotropic stiffness.
+        let (e, nu) = (1000.0f64, 0.3);
+        let m = fieldsmith_solve::ElasticMaterial::new(e, nu);
+        let (lam, mu) = (m.lame_lambda(), m.lame_mu());
+        let c1 = law_cubic_at(Family::Gyroid, FillMode::Sheet, e, nu, 1.0).expect("solid bridge");
+        let eq = |x: f64, y: f64| assert!((x - y).abs() <= 1e-9 * (y.abs() + 1.0));
+        eq(c1.c11, lam + 2.0 * mu);
+        eq(c1.c12, lam);
+        eq(c1.c44, mu);
+        // The modulus scaling is linear in the document material's E.
+        let c2 =
+            law_cubic_at(Family::Gyroid, FillMode::Sheet, 2000.0, 0.3, 0.22).expect("fit exists");
+        assert!(
+            (c2.c11 - 2.0 * g_sheet.c11).abs() < 1e-9 * g_sheet.c11,
+            "E scaling"
+        );
+    }
 
     #[test]
     fn the_buckling_law_is_a_subordinate_readout_above_its_crossover() {

@@ -629,6 +629,7 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     let mat = Material {
         young: vec![spec.young; mesh.tets.len()],
         poisson: spec.nu,
+        cubic: None,
     };
     let problem = Problem {
         mesh: mesh.clone(),
@@ -706,9 +707,7 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
             }
         }
     };
-    let nu_int = eps_yy
-        .zip(eps_int)
-        .map(|(y, x)| -y / x);
+    let nu_int = eps_yy.zip(eps_int).map(|(y, x)| -y / x);
     let eps_full = strain_slope(&mesh, &u, 0.0, l);
     let e_star_int = eps_int.map(|e| macro_stress / e.abs());
     let e_star_full = eps_full.map(|e| macro_stress / e.abs());

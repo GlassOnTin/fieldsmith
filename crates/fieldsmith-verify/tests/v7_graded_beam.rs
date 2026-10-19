@@ -47,6 +47,7 @@
 
 use fieldsmith_core::fill::graded;
 use fieldsmith_core::regions::Facet;
+use fieldsmith_core::Material;
 use fieldsmith_core::{case_force, fixed_mask, material_of, run_case, Resolution};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{quality, stuff};
@@ -187,8 +188,7 @@ fn v7_graded_lattice_beam_deflection() {
         let young = vec![mat.e; mesh.tets.len()];
         let case = run_case(
             &mesh,
-            &young,
-            mat.nu,
+            &Material::iso(young.to_vec(), mat.nu),
             &fixed,
             force,
             case_name.clone(),
