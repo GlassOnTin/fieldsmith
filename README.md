@@ -35,12 +35,19 @@ needs two response headers on every file the host serves:
 
 The Vite dev and preview servers send both; the budget numbers in
 [docs/verification/budgets.md](docs/verification/budgets.md) are measured on the threaded
-build. From source instead of the bundle:
+build.
 
-    git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
+### From the source checkout
+
+No download is needed in a clone of this repository; the app runs from source:
+
+    cd ~/Code/fieldsmith
     npm --prefix web install                  # once
-    bash scripts/build-wasm.sh                # build the WebAssembly analysis
-    npm --prefix web -- run dev               # serves the app locally
+    bash scripts/build-wasm.sh                # one-time wasm build (re-run after rust changes)
+    npm --prefix web -- run dev               # then open http://localhost:5173
+
+The dev server hot-reloads the app and serves the threaded build (both headers above), so
+it is the faster path, and the right one while editing.
 
 ## Run the CLI solver
 
