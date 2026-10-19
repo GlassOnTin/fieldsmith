@@ -1231,18 +1231,11 @@ load pull pull force=(10, 0, 0)
         let d = parse(PULL);
         let young = materials::find(&d, "petg").expect("petg").e;
         let want = 10.0 * 10.0 * 40.0 / (young * 100.0);
-        // At the analysis-lens resolution the mesh is far beyond the dense recovery's
-        // named budget: the flag asks, the recovery refuses by name, and the analysis
-        // carries the refusal as an error the caller presents.
-        let t_r = std::time::Instant::now();
-        let refused = analyse_full(&d, Resolution::Size(2.0), now, None, true)
-            .expect_err("the dense budget refuses");
-        eprintln!("REFUSAL LEG WALL (ms): {}", t_r.elapsed().as_millis());
-        assert!(refused.0.contains("dense recovery"), "{refused:?}");
-        // The coarse path fits the budget: a bracket on the same closed form.
-        let t_p = std::time::Instant::now();
-        let a = analyse_full(&d, Resolution::Size(10.0), now, None, true).expect("analyse");
-        eprintln!("BRACKET LEG WALL (ms): {}", t_p.elapsed().as_millis());
+        // The production-size path: the sparse iterative recovery carries the flag far
+        // beyond the dense budget, so the analysis-lens mesh gets a real bracket.
+        let t_rec = std::time::Instant::now();
+        let a = analyse_full(&d, Resolution::Size(2.0), now, None, true).expect("analyse");
+        eprintln!("EQUILIBRATION WALL (ms): {}", t_rec.elapsed().as_millis());
         let case = a
             .cases
             .iter()

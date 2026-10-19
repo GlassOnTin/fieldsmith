@@ -156,6 +156,25 @@ pub struct UpperBound {
     pub kkt_dofs: usize,
 }
 
+/// Where the constraint assembly lands: the dense matrix (small meshes; bit-identical
+/// to the shipped path) or the triplet stream (the sparse iterative route).
+enum Entries<'m> {
+    Dense(&'m mut FMat<f64>),
+    Trips(&'m mut Vec<(usize, usize, f64)>),
+}
+impl Entries<'_> {
+    #[inline]
+    fn add(&mut self, r: usize, c: usize, v: f64) {
+        match self {
+            Entries::Dense(m) => m[(r, c)] += v,
+            Entries::Trips(t) => t.push((r, c, v)),
+        }
+    }
+    fn sub(&mut self, r: usize, c: usize, v: f64) {
+        self.add(r, c, -v);
+    }
+}
+
 /// The certified upper bound for a converged solve.
 ///
 /// `prescribed` classifies each boundary facet from its three corner node positions in
@@ -179,18 +198,6 @@ pub fn upper_compliance(
         if *ey <= 0.0 || !ey.is_finite() {
             return Err("young's modulus must be positive and finite".to_string());
         }
-    }
-    // The dense recovery's memory is quadratic in the element count (the S matrix is
-    // rows² ≈ (44·tets)², C is rows×60·tets): the fixtures and the coarse-pipeline path
-    // fit; anything bigger is refused by name rather than by the allocator. The sparse
-    // iterative implementation is the named gap (these docs' closing section).
-    if mesh.tets.len() > 600 {
-        return Err(format!(
-            "the equilibration's dense recovery is quadratic in the element count and \
-             refuses beyond 600 tets ({} present) — the sparse iterative implementation \
-             is a named gap; certify on a coarser path instead",
-            mesh.tets.len()
-        ));
     }
 
     // ---- facet census: identity, area, orientation, boundary count ----
@@ -325,17 +332,17 @@ pub fn upper_compliance(
     let rows_total = rows_a + rows_b + rows_c + rows_d;
     let rows_c_end = rows_a + rows_b + rows_c; // rows [rows_c_end..rows_total] are the (d) family
 
-    if rows_total > 12_000 {
-        return Err(format!(
-            "the equilibration's dense solve is quadratic in the constraint rows \
-             ({} computed, budget 12000, the S matrix alone would be {:.1} GB) — the \
-             mesh is past the dense budget; certify on a coarser mesh or await the \
-             sparse iterative implementation (named gap)",
-            rows_total,
-            (rows_total * rows_total * 8) as f64 / 1073741824.0
-        ));
-    }
-    let mut c_mat = FMat::<f64>::zeros(rows_total, n_sigma);
+    // Small meshes assemble the dense matrix (bit-identical path); large ones collect
+    // triplets for the sparse iterative solve. No (r, c) pair is written twice — the
+    // families own disjoint rows and within a family every write targets a distinct
+    // column — so either sink is exact.
+    let use_dense = rows_total <= 12_000 && mesh.tets.len() <= 600;
+    let mut c_mat_buf = use_dense.then(|| FMat::<f64>::zeros(rows_total, n_sigma));
+    let mut trips: Vec<(usize, usize, f64)> = Vec::new();
+    let mut entries = match &mut c_mat_buf {
+        Some(m) => Entries::Dense(m),
+        None => Entries::Trips(&mut trips),
+    };
     let mut rhs = vec![0.0f64; rows_total];
 
     // ---- closed forms ----
@@ -459,7 +466,7 @@ pub fn upper_compliance(
                     }
                     for q in 0..10 {
                         if per_q[q] != 0.0 {
-                            c_mat[(row, sid(e, q, k))] += per_q[q];
+                            entries.add(row, sid(e, q, k), per_q[q]);
                         }
                     }
                 }
@@ -513,7 +520,7 @@ pub fn upper_compliance(
                                 };
                                 let mom = facet_pair(sq, mq, phi, mphi, area[id]);
                                 if mom != 0.0 {
-                                    c_mat[(row, sid(e, q, k))] -= nt[k][cc] * mom;
+                                    entries.sub(row, sid(e, q, k), nt[k][cc] * mom);
                                 }
                             }
                         }
@@ -597,7 +604,7 @@ pub fn upper_compliance(
                             };
                             let mom = facet_pair(sq, mq, phi.0, phi.1, area[id]);
                             if mom != 0.0 {
-                                c_mat[(row, sid(e, q, k))] += o * nt[k][cc] * mom;
+                                entries.add(row, sid(e, q, k), o * nt[k][cc] * mom);
                             }
                         }
                     }
@@ -641,7 +648,7 @@ pub fn upper_compliance(
                             };
                             let mom = facet_pair(sq, mq, phi.0, phi.1, area[id]);
                             if mom != 0.0 {
-                                c_mat[(row, sid(e, q, k))] += nt[k][cc] * mom;
+                                entries.add(row, sid(e, q, k), nt[k][cc] * mom);
                             }
                         }
                     }
@@ -705,7 +712,7 @@ pub fn upper_compliance(
                                 };
                                 let mom = facet_pair(sq, mq, phi.0, phi.1, area[id]);
                                 if mom != 0.0 {
-                                    c_mat[(row, sid(e, q, k))] += nt[k][cc] * mom;
+                                    entries.add(row, sid(e, q, k), nt[k][cc] * mom);
                                 }
                             }
                         }
@@ -716,92 +723,226 @@ pub fn upper_compliance(
         }
         let _ = dd;
     }
-    // Stage 1: any feasible point, via dense least squares (over-determined) or the
-    // minimum-norm normal equations (under-determined).
     let rhs_mat = FMat::<f64>::from_fn(rows_total, 1, |i, _| rhs[i]);
-    let sigma_feasible = || -> FMat<f64> {
-        if rows_total >= n_sigma {
-            return c_mat.col_piv_qr().solve_lstsq(&rhs_mat);
-        }
-        let mut g = (&c_mat * c_mat.transpose()).to_owned();
-        // A tiny ridge guards rank-deficient row sets; the measured witnesses, not
-        // the ridge, decide certification.
-        let mut gdiag = 0.0f64;
-        for i in 0..rows_total {
-            gdiag += g[(i, i)];
-        }
-        for i in 0..rows_total {
-            g[(i, i)] += 1e-12 * gdiag / rows_total as f64;
-        }
-        let lu = faer::linalg::solvers::FullPivLu::<f64>::new(g.as_ref());
-        let w = lu.solve(&rhs_mat);
-        (c_mat.transpose() * &w).to_owned()
-    };
-    let min_j_sigma = || -> Option<FMat<f64>> {
-        let mut s_mat = FMat::<f64>::zeros(rows_total, rows_total);
-        for e in 0..e_count {
-            let vol = mesh.tet_volume(e).abs();
-            let young = problem.material.young[e];
-            let mut h_e = FMat::<f64>::zeros(60, 60);
-            let mut hbase = [[0.0f64; 6]; 6];
-            for (i, hrow) in hbase.iter_mut().enumerate() {
-                for (jj, hv) in hrow.iter_mut().enumerate() {
-                    *hv = contract(
-                        &stress_unit(i),
-                        &strain_from_stress(&stress_unit(jj), young, nu),
-                    );
-                }
+    let (sigma, equilibrium_residual, continuity_residual, pin_residual) = if use_dense {
+        let c_mat = c_mat_buf.expect("dense buffer");
+        let sigma_feasible = || -> FMat<f64> {
+            if rows_total >= n_sigma {
+                return c_mat.col_piv_qr().solve_lstsq(&rhs_mat);
             }
-            for qi in 0..10 {
-                for k in 0..6 {
-                    for r in 0..10 {
-                        for kk in 0..6 {
-                            h_e[(6 * qi + k, 6 * r + kk)] += hbase[k][kk] * tet_pair(qi, r, vol);
-                        }
-                    }
-                }
+            let mut g = (&c_mat * c_mat.transpose()).to_owned();
+            // A tiny ridge guards rank-deficient row sets; the measured witnesses, not
+            // the ridge, decide certification.
+            let mut gdiag = 0.0f64;
+            for i in 0..rows_total {
+                gdiag += g[(i, i)];
             }
-            let eye = FMat::<f64>::from_fn(60, 60, |i, j| if i == j { 1.0 } else { 0.0 });
-            let h_inv = h_e.full_piv_lu().solve(&eye);
-            // gather this element's constraint rows
-            let col0 = 60 * e;
-            let mut gather: Vec<(usize, usize, f64)> = Vec::new();
-            for r in 0..rows_total {
-                for ld in 0..60 {
-                    let v = c_mat[(r, col0 + ld)];
-                    if v != 0.0 {
-                        gather.push((r, ld, v));
-                    }
-                }
+            for i in 0..rows_total {
+                g[(i, i)] += 1e-12 * gdiag / rows_total as f64;
             }
-            // S = C H^{-1} Cᵀ per element pair of local dof entries; the
-            // H^{-1}·H·H^{-1} sandwich collapses to a single H^{-1} lookup.
-            for &(r1, l1, v1) in &gather {
-                for &(r2, l2, v2) in &gather {
-                    let he = v1 * h_inv[(l1, l2)] * v2;
-                    if he != 0.0 {
-                        s_mat[(r1, r2)] += he;
-                    }
-                }
-            }
-        }
-        let mut sdiag = 0.0f64;
-        for i in 0..rows_total {
-            sdiag += s_mat[(i, i)].abs();
-        }
-        for i in 0..rows_total {
-            s_mat[(i, i)] += 1e-12 * sdiag / rows_total as f64;
-        }
-        // S = C H⁻¹ Cᵀ + ridge is positive semidefinite: Cholesky, not the full-pivot
-        // LU (the pivot search was the recovery's whole cost at these sizes). A
-        // factorisation failure means a rank-deficient row set: fall through to the
-        // plain feasible point.
-        let Ok(cho) = s_mat.as_ref().cholesky(faer::Side::Lower) else {
-            return None;
+            let lu = faer::linalg::solvers::FullPivLu::<f64>::new(g.as_ref());
+            let w = lu.solve(&rhs_mat);
+            (c_mat.transpose() * &w).to_owned()
         };
-        let lam = cho.solve(&rhs_mat);
-        // σ = H⁻¹Cᵀλ
-        let mut out = FMat::<f64>::zeros(n_sigma, 1);
+        let min_j_sigma = || -> Option<FMat<f64>> {
+            let mut s_mat = FMat::<f64>::zeros(rows_total, rows_total);
+            for e in 0..e_count {
+                let vol = mesh.tet_volume(e).abs();
+                let young = problem.material.young[e];
+                let mut h_e = FMat::<f64>::zeros(60, 60);
+                let mut hbase = [[0.0f64; 6]; 6];
+                for (i, hrow) in hbase.iter_mut().enumerate() {
+                    for (jj, hv) in hrow.iter_mut().enumerate() {
+                        *hv = contract(
+                            &stress_unit(i),
+                            &strain_from_stress(&stress_unit(jj), young, nu),
+                        );
+                    }
+                }
+                for qi in 0..10 {
+                    for k in 0..6 {
+                        for r in 0..10 {
+                            for kk in 0..6 {
+                                h_e[(6 * qi + k, 6 * r + kk)] +=
+                                    hbase[k][kk] * tet_pair(qi, r, vol);
+                            }
+                        }
+                    }
+                }
+                let eye = FMat::<f64>::from_fn(60, 60, |i, j| if i == j { 1.0 } else { 0.0 });
+                let h_inv = h_e.full_piv_lu().solve(&eye);
+                // gather this element's constraint rows
+                let col0 = 60 * e;
+                let mut gather: Vec<(usize, usize, f64)> = Vec::new();
+                for r in 0..rows_total {
+                    for ld in 0..60 {
+                        let v = c_mat[(r, col0 + ld)];
+                        if v != 0.0 {
+                            gather.push((r, ld, v));
+                        }
+                    }
+                }
+                // S = C H^{-1} Cᵀ per element pair of local dof entries; the
+                // H^{-1}·H·H^{-1} sandwich collapses to a single H^{-1} lookup.
+                for &(r1, l1, v1) in &gather {
+                    for &(r2, l2, v2) in &gather {
+                        let he = v1 * h_inv[(l1, l2)] * v2;
+                        if he != 0.0 {
+                            s_mat[(r1, r2)] += he;
+                        }
+                    }
+                }
+            }
+            let mut sdiag = 0.0f64;
+            for i in 0..rows_total {
+                sdiag += s_mat[(i, i)].abs();
+            }
+            for i in 0..rows_total {
+                s_mat[(i, i)] += 1e-12 * sdiag / rows_total as f64;
+            }
+            // S = C H⁻¹ Cᵀ + ridge is positive semidefinite: Cholesky, not the full-pivot
+            // LU (the pivot search was the recovery's whole cost at these sizes). A
+            // factorisation failure means a rank-deficient row set: fall through to the
+            // plain feasible point.
+            let Ok(cho) = s_mat.as_ref().cholesky(faer::Side::Lower) else {
+                return None;
+            };
+            let lam = cho.solve(&rhs_mat);
+            // σ = H⁻¹Cᵀλ
+            let mut out = FMat::<f64>::zeros(n_sigma, 1);
+            for e in 0..e_count {
+                let vol = mesh.tet_volume(e).abs();
+                let young = problem.material.young[e];
+                let mut h_e = FMat::<f64>::zeros(60, 60);
+                let mut hbase = [[0.0f64; 6]; 6];
+                for (i, hrow) in hbase.iter_mut().enumerate() {
+                    for (jj, hv) in hrow.iter_mut().enumerate() {
+                        *hv = contract(
+                            &stress_unit(i),
+                            &strain_from_stress(&stress_unit(jj), young, nu),
+                        );
+                    }
+                }
+                for qi in 0..10 {
+                    for k in 0..6 {
+                        for r in 0..10 {
+                            for kk in 0..6 {
+                                h_e[(6 * qi + k, 6 * r + kk)] +=
+                                    hbase[k][kk] * tet_pair(qi, r, vol);
+                            }
+                        }
+                    }
+                }
+                let eye = FMat::<f64>::from_fn(60, 60, |i, j| if i == j { 1.0 } else { 0.0 });
+                let h_inv = h_e.full_piv_lu().solve(&eye);
+                let col0 = 60 * e;
+                let mut b = [0.0f64; 60];
+                for r in 0..rows_total {
+                    let lr = lam[(r, 0)];
+                    if lr == 0.0 {
+                        continue;
+                    }
+                    for ld in 0..60 {
+                        b[ld] += c_mat[(r, col0 + ld)] * lr;
+                    }
+                }
+                for ld in 0..60 {
+                    let mut acc = 0.0;
+                    for t in 0..60 {
+                        acc += h_inv[(ld, t)] * b[t];
+                    }
+                    out[(col0 + ld, 0)] = acc;
+                }
+            }
+            Some(out)
+        };
+        let mut sigma = min_j_sigma().expect("the min-J projection returns a field");
+        // fallback before refusing ----
+        let mut scale: f64 = 1e-30;
+        for v in &rhs {
+            scale = scale.max(v.abs());
+        }
+        let residual_of = |sigma: &FMat<f64>, lo: usize, hi: usize, subtract_rhs: bool| -> f64 {
+            let mut worst = 0.0f64;
+            for r in lo..hi {
+                let mut acc = 0.0;
+                for j in 0..n_sigma {
+                    acc += c_mat[(r, j)] * sigma[(j, 0)];
+                }
+                let target = if subtract_rhs { rhs[r] } else { 0.0 };
+                worst = worst.max((acc - target).abs());
+            }
+            worst
+        };
+        let mut equilibrium_residual = residual_of(&sigma, 0, rows_a, true);
+        let mut continuity_residual = residual_of(&sigma, rows_a, rows_a + rows_b, false);
+        let mut pin_residual = residual_of(&sigma, rows_a + rows_b, rows_total, true);
+        let tol = 1e-6 * scale + 1e-9;
+        let bad = |eq: f64, co: f64, pi: f64| -> bool {
+            !eq.is_finite() || !co.is_finite() || !pi.is_finite() || eq.max(co).max(pi) > tol
+        };
+        if bad(equilibrium_residual, continuity_residual, pin_residual) {
+            // One lazy fallback: the plain feasible point; certify it if its witnesses pass.
+            let alt = sigma_feasible();
+            let (eq, co, pi) = (
+                residual_of(&alt, 0, rows_a, true),
+                residual_of(&alt, rows_a, rows_a + rows_b, false),
+                residual_of(&alt, rows_a + rows_b, rows_total, true),
+            );
+            if !bad(eq, co, pi) {
+                equilibrium_residual = eq;
+                continuity_residual = co;
+                pin_residual = pi;
+                sigma = alt;
+            } else {
+                // keep the min-J residuals; the refusal loop below reports whichever failed
+                equilibrium_residual = equilibrium_residual.max(eq);
+                continuity_residual = continuity_residual.max(co);
+                pin_residual = pin_residual.max(pi);
+            }
+        }
+        for (name, res) in [
+            ("equilibrium", equilibrium_residual),
+            ("traction continuity", continuity_residual),
+            ("Neumann pin", pin_residual),
+        ] {
+            if !res.is_finite() {
+                return Err(format!(
+                    "the recovered stress field is not finite (the {name} witness is \
+                     {res:.3e}); the recovery system is rank deficient for this mesh and data"
+                ));
+            }
+            if res > tol {
+                return Err(format!(
+                    "the recovered stress field failed its {name} witness: residual {res:.3e} \
+                     against rhs scale {scale:.3e} — the discrete load is not equilibrible in \
+                     the piecewise-quadratic stress space for this mesh and boundary data"
+                ));
+            }
+        }
+
+        (
+            sigma,
+            equilibrium_residual,
+            continuity_residual,
+            pin_residual,
+        )
+    } else {
+        // ---- the sparse iterative route ----
+        // The min-J system S·λ = rhs with S = C·H⁻¹·Cᵀ (+ a tiny ridge) is solved by PCG:
+        // every matvec is C·(H⁻¹·(Cᵀ·p)) with the per-element block inverses, and the
+        // Jacobi diagonal is read off the row-major view. The witnesses re-check the result
+        // before any value is returned; a non-converged or witness-failing solve is refused
+        // by name (no feasible-point fallback on this route).
+        // One CSC of the constraints serves both matvecs: its column q holds C's
+        // σ-column q, so (Cᵀ·v)[q] = Σ_{r∈col q} C[r,q]·v[r] and (C·z)[r] accumulates
+        // over the same columns.
+        let csc = faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
+            rows_total, n_sigma, &trips,
+        )
+        .map_err(|e| format!("the recovery's constraint matrix failed to build: {e:?}"))?;
+        // Per-element complementary Gram inverses, and σ = H⁻¹·Cᵀ·λ per element.
+        let mut h_inv: Vec<FMat<f64>> = Vec::with_capacity(e_count);
         for e in 0..e_count {
             let vol = mesh.tet_volume(e).abs();
             let young = problem.material.young[e];
@@ -825,97 +966,181 @@ pub fn upper_compliance(
                 }
             }
             let eye = FMat::<f64>::from_fn(60, 60, |i, j| if i == j { 1.0 } else { 0.0 });
-            let h_inv = h_e.full_piv_lu().solve(&eye);
-            let col0 = 60 * e;
-            let mut b = [0.0f64; 60];
-            for r in 0..rows_total {
-                let lr = lam[(r, 0)];
-                if lr == 0.0 {
-                    continue;
-                }
-                for ld in 0..60 {
-                    b[ld] += c_mat[(r, col0 + ld)] * lr;
-                }
-            }
-            for ld in 0..60 {
-                let mut acc = 0.0;
-                for t in 0..60 {
-                    acc += h_inv[(ld, t)] * b[t];
-                }
-                out[(col0 + ld, 0)] = acc;
-            }
+            h_inv.push(h_e.full_piv_lu().solve(&eye));
         }
-        Some(out)
-    };
-
-    // The min-J projection is primary; the plain feasible point is the lazy fallback
-    // (the min-J system itself needs no feasible start).
-    let mut sigma = min_j_sigma().expect("the min-J projection returns a field");
-
-    // ---- residual witness per row family, with the plain feasible point as the lazy
-    // fallback before refusing ----
-    let mut scale: f64 = 1e-30;
-    for v in &rhs {
-        scale = scale.max(v.abs());
-    }
-    let residual_of = |sigma: &FMat<f64>, lo: usize, hi: usize, subtract_rhs: bool| -> f64 {
-        let mut worst = 0.0f64;
-        for r in lo..hi {
-            let mut acc = 0.0;
+        // Cᵀ·v, C·v and Jacobi diag = Σ_{(j,v)∈row} v²·h_inv_e[j%60, j%60].
+        let mat_t = |x: &[f64]| -> Vec<f64> {
+            let mut out = vec![0.0f64; n_sigma];
             for j in 0..n_sigma {
-                acc += c_mat[(r, j)] * sigma[(j, 0)];
+                let rows = csc.row_indices_of_col(j);
+                let vals = csc.values_of_col(j);
+                let mut acc = 0.0f64;
+                for (r, &v) in rows.zip(vals) {
+                    acc += v * x[r];
+                }
+                out[j] = acc;
             }
-            let target = if subtract_rhs { rhs[r] } else { 0.0 };
-            worst = worst.max((acc - target).abs());
+            out
+        };
+        let mat = |x: &[f64]| -> Vec<f64> {
+            let mut out = vec![0.0f64; rows_total];
+            for j in 0..n_sigma {
+                let rows = csc.row_indices_of_col(j);
+                let vals = csc.values_of_col(j);
+                let xv = x[j];
+                for (r, &v) in rows.zip(vals) {
+                    out[r] += v * xv;
+                }
+            }
+            out
+        };
+        let mut diag = vec![0.0f64; rows_total];
+        for q in 0..n_sigma {
+            let e = q / 60;
+            let ld = q % 60;
+            let rows = csc.row_indices_of_col(q);
+            let vals = csc.values_of_col(q);
+            for (r, &v) in rows.zip(vals) {
+                diag[r] += v * v * h_inv[e][(ld, ld)];
+            }
         }
-        worst
-    };
-    let mut equilibrium_residual = residual_of(&sigma, 0, rows_a, true);
-    let mut continuity_residual = residual_of(&sigma, rows_a, rows_a + rows_b, false);
-    let mut pin_residual = residual_of(&sigma, rows_a + rows_b, rows_total, true);
-    let tol = 1e-6 * scale + 1e-9;
-    let bad = |eq: f64, co: f64, pi: f64| -> bool {
-        !eq.is_finite() || !co.is_finite() || !pi.is_finite() || eq.max(co).max(pi) > tol
-    };
-    if bad(equilibrium_residual, continuity_residual, pin_residual) {
-        // One lazy fallback: the plain feasible point; certify it if its witnesses pass.
-        let alt = sigma_feasible();
-        let (eq, co, pi) = (
-            residual_of(&alt, 0, rows_a, true),
-            residual_of(&alt, rows_a, rows_a + rows_b, false),
-            residual_of(&alt, rows_a + rows_b, rows_total, true),
-        );
-        if !bad(eq, co, pi) {
-            equilibrium_residual = eq;
-            continuity_residual = co;
-            pin_residual = pi;
-            sigma = alt;
-        } else {
-            // keep the min-J residuals; the refusal loop below reports whichever failed
-            equilibrium_residual = equilibrium_residual.max(eq);
-            continuity_residual = continuity_residual.max(co);
-            pin_residual = pin_residual.max(pi);
+        let scale: f64 = {
+            let mut s = 0.0f64;
+            for r in 0..rows_total {
+                s += rhs[r].abs();
+            }
+            s / rows_total as f64
+        };
+        let ridge = 1e-13 * scale.max(1.0);
+        for d in diag.iter_mut() {
+            *d += ridge;
         }
-    }
-    for (name, res) in [
-        ("equilibrium", equilibrium_residual),
-        ("traction continuity", continuity_residual),
-        ("Neumann pin", pin_residual),
-    ] {
-        if !res.is_finite() {
+        // PCG on S λ = rhs. S is PSD with the tiny ridge; the RHS is consistent with the
+        // constraint set by construction (the load split), so CG converges inside the range.
+        let mut lam = vec![0.0f64; rows_total];
+        let mut res = rhs.clone();
+        let z: Vec<f64> = (0..rows_total).map(|i| res[i] / diag[i]).collect();
+        let mut p = z.clone();
+        let mut rz = {
+            let mut acc = 0.0f64;
+            for i in 0..rows_total {
+                acc += res[i] * z[i];
+            }
+            acc
+        };
+        let b_norm: f64 = rhs.iter().map(|v| v * v).sum::<f64>().sqrt();
+        // The witnesses gate at 1e-6·scale and rhs − Cσ equals the CG residual plus the
+        // ridge leak, so 1e-7 keeps a clean margin while saving CG iterations.
+        let rtol = 1e-7f64;
+        let max_iter = 20_000usize;
+        let mut converged = false;
+        let sp_matvec = |p: &[f64]| -> Vec<f64> {
+            let ct = mat_t(p);
+            // per-element blocks on the Cᵀ product
+            let mut zc = vec![0.0f64; n_sigma];
+            for e in 0..e_count {
+                for ld in 0..60 {
+                    let mut acc = 0.0f64;
+                    for t in 0..60 {
+                        acc += h_inv[e][(ld, t)] * ct[60 * e + t];
+                    }
+                    zc[60 * e + ld] = acc;
+                }
+            }
+            let out = mat(&zc);
+            // The ridge (tiny · I) rides inside diag: diag[i] = exact block term + ridge.
+            out
+        };
+        for _it in 0..max_iter {
+            let sp = sp_matvec(&p);
+            let mut pz = 0.0f64;
+            for i in 0..rows_total {
+                pz += p[i] * sp[i];
+            }
+            if pz <= 0.0 && rz > 0.0 {
+                // numerically indefinite: refuse rather than lie
+                break;
+            }
+            let alpha = rz / pz;
+            for i in 0..rows_total {
+                lam[i] += alpha * p[i];
+                res[i] -= alpha * sp[i];
+            }
+            let res_l2: f64 = res.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if res_l2 <= rtol * b_norm.max(1e-300) {
+                converged = true;
+                break;
+            }
+            let z_new: Vec<f64> = (0..rows_total).map(|i| res[i] / diag[i]).collect();
+            let mut rz_new = 0.0f64;
+            for i in 0..rows_total {
+                rz_new += res[i] * z_new[i];
+            }
+            let beta = rz_new / rz;
+            rz = rz_new;
+            for i in 0..rows_total {
+                p[i] = z_new[i] + beta * p[i];
+            }
+        }
+        if !converged {
             return Err(format!(
-                "the recovered stress field is not finite (the {name} witness is \
-                 {res:.3e}); the recovery system is rank deficient for this mesh and data"
+                "the equilibration's conjugate-gradient solve did not converge within \
+             {max_iter} iterations at relative tolerance {rtol} — the constraint system \
+             is too ill-conditioned for this mesh (rows {rows_total}); the recovery is \
+             refused rather than reported (the solve's iteration budget or the precon-\
+             ditioner is the next lever)"
             ));
         }
-        if res > tol {
-            return Err(format!(
-                "the recovered stress field failed its {name} witness: residual {res:.3e} \
+        let ct_l = mat_t(&lam);
+        let mut sigma = FMat::<f64>::zeros(n_sigma, 1);
+        for e in 0..e_count {
+            for ld in 0..60 {
+                let mut acc = 0.0f64;
+                for t in 0..60 {
+                    acc += h_inv[e][(ld, t)] * ct_l[60 * e + t];
+                }
+                sigma[(60 * e + ld, 0)] = acc;
+            }
+        }
+        // witnesses via the sparse matvec
+        let sigma_vec: Vec<f64> = (0..n_sigma).map(|j| sigma[(j, 0)]).collect();
+        let cs = mat(&sigma_vec);
+        let mut scale: f64 = 1e-30;
+        for v in &rhs {
+            scale = scale.max(v.abs());
+        }
+        let tol = 1e-6 * scale + 1e-9;
+        let residual_of_vec = |lo: usize, hi: usize, subtract_rhs: bool| -> f64 {
+            let mut worst = 0.0f64;
+            for r in lo..hi {
+                let target = if subtract_rhs { rhs[r] } else { 0.0 };
+                worst = worst.max((cs[r] - target).abs());
+            }
+            worst
+        };
+        let equilibrium_residual = residual_of_vec(0, rows_a, true);
+        let continuity_residual = residual_of_vec(rows_a, rows_a + rows_b, false);
+        let pin_residual = residual_of_vec(rows_a + rows_b, rows_total, true);
+        for (name, res2) in [
+            ("equilibrium", equilibrium_residual),
+            ("traction continuity", continuity_residual),
+            ("Neumann pin", pin_residual),
+        ] {
+            if !res2.is_finite() || res2 > tol {
+                return Err(format!(
+                    "the recovered stress field failed its {name} witness: residual {res2:.3e} \
                  against rhs scale {scale:.3e} — the discrete load is not equilibrible in \
                  the piecewise-quadratic stress space for this mesh and boundary data"
-            ));
+                ));
+            }
         }
-    }
+        (
+            sigma,
+            equilibrium_residual,
+            continuity_residual,
+            pin_residual,
+        )
+    };
 
     // ---- complementary energy ----
     let mut j = 0.0f64;
