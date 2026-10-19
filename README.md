@@ -7,9 +7,30 @@ and grow its interior to fit the load, all in the browser, with no server.
 
 ## Run the web app
 
-Download the static web bundle from the latest
-[GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) (`fieldsmith-*-web.tar.gz`)
-and serve the unpacked folder with any static file server:
+The expected path for most readers: run it from a clone of this repository.
+
+    git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
+    cd fieldsmith
+    npm --prefix web install                  # once per clone
+    bash scripts/build-wasm.sh                # one-time wasm build; re-run after rust changes
+    npm --prefix web -- run dev               # then open http://localhost:5173
+
+The dev server hot-reloads the app on edits and serves the threaded build — the wasm
+packages land in the browser through two response headers Vite sends on every file:
+
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
+
+Without those headers a page can still run Fieldsmith on one worker thread (meshing and
+export take several times longer); the budget numbers in
+[docs/verification/budgets.md](docs/verification/budgets.md) are measured on the threaded
+build.
+
+### Without build tools: the release bundle
+
+If installing node and the rust toolchain is not an option, download the static web bundle
+from the latest [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases)
+(`fieldsmith-*-web.tar.gz`) and serve the unpacked folder with any static file server:
 
     tar -xzf fieldsmith-*-web.tar.gz
     cd fieldsmith-*-web
@@ -24,30 +45,8 @@ If the port is already taken, `http.server` exits with "Address already in use",
 the browser's address belongs to whatever else listens there (on one machine that is a
 file server asking for a sign-in). Pick another port; any static file server works, and
 this path is tested on `python3 -m http.server` (`.wasm` files must arrive as
-`application/wasm`, which python's default does).
-
-No install beyond unpacking. Without extra host headers the app runs on one worker thread
-(meshing and export take several times longer than the threaded build); the threaded build
-needs two response headers on every file the host serves:
-
-    Cross-Origin-Opener-Policy: same-origin
-    Cross-Origin-Embedder-Policy: require-corp
-
-The Vite dev and preview servers send both; the budget numbers in
-[docs/verification/budgets.md](docs/verification/budgets.md) are measured on the threaded
-build.
-
-### From the source checkout
-
-No download is needed in a clone of this repository; the app runs from source:
-
-    cd ~/Code/fieldsmith
-    npm --prefix web install                  # once
-    bash scripts/build-wasm.sh                # one-time wasm build (re-run after rust changes)
-    npm --prefix web -- run dev               # then open http://localhost:5173
-
-The dev server hot-reloads the app and serves the threaded build (both headers above), so
-it is the faster path, and the right one while editing.
+`application/wasm`, which python's default does). Without the two headers above, this
+bundle path runs on one worker thread.
 
 ## Run the CLI solver
 
