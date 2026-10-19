@@ -216,7 +216,7 @@ fn api_csv_writes_one_row_per_sweep_point() {
     assert_eq!(lines.len(), 3, "header plus two points: {lines:?}");
     assert_eq!(
         lines[0],
-        "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,deflection_change_rel,vm_change_rel,status"
+        "value,dofs,elements,wall_ms,deflection_mm,vm_mpa,compliance_nmm,deflection_change_rel,vm_change_rel,compliance_change_rel,status"
     );
     assert!(lines[1].starts_with("6,"), "{}", lines[1]);
     assert!(lines[2].starts_with("8,"), "{}", lines[2]);
