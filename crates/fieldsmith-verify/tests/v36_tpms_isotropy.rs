@@ -194,10 +194,12 @@ fn v36_rotated_lattice_isotropy() {
          own fitted residual (V6 measured ≤ 2.1 % against resolved coupons). The \
          measured ratios above are the raw evidence; the pinned gate bound (±15 %) is a \
          regression guard, not a fit claim.\n\
-         - The yield-indicator half of the bullet landed with the graded solve's per-case \
-         utilization factor (the Gibson-Ashby open-cell strength law, unit-gated in the \
-         core's `fill_mesh.rs`; its constants are literature-cited, not fitted). The \
-         buckling indicator remains a separate slice with its own gate.",
+         - The indicator half of the bullet landed with the graded solve's per-case \
+         yield- and buckling-utilization factors (the Gibson-Ashby open-cell strength \
+         0.3·σ_ys·φ^1.5 and elastic-collapse 0.05·E_s·φ² laws, unit-gated in the \
+         core's `fill_mesh.rs`; constants literature-cited, not fitted — a \
+         linear-elastic solve cannot measure plasticity or buckling, so the rigorous \
+         buckling route, the geometric-stiffness eigenproblem, remains tracked).",
     );
     r.finish();
 }
