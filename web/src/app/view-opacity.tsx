@@ -10,6 +10,10 @@ import { viewOverlays } from './App';
 function OpacityPanel() {
   useApp();
   if (store.lens === 'results') return null;
+  // With no fill there is nothing behind the body to show; the slider would only fade
+  // the part into the background (reads as "dimmer", the V16 mechanic needs a core pass).
+  // Say so instead of pretending: disabled slider, and the hint.
+  const filled = !!store.doc?.fill;
   return (
     <div class="opacity-panel" data-testid="opacity-panel">
       <span class="plain">Semi-transparent</span>
@@ -21,11 +25,17 @@ function OpacityPanel() {
         value={ui.bodyAlpha}
         title="Body opacity: 0 = only the fill shows"
         data-testid="opacity-slider"
+        disabled={!filled}
         onInput={(e) => ui.set('bodyAlpha', Number.parseFloat((e.target as HTMLInputElement).value))}
       />
-      <span class="num" data-testid="opacity-value">
-        {Math.round(ui.bodyAlpha * 100)}%
+      <span class="num" data-testid="opacity-value" data-filled={filled ? '1' : '0'}>
+        {filled ? `${Math.round(ui.bodyAlpha * 100)}%` : '—'}
       </span>
+      {!filled && (
+        <span class="meta" data-testid="opacity-hint">
+          nothing to see through without a fill — add one in the Fill lens
+        </span>
+      )}
     </div>
   );
 }
