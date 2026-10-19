@@ -215,6 +215,11 @@ pub struct CouponSpec {
     pub hmul: f64,
     /// Lattice pattern offset inside the coupon (mm).
     pub shift: f64,
+    /// In-plane lattice rotation about z (deg). The coupon's platens, loads and
+    /// diagnostics stay axis-aligned; only the lattice's argument is rotated, so the
+    /// measured E* is the lattice's modulus along the rotated direction (0 = the built-in
+    /// [100]-oriented lattice). Density untouched: a level set rotated is the same surface.
+    pub rotdeg: f64,
     /// Explicit mesh size; `None` uses `hmul·feature`.
     pub h: Option<f64>,
     /// Interior strain band in cells (each side).
@@ -238,6 +243,7 @@ impl CouponSpec {
             n: 3,
             hmul: default_hmul(mode),
             shift: 0.0,
+            rotdeg: 0.0,
             h: None,
             band: 1.0,
             young: 1000.0,
@@ -431,14 +437,21 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         FillMode::Network => format!("R={:.5}, hmul={}", 0.5 * feature, spec.hmul),
     };
     log.push(format!(
-        "coupon: family={:?} mode={:?} rho={} cell={cell} n={} h={h:.5} ({dinfo}, shift={})",
-        spec.family, spec.mode, spec.rho, spec.n, spec.shift
+        "coupon: family={:?} mode={:?} rho={} cell={cell} n={} h={h:.5} ({dinfo}, shift={}, rot={:.1}°)",
+        spec.family, spec.mode, spec.rho, spec.n, spec.shift, spec.rotdeg
     ));
 
     let param = t;
     let shift = spec.shift;
+    // In-plane lattice rotation about z: the field's argument goes through R⁻¹ (the
+    // lattice is the rotated one; the coupon box, platens and diagnostics stay axial).
+    let (rc, rs) = (
+        spec.rotdeg.to_radians().cos(),
+        spec.rotdeg.to_radians().sin(),
+    );
     let f = |p: V3| {
-        let q = [p[0] + shift, p[1] + shift, p[2] + shift];
+        let (qx, qy) = (p[0] + shift, p[1] + shift);
+        let q = [rc * qx + rs * qy, -rs * qx + rc * qy, p[2] + shift];
         box_sdf(p, l).max(lattice_field(spec.family, spec.mode, cell, param, q).v)
     };
     let t0 = Instant::now();
