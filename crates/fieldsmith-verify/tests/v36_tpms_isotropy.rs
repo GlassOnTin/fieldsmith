@@ -53,6 +53,7 @@ fn v36_rotated_lattice_isotropy() {
 
     let mut body = String::new();
     let mut ratios: Vec<(String, f64, f64)> = Vec::new();
+    let mut cubic: Vec<(String, f64, f64, f64, f64, f64)> = Vec::new();
     for &(fam, mode, label) in &cases {
         let a: CouponResult = coupon::run(&coupon_at(fam, mode, 0.0));
         let b: CouponResult = coupon::run(&coupon_at(fam, mode, 45.0));
@@ -68,8 +69,31 @@ fn v36_rotated_lattice_isotropy() {
         let norm45 = e45 / coupon_law_at(fam, mode, b.rho_mesh);
         let norm0 = e0 / coupon_law_at(fam, mode, a.rho_mesh);
         let norm_ratio = norm45 / norm0;
-        let l45 = 100.0 * (ratio - 1.0).abs();
         ratios.push((label.to_string(), ratio, norm_ratio));
+        let l45 = 100.0 * (ratio - 1.0).abs();
+        // The cubic-tensor fit from the measured triple (E[100] = e0, E[110] = the
+        // normalized 45° modulus, ν = the interior Poisson of the 0° run):
+        //   S11 = 1/E0, S12 = −ν·S11, S44 = 2(1/E45 − S12)
+        // and the Zener anisotropy ratio Z = 2·C44/(C11 − C12) with C = S⁻¹ (Z = 1
+        // exactly isotropic). The density-normalized E45 divides by the law at the
+        // rotated coupon's own density first.
+        let law45 = coupon_law_at(fam, mode, b.rho_mesh);
+        let law0 = coupon_law_at(fam, mode, a.rho_mesh);
+        let e45_norm = e45 * law0 / law45;
+        let e_ref = e0.max(1e-300);
+        let s11 = 1.0 / e_ref;
+        let nu = a.nu_int.expect("band Poisson");
+        let s12 = -nu * s11;
+        let s44 = 2.0 * (1.0 / e45_norm - s12);
+        // The stiffness constants invert the cubic compliance's (a, b, b) diagonal
+        // block in closed form: D = (S11 − S12)(S11 + 2·S12), C11 = (S11 + S12)/D,
+        // C12 = −S12/D, C44 = 1/S44. Zener: Z = 2·C44/(C11 − C12) — 1 is isotropic.
+        let det = (s11 - s12) * (s11 + 2.0 * s12);
+        let c11 = (s11 + s12) / det;
+        let c12 = -s12 / det;
+        let c44 = 1.0 / s44;
+        let zener = 2.0 * c44 / (c11 - c12);
+        cubic.push((label.to_string(), s11, s12, s44, c44, zener));
         body.push_str(&format!(
             "- {label}: E*(0°) = {e0:.2} MPa (ρ_mesh {rho0:.4}), E*(45°) = {e45:.2} MPa \
              (ρ_mesh {rho45:.4}); raw ratio {ratio:+.5} (error {l45:.2} %), \
@@ -138,6 +162,24 @@ fn v36_rotated_lattice_isotropy() {
                     .collect();
                 parts.join("; ")
             }
+        ),
+    )
+    .section(
+        "Cubic-tensor fits",
+        format!(
+            "Per family, from the measured (E[100], E[110]-normalized, ν) triple: {cub}",
+            cub = {
+                let parts: Vec<String> = cubic
+                    .iter()
+                    .map(|(l, s11, s12, s44, c44, z)| {
+                        format!(
+                            "{l}: S11 {s11:+.4e}, S12 {s12:+.4e}, S44 {s44:+.4e} MPa⁻¹; \
+                             C44 {c44:+.1} MPa; Zener {z:+.4} (1 = isotropic)"
+                        )
+                    })
+                    .collect();
+                parts.join(";  ")
+            },
         ),
     )
     .section(
