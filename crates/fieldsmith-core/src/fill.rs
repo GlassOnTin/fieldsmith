@@ -155,6 +155,34 @@ fn law_extended(family: Family, mode: FillMode, phi: f64) -> f64 {
     s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (1.0 - s_hi)
 }
 
+/// The lattice's yield-strength law (the STRENGTH side of Gibson–Ashby, the open-cell
+/// bending-dominated scaling `σ_y*(ρ) ≈ 0.3·σ_ys·ρ^1.5`): **literature-cited defaults,
+/// not fitted by this tool** — this project's coupons run a linear-elastic solver, which
+/// cannot measure plasticity, so the constants come from Gibson–Ashby, *Cellular Solids*
+/// (the open-cell scaling named there and used unchanged here). They are per-family
+/// placeholders in that sense and adjustable once a non-linear fit session exists.
+pub const STRENGTH_COEF: f64 = 0.3;
+pub const STRENGTH_EXP: f64 = 1.5;
+
+/// The strength law on its own measured-style band, extended like the stiffness law:
+/// zero at φ = 0, the open-cell scaling on the band, a linear bridge to the full solid
+/// strength at φ = 1. No family argument: the open-cell placeholder carries no
+/// per-family constant yet — one arrives only with a non-linear fit session.
+pub fn strength_extended(yield_mpa: f64, phi: f64) -> f64 {
+    if phi <= 0.0 {
+        return 0.0;
+    }
+    let raw = yield_mpa * STRENGTH_COEF * phi.powf(STRENGTH_EXP);
+    if phi < RHO_LO {
+        return yield_mpa * STRENGTH_COEF * RHO_LO.powf(STRENGTH_EXP) * phi / RHO_LO;
+    }
+    if phi <= RHO_HI {
+        return raw;
+    }
+    let s_hi = yield_mpa * STRENGTH_COEF * RHO_HI.powf(STRENGTH_EXP);
+    s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (yield_mpa - s_hi)
+}
+
 /// Relative stiffness of a filled element from its material fraction φ and the mesh-to-cell
 /// ratio h/cell. Two regimes (both measured on the V7 beam, see the module header): at element
 /// sizes below the cell the element resolves actual wall/skin geometry and Voigt mixing (φ) is
@@ -226,6 +254,12 @@ pub struct Graded {
     pub rho_design: [f64; 2],
     /// Graded re-solve, one per solid case, same order.
     pub cases: Vec<CaseResult>,
+    /// Per-solid-case strength utilization: the max over NON-VOID elements of the
+    /// element-centroid von Mises divided by the material fraction's yield strength
+    /// (the strength law above; the solid skin's φ = 1 gives the material's full yield).
+    /// Values above 1.0 = the local plastic regime at the current load. The document
+    /// must carry a yield-stating material or this is absent.
+    pub yield_utilization: Vec<Option<f64>>,
     /// Thermal cases re-solved through the graded core, in `doc.thermal_cases()` order: the
     /// conduction solve carries the fill's per-element conductivity map, the expansion solve
     /// the graded moduli. Same case type as the solid path's thermal results.
@@ -602,6 +636,33 @@ pub fn graded_of(
         .map(|e| all_cases.clone().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
         .collect();
 
+    // Strength utilization per solid case: the max over NON-VOID elements of the
+    // element von Mises over the fraction-scaled yield (the strength law above; the solid
+    // skin's φ = 1 recovers the material's full yield, and every φ ≤ 1 gives sy ≤ that,
+    // so the factor dominates the peak-vm-over-solid-yield floor). Absent without a
+    // yield-stating document material.
+    let yield_utilization = if mat.yield_strength > 0.0 {
+        cases
+            .iter()
+            .map(|c| {
+                let mut worst = 0.0f64;
+                for e in 0..base.mesh.tets.len() {
+                    if class[e] == CLASS_VOID {
+                        continue;
+                    }
+                    let sy = strength_extended(mat.yield_strength, rho_elem[e]);
+                    let r = c.vm_elem[e] / sy;
+                    if r > worst {
+                        worst = r;
+                    }
+                }
+                Some(worst)
+            })
+            .collect()
+    } else {
+        cases.iter().map(|_| None).collect()
+    };
+
     Ok(Graded {
         spec,
         fill,
@@ -610,6 +671,7 @@ pub fn graded_of(
         rho_elem,
         rho_design,
         cases,
+        yield_utilization,
         thermal_cases,
         envelope,
         envelope_elem,

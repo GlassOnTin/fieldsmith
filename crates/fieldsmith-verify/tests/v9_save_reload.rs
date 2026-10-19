@@ -113,6 +113,29 @@ fn assert_same_graded(a: &Graded, b: &Graded, label: &str) {
             _ => panic!("{label}: graded compliance_upper mismatch"),
         }
     }
+    // The yield-utilization factors (per case; absent — None — without a yield-stating
+    // material) round-trip bit for bit with the solve.
+    assert_eq!(
+        a.yield_utilization.len(),
+        b.yield_utilization.len(),
+        "{label}: utilization case count"
+    );
+    for (i, (ux, uy)) in a
+        .yield_utilization
+        .iter()
+        .zip(b.yield_utilization.iter())
+        .enumerate()
+    {
+        match (ux, uy) {
+            (None, None) => {}
+            (Some(p), Some(q)) => assert_eq!(
+                p.to_bits(),
+                q.to_bits(),
+                "{label}: case {i} yield-utilization factor"
+            ),
+            _ => panic!("{label}: case {i} utilization present in one graded run only"),
+        }
+    }
 }
 
 fn round_trip(doc: &Document) -> Document {

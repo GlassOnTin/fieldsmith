@@ -162,6 +162,21 @@ fn graded_fill_on_a_mesh_document_is_measured() {
     assert!(d.validate().is_empty(), "validate: {:?}", d.validate());
 
     let (base, g) = graded(&d, Resolution::Size(1.5), now).expect("graded analysis on a mesh doc");
+    // The strength-utilization readout: a yield-stating material (250 MPa) makes the
+    // per-case load factor present. The lower bound is exact, not approximate: the
+    // graded solve's peak-vM element is non-void, and every non-void element has φ ≤ 1
+    // so its law yield is ≤ the solid yield — the factor therefore dominates
+    // peak-vm/250. The upper guard is a fixture-pinned regression bound (measured
+    // 2.63; the case-max-instead-of-element-vm bug it guards against read 30.9).
+    assert!(g.yield_utilization.len() == g.cases.len());
+    let u = g.yield_utilization[0].expect("yield-stating material");
+    assert!(u > 0.0, "utilisation {u}");
+    assert!(
+        u >= g.cases[0].max_vm_elem / 250.0 * (1.0 - 1e-12),
+        "the factor dominates the full-strength floor: {u} vs {}",
+        g.cases[0].max_vm_elem / 250.0
+    );
+    assert!(u < 6.0, "fixture-pinned guard: {u}");
     println!("=== graded fill on an imported mesh ===");
     println!(
         "solid: {} elements, {} DOF, h {:.2} mm",
@@ -303,4 +318,15 @@ fn graded_fill_on_a_mesh_document_is_measured() {
     );
     // The cap is the whole −x face: 10×10 mm at h = 1.5 → ~44 facets (P2, 2 per element face).
     // The tip is the whole +x face likewise. Both non-empty is the claim that matters.
+}
+
+#[test]
+fn graded_without_a_yield_statement_carries_no_utilization() {
+    let mut d = mesh_bar_doc();
+    d.custom_materials[0].yield_strength = 0.0;
+    let (_, g) = graded(&d, Resolution::Size(1.5), now).expect("graded");
+    assert!(
+        g.yield_utilization.iter().all(|u| u.is_none()),
+        "no yield statement: the utilization must be absent"
+    );
 }
