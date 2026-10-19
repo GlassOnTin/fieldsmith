@@ -254,10 +254,12 @@ fn v23_sweep_five_points_on_the_cantilever() {
         assert_eq!(cols[0], p.value.to_string());
         assert_eq!(cols[4], last.tracked.deflection_mm.to_string(), "{line}");
         assert_eq!(cols[5], last.tracked.vm_mpa.to_string(), "{line}");
-        // Two rungs ran: both change columns present, verdict ok (no tolerance).
-        assert!(cols[6].parse::<f64>().is_ok(), "{line}");
+        assert_eq!(cols[6], last.tracked.compliance_nmm.to_string(), "{line}");
+        // Two rungs ran: all three change columns present, verdict ok (no tolerance).
         assert!(cols[7].parse::<f64>().is_ok(), "{line}");
-        assert_eq!(cols[8], "ok", "{line}");
+        assert!(cols[8].parse::<f64>().is_ok(), "{line}");
+        assert!(cols[9].parse::<f64>().is_ok(), "{line}");
+        assert_eq!(cols[10], "ok", "{line}");
     }
     r.section(
         "The CSV",

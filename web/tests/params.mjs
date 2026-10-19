@@ -164,7 +164,7 @@ export async function paramsTest(browser, url, { screens, docsDir }) {
 
     // The representation contract, measured exactly: same geometry per point, same
     // machine, same binary — every CSV cell except each run's own wall_ms must equal.
-    const CSV_COLS = ['value', 'dofs', 'elements', 'wall_ms', 'deflection_mm', 'vm_mpa', 'deflection_change_rel', 'vm_change_rel', 'status'];
+    const CSV_COLS = ['value', 'dofs', 'elements', 'wall_ms', 'deflection_mm', 'vm_mpa', 'compliance_nmm', 'deflection_change_rel', 'vm_change_rel', 'compliance_change_rel', 'status'];
     const nodeCsv = node.status === 0 ? readFileSync(resolve(tmp, 'node.csv'), 'utf8') : '';
     const letCsv = let_run.status === 0 ? readFileSync(resolve(tmp, 'let.csv'), 'utf8') : '';
     const a = nodeCsv.split('\n').filter((x) => x !== '');
