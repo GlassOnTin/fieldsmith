@@ -311,6 +311,21 @@ export function ViewportHost() {
               }
             : null,
         );
+        // The see-through pass: the far wall, mounted whenever a body field renders (the
+        // quad only draws once the body goes sub-1-α). Same filled field, so the exit
+        // march needs the core pass's tunneling-safe step.
+        vp.setExit(
+          !missing.length && shader.bounds
+            ? {
+                source: shader.source,
+                bounds: shader.bounds,
+                ident: shader.ident,
+                meshes: slots,
+                grid: fillGrid,
+                stepScale: 0.35,
+              }
+            : null,
+        );
         vp.setPartColors(effectiveLeafColors(doc), shader.leaves);
         updateGhost();
       } else if (selKey !== lastSel || store.lens !== lastLens) {

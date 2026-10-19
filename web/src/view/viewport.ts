@@ -33,6 +33,7 @@ uniform vec3 u_base;
 uniform vec3 u_camRight;
 uniform vec3 u_camUp;
 uniform float u_ghost;      // 1 = draw as translucent ghost
+uniform float u_exit;       // 1 = render the far wall (the see-through pass)
 uniform float u_alpha;      // body alpha (1 = opaque); the interior pass is opaque
 uniform float u_core;       // 1 = march/colour through the interior field (core pass)
 uniform vec3 u_leafCol[${MAX_PARTCOLORS}];  // per-leaf display colour (linear RGB)
@@ -131,6 +132,33 @@ bool floorFragment(vec3 ro, vec3 rd, out vec4 col, out float depthOut) {
   col = vec4(u_gridCol * a, a);
   return true;
 }
+vec3 shadeField(vec3 p, vec3 n, vec3 rd, vec2 id, vec3 base, float tSurf) {
+  // Studio lighting: camera-relative key light, sky/ground hemisphere, soft rim.
+  vec3 L = normalize(u_camRight * 0.45 + u_camUp * 0.65 - rd * 0.6);
+  float diff = max(dot(n, L), 0.0);
+  float hemi = 0.5 + 0.5 * n.z;
+  float ao = 1.0;
+  float h = max(0.6, tSurf * u_pixel * 6.0);
+  for (int k = 1; k <= 4; k++) {
+    float s = h * float(k);
+    ao -= max(s - fsClip(p + n * s).x, 0.0) / s * 0.12;
+  }
+  ao = clamp(ao, 0.35, 1.0);
+  vec3 col = base * (0.30 + 0.22 * hemi + 0.58 * diff) * ao;
+  float spec = pow(max(dot(reflect(rd, n), L), 0.0), 48.0) * 0.18;
+  float rim = pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.10;
+  col += vec3(spec + rim);
+  if (u_hlN > 0) {
+    for (int i = 0; i < ${MAX_HIGHLIGHTS}; i++) {
+      if (i >= u_hlN) break;
+      vec2 key = u_hlKey[i];
+      if (abs(id.x - key.x) < 0.5 && (key.y < 0.0 || abs(id.y - key.y) < 0.5)) {
+        col = mix(col, u_hlCol[i] * (0.55 + 0.45 * diff + 0.25 * hemi), 0.72);
+      }
+    }
+  }
+  return col;
+}
 void main() {
   vec4 a = u_invViewProj * vec4(v_ndc, -1.0, 1.0); a /= a.w;
   vec4 b = u_invViewProj * vec4(v_ndc, 1.0, 1.0); b /= b.w;
@@ -187,8 +215,50 @@ void main() {
     fragColor = floorCol;
     return;
   }
+
+  // The exit (see-through) pass: this call's first hit is the near wall; march on inside
+  // to the far wall and render that surface opaque at its own depth. The body's
+  // translucent pass then blends its near face over the framebuffer, where the far wall
+  // (or the core pass's lattice, or the floor) lives: the shaded-transparency model, the
+  // FreeCAD/OpenSCAD look. The opaque path skips it entirely (bit-identical to the
+  // single-hit march).
+  if (u_exit > 0.5) {
+    float te = t;
+    bool xhit = false;
+    vec4 fx = f;
+    for (int i = 0; i < 400 && t1 > te; i++) {
+      vec3 pe = ro + rd * te;
+      fx = fs_active(pe);
+      if (fx.x > 0.0) {
+        // Crossing into empty space: bisect to the exact exit surface.
+        float lo = t;
+        float hi = te;
+        for (int j = 0; j < 10; j++) {
+          float mid = 0.5 * (lo + hi);
+          vec4 fm = fs_active(ro + rd * mid);
+          if (fm.x < 0.0) { lo = mid; } else { hi = mid; }
+        }
+        te = hi;
+        fx = fs_active(ro + rd * te);
+        xhit = true;
+        break;
+      }
+      te += max(-fx.x * u_step, eps * 0.5);
+    }
+    if (xhit) {
+      // p is declared after this branch; only t and f carry the exit surface forward —
+      // the p/n/id block below reconstructs everything from them.
+      f = fx;
+      t = te;
+    } else {
+      // No far wall inside the interval (an open clip side with nothing behind):
+      // the near pass still covers this pixel in its own blend.
+      discard;
+    }
+  }
+
   vec3 p = ro + rd * t;
-  vec3 n = cap ? -u_clipN : normalize(f.yzw);
+  vec3 n = cap && u_exit < 0.5 ? -u_clipN : normalize(f.yzw);
   if (dot(n, rd) > 0.0) n = -n;
   // Leaf identity is queried only when somebody will read it (part colours or highlights),
   // so the no-colour/ no-selection path costs nothing.
@@ -201,34 +271,13 @@ void main() {
       if (abs(id.x - float(i)) < 0.5) { base = u_leafCol[i]; break; }
     }
   }
-  // Studio lighting: camera-relative key light, sky/ground hemisphere, soft rim.
-  vec3 L = normalize(u_camRight * 0.45 + u_camUp * 0.65 - rd * 0.6);
-  float diff = max(dot(n, L), 0.0);
-  float hemi = 0.5 + 0.5 * n.z;
-  float ao = 1.0;
-  float h = max(0.6, t * u_pixel * 6.0);
-  for (int k = 1; k <= 4; k++) {
-    float s = h * float(k);
-    ao -= max(s - fsClip(p + n * s).x, 0.0) / s * 0.12;
-  }
-  ao = clamp(ao, 0.35, 1.0);
-  vec3 col = base * (0.30 + 0.22 * hemi + 0.58 * diff) * ao;
-  float spec = pow(max(dot(reflect(rd, n), L), 0.0), 48.0) * 0.18;
-  float rim = pow(1.0 - max(dot(-rd, n), 0.0), 3.0) * 0.10;
-  col += vec3(spec + rim);
-  if (u_hlN > 0) {
-    for (int i = 0; i < ${MAX_HIGHLIGHTS}; i++) {
-      if (i >= u_hlN) break;
-      vec2 key = u_hlKey[i];
-      if (abs(id.x - key.x) < 0.5 && (key.y < 0.0 || abs(id.y - key.y) < 0.5)) {
-        col = mix(col, u_hlCol[i] * (0.55 + 0.45 * diff + 0.25 * hemi), 0.72);
-      }
-    }
-  }
+  vec3 col = shadeField(p, n, rd, id, base, t);
   vec4 clip = u_viewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  fragColor = vec4(pow(col, vec3(1.0 / 2.2)), u_ghost > 0.5 ? 0.28 : u_alpha);
-}`;
+  float alphaOut = u_exit > 0.5 ? 1.0 : (u_ghost > 0.5 ? 0.28 : u_alpha);
+  fragColor = vec4(pow(col, vec3(1.0 / 2.2)), alphaOut);
+}
+`;
 }
 
 /** One mesh leaf's voxel grid, resolved by the host from the session grid registry. The
@@ -274,7 +323,9 @@ export class Viewport {
   // Interior (core) pass of a filled part: opaque, drawn between the floor and the
   // body quad so a semi-transparent body reveals the lattice — only ever mounted.
   private coreQuad: THREE.Mesh;
+  private exitQuad: THREE.Mesh;
   private coreMaterial: THREE.RawShaderMaterial | null = null;
+  private exitMaterial: THREE.RawShaderMaterial | null = null;
   // Floor-only pass for the lens/empty-document states without a field shader
   // (results lens, empty doc). Same floorFragment code, trivial always-miss field.
   private floorQuad: THREE.Mesh;
@@ -343,6 +394,9 @@ export class Viewport {
     this.coreQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.coreQuad.frustumCulled = false;
     this.coreQuad.renderOrder = -15;
+    this.exitQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
+    this.exitQuad.frustumCulled = false;
+    this.exitQuad.renderOrder = -14;
     this.ghostQuad = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ visible: false }));
     this.ghostQuad.frustumCulled = false;
     this.ghostQuad.renderOrder = 10;
@@ -478,10 +532,11 @@ export class Viewport {
 
   private buildMaterial(
     spec: FieldSpec,
-    opts: { ghost?: boolean; core?: boolean; translucent?: boolean } = {},
+    opts: { ghost?: boolean; core?: boolean; exit?: boolean; translucent?: boolean } = {},
   ): THREE.RawShaderMaterial {
     const ghost = opts.ghost === true;
     const core = opts.core === true;
+    const exit = opts.exit === true;
     const translucent = opts.translucent === true;
     const uniforms: Record<string, THREE.IUniform> = {
       u_invViewProj: { value: new THREE.Matrix4() },
@@ -494,8 +549,9 @@ export class Viewport {
       u_camRight: { value: new THREE.Vector3() },
       u_camUp: { value: new THREE.Vector3() },
       u_ghost: { value: ghost ? 1 : 0 },
-      u_alpha: { value: ghost ? 0.28 : core ? 1 : this.bodyAlpha },
+      u_alpha: { value: ghost || exit ? 1 : this.bodyAlpha },
       u_core: { value: core ? 1 : 0 },
+      u_exit: { value: exit ? 1 : 0 },
       u_gridCol: this.gridCol,
       u_gridOn: this.gridOn,
       u_gridCenter: { value: new THREE.Vector2() },
@@ -645,6 +701,9 @@ export class Viewport {
   private lastSpec: FieldSpec | null = null;
   /** The last spec handed to `setCore`; compiled only while `bodyAlpha < 1`. */
   private lastCoreSpec: FieldSpec | null = null;
+  /** The last spec handed to `setExit`; built like the core pass, whenever a body field
+   * spec exists. */
+  private lastExitSpec: FieldSpec | null = null;
   /** App-wide body alpha (1 = opaque). The interior pass shows when this is < 1. */
   private bodyAlpha = 1;
 
@@ -664,6 +723,31 @@ export class Viewport {
     }
     this.coreMaterial = this.buildMaterial(spec, { core: true });
     this.coreQuad.material = this.coreMaterial;
+    this.applyPartColors();
+    this.invalidate();
+  }
+
+  /** The see-through pass: the far wall rendered opaque at its own depth, mounted under
+   * the translucent body — the shaded-transparency model's second layer. Mirrors
+   * `setCore` (the same field, no core switch, no step choice of its own: the spec
+   * carries its step scale). */
+  setExit(spec: FieldSpec | null) {
+    this.lastExitSpec = spec;
+    this.mountExit();
+  }
+
+  private mountExit() {
+    this.dropFieldTextures(this.exitMaterial);
+    this.exitMaterial?.dispose();
+    if (!this.lastExitSpec?.bounds || this.bodyAlpha >= 1) {
+      const had = this.exitMaterial !== null;
+      this.exitMaterial = null;
+      this.exitQuad.material = new THREE.MeshBasicMaterial({ visible: false });
+      if (had) this.invalidate();
+      return;
+    }
+    this.exitMaterial = this.buildMaterial(this.lastExitSpec, { exit: true });
+    this.exitQuad.material = this.exitMaterial;
     this.applyPartColors();
     this.invalidate();
   }
@@ -689,6 +773,7 @@ export class Viewport {
         this.coreMaterial = null;
         this.coreQuad.material = new THREE.MeshBasicMaterial({ visible: false });
       }
+      this.mountExit();
     }
     const done = flip ? this.setField(this.lastSpec!) : undefined;
     if (!flip && this.material) {
@@ -749,7 +834,7 @@ export class Viewport {
     const covered = Math.min(this.partLeaves.length, MAX_PARTCOLORS);
     let n = 0;
     for (let i = 0; i < covered; i++) if (this.partColors[this.partLeaves[i]]) n = i + 1;
-    for (const m of [this.material, this.coreMaterial]) {
+    for (const m of [this.material, this.coreMaterial, this.exitMaterial]) {
       if (!m) continue;
       const cols = m.uniforms.u_leafCol.value as THREE.Vector3[];
       for (let i = 0; i < n; i++) {
