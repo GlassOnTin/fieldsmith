@@ -311,11 +311,13 @@ export function ViewportHost() {
               }
             : null,
         );
-        // The see-through pass: the far wall, mounted whenever a body field renders (the
-        // quad only draws once the body goes sub-1-α). Same filled field, so the exit
-        // march needs the core pass's tunneling-safe step.
+        // The see-through pass: the far wall, plain shapes only. Filled parts keep the
+        // core pass's look (the lattice through the walls); their first interior
+        // crossing is the skin's own inner face, which drawn opaque would occlude the
+        // lattice behind it (measured: 0.11 % changed pixels, V16). The proper
+        // multi-layer composite peels that properly — tracked, not faked now.
         vp.setExit(
-          !missing.length && shader.bounds
+          !missing.length && shader.bounds && !shader.core
             ? {
                 source: shader.source,
                 bounds: shader.bounds,
