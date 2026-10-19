@@ -16,9 +16,10 @@ use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
-    compliance, element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, solve,
-    solve_conduction, thermal_load, upper_compliance, von_mises, HeatFluxBc, Material, P2Mesh,
-    Problem, RobinBc, SolveReport, SolverOptions, Stress, ThermalRefData, V3,
+    compliance, element_stress, element_stress_thermal, min_compressive, nodal_stress,
+    nodal_stress_thermal, solve, solve_conduction, thermal_load, upper_compliance, von_mises,
+    HeatFluxBc, Material, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions, Stress,
+    ThermalRefData, V3,
 };
 use serde::Serialize;
 
@@ -67,6 +68,11 @@ pub struct CaseResult {
     /// statistic, not on recovered nodal maxima.
     #[serde(skip)]
     pub vm_elem: Vec<f64>,
+    /// Most compressive principal stress at each element centroid (≤ 0; MPa) — the
+    /// buckling indicator's load measure, the twin of `vm_elem`. Serde-skipped like the
+    /// other per-element fields.
+    #[serde(skip)]
+    pub sigma_min_elem: Vec<f64>,
     pub max_von_mises: f64,
     pub max_vm_elem: f64,
     pub max_displacement: f64,
@@ -184,6 +190,46 @@ pub fn size_for_dofs(volume: f64, dofs: usize) -> f64 {
 pub fn elem_von_mises(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<f64> {
     (0..mesh.tets.len())
         .map(|e| von_mises(&element_stress(mesh, u, e, young[e], poisson, [0.25; 3])))
+        .collect()
+}
+
+/// The most compressive principal stress at each element centroid (0 when the tensor has
+/// no compressive component) — the element buckling indicator reads. Twin of
+/// [`elem_von_mises`] with the same centroid statistic.
+pub fn elem_min_compress_principal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+) -> Vec<f64> {
+    (0..mesh.tets.len())
+        .map(|e| min_compressive(&element_stress(mesh, u, e, young[e], poisson, [0.25; 3])))
+        .collect()
+}
+
+/// [`elem_min_compress_principal`] for a thermal case: the elastic-thermal tensor's
+/// most compressive principal (same thermal term [`elem_von_mises_thermal`] subtracts).
+pub fn elem_min_compress_principal_thermal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha: f64,
+    dt: &[f64],
+) -> Vec<f64> {
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let phi = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
+    (0..mesh.tets.len())
+        .map(|e| {
+            let t = &mesh.tets[e];
+            let dt_c: f64 = t
+                .iter()
+                .zip(phi.iter())
+                .map(|(&n, p)| dt[n as usize] * p)
+                .sum();
+            let s = element_stress_thermal(mesh, u, e, young[e], poisson, alpha, dt_c, [0.25; 3]);
+            min_compressive(&s)
+        })
         .collect()
 }
 
@@ -646,6 +692,7 @@ pub fn run_case(
     } else {
         None
     };
+    let sigma_min_elem = elem_min_compress_principal(mesh, &u, young, poisson);
     Ok(CaseResult {
         name,
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
@@ -656,6 +703,7 @@ pub fn run_case(
         u,
         stress,
         von_mises: vm,
+        sigma_min_elem,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
@@ -709,6 +757,7 @@ pub fn run_thermal_case(
     let stress = nodal_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
     let vm_elem = elem_von_mises_thermal(mesh, &u, young, poisson, alpha, &dt);
+    let sigma_min_elem = elem_min_compress_principal_thermal(mesh, &u, young, poisson, alpha, &dt);
     let max_d = (0..mesh.nodes.len())
         .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
         .fold(0.0, f64::max);
@@ -730,6 +779,7 @@ pub fn run_thermal_case(
         u,
         stress,
         von_mises: vm,
+        sigma_min_elem,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),

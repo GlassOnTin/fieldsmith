@@ -851,16 +851,20 @@ function ResultsPanel() {
               {(lvl.meta.provenance.thermal_ms ?? 0) > 0 && ` · thermal ${fmt(lvl.meta.provenance.thermal_ms!)} ms`}
             </span>
             {lvl.meta.cases.slice(0, 4).map((c, i) => {
-              // The fill re-solve's strength-utilization factor (the fill.rs law, the
-              // max element vM over the fraction-scaled yield): shown when the document
-              // states a yield, mechanical slots only (thermal slots carry null).
+              // The fill re-solve's utilization factors (the fill.rs laws): yield — the
+              // max element vM over the fraction-scaled yield, shown when the document
+              // states a yield; buckling — the max lattice-element compressive principal
+              // over the buckling law's stress. Mechanical slots only (thermal carry
+              // null); factors above 1 mark the local over-yield / collapse regime.
               const uf = lvl.meta.yield_utilization?.[i];
+              const bf = lvl.meta.buckling_utilization?.[i];
               return (
                 <Fragment key={c.name}>
                   <span class="plain">{c.name}</span>
                   <span class="num">
                     {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
                     {uf != null ? ` · yield ×${fmt(uf, 2)}` : ''}
+                    {bf != null ? ` · buckling ×${fmt(bf, 2)}` : ''}
                     {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
                   </span>
                 </Fragment>

@@ -29,6 +29,20 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
     );
     assert_eq!(a.cases.len(), b.cases.len(), "{label}: case count");
     for (ca, cb) in a.cases.iter().zip(b.cases.iter()) {
+        // The most-compress-principal element values round-trip bit for bit (the
+        // buckling indicator's load measure).
+        assert_eq!(
+            ca.sigma_min_elem
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>(),
+            cb.sigma_min_elem
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>(),
+            "{label}: {} min-compressive principal per element",
+            ca.name
+        );
         assert_eq!(ca.name, cb.name, "{label}: case name");
         assert_eq!(
             ca.max_von_mises.to_bits(),

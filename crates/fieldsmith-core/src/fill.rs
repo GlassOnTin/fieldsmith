@@ -183,6 +183,36 @@ pub fn strength_extended(yield_mpa: f64, phi: f64) -> f64 {
     s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (yield_mpa - s_hi)
 }
 
+/// The lattice's elastic-buckling law (the open-cell elastic-collapse scaling
+/// `σ_el*(ρ) ≈ 0.05·E_s·φ²`): **literature-cited defaults, not fitted by this tool** —
+/// Gibson & Ashby, *Cellular Solids*, ch. 6 (the strut-buckling scaling; Ashby 2006,
+/// *Phil. Trans. R. Soc. A* 364, states the 0.05 coefficient; Ohno–Okumura–Okada 2008
+/// verify it against Kelvin-cell FEM). Like the strength law these are placeholders a
+/// linear-elastic solve cannot fit: buckling is not measured by any linear solver — a
+/// geometric-stiffness eigenproblem is the rigorous route, tracked on the rung.
+///
+/// Design reading the two laws combine into: elastic buckling dominates plastic yield
+/// only where `0.05·E_s·φ² < 0.3·σ_ys·φ^1.5`, i.e. `φ < 36·(σ_ys/E_s)²` — at PETG's
+/// σ_ys/E_s ≈ 31e-3 that crossover sits at φ ≈ 0.035, far below any graded wall, so for
+/// these materials the buckling factor's usual role is to show HOW far yield binds first.
+pub const BUCKLING_COEF: f64 = 0.05;
+pub const BUCKLING_EXP: f64 = 2.0;
+
+/// The buckling law's stress: zero at φ = 0, a linear ramp up to the band floor, the
+/// quadratic scaling on the band, and CLAMPED to the band-top value above it — the
+/// most conservative continuation, since the extrapolation past the band carries no
+/// citation and an underestimate at a dense wall would hide a risk. The call site reads
+/// lattice elements only (a solid skin does not strut-buckle; its check is the yield's).
+pub fn buckling_extended(young_mpa: f64, phi: f64) -> f64 {
+    if phi <= 0.0 {
+        return 0.0;
+    }
+    if phi < RHO_LO {
+        return young_mpa * BUCKLING_COEF * RHO_LO.powf(BUCKLING_EXP) * phi / RHO_LO;
+    }
+    young_mpa * BUCKLING_COEF * phi.min(RHO_HI).powf(BUCKLING_EXP)
+}
+
 /// Relative stiffness of a filled element from its material fraction φ and the mesh-to-cell
 /// ratio h/cell. Two regimes (both measured on the V7 beam, see the module header): at element
 /// sizes below the cell the element resolves actual wall/skin geometry and Voigt mixing (φ) is
@@ -260,6 +290,13 @@ pub struct Graded {
     /// Values above 1.0 = the local plastic regime at the current load. The document
     /// must carry a yield-stating material or this is absent.
     pub yield_utilization: Vec<Option<f64>>,
+    /// Per-solid-case buckling utilization: the max over LATTICE elements of the
+    /// compressive magnitude of the most compressive principal stress over the
+    /// buckling law's stress (see the `BUCKLING` law above; the solid skin's
+    /// yield check covers it instead — a solid region does not strut-buckle).
+    /// Values above 1.0 = the local elastic-collapse regime at the current load; the
+    /// law's band-top clamp makes the above-band lattice elements err high.
+    pub buckling_utilization: Vec<f64>,
     /// Thermal cases re-solved through the graded core, in `doc.thermal_cases()` order: the
     /// conduction solve carries the fill's per-element conductivity map, the expansion solve
     /// the graded moduli. Same case type as the solid path's thermal results.
@@ -663,6 +700,32 @@ pub fn graded_of(
         cases.iter().map(|_| None).collect()
     };
 
+    // Buckling utilization per solid case (mechanical only, like the yield factor): the
+    // max over LATTICE elements of the compressive magnitude — the most-compressive
+    // principal's magnitude from the case's centroid stress — over the buckling law's
+    // stress. Elements in tension contribute nothing (no compressive load, no wall
+    // instability); the skin's φ ≥ the solid floor is the yield factor's business.
+    let buckling_utilization = cases
+        .iter()
+        .map(|c| {
+            let mut worst = 0.0f64;
+            for e in 0..base.mesh.tets.len() {
+                if class[e] != CLASS_LATTICE {
+                    continue;
+                }
+                let sc = -c.sigma_min_elem[e];
+                if sc <= 0.0 {
+                    continue;
+                }
+                let r = sc / buckling_extended(mat.e, rho_elem[e]);
+                if r > worst {
+                    worst = r;
+                }
+            }
+            worst
+        })
+        .collect();
+
     Ok(Graded {
         spec,
         fill,
@@ -672,6 +735,7 @@ pub fn graded_of(
         rho_design,
         cases,
         yield_utilization,
+        buckling_utilization,
         thermal_cases,
         envelope,
         envelope_elem,
@@ -817,6 +881,33 @@ support clamp cap fixed=xyz
 load pull tip force=(1200, 0, 0)
 fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 ";
+
+    #[test]
+    fn the_buckling_law_is_a_subordinate_readout_above_its_crossover() {
+        // The two laws' crossover reading (the BUCKLING comment's `φ < 36·(σ_ys/E)²`):
+        // the RAW scalings meet at φ* by that algebra — asserted as an identity of the
+        // constants, so editing a coefficient re-arms the check.
+        let (e, sy) = (1500.0f64, 47.0f64);
+        let phi_star = (6.0 * sy / e).powi(2);
+        let raw_b = e * BUCKLING_COEF * phi_star.powf(BUCKLING_EXP);
+        let raw_s = sy * STRENGTH_COEF * phi_star.powf(STRENGTH_EXP);
+        assert!(
+            (raw_b - raw_s).abs() <= 1e-12 * raw_s,
+            "the raw laws cross at φ*: {raw_b} vs {raw_s}"
+        );
+        // PETG's φ* ≈ 0.0353 sits below the band floor, so on every in-band density the
+        // yield allowable is the binding (smaller) one — the buckling factor's usual
+        // role for these materials is to show how far yield binds first, with the
+        // buckling regime reached only at very light walls.
+        for phi in [RHO_LO, 0.22, 0.3, RHO_HI] {
+            assert!(
+                strength_extended(sy, phi) < buckling_extended(e, phi),
+                "at φ = {phi} the yield allowable {0} binds below the buckling allowable {1}",
+                strength_extended(sy, phi),
+                buckling_extended(e, phi)
+            );
+        }
+    }
 
     #[test]
     fn graded_bar_smoke() {

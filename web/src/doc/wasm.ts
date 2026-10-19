@@ -433,6 +433,11 @@ export interface AnalysisMeta {
    * Length and order = `cases` BEFORE the worker appends thermal slots (those carry
    * `null`). `null` entries where the document material states no yield. */
   yield_utilization?: (number | null)[];
+  /** Fill levels only: the graded re-solve's per-case buckling-utilization factor — the
+   * max lattice-element compressive magnitude over the buckling law's stress (the
+   * fill.rs buckling law; the solid skin's check is the yield factor's). Length and
+   * order = `cases` BEFORE the worker appends thermal slots (those carry `null`). */
+  buckling_utilization?: (number | null)[];
   /** Fill levels only: the fill spec, masses and the achieved density window. */
   fill?: FillInfo;
   /** When the document's `solve modes` asks for it: the first modes of the static mesh. */
@@ -519,6 +524,9 @@ export interface GradedHandle extends AnalysisHandle {
   /** Element-centroid von Mises of one graded thermal case (MPa), the readout statistic
    * per V3.md. Packed into the level's `cases` by the worker; direct getter for e2e. */
   thermalVmElem(ci: number): Float64Array;
+  /** Most-compressive principal stress of one graded mechanical case at the element
+   * centroids (MPa, ≤ 0) — the buckling indicator's load measure; direct getter for e2e. */
+  sigmaMinElem(ci: number): Float64Array;
   /** Per-element class: 0 solid (skin, protected), 1 lattice, 2 void. */
   class(): Uint8Array;
   /** Per-element material fraction of the fill (1 solid, 0 void; the modulus input). */

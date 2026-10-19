@@ -74,10 +74,13 @@ function pack(
   if (thermalCases.length) {
     meta.cases = [...meta.cases, ...thermalCases];
     delete meta.thermal_cases;
-    // The utilization field spans the mechanical slots only; extend with nulls so the
-    // array stays index-aligned with the merged `cases` (thermal slots carry no factor).
+    // The utilization fields span the mechanical slots only; extend with nulls so the
+    // arrays stay index-aligned with the merged `cases` (thermal slots carry no factor).
     if (meta.yield_utilization) {
       meta.yield_utilization = [...meta.yield_utilization, ...thermalCases.map(() => null)];
+    }
+    if (meta.buckling_utilization) {
+      meta.buckling_utilization = [...meta.buckling_utilization, ...thermalCases.map(() => null)];
     }
   }
   const nodes = out.nodes().slice();

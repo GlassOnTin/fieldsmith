@@ -33,7 +33,8 @@ pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
 pub use stress::{
-    element_stress, element_stress_thermal, nodal_stress, nodal_stress_thermal, von_mises, Stress,
+    element_stress, element_stress_thermal, min_compressive, nodal_stress, nodal_stress_thermal,
+    principal_stresses, von_mises, Stress,
 };
 pub use thermal::{
     assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,

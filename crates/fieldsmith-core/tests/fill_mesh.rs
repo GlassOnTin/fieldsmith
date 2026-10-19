@@ -177,6 +177,19 @@ fn graded_fill_on_a_mesh_document_is_measured() {
         g.cases[0].max_vm_elem / 250.0
     );
     assert!(u < 6.0, "fixture-pinned guard: {u}");
+
+    // The buckling-utilization readout (lattice elements only; the compressive principal
+    // over the buckling law's stress). Positive under this pull (walls carry compression
+    // somewhere in the graded gyroid), and at this fixture's densities the yield
+    // allowable binds far earlier than the buckling one (PETG-class law crossover
+    // ≈ 0.035, the walls sit at φ ≥ 0.18), so the buckling factor stays under the
+    // yield factor here — pinned as a fixture bound, not a law claim.
+    let b = g.buckling_utilization[0];
+    assert!(b > 0.0, "buckling {b}");
+    assert!(
+        b < u,
+        "buckling {b} vs yield {u}: yield binds at these densities"
+    );
     println!("=== graded fill on an imported mesh ===");
     println!(
         "solid: {} elements, {} DOF, h {:.2} mm",
@@ -328,5 +341,11 @@ fn graded_without_a_yield_statement_carries_no_utilization() {
     assert!(
         g.yield_utilization.iter().all(|u| u.is_none()),
         "no yield statement: the utilization must be absent"
+    );
+    // The buckling factor reads the material's modulus, not its yield: it stays present.
+    assert!(
+        g.buckling_utilization.iter().all(|b| *b > 0.0),
+        "no yield statement: buckling still reads ({:?})",
+        g.buckling_utilization
     );
 }

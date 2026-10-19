@@ -822,6 +822,10 @@ struct GradedMeta {
     /// fraction-scaled law yield, see `fill::Graded`): `None` entries where the document
     /// material states no yield. Length and order = `cases`, mechanical slots only.
     yield_utilization: Vec<Option<f64>>,
+    /// Per-solid-case buckling-utilization factor (the max lattice-element compressive
+    /// magnitude over the buckling law's stress, see `fill::Graded`). Length and order
+    /// = `cases`, mechanical slots only.
+    buckling_utilization: Vec<f64>,
     /// Graded thermal cases (conduction through the fill's per-element conductivity map,
     /// expansion on the graded moduli), in `doc.thermalCases()` order; empty without
     /// `temperature`/`convection`/`flux` statements.
@@ -876,6 +880,7 @@ impl GradedOut {
             provenance: self.base.provenance.clone(),
             cases: self.g.cases.clone(),
             yield_utilization: self.g.yield_utilization.clone(),
+            buckling_utilization: self.g.buckling_utilization.clone(),
             thermal_cases: self.g.thermal_cases.clone(),
             solid_cases: self
                 .base
@@ -979,6 +984,13 @@ impl GradedOut {
     #[wasm_bindgen(js_name = vmElem)]
     pub fn vm_elem(&self, case: usize) -> Float64Array {
         Float64Array::from(&self.g.cases[case].vm_elem[..])
+    }
+
+    /// Graded most-compressive principal stress of one case at the element centroids
+    /// (MPa, ≤ 0) — the buckling indicator's load measure.
+    #[wasm_bindgen(js_name = sigmaMinElem)]
+    pub fn sigma_min_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].sigma_min_elem[..])
     }
 
     /// Graded max over cases of nodal von Mises (MPa).
