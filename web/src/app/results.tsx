@@ -850,15 +850,22 @@ function ResultsPanel() {
               {/* thermal_ms is 0 (not absent) on pre-thermal bundles */}
               {(lvl.meta.provenance.thermal_ms ?? 0) > 0 && ` · thermal ${fmt(lvl.meta.provenance.thermal_ms!)} ms`}
             </span>
-            {lvl.meta.cases.slice(0, 4).map((c) => (
-              <Fragment key={c.name}>
-                <span class="plain">{c.name}</span>
-                <span class="num">
-                  {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
-                  {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
-                </span>
-              </Fragment>
-            ))}
+            {lvl.meta.cases.slice(0, 4).map((c, i) => {
+              // The fill re-solve's strength-utilization factor (the fill.rs law, the
+              // max element vM over the fraction-scaled yield): shown when the document
+              // states a yield, mechanical slots only (thermal slots carry null).
+              const uf = lvl.meta.yield_utilization?.[i];
+              return (
+                <Fragment key={c.name}>
+                  <span class="plain">{c.name}</span>
+                  <span class="num">
+                    {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
+                    {uf != null ? ` · yield ×${fmt(uf, 2)}` : ''}
+                    {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
+                  </span>
+                </Fragment>
+              );
+            })}
           </div>
           {s.levels.length > 0 && (
             <div class="field-grid" data-testid="rung-table">

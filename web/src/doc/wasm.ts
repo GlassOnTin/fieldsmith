@@ -428,6 +428,11 @@ export interface AnalysisMeta {
   thermal_cases?: CaseSummary[];
   /** Fill levels only: solid-reference per-case maxima in `cases` order (serde name). */
   solid_cases?: CaseMax[];
+  /** Fill levels only: the graded re-solve's per-case strength-utilization factor — the
+   * max element von Mises over the fraction-scaled yield (the fill.rs strength law).
+   * Length and order = `cases` BEFORE the worker appends thermal slots (those carry
+   * `null`). `null` entries where the document material states no yield. */
+  yield_utilization?: (number | null)[];
   /** Fill levels only: the fill spec, masses and the achieved density window. */
   fill?: FillInfo;
   /** When the document's `solve modes` asks for it: the first modes of the static mesh. */

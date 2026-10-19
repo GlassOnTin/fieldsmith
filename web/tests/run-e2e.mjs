@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -32,6 +32,7 @@ import { heatfluxTest } from './heatflux.mjs';
 import { profilesketchTest } from './profilesketch.mjs';
 import { gradedthermalTest } from './gradedthermal.mjs';
 import { gradedresultsTest } from './gradedresults.mjs';
+import { gradedyieldTest } from './gradedyield.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -192,6 +193,11 @@ try {
   if (!only || only === 'gradedresults') {
     const ok = await gradedresultsTest(browser, url, { screens, docsDir });
     console.log(`graded results test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'gradedyield') {
+    const ok = await gradedyieldTest(browser, url, { screens, docsDir });
+    console.log(`graded yield test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

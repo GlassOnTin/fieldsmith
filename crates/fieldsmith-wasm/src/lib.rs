@@ -818,6 +818,10 @@ struct GradedMeta {
     provenance: Provenance,
     /// The graded re-solve, one per load case, same order as the solid cases.
     cases: Vec<fieldsmith_core::CaseResult>,
+    /// Per-solid-case strength-utilization factor (the max element von Mises over the
+    /// fraction-scaled law yield, see `fill::Graded`): `None` entries where the document
+    /// material states no yield. Length and order = `cases`, mechanical slots only.
+    yield_utilization: Vec<Option<f64>>,
     /// Graded thermal cases (conduction through the fill's per-element conductivity map,
     /// expansion on the graded moduli), in `doc.thermalCases()` order; empty without
     /// `temperature`/`convection`/`flux` statements.
@@ -871,6 +875,7 @@ impl GradedOut {
         to_json(&GradedMeta {
             provenance: self.base.provenance.clone(),
             cases: self.g.cases.clone(),
+            yield_utilization: self.g.yield_utilization.clone(),
             thermal_cases: self.g.thermal_cases.clone(),
             solid_cases: self
                 .base
