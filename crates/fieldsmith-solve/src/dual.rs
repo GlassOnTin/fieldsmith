@@ -994,104 +994,152 @@ pub fn upper_compliance(
             }
             out
         };
-        let mut diag = vec![0.0f64; rows_total];
-        for q in 0..n_sigma {
-            let e = q / 60;
-            let ld = q % 60;
-            let rows = csc.row_indices_of_col(q);
-            let vals = csc.values_of_col(q);
-            for (r, &v) in rows.zip(vals) {
-                diag[r] += v * v * h_inv[e][(ld, ld)];
-            }
-        }
-        let scale: f64 = {
-            let mut s = 0.0f64;
-            for r in 0..rows_total {
-                s += rhs[r].abs();
-            }
-            s / rows_total as f64
-        };
-        let ridge = 1e-13 * scale.max(1.0);
-        for d in diag.iter_mut() {
-            *d += ridge;
-        }
-        // PCG on S λ = rhs. S is PSD with the tiny ridge; the RHS is consistent with the
-        // constraint set by construction (the load split), so CG converges inside the range.
-        let mut lam = vec![0.0f64; rows_total];
-        let mut res = rhs.clone();
-        let z: Vec<f64> = (0..rows_total).map(|i| res[i] / diag[i]).collect();
-        let mut p = z.clone();
-        let mut rz = {
-            let mut acc = 0.0f64;
-            for i in 0..rows_total {
-                acc += res[i] * z[i];
-            }
-            acc
-        };
-        let b_norm: f64 = rhs.iter().map(|v| v * v).sum::<f64>().sqrt();
-        // The witnesses gate at 1e-6·scale and rhs − Cσ equals the CG residual plus the
-        // ridge leak, so 1e-7 keeps a clean margin while saving CG iterations.
-        let rtol = 1e-7f64;
-        let max_iter = 20_000usize;
-        let mut converged = false;
-        let sp_matvec = |p: &[f64]| -> Vec<f64> {
-            let ct = mat_t(p);
-            // per-element blocks on the Cᵀ product
-            let mut zc = vec![0.0f64; n_sigma];
-            for e in 0..e_count {
-                for ld in 0..60 {
-                    let mut acc = 0.0f64;
-                    for t in 0..60 {
-                        acc += h_inv[e][(ld, t)] * ct[60 * e + t];
+        // ---- the padding, then the direct sparse solve ----
+        // The vacuous rows' diagonals are completed on S directly (next block).
+        // ---- the direct sparse solve of the min-J system ----
+        // S = C·H⁻¹·Cᵀ, from two sparse-sparse matmuls with the block-diagonal Gram
+        // inverse — no iterations, no preconditioner; the conditioning that stalled the
+        // Jacobi PCG (20k non-converged iterations on the bracket) is irrelevant to a
+        // direct solve. The symmetric (Ruiz) equilibration drives the scaled diagonal
+        // to ±1 before a small unit-relative ridge keeps the factorisation strictly
+        // SPD; the ridge's leak cancels in σ = H⁻¹·Cᵀ·λ because the elimination's
+        // arithmetic, not an ε-floored spectrum, bounds λ here.
+        let mut hblk_trips: Vec<(usize, usize, f64)> = Vec::with_capacity(e_count * 3600);
+        for (e, h) in h_inv.iter().enumerate() {
+            for ld in 0..60 {
+                for t in 0..60 {
+                    let v = h[(ld, t)];
+                    if v != 0.0 {
+                        hblk_trips.push((60 * e + ld, 60 * e + t, v));
                     }
-                    zc[60 * e + ld] = acc;
                 }
             }
-            let out = mat(&zc);
-            // The ridge (tiny · I) rides inside diag: diag[i] = exact block term + ridge.
-            out
-        };
-        for _it in 0..max_iter {
-            let sp = sp_matvec(&p);
-            let mut pz = 0.0f64;
+        }
+        let hblk = faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
+            n_sigma,
+            n_sigma,
+            &hblk_trips,
+        )
+        .map_err(|e| format!("the recovery's Gram blocks failed: {e:?}"))?;
+        let par = faer::get_global_parallelism();
+        let ch = faer::sparse::linalg::matmul::sparse_sparse_matmul(
+            csc.as_ref(),
+            hblk.as_ref(),
+            1.0,
+            par,
+        )
+        .map_err(|e| format!("the recovery's C·H⁻¹ product failed: {e:?}"))?;
+        let trips_t: Vec<(usize, usize, f64)> = trips.iter().map(|&(r, c, v)| (c, r, v)).collect();
+        let csc_t = faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
+            n_sigma, rows_total, &trips_t,
+        )
+        .map_err(|e| format!("the recovery's adjoint failed: {e:?}"))?;
+        let mut s_mat = faer::sparse::linalg::matmul::sparse_sparse_matmul(
+            ch.as_ref(),
+            csc_t.as_ref(),
+            1.0,
+            par,
+        )
+        .map_err(|e| format!("the recovery's S product failed: {e:?}"))?;
+        // Diagonal completion: the vacuous rows (the fixed-comp rows — counted, never
+        // written) have no (j, j) survivors: the padding of C with zeros explodes the
+        // Ruiz scale and with units pollutes the witness matvec. Instead complete S's
+        // diagonal directly, using the Gram's own positive diagonal entries — the value
+        // the products would have produced through the pad path. Structure: rebuild S
+        // from its triplets plus the missing diagonals.
+        {
+            let (sym0, vals0) = s_mat.parts();
+            let col_ptrs0 = sym0.col_ptrs();
+            let row_ind0 = sym0.row_indices();
+            let mut trips2: Vec<(usize, usize, f64)> =
+                Vec::with_capacity(sym0.compute_nnz() + rows_total);
+            let mut has_diag = vec![false; rows_total];
+            for j in 0..rows_total {
+                let k0 = col_ptrs0[j];
+                let k1 = col_ptrs0[j + 1];
+                for k in k0..k1 {
+                    let i = row_ind0[k];
+                    let v = vals0[k];
+                    trips2.push((i, j, v));
+                    if i == j {
+                        has_diag[j] = true;
+                    }
+                }
+            }
+            for j in 0..rows_total {
+                if !has_diag[j] {
+                    let e = j / 60;
+                    let ld = j % 60;
+                    let dv = h_inv[e][(ld, ld)];
+                    trips2.push((j, j, dv));
+                }
+            }
+            s_mat = faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
+                rows_total, rows_total, &trips2,
+            )
+            .map_err(|e| format!("the completed diagonal failed: {e:?}"))?;
+        }
+        let (sym, vals) = s_mat.parts_mut();
+        let col_ptrs = sym.col_ptrs();
+        let row_ind = sym.row_indices();
+        // Ruiz equilibration: three symmetric sweeps.
+        let mut d = vec![1.0f64; rows_total];
+        for _ in 0..3 {
+            let mut m = vec![0.0f64; rows_total];
+            for j in 0..rows_total {
+                let k0 = col_ptrs[j];
+                let k1 = col_ptrs[j + 1];
+                for k in k0..k1 {
+                    let i = row_ind[k];
+                    let a = vals[k].abs() * d[j] * d[i];
+                    if a > m[i] {
+                        m[i] = a;
+                    }
+                }
+            }
             for i in 0..rows_total {
-                pz += p[i] * sp[i];
-            }
-            if pz <= 0.0 && rz > 0.0 {
-                // numerically indefinite: refuse rather than lie
-                break;
-            }
-            let alpha = rz / pz;
-            for i in 0..rows_total {
-                lam[i] += alpha * p[i];
-                res[i] -= alpha * sp[i];
-            }
-            let res_l2: f64 = res.iter().map(|v| v * v).sum::<f64>().sqrt();
-            if res_l2 <= rtol * b_norm.max(1e-300) {
-                converged = true;
-                break;
-            }
-            let z_new: Vec<f64> = (0..rows_total).map(|i| res[i] / diag[i]).collect();
-            let mut rz_new = 0.0f64;
-            for i in 0..rows_total {
-                rz_new += res[i] * z_new[i];
-            }
-            let beta = rz_new / rz;
-            rz = rz_new;
-            for i in 0..rows_total {
-                p[i] = z_new[i] + beta * p[i];
+                d[i] /= m[i].max(1e-300).sqrt();
             }
         }
-        if !converged {
-            return Err(format!(
-                "the equilibration's conjugate-gradient solve did not converge within \
-             {max_iter} iterations at relative tolerance {rtol} — the constraint system \
-             is too ill-conditioned for this mesh (rows {rows_total}); the recovery is \
-             refused rather than reported (the solve's iteration budget or the precon-\
-             ditioner is the next lever)"
-            ));
+        for j in 0..rows_total {
+            let k0 = col_ptrs[j];
+            let k1 = col_ptrs[j + 1];
+            for k in k0..k1 {
+                vals[k] = vals[k] * d[row_ind[k]] * d[j];
+            }
         }
-        let ct_l = mat_t(&lam);
+        // The scaled diagonal is now ±1 on real rows; add the unit-relative ridge.
+        for j in 0..rows_total {
+            let k0 = col_ptrs[j];
+            let k1 = col_ptrs[j + 1];
+            for k in k0..k1 {
+                if row_ind[k] == j {
+                    vals[k] += 1e-10;
+                }
+            }
+        }
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::File::create("/tmp/smat.txt").expect("dump");
+            for j in 0..rows_total {
+                let k0 = col_ptrs[j];
+                let k1 = col_ptrs[j + 1];
+                for k in k0..k1 {
+                    writeln!(f, "{} {} {:?}", row_ind[k], j, vals[k]).expect("w");
+                }
+            }
+            eprintln!("DUMPED S: rows {rows_total} nnz {}", col_ptrs[rows_total]);
+        }
+        let cho = s_mat
+            .as_ref()
+            .sp_cholesky(faer::Side::Lower)
+            .map_err(|e| format!("the recovery's sparse Cholesky failed ({e:?})"))?;
+        // Ṡ·λ̃ = D·rhs (with λ = D·λ̃ and Ṡ = D·S·D); the unscaled rhs would
+        // return C·σ = D·D⁻¹... the wrong form and the witness would see the scaling.
+        let lam_scaled = cho.solve(&FMat::<f64>::from_fn(rows_total, 1, |i, _| rhs[i] * d[i]));
+        let lam = FMat::<f64>::from_fn(rows_total, 1, |i, _| lam_scaled[(i, 0)] * d[i]);
+        let lam_v: Vec<f64> = (0..rows_total).map(|i| lam[(i, 0)]).collect();
+        let ct_l = mat_t(&lam_v);
         let mut sigma = FMat::<f64>::zeros(n_sigma, 1);
         for e in 0..e_count {
             for ld in 0..60 {
