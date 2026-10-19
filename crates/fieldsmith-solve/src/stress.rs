@@ -87,6 +87,46 @@ pub fn element_stress(
     ]
 }
 
+/// Stress in element `e` at reference point `xi` for a CUBIC material in the mesh's own
+/// frame: σ = D·ε with the engineering-shear Voigt convention (the twin of
+/// [`element_stress`]'s isotropic path; `solve::ortho` carries the constants).
+pub fn element_stress_cubic(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    m: &crate::ortho::CubicMaterial,
+    xi: [f64; 3],
+) -> Stress {
+    let map = element_map(mesh, e);
+    let g = P2Tetrahedron.evaluate_gradients(&xi);
+    let t = &mesh.tets[e];
+    let mut h = [[0.0f64; 3]; 3];
+    for a in 0..10 {
+        let gp = map.transform_gradient(&g[a]);
+        let n = t[a] as usize;
+        for i in 0..3 {
+            for j in 0..3 {
+                h[i][j] += u[3 * n + i] * gp[j];
+            }
+        }
+    }
+    // Engineering-shear strain vector: (ε11, ε22, ε33, γ12, γ23, γ13).
+    let ev = [
+        h[0][0],
+        h[1][1],
+        h[2][2],
+        h[0][1] + h[1][0],
+        h[1][2] + h[2][1],
+        h[0][2] + h[2][0],
+    ];
+    let d = crate::ortho::d_voigt(m);
+    let mut out = [0.0f64; 6];
+    for i in 0..6 {
+        out[i] = (0..6).map(|j| d[i][j] * ev[j]).fold(0.0, |x, y| x + y);
+    }
+    out
+}
+
 /// Nodal stresses for every P2 node: element stresses evaluated at the node, averaged over the
 /// elements sharing it with volume weights.
 pub fn nodal_stress(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<Stress> {
@@ -235,5 +275,69 @@ mod tests {
     fn min_compressive_clamps_tension() {
         assert_eq!(min_compressive(&[100.0, 60.0, 20.0, 0.0, 0.0, 0.0]), 0.0);
         assert_eq!(min_compressive(&[-40.0, 10.0, 5.0, 0.0, 0.0, 0.0]), -40.0);
+    }
+}
+
+#[cfg(test)]
+mod orthogonal_patch {
+    use super::*;
+    use crate as solve;
+
+    /// The anisotropic stress twin's exact patch: a displacement field u = a·x (linear in
+    /// x) has a constant strain, so the cubic D's stress is exact at any quadrature
+    /// point — uniaxial strain (a, 0, 0) gives σ = (C11, C12, C12, 0, 0, 0)·a and the
+    /// shear strain (0, γ, 0 in γ12) gives σ = (0, 0, 0, C44·γ, 0, 0).
+    #[test]
+    fn the_cubic_stress_recovery_is_exact_on_linear_fields() {
+        let v = [
+            [0.0f64, 0.0, 0.0],
+            [2.0, 0.1, 0.0],
+            [0.0, 1.7, 0.2],
+            [0.1, 0.0, 2.3],
+        ];
+        let mesh = solve::P2Mesh::from_linear(&v, &[[0, 1, 2, 3]]);
+        let m = crate::ortho::CubicMaterial {
+            c11: 120000.0,
+            c12: 30000.0,
+            c44: 20000.0,
+        };
+        assert!(m.is_stable());
+        // u = a·(x, 0, 0): every node's u = a·x_c.
+        let a = 2.0e-6;
+        let u: Vec<f64> = mesh
+            .nodes
+            .iter()
+            .flat_map(|p| [a * p[0], 0.0, 0.0])
+            .collect();
+        let s = element_stress_cubic(&mesh, &u, 0, &m, [0.25, 0.25, 0.25]);
+        let eq = |x: f64, y: f64| {
+            assert!(
+                (x - y).abs() <= 1e-9 * (y.abs() + 1.0),
+                "stress {s:?} vs want {y}"
+            );
+        };
+        eq(s[0], m.c11 * a);
+        eq(s[1], m.c12 * a);
+        eq(s[2], m.c12 * a);
+        // The zeros are roundoff-noisy through the affine-map gradient chain (~1e-19).
+        for v in &s[3..6] {
+            assert!(v.abs() < 1e-12, "uniaxial strain's shear components: {v}");
+        }
+        // u = (g·y, g·x, 0) is pure engineering shear γ12 = 2·g (each diagonal half).
+        let gsh = 3.0e-6;
+        let u2: Vec<f64> = mesh
+            .nodes
+            .iter()
+            .flat_map(|p| [gsh * p[1], gsh * p[0], 0.0])
+            .collect();
+        let s2 = element_stress_cubic(&mesh, &u2, 0, &m, [0.25, 0.25, 0.25]);
+        eq(s2[3], m.c44 * 2.0 * gsh);
+        for &k in &[0, 1, 2, 4, 5] {
+            assert!(
+                s2[k].abs() < 1e-12,
+                "pure shear's off-component ({k}): {}",
+                s2[k]
+            );
+        }
     }
 }

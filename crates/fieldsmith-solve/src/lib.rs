@@ -20,6 +20,7 @@ pub mod bounds;
 pub mod bsr;
 pub mod dual;
 pub mod modal;
+pub mod ortho;
 pub mod p2;
 pub mod pcg;
 pub mod stress;
