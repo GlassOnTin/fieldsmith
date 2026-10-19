@@ -1,34 +1,98 @@
 # Fieldsmith
 
-Shape a part, load it, and grow its interior to fit the load — in the browser, with no server.
 Fieldsmith is an implicit-field CAD and analysis tool: a document is a small text programme,
 its geometry is an SDF-like field, and every measurement (volume, stress, printed mass) comes
-from integrating that field, not from a boundary representation.
+from integrating that field, not from a boundary representation. You shape a part, load it,
+and grow its interior to fit the load, all in the browser, with no server.
 
-**Status:** v0.5.0 was the last tag; `main` is part-way through the roadmap's deeper-mechanics
-rungs (VISION.md §7): interactive section-plane clipping, `.fsm` let-variables, mode-shape
-display, convection and heat-flux boundary conditions, the graded fill's own thermal
-re-solve, certified compliance brackets, a yield/buckling indicator pair in the Results
-lens, and a cubic anisotropic lattice law fitted to the measured TPMS coupons. The
-model → setup → solve → fill → export flow works locally and is
-verified by the cases in [docs/verification/](docs/verification/); imported meshes
-(GLB, OBJ, binary and ASCII STL, and 3MF — our own export format) become field leaves
-with labelled faces and region-driven extension (V10); a multi-object 3MF imports as
-one field leaf per placed object (build items expand), with the file's base-material
-names recorded on the leaves. The GOAL.md performance budgets are measured in the headed
-Chromium referee on the workstation and on the mid-range N100 box ([budgets.md](docs/verification/budgets.md)
-and the budgets-* reports beside it); every run's walls live in
-[data/costs/costs.csv](data/costs/costs.csv). The same verified crates also reach other
-programs: the `api` CLI verb takes one JSON request on stdin and writes one envelope on
-stdout, `fieldsmith-mcp` is an stdio MCP server over that API, and `fieldsmith session`
-/ `fieldsmith worker` host and serve jobs between machines the user owns over
-Noise-encrypted connections — usage in each binary's help text.
+## Try it
 
-## Building and running
+Two paths, no install beyond the first command on either.
 
-Prebuilt static Linux archives (`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
-carrying `fieldsmith` and `fieldsmith-mcp`) and the static web bundle (`fieldsmith-*-web.tar.gz`)
-publish on [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) on each `v*` tag.
+Run the solver from a terminal (the example document is in `examples/`):
+
+    fieldsmith check  examples/bracket-filled.fsm
+    fieldsmith solve  examples/bracket.fsm --report
+    fieldsmith export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
+
+Static Linux archives (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, with
+`fieldsmith` and `fieldsmith-mcp`) and a static web bundle (`fieldsmith-*-web.tar.gz`)
+publish on [GitHub Releases](https://github.com/GlassOnTin/fieldsmith/releases) per `v*` tag.
+
+Open the app in a browser: unzip the web bundle and serve it statically. Any static file
+server works on one thread; the threaded build needs two response headers on every file the
+host serves:
+
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
+
+The Vite dev and preview servers send both. A static host without them still gives a working
+app on one thread, with meshing and export several times slower; the budget numbers in
+[docs/verification/budgets.md](docs/verification/budgets.md) are measured on the threaded
+build.
+
+## The document
+
+A `.fsm` document is the whole thing: shapes, materials, supports, loads, and the lattice
+fill. This is `examples/bracket-filled.fsm`:
+
+```fsm
+fieldsmith 1
+name "Bracket"
+material petg
+
+box base size=(60, 40, 8) at=(30, 20, 4)
+box upright size=(60, 8, 40) at=(30, 4, 20) blend=8
+cylinder hole1 r=3.25 h=20 at=(15, 26, 4) subtract
+cylinder hole2 r=3.25 h=20 at=(45, 26, 4) subtract
+cylinder hole3 r=4.25 h=20 at=(30, 4, 28) rotate=(90, 0, 0) subtract
+
+region mount = hole1.side + hole2.side
+region pin = hole3.side
+support fixed mount fixed=xyz
+load pull pin force=(0, -103.53, -386.37) case="Load 1"
+
+fill gyroid sheet cell=6 skin=1.2 rho=(0.2, 0.8) curve=1 wall=0.8
+```
+
+You can type this into the web app, edit it there, or write it in a file and drive the CLI.
+Named variables (`let wall_t = ...`) work throughout. The app's lenses walk the flow
+(model, setup, solve, fill, results, export), with interactive section-plane clipping into
+the solved field.
+
+## What it does
+
+- Implicit-field modelling with blend, intersect, subtract, rotate, and mirrored patterns;
+  in-app 2D profile sketching.
+- Import of GLB, OBJ, STL (binary and ASCII), and 3MF; a mesh becomes a field leaf with
+  labelled faces so regions and loads extend to imported parts (V10). STEP imports via the CLI.
+- P2 finite-element solve with one Young's modulus per element; steady thermal
+  conduction (`temperature`), convection bands (`convection`), prescribed heat fluxes
+  (`heatflux`); modal analysis.
+- TPMS lattice fill (gyroid, primitive, diamond; sheet and network), graded by solved
+  stress, with per-element yield and buckling factors in the Results lens.
+- Certified numbers where the physics allows: the compliance is a lower bound (V34), and
+  an equilibrated stress field raises an upper end (V35) to bracket the truth.
+- Binary STL and 3MF export (millimetres, part name and material recorded).
+- Automation: `fieldsmith api` (one JSON request in, one envelope out), the
+  `fieldsmith-mcp` binary (stdio MCP server over that API), and the `session` and
+  `worker` verbs to hand jobs to machines you own over Noise-encrypted connections.
+
+## Where to look next
+
+By what you want to do:
+
+| You want to | Look at |
+| :-- | :-- |
+| see the language and the flow | this README, `examples/*.fsm`, then the app itself |
+| check one measured claim | [docs/verification/](docs/verification/): one report per case, numbered from V1 in gate order, each with Method and Limits sections |
+| know the performance | [budgets.md](docs/verification/budgets.md) and the machine variants beside it; per-run wall times in [data/costs/costs.csv](data/costs/costs.csv) |
+| know where the project is going | [VISION.md](VISION.md) (the roadmap, §7 for the current rungs) and [GOAL.md](GOAL.md) |
+| automate or distribute | each verb's help text (`fieldsmith --help`, and the `fieldsmith-mcp` binary's own help) |
+| build it | the next section |
+
+## Building from source
+
 To build from source:
 
     git clone --recurse-submodules https://github.com/GlassOnTin/fieldsmith
@@ -40,103 +104,94 @@ To build from source:
 For development, `bash scripts/build-wasm.sh && npm --prefix web -- run dev` serves the app
 locally.
 
-### Threads and hosting
+`build-wasm.sh` produces two packages of the same crate: `web/src/pkg` (single thread,
+stable toolchain) and `web/src/pkg-mt` (shared memory plus a rayon pool on Web Workers;
+needs a nightly toolchain with `rust-src` for `-Z build-std`; set
+`FIELDSMITH_WASM_ST_ONLY=1` to skip it). The browser fetches the threaded package only
+when the page is cross-origin isolated (the two headers above).
 
-`build-wasm.sh` builds two packages of the same crate: `web/src/pkg` (single thread, stable
-toolchain) and `web/src/pkg-mt` (shared memory plus a rayon pool on Web Workers via
-wasm-bindgen-rayon; needs a nightly toolchain with `rust-src` for `-Z build-std`;
-`FIELDSMITH_WASM_ST_ONLY=1` skips it). The browser fetches one of them: the threaded package
-only when the page is cross-origin isolated, which takes two response headers on every file
-the host serves:
-
-    Cross-Origin-Opener-Policy: same-origin
-    Cross-Origin-Embedder-Policy: require-corp
-
-The Vite dev and preview servers send both (`web/vite.config.ts`). A static host without them
-still serves a working app on one thread, with meshing and export several times slower; the
-budget numbers in `docs/verification/budgets.md` are measured on the threaded build.
-
-Or work headless with the CLI:
+For headless work, the CLI:
 
     cargo run -p fieldsmith-cli -- volume examples/bracket.fsm
     cargo run -p fieldsmith-cli -- solve examples/bracket.fsm --report
     cargo run -p fieldsmith-cli -- export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
 
-The CLI exports binary STL and 3MF (millimetres, part name and material recorded); fill
-documents export the graded part, `--solid` the body alone. When the document is a plain
-stack of add-shaped nodes (no subtract/intersect, group modifiers, blends, or fill), the
-3MF carries one object per node, each labelled with its material (the node's label, else
-the document material); slicers union the objects into the printed solid. Anything that
-shapes the body beyond the volumes' own shapes exports as one labelled union, and the
-in-app export always does.
+The CLI exports binary STL and 3MF; fill documents export the graded part, `--solid` the
+body alone. A plain stack of add-shaped nodes (no subtract, intersect, group modifiers,
+blends, or fill) exports one labelled object per node so slicers can union them; anything
+that shapes the body further exports as one labelled union, and the in-app export always
+does.
 
 ## What is verified, and what is not
 
-`docs/verification/` carries a report per verification case: volumes against closed-form
-answers (V4), the half and quarter plate-with-hole models against Heywood theory (V3), the
-cantilever against theory (V2), the graded lattice's stiffness against a resolved reference
-mesh (V7), the lattice law's direction dependence against rotated coupons (V36), the
-graded fill's thermal re-solve (V32), and an imported mesh or STEP B-rep against its file's own header, analytic flux
-volume, and the slicer that consumes it (V10, V14, [slicer.md](docs/verification/slicer.md)).
-Limits that are not covered get stated in those reports rather than glossed: the graded
-fill's surface carries measured non-manifold spoke edges and interpenetrating wall tiles
-where TPMS sheets cross or pinch inside one cell (V8, "Non-manifold edges"), while adaptive
-dual contouring closes both analytic and mesh-leaf graded fills (`skin = 0..1.2 mm`) with
-`0` open edges and `manifold = yes` in PrusaSlicer 2.9.6 (`slicer.md`).
-
+`docs/verification/` carries a report per case: volumes against closed-form answers (V4),
+plates with holes against Heywood theory (V3), the cantilever against theory (V2), the
+graded lattice's stiffness against a resolved reference mesh (V7), the lattice law's
+direction dependence against rotated coupons (V36), the graded fill's thermal re-solve
+(V32), and imports against their own headers (V10, V14, [slicer.md](docs/verification/slicer.md)).
+The web app's flows have browser-driven e2e families beside them (the graded-lens runs
+and the *-e2e.md reports). Heavy release-run cases are ignore-marked in the test suite
+and run in the release stage. Limits that are not covered get stated in those reports rather than
+glossed: the graded fill's surface carries measured non-manifold spoke edges and
+interpenetrating wall tiles where TPMS sheets cross or pinch inside one cell (V8), while
+adaptive dual contouring closes both analytic and mesh-leaf graded fills with `0` open
+edges and `manifold = yes` in PrusaSlicer 2.9.6 (slicer.md).
 
 ## Limitations
 
-Linear-elastic, small strain. The body's material is isotropic per element; the fill's
-lattice elements carry the measured cubic anisotropy law on the five TPMS families whose
-45°/0° coupon ratio V36 measured (13.6–130 % — the isotropic extension was owed, not
-optional), homogenising in the lattice's own axes, with the density exponent the
-family's measured isotropic one (the direction exponents' equality at other densities is
-an assumption, stated in the law); families without a coupon fit — the primitive
-network — keep the isotropic law. The yield and buckling indicators in the Results lens
-are literature-law estimates (Gibson–Ashby open-cell strength and elastic collapse): a
-linear-elastic solver cannot measure plasticity or buckling, and the rigorous buckling
-route (the geometric-stiffness eigenproblem) is tracked, not built. The compliance is a
-certified lower bound (V34) and, on the isotropic route, an equilibrated upper end
-certifies the bracket in between (V35); the cubic-anisotropic route refuses equilibration
-rather than mis-certifying.
+Physics
 
-One material per part: the solve is single-material, and a
-volume's material label travels with the 3MF export for the slicer (validation reports
-unknown label ids as errors and mixed labels as a warning). STEP import is CLI-only: a
-STEP file is tessellated to a mesh, and there is no B-rep editing. Per-part colours are
-render colours, in the app and on the 3MF export; neither affects what is printed or what
-the solve assumes. No topology optimisation, no CFD analysis, per-node material labels are not
-adopted on 3MF import (another tool's ids are not fieldsmith material ids), no g-code
-generation, no mobile layout. Modal analysis reports the first natural frequencies of
-the same linear small-strain model; it takes the same supports and ignores loads. The
-shapes are computed but not visualised; the in-browser eigensolve completed without a
-memory error at a 190 k-DOF rung, and larger meshes may fail at the wasm memory limit
-with a named error. Thermal analysis is steady conduction with fixed temperatures on
-labelled regions (`temperature`), plus convection bands (`convection h=`) and prescribed
-heat fluxes (`heatflux q=`) on labelled regions (V29, V30): the region's facet nodes and
-bands carry the stated values, everything else is insulated, and each thermal case then
-expands the part by α·(T − tref), the reference
-being the solve statement's tref (20 °C when unstated). With one isotropic conductivity
-the value of k drops out of the steady solution, so there is no conductivity property to
-set; the graded fill's re-solve instead maps k per element through its material fraction.
-Materials need a sourced thermal expansion coefficient for thermal cases, which
-validation refuses without one (the web setup lens has no editor for a custom material's
-`a=` value, so custom materials state it through the `.fsm` statement); radiation,
-transient heat and per-region conductivity are not modelled, and the graded fill's
-thermal expansion re-solve keeps the isotropic law. Rung-to-rung changes on the refinement ladder are estimates, not
-bounds: on the V1 cantilever the ratio of remaining error to change spans 13× between
-regimes (V17), and the wall-time estimator reports its own residual instead of none
-(V18). Solving the same document on another
-machine over the worker channel is not promised bit-identical, and the divergence is
-measured rather than assumed: on the two measured x86_64 hosts the tracked values
-reproduced bit-identically and only wall time differed, by the machine ratio
-(data/costs/costs.csv). Cross-architecture the divergence is real: on the measured
-aarch64 phone (SM8750, V25) tracked values diverge at ~1e-13..3e-11 relative (faer SIMD
-kernels; the sweep's small change fields to ~7e-8), while the V22 canon quantization
-ties every compared field; any other machine class carries its claim only once measured. One load
-case at a time in the setup lens; envelopes exist in
-the solver but the UI shows one case or the envelope, not both side by side.
+- Linear-elastic, small strain. The body's material is isotropic per element. The fill's
+  lattice elements carry the measured cubic anisotropy law on the five TPMS families whose
+  45°/0° coupon ratio V36 measured from 13.6 % to 130 %, homogenising in the lattice's own
+  axes, with the density exponent the family's measured isotropic one; that the direction exponents stay equal at other
+  densities is an assumption, stated in the law. Families without a coupon fit (the
+  primitive network) keep the isotropic law.
+- The yield and buckling factors are literature-law estimates (Gibson–Ashby open-cell
+  strength and elastic collapse): a linear-elastic solver cannot measure plasticity or
+  buckling. The rigorous buckling route (geometric-stiffness eigenproblem) is tracked, not
+  built.
+- The compliance is a certified lower bound, and on the isotropic route the equilibrated
+  upper end certifies the bracket (V34, V35). The cubic-anisotropic route refuses
+  equilibration rather than mis-certifying. Lattice elements homogenise at sub-cell
+  mesh sizes; the resolved geometry is what V6/V7 measure.
+
+Modelling and files
+
+- One material per part: the solve is single-material, and a volume's material label
+  travels with the 3MF export (validation reports unknown label ids as errors and mixed
+  labels as a warning). Per-part colours are render colours only.
+- No topology optimisation, no CFD analysis, no g-code generation, no mobile layout.
+- Per-node material labels are not adopted on 3MF import (another tool's ids are not
+  fieldsmith material ids). STEP import is CLI-only, tessellated; no B-rep editing.
+
+Thermal
+
+- Steady conduction only. `temperature`, `convection`, `heatflux` on labelled regions;
+  everything else insulated. Each thermal case expands the part by α·(T − tref) (tref is
+  the solve statement's, 20 °C when unstated). One isotropic conductivity: its value drops
+  out of the steady solution, so there is no k to set; the graded fill's re-solve instead
+  maps k per element through its material fraction. Radiation, transient heat, and
+  per-region conductivity are not modelled. Materials need a sourced CTE for thermal
+  cases, which validation refuses without one (the web setup lens has no editor for a
+  custom material's `a=` value; custom materials state it through the `.fsm` statement).
+
+Working across machines and rungs
+
+- Rung-to-rung changes on the refinement ladder are estimates, not bounds (V17, V18).
+  Worker-channel solves are not promised bit-identical; the divergence is measured. On the
+  two measured x86_64 hosts the tracked values reproduced bit-identically and only wall
+  time differed (data/costs/costs.csv). On the measured aarch64 phone (SM8750, V25) the
+  divergence is real: ~1e-13..3e-11 relative on tracked values (faer SIMD kernels). The
+  V22 canon quantization ties every compared field; other machine classes carry a claim
+  only once measured.
+- One load case at a time in the setup lens; envelopes exist in the solver but the UI
+  shows one case or the envelope, not both side by side. Modal analysis takes the same
+  supports and ignores loads. The in-browser eigensolve completed without a memory error
+  at a 190 k-DOF rung; larger meshes may fail at the wasm memory limit with a named
+  error.
+
+## Project
 
 Successor to the MorphoForge experiment. Built on
 [`fenics-rs`](https://github.com/GlassOnTin/fenics-rs), consumed as a submodule.
