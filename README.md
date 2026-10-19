@@ -13,7 +13,12 @@ and serve the unpacked folder with any static file server:
 
     tar -xzf fieldsmith-*-web.tar.gz
     cd fieldsmith-*-web
+    ls index.html   # confirm you are in the unpacked folder, not the download dir
     python3 -m http.server 8931 --bind 127.0.0.1    # then open http://127.0.0.1:8931
+
+What you should see is the app itself. A **directory listing** means the server is rooted
+at the wrong folder — the unpacked `fieldsmith-*-web` directory carries `index.html` at
+its top; the repository (or the folder you downloaded into) does not.
 
 If the port is already taken, `http.server` exits with "Address already in use", and then
 the browser's address belongs to whatever else listens there (on one machine that is a
