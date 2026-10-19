@@ -13,7 +13,13 @@ and serve the unpacked folder with any static file server:
 
     tar -xzf fieldsmith-*-web.tar.gz
     cd fieldsmith-*-web
-    python3 -m http.server 8000        # then open http://localhost:8000
+    python3 -m http.server 8931 --bind 127.0.0.1    # then open http://127.0.0.1:8931
+
+If the port is already taken, `http.server` exits with "Address already in use", and then
+the browser's address belongs to whatever else listens there (on one machine that is a
+file server asking for a sign-in). Pick another port; any static file server works, and
+this path is tested on `python3 -m http.server` (`.wasm` files must arrive as
+`application/wasm`, which python's default does).
 
 No install beyond unpacking. Without extra host headers the app runs on one worker thread
 (meshing and export take several times longer than the threaded build); the threaded build
