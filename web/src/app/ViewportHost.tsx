@@ -54,6 +54,8 @@ export function ViewportHost() {
   useEffect(() => {
     const vp = new Viewport(host.current!);
     liveViewport = vp;
+    // Debug/e2e access for in-page probes (the viewport holds the render state).
+    (window as unknown as { __vplive?: unknown }).__vplive = vp;
     const hook = (window as unknown as { fieldsmith?: Record<string, unknown> }).fieldsmith;
     if (hook) hook.viewport = vp;
     let shader: ShaderInfo | null = null;
@@ -301,23 +303,6 @@ export function ViewportHost() {
         // over-estimates distances between grid nodes and would tunnel thin struts.
         vp.setCore(
           !missing.length && shader.core && shader.bounds
-            ? {
-                source: shader.source,
-                bounds: shader.bounds,
-                ident: shader.ident,
-                meshes: slots,
-                grid: fillGrid,
-                stepScale: 0.35,
-              }
-            : null,
-        );
-        // The see-through pass: the far wall, plain shapes only. Filled parts keep the
-        // core pass's look (the lattice through the walls); their first interior
-        // crossing is the skin's own inner face, which drawn opaque would occlude the
-        // lattice behind it (measured: 0.11 % changed pixels, V16). The proper
-        // multi-layer composite peels that properly — tracked, not faked now.
-        vp.setExit(
-          !missing.length && shader.bounds && !shader.core
             ? {
                 source: shader.source,
                 bounds: shader.bounds,
