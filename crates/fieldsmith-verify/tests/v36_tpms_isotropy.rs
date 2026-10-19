@@ -21,6 +21,12 @@ use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_verify::coupon::{self, CouponResult, CouponSpec};
 use fieldsmith_verify::Report;
 
+/// The engine's own isotropic law at a density (relative units — the ratios cancel
+/// the material modulus).
+fn coupon_law_at(family: Family, mode: FillMode, rho: f64) -> f64 {
+    fieldsmith_core::fill::law_stiffness(family, mode, rho)
+}
+
 fn coupon_at(family: Family, mode: FillMode, rotdeg: f64) -> CouponSpec {
     let mut s = CouponSpec::new(family, mode, 0.22);
     s.n = 3;
@@ -46,7 +52,7 @@ fn v36_rotated_lattice_isotropy() {
     ];
 
     let mut body = String::new();
-    let mut ratios: Vec<(String, f64)> = Vec::new();
+    let mut ratios: Vec<(String, f64, f64)> = Vec::new();
     for &(fam, mode, label) in &cases {
         let a: CouponResult = coupon::run(&coupon_at(fam, mode, 0.0));
         let b: CouponResult = coupon::run(&coupon_at(fam, mode, 45.0));
@@ -54,14 +60,20 @@ fn v36_rotated_lattice_isotropy() {
             a.e_int.expect("band modulus"),
             b.e_int.expect("band modulus"),
         );
-        // The law's reference at each run's OWN measured density: the honest comparison
-        // is ratio-to-ratio, the density difference being the coupon's own calibration.
+        // The raw ratio mixes whichever density each run achieved; the density-normalized
+        // ratio divides each coupon's modulus by the isotropic law at ITS OWN measured
+        // density, so a small density difference cannot masquerade as a direction effect
+        // (E ~ ρ^n with n 1.2-2.1: a few percent of density is tens of percent of modulus).
         let ratio = e45 / e0;
+        let norm45 = e45 / coupon_law_at(fam, mode, b.rho_mesh);
+        let norm0 = e0 / coupon_law_at(fam, mode, a.rho_mesh);
+        let norm_ratio = norm45 / norm0;
         let l45 = 100.0 * (ratio - 1.0).abs();
-        ratios.push((label.to_string(), ratio));
+        ratios.push((label.to_string(), ratio, norm_ratio));
         body.push_str(&format!(
             "- {label}: E*(0°) = {e0:.2} MPa (ρ_mesh {rho0:.4}), E*(45°) = {e45:.2} MPa \
-             (ρ_mesh {rho45:.4}); ratio {ratio:+.5} — the direction error {l45:.2} %.\n",
+             (ρ_mesh {rho45:.4}); raw ratio {ratio:+.5} (error {l45:.2} %), \
+             density-normalized ratio {norm_ratio:+.5}.\n",
             rho0 = a.rho_mesh,
             rho45 = b.rho_mesh,
         ));
@@ -70,30 +82,38 @@ fn v36_rotated_lattice_isotropy() {
     // The pinned bound: the reference values from the release-measured gate; the gate's
     // own body records them. Re-running in release updates the report; the assert holds
     // the pinned claim.
-    // The pinned reference = the release-measured ratios (the gate guards the
-    // measurement once pinned, and the ±5 % band is the coupon's re-run noise band —
-    // V6's ρ_mesh measured reproducible to ≤ 0.4 %, giving the ratio a band of the
-    // same order; ±5 % keeps a margin). The first measured run's values: 1.1356
-    // (gyroid sheet), 1.9237 (primitive sheet), 0.8000 (diamond sheet), 1.4398
-    // (gyroid network), 2.3037 (diamond network). The DIRECTION ERROR is the finding:
-    // the isotropic law understates the 45° direction by up to 2.3× (diamond network)
-    // and overstates by 25 % (diamond sheet) — the anisotropic extension is owed.
-    let reference: [(&str, f64); 5] = [
-        ("gyroid sheet", 1.135618),
-        ("primitive sheet", 1.923733),
-        ("diamond sheet", 0.8000425),
-        ("gyroid network", 1.439837),
-        ("diamond network", 2.303728),
+    // The pinned reference = the release-measured ratios: raw, then density-normalized
+    // (each coupon's modulus over the engine's isotropic law at its own measured density
+    // — the 45° runs' ρ_mesh differ from the 0° runs' by a few percent, and at n =
+    // 1.2-2.1 that is tens of percent of modulus). Measured: raw 1.1356 / 1.9237 /
+    // 0.8000 / 1.4398 / 2.3037; normalized 1.1358 / 2.0694 / 0.8128 / 1.5673 / 2.2172.
+    // The DIRECTION ERROR is the finding: even density-normalized, the isotropic law
+    // understates the 45° direction by up to 2.07× (primitive sheet) and overstates by
+    // 19 % (diamond sheet) — the normalized ratio is the honest one and the anisotropic
+    // extension is owed.
+    let reference: [(&str, f64, f64); 5] = [
+        ("gyroid sheet", 1.135618, 1.135842),
+        ("primitive sheet", 1.923733, 2.069422),
+        ("diamond sheet", 0.8000425, 0.8127922),
+        ("gyroid network", 1.439837, 1.567271),
+        ("diamond network", 2.303728, 2.217194),
     ];
-    for (label, ratio) in &ratios {
-        let (_, pinned) = reference
+    for (label, ratio, norm) in &ratios {
+        let pinned = reference
             .iter()
-            .find(|&&(l, _)| l == label.as_str())
+            .find(|&&(l, _, _)| l == label.as_str())
             .expect("pinned label");
         r.check(fieldsmith_verify::Check::relative(
-            &format!("{label}: E*(45°)/E*(0°)"),
-            *pinned,
+            &format!("{label}: E*(45°)/E*(0°) raw"),
+            pinned.1,
             *ratio,
+            "ratio",
+            0.05,
+        ));
+        r.check(fieldsmith_verify::Check::relative(
+            &format!("{label}: E*(45°)/E*(0°) density-normalized"),
+            pinned.2,
+            *norm,
             "ratio",
             0.05,
         ));
@@ -112,8 +132,10 @@ fn v36_rotated_lattice_isotropy() {
         format!(
             "The coupon pairs: {ratio_str}",
             ratio_str = {
-                let parts: Vec<String> =
-                    ratios.iter().map(|(l, x)| format!("{l} {x:+.5}")).collect();
+                let parts: Vec<String> = ratios
+                    .iter()
+                    .map(|(l, x, n)| format!("{l} raw {x:+.5} normalized {n:+.5}"))
+                    .collect();
                 parts.join("; ")
             }
         ),
