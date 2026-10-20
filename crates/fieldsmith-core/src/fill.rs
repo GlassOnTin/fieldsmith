@@ -129,8 +129,11 @@ struct CubicFit {
 /// Coupon-measured cubic fits per family and mode (V36's release-run compliance
 /// inversion — S11/S12/S44 measured on the 1000 MPa coupons at ρ = 0.22, then C = S⁻¹
 /// in closed form; the values here match that report's cubic section to its quoted
-/// digits). The Zener anisotropy these carry is the measured finding: primitive sheet
-/// Z ≈ 1.63, diamond sheet Z ≈ 0.85 (SOFTER across the diagonal — the opposite sense).
+/// digits). The [110] inversion is S44 = 4/E45 − 2(S11 + S12) (the earlier printed
+/// recipe S44 = 2(1/E45 − S12) was wrong and understated the direction dependence;
+/// V42's fit check holds the corrected constants against V36's measured ratios).
+/// The Zener anisotropy these carry is the measured finding: primitive sheet Z ≈ 4.38,
+/// diamond sheet Z ≈ 0.73 (SOFTER across the diagonal — the opposite sense).
 /// `None` where no coupon fit exists yet: the primitive-network family carries only the
 /// isotropic law until its coupon is measured.
 fn cubic_fit(family: Family, mode: FillMode) -> Option<CubicFit> {
@@ -138,27 +141,27 @@ fn cubic_fit(family: Family, mode: FillMode) -> Option<CubicFit> {
         (Family::Gyroid, FillMode::Sheet) => CubicFit {
             c11_ref: 102.044,
             c12_ratio: 0.49095,
-            c44_ratio: 0.27969,
+            c44_ratio: 0.31037,
         },
         (Family::Primitive, FillMode::Sheet) => CubicFit {
             c11_ref: 64.782,
             c12_ratio: 0.51291,
-            c44_ratio: 0.39661,
+            c44_ratio: 1.06756,
         },
         (Family::Diamond, FillMode::Sheet) => CubicFit {
             c11_ref: 118.418,
             c12_ratio: 0.36658,
-            c44_ratio: 0.26803,
+            c44_ratio: 0.23232,
         },
         (Family::Gyroid, FillMode::Network) => CubicFit {
             c11_ref: 34.323,
             c12_ratio: 0.41861,
-            c44_ratio: 0.40345,
+            c44_ratio: 0.65911,
         },
         (Family::Diamond, FillMode::Network) => CubicFit {
             c11_ref: 32.484,
             c12_ratio: 0.48358,
-            c44_ratio: 0.44065,
+            c44_ratio: 1.50167,
         },
         _ => return None,
     })
@@ -1015,16 +1018,17 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
             .expect("gyroid sheet has a fit");
         assert!((g_sheet.c11 - 102.044).abs() < 1e-2, "C11 {}", g_sheet.c11);
         assert!((g_sheet.c12 / g_sheet.c11 - 0.49095).abs() < 1e-4);
-        assert!((g_sheet.c44 / g_sheet.c11 - 0.27969).abs() < 1e-4);
+        assert!((g_sheet.c44 / g_sheet.c11 - 0.31037).abs() < 1e-4);
         let z = 2.0 * g_sheet.c44 / (g_sheet.c11 - g_sheet.c12);
-        assert!((z - 1.0989).abs() < 1e-3, "Zener {z}");
-        // The whole table: stable, and the Zener matches each family's measured value.
+        assert!((z - 1.2194).abs() < 1e-3, "Zener {z}");
+        // The whole table: stable, and the Zener matches each family's measured value
+        // (the corrected [110] inversion — V42's fit check holds these against V36).
         let want = [
-            (Family::Gyroid, FillMode::Sheet, 1.0989),
-            (Family::Primitive, FillMode::Sheet, 1.6285),
-            (Family::Diamond, FillMode::Sheet, 0.8463),
-            (Family::Gyroid, FillMode::Network, 1.3879),
-            (Family::Diamond, FillMode::Network, 1.7066),
+            (Family::Gyroid, FillMode::Sheet, 1.2194),
+            (Family::Primitive, FillMode::Sheet, 4.3834),
+            (Family::Diamond, FillMode::Sheet, 0.7335),
+            (Family::Gyroid, FillMode::Network, 2.2674),
+            (Family::Diamond, FillMode::Network, 5.8157),
         ];
         for &(fam, mode, z_want) in &want {
             let c = law_cubic_at(fam, mode, 1000.0, 0.3, 0.22).expect("fit exists");

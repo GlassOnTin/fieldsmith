@@ -72,8 +72,10 @@ fn v36_rotated_lattice_isotropy() {
         ratios.push((label.to_string(), ratio, norm_ratio));
         let l45 = 100.0 * (ratio - 1.0).abs();
         // The cubic-tensor fit from the measured triple (E[100] = e0, E[110] = the
-        // normalized 45° modulus, ν = the interior Poisson of the 0° run):
-        //   S11 = 1/E0, S12 = −ν·S11, S44 = 2(1/E45 − S12)
+        // normalized 45° modulus, ν = the interior Poisson of the 0° run). The [110]
+        // direction of a cubic compliance is 1/E[110] = S11 − (S11 − S12 − S44/2)/2,
+        // so the inversion is S44 = 4/E45 − 2(S11 + S12):
+        //   S11 = 1/E0, S12 = −ν·S11, S44 = 4/E45 − 2(S11 + S12)
         // and the Zener anisotropy ratio Z = 2·C44/(C11 − C12) with C = S⁻¹ (Z = 1
         // exactly isotropic). The density-normalized E45 divides by the law at the
         // rotated coupon's own density first.
@@ -84,7 +86,7 @@ fn v36_rotated_lattice_isotropy() {
         let s11 = 1.0 / e_ref;
         let nu = a.nu_int.expect("band Poisson");
         let s12 = -nu * s11;
-        let s44 = 2.0 * (1.0 / e45_norm - s12);
+        let s44 = 4.0 / e45_norm - 2.0 * (s11 + s12);
         // The stiffness constants invert the cubic compliance's (a, b, b) diagonal
         // block in closed form: D = (S11 − S12)(S11 + 2·S12), C11 = (S11 + S12)/D,
         // C12 = −S12/D, C44 = 1/S44. Zener: Z = 2·C44/(C11 − C12) — 1 is isotropic.
@@ -188,11 +190,13 @@ fn v36_rotated_lattice_isotropy() {
          family: the bound holds where measured; no claim over other densities or angles \
          is made. The cubic cell's symmetry already kills the x/y/z uniaxial anisotropy \
          by construction, which is why the interesting direction is the 45° one.\n\
-         - The engine's per-element law stays the isotropic `E*(ρ)` of V6; this gate \
-         decides whether the direction extension (§7 item 2's anisotropic \
-         homogenisation) is owed or whether the isotropy error sits inside the law's \
-         own fitted residual (V6 measured ≤ 2.1 % against resolved coupons). The \
-         measured ratios above are the raw evidence; the pinned gate bound (±15 %) is a \
+         - This gate decided the direction extension (§7 item 2's anisotropic \
+         homogenisation) owed: the isotropy error sat far outside the law's own fitted \
+         residual (V6 measured ≤ 2.1 % against resolved coupons). The extension landed \
+         with the cubic per-element law (`fill::law_cubic_at`, routed through \
+         `solve::ortho`); V42's gate holds the fitted tensors against the measured \
+         ratios above and the routed solve against the tensor in closed form. The \
+         measured ratios are the raw evidence; the pinned gate bound (±15 %) is a \
          regression guard, not a fit claim.\n\
          - The indicator half of the bullet landed with the graded solve's per-case \
          yield- and buckling-utilization factors (the Gibson-Ashby open-cell strength \
