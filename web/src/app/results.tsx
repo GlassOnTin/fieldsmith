@@ -495,12 +495,16 @@ function syncResults(vp: Viewport) {
     if (on && lvl) {
       try {
         rebuild(lvl);
+        if (ui.renderError?.kind === 'results') ui.set('renderError', null);
       } catch (err) {
         while (resultGroup.children.length) {
           const c = resultGroup.children.pop()!;
           disposeDeep(c);
         }
+        // Loud rendering failure: the analysed mesh is the whole lens — a build that threw
+        // must say so in the viewport, not only in the console (VISION §7).
         console.error('results mesh build failed', err);
+        ui.set('renderError', { kind: 'results', text: `the analysed mesh could not be built: ${String(err)}` });
       }
     }
     vp.invalidate();

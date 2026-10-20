@@ -83,6 +83,11 @@ class Ui {
    * plane along the axis inside the field bounds; t = 0 restores the intact body in both
    * directions. Display-only like bodyAlpha — resets on load. */
   clip: { on: boolean; axis: 0 | 1 | 2; dir: 1 | -1; t: number } = { on: false, axis: 0, dir: 1, t: 0 };
+  /** A rendering failure the viewport cannot show (loud rendering failures, VISION §7): a
+   * shader whose program will not link, a document whose field has no surface inside its
+   * own bounds, or a results mesh whose build threw. Persistent until the next state
+   * change clears it — unlike the toast, it stays while the blank viewport stays. */
+  renderError: { kind: 'shader' | 'surface' | 'results'; text: string } | null = null;
   probe: Probe | null = null;
   collapsed = new Set<string>();
   version = 0;

@@ -7,7 +7,7 @@ import { Viewport } from '../view/viewport';
 import type { FieldSpec, Highlight, MeshSlotSpec } from '../view/viewport';
 import { store } from '../doc/store';
 import { meshcache } from '../doc/meshcache';
-import { bodyShader, shapeShader, pick, previewFillParamData, FACE_CODES } from '../doc/wasm';
+import { bodyShader, shapeShader, pick, previewFillParamData, evalBody, FACE_CODES } from '../doc/wasm';
 import type { ShaderInfo } from '../doc/wasm';
 import { findNode, walk } from '../doc/types';
 import type { Document, Node, Vec3 } from '../doc/types';
@@ -256,6 +256,58 @@ export function ViewportHost() {
     };
     applyClip();
 
+    // ---- loud rendering failures -------------------------------------------------------
+    // (a) The viewport reports shader link failures through this hook; the persistent
+    //     ui.renderError is what the lens shows (the toast would fade out while the blank
+    //     frame stays). A successful compile clears only a shader-kind error — a surface
+    //     or results error belongs to a different detector and must not be erased by an
+    //     unrelated shader that happens to compile.
+    vp.onRenderError = (err) => {
+      if (err) ui.set('renderError', err);
+      else if (ui.renderError?.kind === 'shader') ui.set('renderError', null);
+    };
+    // (b) The no-surface case: the march converges on nothing inside non-empty bounds and
+    //     the fragment discards (viewport.ts's floor fallback) — a blank viewport with no
+    //     error. The CPU twin settles it: sample the compiled field on a grid over the
+    //     bounds; the SDF is 1-Lipschitz, so every node reading d > h·√3/2 (h = grid
+    //     spacing) proves no surface exists anywhere in the box — and any real surface has
+    //     a node within h·√3/2, so a thin sheet never triggers a false alarm. One call
+    //     with all points amortises the Rust side's per-call expression compile.
+    let surfaceGen = 0;
+    const probeSurface = (doc: Document, bounds: [Vec3, Vec3]) => {
+      const gen = ++surfaceGen;
+      void Promise.resolve()
+        .then(() => {
+          const [lo, hi] = bounds;
+          const N = 12;
+          const h = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / (N - 1);
+          const pts = new Float64Array(N * N * N * 3);
+          let k = 0;
+          for (let i = 0; i < N; i++)
+            for (let j = 0; j < N; j++)
+              for (let m = 0; m < N; m++) {
+                pts[k++] = lo[0] + ((hi[0] - lo[0]) * i) / (N - 1);
+                pts[k++] = lo[1] + ((hi[1] - lo[1]) * j) / (N - 1);
+                pts[k++] = lo[2] + ((hi[2] - lo[2]) * m) / (N - 1);
+              }
+          const vals = evalBody(doc, pts);
+          let minD = Infinity;
+          for (let i = 0; i < vals.length; i += 4) minD = Math.min(minD, vals[i]);
+          if (gen !== surfaceGen) return;
+          if (minD > (h * Math.sqrt(3)) / 2) {
+            ui.set('renderError', {
+              kind: 'surface',
+              text: 'the document has no surface inside its own bounds — every shape cancels out (a cut that contains the whole body, or an empty result)',
+            });
+          } else if (ui.renderError?.kind === 'surface') {
+            ui.set('renderError', null);
+          }
+        })
+        .catch(() => {
+          /* the probe is advisory: a wasm-side failure here must not break the view */
+        });
+    };
+
     const sync = () => {
       pending = 0;
       const doc = store.doc;
@@ -290,6 +342,7 @@ export function ViewportHost() {
           : { source: shader.source, bounds: shader.bounds, ident: shader.ident, meshes: slots, grid: fillGrid };
         boundSpec = spec;
         appliedData = fillGrid ? fillGrid.data : null;
+        if (spec.bounds) probeSurface(doc, spec.bounds);
         void vp.setField(spec).then(() => {
           ui.compileMs = vp.lastCompileMs;
           updateHighlights();

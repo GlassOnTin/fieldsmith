@@ -12,6 +12,20 @@ void main() {
 }`;
 
 export const MAX_HIGHLIGHTS = 16;
+
+/** The slice of three's internal WebGLProgram wrapper that the link probe reads. three
+ * types the wrapper as a class without `diagnostics` (it is set in `onFirstUse` only when
+ * a link fails), so the probe narrows it here instead of casting at the call site. */
+interface WebGLProgramLike {
+  program: WebGLProgram | null;
+  getUniforms(): unknown;
+  diagnostics?: {
+    runnable: boolean;
+    programLog?: string;
+    vertexShader?: { log?: string };
+    fragmentShader?: { log?: string };
+  } | null;
+}
 /** Per-leaf colour cap; beyond the first 32 (tree order) parts render in the base colour. */
 export const MAX_PARTCOLORS = 32;
 
@@ -387,6 +401,20 @@ export class Viewport {
     // Built-in overlay materials (result mesh, glyphs) honour the section plane through
     // three's local clipping; the raymarched passes implement it in their own shader.
     this.renderer.localClippingEnabled = true;
+    // Loud rendering failures: three reports a failed link through this hook (and through
+    // the program wrapper's diagnostics, which `programLinkFailure` reads). Capturing the
+    // raw GL logs here keeps the driver's own text for the error surface; without a hook
+    // three only console.errors, which the lens cannot show.
+    this.renderer.debug.onShaderError = (gl, program, vShader, fShader) => {
+      const logs = [
+        gl.getProgramInfoLog(program),
+        gl.getShaderInfoLog(vShader),
+        gl.getShaderInfoLog(fShader),
+      ]
+        .filter((l): l is string => !!l && l.trim() !== '')
+        .map((l) => l.replace(/\0/g, '').trim());
+      this.lastShaderLog = logs.join('\n') || 'the shader program failed to link';
+    };
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'viewport-canvas';
     host.appendChild(this.canvas);
@@ -627,6 +655,39 @@ export class Viewport {
   private highlights: Highlight[] = [];
   /** Milliseconds the last shader took from source to first use (compile included). */
   lastCompileMs = 0;
+  /** The raw GL logs from the last failed link the `onShaderError` hook saw (empty until
+   * one fires). `programLinkFailure` prefers the wrapper's own diagnostics and falls back
+   * to this. */
+  private lastShaderLog = '';
+  /** Loud rendering failures: the host installs this to put shader-compile/link failures
+   * into the persistent `ui.renderError` state (the viewport itself has no UI). Called
+   * with the failure, and with `null` when a subsequent compile succeeds (the host decides
+   * whether the current error is its own kind to clear). */
+  onRenderError: ((err: { kind: 'shader'; text: string } | null) => void) | null = null;
+
+  /**
+   * Whether a material's compiled program will actually run. `compileAsync` resolves even
+   * when the link failed (verified on headless Chromium + three 0.180: it polls
+   * `isReady()`, which without KHR_parallel_shader_compile is true from the start), so the
+   * silent `catch {}` around it never sees a bad shader. The observable is the program
+   * wrapper: `getUniforms()` triggers three's first-use LINK_STATUS check, which fires the
+   * `debug.onShaderError` hook and populates `diagnostics.runnable`. Returns the driver's
+   * log text when the program is dead, null when it runs.
+   */
+  programLinkFailure(mat: THREE.RawShaderMaterial): string | null {
+    const wrapper = (this.renderer.properties.get(mat) as { currentProgram?: WebGLProgramLike }).currentProgram;
+    if (!wrapper || wrapper.program == null) return null;
+    wrapper.getUniforms();
+    if (wrapper.diagnostics && wrapper.diagnostics.runnable === false) {
+      const d = wrapper.diagnostics;
+      const text = [d.programLog, d.vertexShader?.log, d.fragmentShader?.log]
+        .filter((l): l is string => !!l && l.trim() !== '')
+        .map((l) => l.replace(/\0/g, '').trim())
+        .join('\n');
+      return text || this.lastShaderLog || 'the shader program failed to link';
+    }
+    return null;
+  }
 
   /**
    * Install a new field shader. The program is compiled asynchronously (KHR_parallel_shader_compile
@@ -649,10 +710,11 @@ export class Viewport {
     const probe = new THREE.Mesh(this.quad.geometry, mat);
     probe.frustumCulled = false;
     this.compiling++;
+    let compileThrew: unknown = null;
     try {
       await this.renderer.compileAsync(probe, this.camera, this.scene);
-    } catch {
-      /* fall back to synchronous compile on first render */
+    } catch (err) {
+      compileThrew = err;
     } finally {
       this.compiling--;
     }
@@ -661,6 +723,21 @@ export class Viewport {
       mat.dispose();
       return;
     }
+    // Loud rendering failure: compileAsync resolving is not the same as the program being
+    // runnable — a failed compile or link still resolves (verified on the headless stack).
+    // Ask the wrapper; if the program is dead, keep the previous shader on screen and
+    // surface the driver's log instead of rendering a silently blank viewport.
+    const linkFail = compileThrew !== null ? null : this.programLinkFailure(mat);
+    if (compileThrew !== null || linkFail !== null) {
+      this.onRenderError?.({
+        kind: 'shader',
+        text: linkFail ?? `the shader could not be compiled: ${String(compileThrew)}`,
+      });
+      this.dropFieldTextures(mat);
+      mat.dispose();
+      return;
+    }
+    this.onRenderError?.(null);
     this.dropFieldTextures(this.material);
     this.material?.dispose();
     this.material = mat;

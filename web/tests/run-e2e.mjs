@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -11,7 +11,8 @@
 // convection), docs/verification/V30.md (heat flux), docs/verification/V31.md (profile
 // sketch), docs/verification/V32.md (two-domain graded conduction), docs/verification/
 // V33.md (the Results lens on graded thermal fields), docs/verification/V39.md (the
-// feature-combination matrix) and exits non-zero on any failure or console error.
+// feature-combination matrix), docs/verification/V40.md (loud rendering failures) and
+// exits non-zero on any failure or console error.
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -35,6 +36,7 @@ import { gradedresultsTest } from './gradedresults.mjs';
 import { gradedyieldTest } from './gradedyield.mjs';
 import { gradedbucklingTest } from './gradedbuckling.mjs';
 import { combinationsTest } from './combinations.mjs';
+import { renderfailTest } from './renderfail.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -210,6 +212,11 @@ try {
   if (!only || only === 'combinations') {
     const ok = await combinationsTest(browser, url, { screens, docsDir });
     console.log(`combinations test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'renderfail') {
+    const ok = await renderfailTest(browser, url, { screens, docsDir });
+    console.log(`renderfail test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

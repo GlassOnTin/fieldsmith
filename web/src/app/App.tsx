@@ -124,6 +124,27 @@ function StatusBar() {
   );
 }
 
+/** Persistent banner over the viewport while a rendering failure leaves it blank or
+ * wrong (loud rendering failures, VISION §7). Unlike the toast it stays for as long as
+ * the broken state does — the next successful shader compile, a document whose field
+ * has a surface again, or a results build that succeeds clears it. */
+function RenderErrorSurface() {
+  const e = ui.renderError;
+  if (!e) return null;
+  const label =
+    e.kind === 'shader'
+      ? 'The view shader failed'
+      : e.kind === 'surface'
+        ? 'Nothing to draw'
+        : 'Results failed to build';
+  return (
+    <div class="render-error" role="alert" data-testid="render-error" data-kind={e.kind}>
+      <div class="head">{label}</div>
+      <pre>{e.text}</pre>
+    </div>
+  );
+}
+
 function Toast() {
   const t = ui.toast;
   if (!t) return null;
@@ -205,6 +226,7 @@ export function App() {
         <Lenses />
         <ViewTools />
         <EmptyState />
+        <RenderErrorSurface />
         {viewOverlays.map((O, i) => (
           <O key={i} />
         ))}
