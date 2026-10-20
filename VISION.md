@@ -258,9 +258,32 @@ New capabilities are ranked by one question: **does this put a high-value engine
 capability into the hands of anyone with a browser and their own hardware, while keeping the
 numbers verifiable?**
 
-In priority order beyond the v0.5 foundation cleanup:
+In priority order beyond the v0.5 foundation cleanup: item 1 of the earlier list
+delivered (V26–V31); the former deeper-mechanics item delivered the error bounds, the
+measured anisotropy, and the indicator pair, with the nonlinear-material bullet and the
+cubic law's completion remaining; the thermal-coupled flows delivered their pair (V29,
+V32). The owner's 2026-10-20 direction re-ranks what remains:
 
-1. **Interior inspection and parametric ergonomics.**
+1. **User-interface robustness and feature-combination testing.** The v0.6 rungs were each
+   verified per feature and still shipped basic user-facing failures the owner found in
+   minutes of use: the section toggle's first click was an inert plane (t = 0 is the no-cut
+   state, and the toggle-on did not move off it); the transparency slider read as "dimmer"
+   because the render path composited the background through closed walls and then hid its
+   own interior pass behind a missing uniform sync; and a mounted-but-unsynced render pass
+   drew silently nothing. Each had its pixel-gated e2e family, which asserts state values
+   and fixture pixels but not the combination space. The rung:
+   - *Feature-combination matrix*: every overlay control (section, opacity, thermal, modes,
+     sketch, sweeps) against every document kind (analytic solid, mesh leaf, filled) and
+     lens, driven through the real UI with VISIBLE pixel-change assertions — assert pixels,
+     not state, because a state variable can change correctly while the render stays dark.
+   - *Loud rendering failures*: a failed shader compile or a march that produces no surface
+     must surface (an error state the lens can show), never render a silently blank
+     viewport; the e2e then asserts non-blank on every state change, which no current
+     family does.
+   - *The new-user path as a gate*: one documented headless pass that follows the README
+     (clone → dev server → example → every lens) and reports what a first user would hit,
+     run on the ladder before each tag.
+2. **Interior inspection and parametric ergonomics.**
    - *Interactive section-plane clipping* in the GPU raymarcher so engineers can slice through
      a part in real time to inspect internal stress fields, thermal gradients, and graded TPMS
      walls.
@@ -268,7 +291,7 @@ In priority order beyond the v0.5 foundation cleanup:
      reference meaningful engineering parameters (`wall_t`, `bolt_pitch`) rather than raw node
      indices.
    - *Part/group hierarchy* in the model tree and in-UI 2D profile sketching for extrusions.
-2. **Deeper structural and lattice mechanics (where implicit fields excel).**
+3. **Deeper structural and lattice mechanics (where implicit fields excel).**
    - *Rigorous error bounds*: pairing conforming displacement solves (lower bound on
      compliance) with dual/equilibrated stress recovery so rung estimates become certified
      brackets where the physics allows.
@@ -276,13 +299,13 @@ In priority order beyond the v0.5 foundation cleanup:
      thin TPMS walls.
    - *Nonlinear material laws* (elasto-plasticity, brittle failure criteria, hyperelasticity)
      for printed polymers and metals.
-3. **Coupled engineering flows.**
+4. **Coupled engineering flows.**
    - *Thermal and heat-exchanger workflows*: convective and heat-flux boundary conditions and
      two-domain TPMS core grading (builds directly on the M14 conduction kernel).
    - *Wave / RF / acoustic problems*: added only when paired with appropriate finite-element
      spaces (e.g. Nédélec edge elements or BEM/NEC-2 cross-checks) rather than forcing scalar
      Lagrange elements outside their domain.
-4. **Field-native synthesis (where implicit fields + live FEM + `.fsm` text go beyond B-rep CAD).**
+5. **Field-native synthesis (where implicit fields + live FEM + `.fsm` text go beyond B-rep CAD).**
    - *Stress-driven outer geometry (shells, ribs, and variable fillets)*: feeding the solved
      `u_param` / `σ_vm(p)` 3D grid back into the body field `f(p)` itself — e.g. wall offsets
      `t(p)` and smooth-boolean fillet radii `k(p)` that automatically thicken and widen at
