@@ -30,12 +30,13 @@ CLONE="$(mktemp -d /tmp/fieldsmith-v41-clone.XXXXXX)"
 LOG="$(mktemp -d /tmp/fieldsmith-v41-log.XXXXXX)/dev-server.log"
 PORT=5191
 SERVER_PID=""
+SERVER_PGID=""
 fail=0
 
 cleanup() {
   # setsid makes the server its own process group; npm spawns vite as a child, so the
   # whole group must die, not just the npm wrapper.
-  [ -n "$SERVER_PID" ] && kill -- "-$SERVER_PID" 2>/dev/null
+  [ -n "$SERVER_PGID" ] && kill -- "-$SERVER_PGID" 2>/dev/null
   wait "$SERVER_PID" 2>/dev/null
   rm -rf "$CLONE" "$(dirname "$LOG")"
 }
@@ -72,14 +73,33 @@ t_serve=0
 t_pass=0
 if [ "$fail" = 0 ]; then
   echo "===== V41 leg 3: the README's run command ====="
-  (cd "$CLONE" && exec npm --prefix web run dev -- --port "$PORT" --strictPort) >"$LOG" 2>&1 &
+  # Refuse to start on a port something already serves: an earlier run's leaked server
+  # (or any other vite) would answer the probe below and the pass would silently drive
+  # that tree instead of the clone. Vite's own --strictPort dies on EADDRINUSE, but the
+  # probe would never notice — it only checks the port, not whose port it is.
+  for host in localhost 127.0.0.1; do
+    if curl -sf -o /dev/null --max-time 2 "http://$host:$PORT/"; then
+      echo "port $PORT is already served by $host — the gate must drive its own clone's server"; fail=1; break
+    fi
+  done
+fi
+if [ "$fail" = 0 ]; then
+  # Identity marker: served from the clone's web/ root, so the probe can prove the
+  # answering server is this run's clone, not a stranger on the same port.
+  MARKER="v41-$$-$RANDOM"
+  echo "$MARKER" > "$CLONE/web/v41-marker.txt"
+  # setsid (exec'd, so $! is the session leader) puts npm and its vite child in their
+  # own process group; cleanup kills the group, not just the wrapper.
+  (cd "$CLONE" && exec setsid npm --prefix web run dev -- --port "$PORT" --strictPort) >"$LOG" 2>&1 &
   SERVER_PID=$!
+  SERVER_PGID=$SERVER_PID
   # Probe both localhost and 127.0.0.1: Vite binds ::1 by default on this stack but
   # 127.0.0.1 on others, and the README tells the reader to open http://localhost:5173.
   URL=""
   for _ in $(seq 1 120); do
     for host in localhost 127.0.0.1; do
-      if curl -sf -o /dev/null "http://$host:$PORT/"; then URL="http://$host:$PORT/"; break; fi
+      body=$(curl -sf --max-time 2 "http://$host:$PORT/v41-marker.txt" 2>/dev/null) || continue
+      if [ "$body" = "$MARKER" ]; then URL="http://$host:$PORT/"; break; fi
     done
     [ -n "$URL" ] && break
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -87,7 +107,7 @@ if [ "$fail" = 0 ]; then
     fi
     sleep 1
   done
-  [ -n "$URL" ] || { echo "dev server never answered on $PORT:"; cat "$LOG"; fail=1; }
+  [ -n "$URL" ] || { echo "dev server never served its marker on $PORT:"; cat "$LOG"; fail=1; }
   t_serve=$((SECONDS - t_build - t_clone))
 fi
 
