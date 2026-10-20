@@ -382,8 +382,8 @@ fn v42_anisotropic_route() {
          - One density (0.22, the fit point) and two directions ([100], [110]) are tested \
          through the solve; the density bridge and the other families' patch rows are \
          covered by the fit check's closed form, not by a solve.\n\
-         - The equilibrated upper end still refuses the cubic route (fail closed in \
-         `run_case`); the dual stress projection's cubic extension stays tracked.\n\
+         - The equilibrated upper end routes the cubic law through each element's \
+         compliance tensor (V43); the bracket's cubic leg is certified there, not here.\n\
          - The document grammar has no lattice-rotation option: in the product the lattice \
          axes are the mesh axes, and direction dependence enters through the part's \
          orientation relative to its loads — the patch test's rotated loading is the \

@@ -695,15 +695,9 @@ pub fn run_case(
         fixed: fixed.to_vec(),
         force,
     };
-    // The equilibrated upper end recovers through the dual stress projection, which is
-    // written for isotropic materials — refuse it on the cubic route rather than emit a
-    // certificate computed through the wrong D (fail closed; the route is tracked).
-    if problem.material.cubic.is_some() && equilibrate {
-        return Err(SetupError(
-            "the equilibrated upper end does not yet route the cubic anisotropic law;              run the fill without equilibration or drop the fill's cubic fit"
-                .into(),
-        ));
-    }
+    // The equilibrated upper end reads each element's compliance tensor — isotropic
+    // Gram or cubic Gram (V43) — so the cubic route certifies through the same law the
+    // conforming solve used.
     let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
     let routed = problem.material.cubic.is_some();
     let (stress, vm_elem) = if routed {

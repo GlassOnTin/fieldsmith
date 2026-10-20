@@ -49,7 +49,10 @@
 //! - the `prescribed` closure must classify every boundary facet: `Some(t)` = Neumann
 //!   facet with constant traction t in the outward normal (including zero for every
 //!   unloaded non-support facet), `None` = Dirichlet side with a free reaction;
-//! - isotropic material with E > 0 per element and ν ∈ (−1, ½) (checked);
+//! - material with E > 0 per element (checked): isotropic elements need ν ∈ (−1, ½)
+//!   (checked), cubic elements need the Born criteria (checked via `CubicMaterial::
+//!   is_stable`); the recovery reads each element's compliance tensor — the cubic
+//!   Gram's isotropic limit is the isotropic one, so a mixed set certifies consistently;
 //! - well-posed problems (the free stiffness is definite); the residual check refuses
 //!   otherwise rather than returning a value.
 //!
@@ -100,6 +103,46 @@ fn strain_from_stress(s: &[f64; 6], young: f64, poisson: f64) -> [f64; 6] {
         (1.0 + poisson) * s[XZ] / young,
         (1.0 + poisson) * s[YZ] / young,
     ]
+}
+
+/// The element's compliance Gram `hbase[k][kk] = e_k : A : e_kk` (A = the inverse
+/// stiffness tensor), the dual recovery's only material input. Isotropic elements keep
+/// the exact `strain_from_stress` arithmetic (bit-identical to the pre-cubic route);
+/// cubic elements read the closed-form compliance of the class — ε_ii = S₁₂·trσ +
+/// (S₁₁ − S₁₂)·σ_ii, γ = τ/C₄₄ — whose Gram is diagonal-blocked: S₁₁ on the normal
+/// diagonal, S₁₂ off it, 1/C₄₄ on the shear diagonal (the contract() shear doubling
+/// cancels the tensor-vs-engineering factor). At C₄₄ = (C₁₁ − C₁₂)/2 this equals the
+/// isotropic Gram to roundoff — the same parity gate `ortho` holds for the stiffness.
+fn elem_compliance(problem: &Problem, e: usize) -> [[f64; 6]; 6] {
+    let mut h = [[0.0f64; 6]; 6];
+    match problem.material.cubic.as_ref().and_then(|cs| cs[e]) {
+        Some(c) => {
+            let d = (c.c11 - c.c12) * (c.c11 + 2.0 * c.c12);
+            let s11 = (c.c11 + c.c12) / d;
+            let s12 = -c.c12 / d;
+            for (i, hrow) in h.iter_mut().enumerate().take(3) {
+                for (j, hv) in hrow.iter_mut().enumerate().take(3) {
+                    *hv = if i == j { s11 } else { s12 };
+                }
+            }
+            h[XY][XY] = 1.0 / c.c44;
+            h[XZ][XZ] = 1.0 / c.c44;
+            h[YZ][YZ] = 1.0 / c.c44;
+        }
+        None => {
+            let young = problem.material.young[e];
+            let nu = problem.material.poisson;
+            for (i, hrow) in h.iter_mut().enumerate() {
+                for (j, hv) in hrow.iter_mut().enumerate() {
+                    *hv = contract(
+                        &stress_unit(i),
+                        &strain_from_stress(&stress_unit(j), young, nu),
+                    );
+                }
+            }
+        }
+    }
+    h
 }
 
 /// Constant strain 6-vector of the displacement field e_c·λ_a with vertex-shape gradient
@@ -189,10 +232,36 @@ pub fn upper_compliance(
 ) -> Result<UpperBound, String> {
     let mesh = &problem.mesh;
     let nu = problem.material.poisson;
-    if nu <= -1.0 || nu >= 0.5 {
+    // ν is the compliance input only for elements without a cubic triple; a fully
+    // cubic set never reads it. Cubic elements are licensed by the Born criteria
+    // instead (the same `is_stable` the assembly route holds).
+    let any_isotropic = problem
+        .material
+        .cubic
+        .as_deref()
+        .is_none_or(|cs| cs.iter().any(|c| c.is_none()));
+    if any_isotropic && (nu <= -1.0 || nu >= 0.5) {
         return Err(format!(
             "poisson {nu} outside the isotropic compliance range (-1, 1/2)"
         ));
+    }
+    for (e, c) in problem
+        .material
+        .cubic
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
+        if let Some(c) = c {
+            if !c.is_stable() {
+                return Err(format!(
+                    "element {e} carries an unstable cubic triple (Born: C11 > C12 > 0, \
+                     C44 > 0): C11 {}, C12 {}, C44 {}",
+                    c.c11, c.c12, c.c44
+                ));
+            }
+        }
     }
     for ey in &problem.material.young {
         if *ey <= 0.0 || !ey.is_finite() {
@@ -748,17 +817,8 @@ pub fn upper_compliance(
             let mut s_mat = FMat::<f64>::zeros(rows_total, rows_total);
             for e in 0..e_count {
                 let vol = mesh.tet_volume(e).abs();
-                let young = problem.material.young[e];
                 let mut h_e = FMat::<f64>::zeros(60, 60);
-                let mut hbase = [[0.0f64; 6]; 6];
-                for (i, hrow) in hbase.iter_mut().enumerate() {
-                    for (jj, hv) in hrow.iter_mut().enumerate() {
-                        *hv = contract(
-                            &stress_unit(i),
-                            &strain_from_stress(&stress_unit(jj), young, nu),
-                        );
-                    }
-                }
+                let hbase = elem_compliance(problem, e);
                 for qi in 0..10 {
                     for k in 0..6 {
                         for r in 0..10 {
@@ -812,17 +872,8 @@ pub fn upper_compliance(
             let mut out = FMat::<f64>::zeros(n_sigma, 1);
             for e in 0..e_count {
                 let vol = mesh.tet_volume(e).abs();
-                let young = problem.material.young[e];
                 let mut h_e = FMat::<f64>::zeros(60, 60);
-                let mut hbase = [[0.0f64; 6]; 6];
-                for (i, hrow) in hbase.iter_mut().enumerate() {
-                    for (jj, hv) in hrow.iter_mut().enumerate() {
-                        *hv = contract(
-                            &stress_unit(i),
-                            &strain_from_stress(&stress_unit(jj), young, nu),
-                        );
-                    }
-                }
+                let hbase = elem_compliance(problem, e);
                 for qi in 0..10 {
                     for k in 0..6 {
                         for r in 0..10 {
@@ -945,17 +996,8 @@ pub fn upper_compliance(
         let mut h_inv: Vec<FMat<f64>> = Vec::with_capacity(e_count);
         for e in 0..e_count {
             let vol = mesh.tet_volume(e).abs();
-            let young = problem.material.young[e];
             let mut h_e = FMat::<f64>::zeros(60, 60);
-            let mut hbase = [[0.0f64; 6]; 6];
-            for (i, hrow) in hbase.iter_mut().enumerate() {
-                for (jj, hv) in hrow.iter_mut().enumerate() {
-                    *hv = contract(
-                        &stress_unit(i),
-                        &strain_from_stress(&stress_unit(jj), young, nu),
-                    );
-                }
-            }
+            let hbase = elem_compliance(problem, e);
             for qi in 0..10 {
                 for k in 0..6 {
                     for r in 0..10 {
@@ -1118,18 +1160,6 @@ pub fn upper_compliance(
                 }
             }
         }
-        {
-            use std::io::Write as _;
-            let mut f = std::fs::File::create("/tmp/smat.txt").expect("dump");
-            for j in 0..rows_total {
-                let k0 = col_ptrs[j];
-                let k1 = col_ptrs[j + 1];
-                for k in k0..k1 {
-                    writeln!(f, "{} {} {:?}", row_ind[k], j, vals[k]).expect("w");
-                }
-            }
-            eprintln!("DUMPED S: rows {rows_total} nnz {}", col_ptrs[rows_total]);
-        }
         let cho = s_mat
             .as_ref()
             .sp_cholesky(faer::Side::Lower)
@@ -1196,17 +1226,8 @@ pub fn upper_compliance(
     // ---- complementary energy ----
     let mut j = 0.0f64;
     for e in 0..e_count {
-        let young = problem.material.young[e];
         let vol = mesh.tet_volume(e).abs();
-        let mut hbase = [[0.0f64; 6]; 6];
-        for (i, hrow) in hbase.iter_mut().enumerate() {
-            for (jj, hv) in hrow.iter_mut().enumerate() {
-                *hv = contract(
-                    &stress_unit(i),
-                    &strain_from_stress(&stress_unit(jj), young, nu),
-                );
-            }
-        }
+        let hbase = elem_compliance(problem, e);
         for q in 0..10 {
             for r in 0..10 {
                 let tq = tet_pair(q, r, vol);
