@@ -38,6 +38,7 @@ step 'wasm package build' npm --prefix web run wasm
 step 'headless browser suite (V5 + V16 + bracket + shape + make + mesh)' npm --prefix web run test:e2e
 step 'V16 interior case (isolated)' node web/tests/run-e2e.mjs --only interior
 step 'V24 fresh-clone contract (V1-V23 workspace stage above built target/debug/fieldsmith; needs gh auth)' scripts/v24-fresh-clone.sh
+step 'V41 new-user path (fresh clone, README commands, headless first session; needs gh auth)' scripts/v41-newuser.sh
 step 'V6 gyroid law (heavy, release)' cargo test -p fieldsmith-verify --release --test v6_tpms_law -- --ignored --nocapture
 step 'V7 graded beam (heavy, release)' cargo test -p fieldsmith-verify --release --test v7_graded_beam -- --ignored
 step 'V14 STEP chord ladder (heavy, release)' cargo test -p fieldsmith-verify --release --test v14_step -- --ignored --nocapture
