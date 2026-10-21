@@ -171,13 +171,19 @@ impl Report {
         s
     }
 
-    /// Write `docs/verification/<id>.md` (relative to the workspace root) and return the path.
+    /// Write `docs/verification/<id>.md` (relative to the workspace root) when creating a new
+    /// report, when `FIELDSMITH_BLESS=1` is set, or when a check fails, and return the path.
     pub fn write(&self) -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root.join("docs/verification");
         std::fs::create_dir_all(&dir).expect("create docs/verification");
         let path = dir.join(format!("{}.md", self.id));
-        std::fs::write(&path, self.markdown()).expect("write report");
+        let bless =
+            std::env::var_os("FIELDSMITH_BLESS").is_some_and(|v| v != "0" && !v.is_empty());
+        let failed = !self.checks.is_empty() && !self.passed();
+        if bless || !path.exists() || failed {
+            std::fs::write(&path, self.markdown()).expect("write report");
+        }
         path
     }
 

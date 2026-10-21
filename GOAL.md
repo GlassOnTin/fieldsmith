@@ -1,206 +1,114 @@
-# Fieldsmith — Goal (v0.5: Foundation & Verification Closure)
+# Fieldsmith — Goal (v0.7: Additive-Native Orientation, Lattice Alignment & Pareto Exploration)
 
-**Closed.** `M20` closed at `28412e3` and `M21` at `b9f83b3`, which also ticked the criteria
-below; `v0.5.0` is tagged at `ab59756`, where GitHub Actions CI and the release workflow are
-green.
-
-This file defines **what "done" means for v0.5**. The [VISION](VISION.md) defines *why* and
+This file defines **what "done" means for v0.7**. The [VISION](VISION.md) defines *why* and
 *where next*; this file defines the concrete, testable acceptance bar for the current release.
 Previous goals are preserved in git history (`v0.2.0` at `a52b6b8`, `v0.3` at `0b92e1c`,
-`v0.4.0` at `295e80e`). If an acceptance criterion or tolerance turns out to be wrong, update
-this file in a reviewed commit with the measured reason rather than skipping it.
+`v0.4.0` at `295e80e`, `v0.5.0` at `ab59756`, and `v0.6` closed across `V26`–`V43` at
+`e283ba1`, summarised in the appendix below). If an acceptance criterion or tolerance turns out
+to be wrong, update this file in a reviewed commit with the measured reason rather than
+skipping it.
 
 ---
 
 ## The goal in one sentence
 
-> Anyone can clone Fieldsmith from its git remote and build and verify it from the clone alone
-> (`V24`); the verified solver and parameter sweep are measured on a non-x86_64 architecture
-> (`V25`); and the three unresolved technical findings carried out of v0.3/v0.4 — the `V3`
-> quarter-hole tangent-junction mesh defect, the mesh-leaf graded-fill slicer manifold seam at
-> `skin = 1.2 mm`, and the N100 Chrome WebGL/Worker wall-time split — are diagnosed and closed
-> with reproducible evidence.
+> An engineer can orient a lattice's cubic-anisotropic axes (`fill ... rotate=(rx, ry, rz)`)
+> independently of the part (`V44`), evaluate exact-gradient overhang bounds and inter-layer
+> bond peel/shear utilization across build orientations `(θ, φ)` (`V45`, `V46`), and explore a
+> multi-parameter sweep's Pareto frontier interactively in `Results` where clicking a point
+> snaps the 3D viewport and `.fsm` document to that candidate (`V47`).
+
+---
+
+## Settled policy decisions
+
+1. **No Engine Islands:** No solver module or verification case (`V#`) lands unless it is either
+   (a) reachable end-to-end from a `.fsm` document in both `fieldsmith-cli` and the browser UI,
+   or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6` and `V36`
+   calibrate `fill.rs`). Standalone solver modules exercised only by a synthetic test are
+   out of bounds.
+2. **Pixels and first-user paths, not state-only assertions:** Every UI control added in v0.7
+   joins the `V39` feature-combination pixel matrix (`web/tests/combinations.mjs`), surfaces
+   any rendering or empty-field failure through `ui.renderError` (`V40`), and keeps the
+   fresh-clone README new-user gate (`V41`) green.
+3. **Report immutability on routine test runs (`FIELDSMITH_BLESS`):** `cargo test -p fieldsmith-verify`
+   checks every tolerance on every run but only overwrites existing `docs/verification/V*.md`
+   files when `FIELDSMITH_BLESS=1` is set (or when a new report is created or a check fails),
+   keeping the working tree clean of wall-time jitter.
+4. **Carried v0.4/v0.5 policies remain in force:** The 32-thread workstation (`budgets.md`) is
+   the pass/fail interactive referee; secondary hardware (`N100`, `SM8750`) populates empirical
+   rows in `data/costs/costs.csv`; and the default browser ladder stays capped at `750k` DOFs
+   with explicit refusal when a tighter tolerance requires `--rungs`.
 
 ---
 
 ## The reference task
 
-1. **Standalone fresh clone (`V24`).** `git clone --recurse-submodules` from the remote into a
-   clean directory, `cargo build`, and run the pinned golden `fieldsmith api` request; the
-   canonical response matches byte-for-byte (`scripts/v24-fresh-clone.sh`).
-2. **Cross-architecture verification (`V25`).** Run the reference tolerance ladder and the `V23`
-   5-point cantilever sweep through `fieldsmith api` on an aarch64 device the user owns
-   (OnePlus 13, Snapdragon 8 Elite `SM8750`). Record wall times, throughput (points/hour), and
-   field-by-field divergence against the x86_64 referee in `docs/verification/V25.md` and
-   `data/costs/costs.csv`.
-3. **Quarter-plate tangent junction (`V3x`).** Diagnose the `V3` quarter-plate (`x ≥ 0, y ≥ 0`)
-   mouth-junction mesh defect at the `x = 0` hole tangency, fix the boundary-claim bisection in
-   `fieldsmith-mesh`, and run the 5-row mesh study (`h = 0.2, 0.14, 0.1, 0.07, 0.05 mm`)
-   recorded in `docs/verification/V3.md`.
-4. **Mesh-leaf graded fill in PrusaSlicer (`Sx`).** Locate the manifold boundary for graded TPMS
-   fill on a mesh/STEP-imported leaf across a grid of `skin` (`0 / 0.6 / 1.2 mm`) and cell size
-   using headless PrusaSlicer 2.9.6 (`--info`), diagnose why the `-skin` offset on a trilinear
-   mesh-leaf SDF produces open/non-manifold seams in adaptive dual contouring (`V14.md`), and
-   either fix the export stitch to reach `manifold = yes` at `skin = 1.2 mm` or bound and
-   document the exact geometric limit in `docs/verification/slicer.md`.
-5. **N100 Chrome wall-time split (`M21`).** Run a controlled factorial experiment on the N100
-   box (`ian-quieter.lan`) testing the hypotheses behind the M13 Chrome wall-time shift
-   (`4.9 / 15.1 s` vs. `9.1 / 24.1 s` while native CLI and Firefox held steady) and record the
-   measured cause or falsified hypotheses in `docs/verification/budgets.md`.
+1. **Rotated TPMS lattice alignment (`M22`, `V44`).** Add `rotate=(rx, ry, rz)` (degrees, ZYX
+   Euler matching primitive rotation) to the `fill` statement in `.fsm`, the GLSL raymarcher,
+   the CPU field evaluator / adaptive dual contourer, the per-element rotated cubic stiffness
+   tensor (`R · C · Rᵀ`), and the `Fill` lens inspector. Verify on a uniaxial bar that rotating
+   a diamond-network or primitive-sheet fill by `45°` about Z reproduces the `V36` `[110]`
+   modulus (`2.22×` / `2.07×` of `[100]`) and updates the raymarched preview pixels.
+2. **Exact-gradient overhang map and orientation check (`M23`, `V45`).** Compute the exact
+   outward surface normal `n(p) = ∇f(p) / ‖∇f(p)‖` across surface facets and in the shader for
+   a declared build axis `b̂(θ, φ)` (default `+Z`, threshold `α_max = 45°` from build vertical).
+   Expose overhang area fraction and worst overhang angle in `Make` / CLI (`--overhang`) and
+   render the overhang highlight overlay in the viewport, verified against closed-form sphere
+   and inclined-plane overhang areas (`V45`).
+3. **Inter-layer peel and shear utilization (`M24`, `V46`).** Add build-axis layer-bond
+   evaluation (`σ_nn = b̂ᵀ σ b̂` inter-layer tension and `τ_nt = ‖σ b̂ − σ_nn b̂‖` inter-layer
+   shear, combined via a quadratic layer-bond criterion `(max(0, σ_nn) / S_z)² + (τ_nt / S_s)²`)
+   with material `yield_z=` / `shear_z=` parameters (or a stated default z-bond knockdown ratio
+   when omitted). Expose the `layer-peel` mode in `Results` and a build-orientation sweep over
+   `(θ, φ)` that identifies the orientation minimizing peak layer-peel utilization (`V46`).
+4. **Interactive Pareto frontier explorer in `Results` (`M25`, `V47`).** Extend the `Results`
+   sweep runner to support 2-parameter `let` grids (or multi-point sweeps) and plot a 2D scatter
+   frontier (`mass (g)` on X vs. `max von Mises`, `safety factor`, `compliance`, `layer-peel`,
+   or `f₁` on Y) with Pareto-optimal points highlighted. Clicking a point in the plot updates
+   the `.fsm` `let` bindings, re-renders the 3D viewport, and supports `Undo` back to the prior
+   state (`V47`).
 
 ---
 
 ## Acceptance criteria
 
-### A. Standalone repository & fresh-clone gate (M17 — closed at `7e5c1db`, [V24.md](docs/verification/V24.md))
-- [x] Annotated tag `v0.4.0` at `295e80e` recording verified results and stated limits.
-- [x] `fenics-rs` linked as a git submodule (`14b0dc8`, `exclude = ["fenics-rs"]` in the root
-      workspace so nested workspace inheritance resolves cleanly).
-- [x] Tree scanned for credentials/tokens prior to push; pushed `main` and tags (`v0.2.0`,
-      `v0.4.0`) to `GlassOnTin/fieldsmith`.
-- [x] `scripts/v24-fresh-clone.sh` runs in `scripts/ci.sh`: clones into a temporary directory,
-      builds offline from the clone alone, and verifies byte-identical canonical output on the
-      pinned `V22` golden request (`104 s` clone-to-answer on the referee).
+### A. Lattice axis rotation (`M22` — `V44`)
+- [ ] `.fsm` grammar and printer round-trip `fill ... rotate=(rx, ry, rz)` (`V9` extended).
+- [ ] CPU field evaluator, GLSL raymarcher (`fs_core`), and adaptive 3MF exporter apply the
+      inverse rotation to lattice sample coordinates `p`, leaving outer body skins unrotated.
+- [ ] `fieldsmith-solve` rotates each lattice element's cubic stiffness and compliance tensors
+      by `R(rx, ry, rz)` during assembly, stress recovery, and `dual.rs` upper-bound
+      equilibration.
+- [ ] `V44` verifies that `fill ... rotate=(0, 0, 45)` on a `[100]`-loaded bar matches the
+      unrotated `[110]` patch stiffness and equilibrated compliance bound within `0.1 %`, and
+      that changing `rotate` in the `Fill` lens visibly changes viewport pixels (`V39`).
 
-### B. Cross-architecture `aarch64` datapoint (M18 — closed at `cfee968`, [V25.md](docs/verification/V25.md))
-- [x] Cross-compiled static `aarch64-unknown-linux-musl` `fieldsmith` binary executed on the
-      OnePlus 13 (`SM8750`, 8 cores, 15.8 GB RAM) inside Haven's Debian `arm64` guest.
-- [x] Reference tolerance ladder and `V23` 5-point cantilever sweep measured (`1966 points/hour`
-      vs. `≥ 100 points/hour` target; 1.16×–1.97× wall ratio against the Ryzen 9 9950X referee).
-- [x] All `259` tracked scalar fields compared against x86_64 (`scripts/v25-arm-compare.py`):
-      mesh counts and DOFs match identically; raw `faer` SIMD solves diverge by `1e-13..3.3e-11`
-      relative on primary fields (`7.2e-8` relative / `3.2e-12` absolute on small rung-change
-      differences); `259 / 259` fields tie under the 6-sig-fig `V22` canonical quantisation.
-- [x] 13 `SM8750` rows added to `data/costs/costs.csv` and pinned by `V18`
-      (`v18_costs_csv_ties_to_ship_data`, 59 total rows); `README.md` updated with measured
-      cross-architecture divergence scope.
+### B. Overhang analysis from `∇f(p)` (`M23` — `V45`)
+- [ ] Surface overhang metric (`n(p) · (−b̂) > sin(α_max)`) implemented in `fieldsmith-core`,
+      exposed in `fieldsmith check` / `fieldsmith api`, and rendered as an overlay in `Make`.
+- [ ] `V45` verifies overhang area on a sphere (`r = 10 mm`, exact cap area
+      `2π r² (1 − sin α_max)`) and a `60°` tilted plate within `1.5 %` at default mesh spacing,
+      plus pixel-delta verification of the `Make` overhang overlay.
 
-### C. Quarter-plate tangent junction (M19 — closed, [V3.md](docs/verification/V3.md))
-- [x] **Diagnose from mesh output and fix boundary-claim bisection (`f620a91`).** Reconstructed
-      the quarter plate (`crates/fieldsmith-verify/examples/v3quarter.rs`) and isolated two
-      mechanisms in `fieldsmith-mesh`:
-      1. `positive_boundary` bisected on `raw > tiny`, pinning C2 zero-claims to the `tiny`
-         band edge (`c_y = tiny/slope = −8.28e-10`) and emitting planar slivers (`6.75e-11 · h³`)
-         that prevented solver convergence on `extend_face_region`.
-      2. Composite fields carry `±ulp` coordinate noise (`5.6e-17` to `3.6e-15`) on zero
-         patches, causing a `raw > 0` predicate to collapse the bisection to the bracket end
-         and drop the `(0, 1)` mouth apex node (`0.013 · h` miss).
-      Fixed by bisecting `positive_boundary` on `raw(p) > NOISE` (`NOISE = 1e-14`, 60
-      iterations), covered by `crates/fieldsmith-mesh/tests/mouth_junction.rs` and
-      `cap_chime.rs`.
-- [x] **Complete the 5-row quarter-model mesh study (`h = 0.2, 0.14, 0.1, 0.07, 0.05 mm`).**
-      Both the half-plate and quarter-plate 5-row studies now run in
-      `crates/fieldsmith-verify/tests/v3_plate_hole.rs` and emit full tables into
-      `docs/verification/V3.md`. The quarter model's graze peaks dropped from `45.48 / 45.59 MPa`
-      (`+50 %`) to `29.322 MPa` (`Kt = 2.6390`, `−3.30 %` at `h = 0.14`) and `32.399 MPa`
-      (`Kt = 2.9159`, `+6.85 %` at `h = 0.07`, inside the `8.5 %` graze bound), with `0`
-      off-plane pinned nodes and the mouth apex placed at `(0, 1, z)`.
-- [x] **Explain and bound the remaining `+0.95 %` half-vs-quarter offset at `h = 0.05`.** Across
-      the four spacings that share the same peak centroid element (`h = 0.2, 0.1, 0.07, 0.05`),
-      the quarter model reads a uniform `+0.93 %` to `+0.98 %` above the half model (`+1.59 %`,
-      `+1.47 %`, `+6.85 %`, `+5.39 %` vs. `+0.60 %`, `+0.53 %`, `+5.85 %`, `+4.40 %`) because
-      `ux = 0` on `x = 0` models symmetric uniform traction on both `x = ±10`, whereas the half
-      model constrains the entire `x = −10` end flat (`ux = 0`) and pulls `x = +10`. Documented
-      in `V3.md` and pinned at `5.5 %` (`KT_TOL_QUARTER_FINE`) in `v3_plate_hole.rs`.
+### C. Orthotropic layer-peel criterion & build orientation (`M24` — `V46`)
+- [ ] `.fsm` material/solve statements accept build orientation `build=(θ, φ)` and inter-layer
+      tensile/shear strengths (`yield_z`, `shear_z`).
+- [ ] `fieldsmith-core` computes per-element and nodal layer-peel utilization alongside bulk
+      von Mises; `Results` lens mode chip adds `Layer peel` and reports peak utilization and
+      governing orientation.
+- [ ] `V46` verifies exact closed-form layer-peel utilization on an off-axis uniaxial bar across
+      `θ ∈ {0°, 30°, 45°, 60°, 90°}` (`σ_nn = σ₀ cos²θ`, `τ_nt = σ₀ sin θ cos θ`) to solver
+      precision (`≤ 1e-6`), and verifies the `Results` lens ramp in headless e2e.
 
-### D. Mesh-leaf graded fill reaches the slicer (M20 — closed, [slicer.md](docs/verification/slicer.md))
-- [x] **Map the manifold boundary on a mesh-imported leaf.** Ran the 5 × 3 grid over
-      `skin ∈ {0, 0.3, 0.6, 0.9, 1.2 mm}` and adaptive DC spacing `h ∈ {0.30, 0.25, 0.15 mm}`
-      on `c01x-composite.fsmz` (`slicer.md`) and recorded `TriMesh::defects()` alongside
-      headless PrusaSlicer 2.9.6 (`--info`) verdicts.
-- [x] **Diagnose and fix the three adaptive-stitch causes (`crates/fieldsmith-mesh/src/adaptive.rs`).**
-      1. *Sub-tolerance `f32` corner crossings on planar offset faces (`216` apparent open edges
-         from `140` degenerate triangles at `h = 0.30 mm`):* clamped sign-changing edge crossings
-         into `[FOLD_NUDGE, 1.0 - FOLD_NUDGE]` (`[1e-4, 0.9999]`), upholding the corner-clearance
-         invariant across `f32` mesh-grid evaluation noise (`~1e-8..3e-7 mm`).
-      2. *Post-weld `[u, v, v]` collapsed triangles (`4 / 14 / 42` degenerate triangles at
-         `skin = 0.0`, causing PrusaSlicer `manifold = no, open_edges = 2`):* dropped
-         repeated-vertex triangles immediately after `weld_exact`.
-      3. *Per-component cavity orientation (`+18.02 %` volume jump at `h = 0.25 mm`, where a
-         crease seed inverted one `325 394`-triangle interior gyroid labyrinth from
-         `−1 088.3 mm³` to `+1 088.3 mm³`):* oriented each edge-connected component by majority
-         vote of its build-time (`emit_quad`) normals in `orient_inner`.
-- [x] **Close with measured `manifold = yes` across all 15 cells (`skin = 0..1.2 mm`,
-      `h = 0.30..0.15 mm`).** Every cell in the 5 × 3 grid now reports `0` open edges, `0`
-      degenerate triangles, `0` orientation defects, and PrusaSlicer `manifold = yes`;
-      `skin = 1.2 mm` slices at `0.2 mm` layer height (`--export-gcode`) to `11 MB` G-code with
-      zero repair diagnostics (`slicer.md`, `V14.md`), and regression tests are locked in
-      `adaptive.rs` and `v14_step.rs`.
-
-
-### E. N100 Chrome empirical compute profile (M21 — evidence: appendix in [budgets.md](docs/verification/budgets.md))
-- [x] **Measure controllable runtime factors on `ian-quieter.lan`.** Isolated the v0.4 two-band
-      split (`4918 / 15064 ms` pre-M12 vs. `9679 / 24967 ms` post-M12) on the 4-core N100:
-      1. *Software WebGL (`SwiftShader` 1080p) shader inlining and redundant rAF invalidations:*
-         M12 added `if (u_core > 0.5) return fs_core(p); return fs_field(p);` to the shared
-         fragment shader and mounted `setCore` + `updateParamGrid` on every edit/arrival, causing
-         SwiftShader to inline the gyroid lattice (`fs_core`, `u_param` 3D texture fetches,
-         `3 × fs_sincos`) into the opaque body pass (`~2100 ms`/frame vs. `~750 ms`/frame) across
-         `9` solve-window frames (`18 937 ms` total CPU). Specializing `fragSource` per pass,
-         deferring `coreMaterial` construction and `u_param` uploads until `bodyAlpha < 1`,
-         holding the render loop while `compileAsync` is in flight, and deduplicating
-         highlight/gizmo/glyph invalidations reduces solve-window renders to the `3` visual
-         updates (`[[26,628],[3304,969],[13392,768]]`, `2 365 ms` sum) and brings N100 Chrome down
-         to **`3272–3285 / 13351–13409 ms`** (`1.9 fps` at 100 % opacity, `0.8–0.9 fps` at 35 %).
-         Pausing `vp.render` during the edit solve (`paused-webgl-worker-only`) measures
-         **`2746 / 13288 ms`** (`0` long tasks), matching WebGL-less Firefox (`2963 / 12670 ms`)
-         within `7 %`.
-      2. *Profile cache vs. sustained PL1 package thermal/power clamping:* cool-start runs
-         (`38 °C`, `2.9–3.1 GHz`) reproduce within `0.4 %` across `4` runs; back-to-back warm
-         runs after sustained 4-core load (`63 °C`, PL1 clamping one core to `1.69 GHz`) measure
-         `3722 / 14968 ms` (`+11.9–13.3 %`).
-- [x] **Record the empirical compute band in `budgets.md` and `data/costs/costs.csv`.** Added the
-      measured factorial appendix to `docs/verification/budgets.md`,
-      `docs/verification/budgets-laptop-chrome.md`, and `web/tests/probe-budgets.mjs`, and
-      updated `data/costs/costs.csv` (`3280 / 13363 ms` on N100, `1337 / 5983 ms` on referee)
-      and `v18_estimator_residual.rs`.
-
-### F. Release hygiene & carried items
-- [x] `scripts/ci.sh` passes end-to-end across `V1`–`V24` plus `V25`'s portable tie-in assertions.
-- [x] `README.md` status header updated from `v0.2.0` to `v0.5.0` and reflects
-      the updated `V3`, `slicer.md`, and `budgets.md` findings without unmeasured claims.
-
----
-
-## Verification cases
-
-Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
-
-| ID | Case | Reference | Acceptance bar |
-| :-- | :-- | :-- | :-- |
-| `V24` | Fresh-clone build & golden API contract (`scripts/v24-fresh-clone.sh`) | `V22` golden canonical response | Byte-identical canonical output from a standalone clone; passes in CI (**measured: PASS, 104 s**) |
-| `V25` | `aarch64` (`SM8750` OnePlus 13) ladder + `V23` 5-point sweep (`scripts/v25-arm-compare.py`) | x86_64 referee envelopes & `V18` `costs.csv` tie-in | Per-field divergence measured and documented; 259/259 canon-equal; sweep `≥ 100 pts/h` (**measured: PASS, 1966 pts/h**) |
-| `V3x` | `V3` quarter-plate (`x ≥ 0, y ≥ 0`) 5-row mesh study | Heywood finite-width `Kt = 2.729` & half-plate study | 5-row quarter table in `V3.md` (**measured: PASS, +1.59 / −3.30 / +1.47 / +6.85 / +5.39 %**) |
-| `Sx` | Mesh-leaf graded-fill slicer manifold grid | Headless PrusaSlicer 2.9.6 `--info` (`manifold = yes`) | `manifold = yes` at `skin = 1.2 mm` on mesh-leaf graded part (**measured: PASS across all 15 cells, `0` open edges, slices at `0.2 mm` to `11 MB` G-code**) |
-
----
-
-## Performance & quality budgets
-
-| Metric | Target | Status |
-| :-- | :-- | :-- |
-| Fresh clone → build → golden API answer (`V24`) | `≤ 5 min` on referee | **104 s** (clone 2 s + build 98 s + run 2 s) — PASS |
-| `SM8750` (`aarch64`) 5-point sweep throughput (`V25`) | `≥ 100 points/hour` | **1966 points/hour** (9.16 s engine sum across 5 points) — PASS |
-| `V3x` quarter-plate peak stress error (`h = 0.2..0.05`) | `≤ 5 %` (`≤ 8.5 %` graze, `≤ 5.5 %` at `0.05`) | **+1.59 / −3.30 / +1.47 / +6.85 / +5.39 %** (`V3.md`) — PASS |
-| Mesh-leaf graded fill in PrusaSlicer (`Sx`) | `manifold = yes` at `skin = 1.2 mm` | **`manifold = yes` across all 15 cells (`skin = 0..1.2 mm`, `h = 0.30..0.15 mm`), `0` open edges** (`slicer.md`) — PASS |
-| N100 Chrome compute profile (`M21`) | Empirical walls measured across WebGL/worker conditions | **3280 / 13363 ms** (`3` visual rAFs, down from `9679 / 24967 ms`; `2746 / 13288 ms` worker-only) — PASS |
-
----
-
-## Settled policy decisions (from v0.4)
-
-1. **N100 rows are empirical compute measurements, not pass/fail workstation gates:** The
-   32-thread workstation (`budgets.md`) is the pass/fail referee for the interactive browser
-   targets (`1.5 s` coarse / `10 s` refined). Secondary hardware (`N100` x86_64 mini-PC,
-   `SM8750` `aarch64` phone) exists to populate `data/costs/costs.csv` and `budgets-laptop-*.md`
-   with real empirical compute walls across machine classes.
-2. **Default `750k`-DOF ladder cap & refusal contract:** The default 3-rung schedule
-   (`30k → 150k → 750k` DOFs) stays capped at `750k` DOFs so browser WASM (`4 GB` `wasm32`
-   address limit) and small-RAM hosts never OOM by default. When a part's geometry requires
-   more than `750k` DOFs to bring rung-to-rung change inside a tight declared tolerance (such as
-   `1 %` on the unfilleted holes of `bracket.fsm`, which reaches `−4.1 %` at `750k` DOFs in
-   `10.9 s`), returning an explicit refusal with the measured residual satisfies the contract;
-   users on native CLI or remote workers can pass `--rungs` to climb higher when desired.
+### D. Interactive Pareto explorer (`M25` — `V47`)
+- [ ] `Results` sweep panel supports 1D or 2D `let` parameter sweeps and renders an SVG scatter
+      plot (`mass` vs. selected metric) marking the non-dominated Pareto front.
+- [ ] Clicking a plotted candidate updates the `.fsm` document's `let` bindings in a single
+      reversible transaction, updates the 3D viewport, and restores bit-identically on `Undo`.
+- [ ] `V47` drives a multi-point bracket sweep in headless Chromium, asserts the Pareto frontier
+      markers match the computed non-dominated set, clicks a frontier point, asserts both `.fsm`
+      source and viewport pixels update, and asserts `Ctrl+Z` restores the initial state.
 
 ---
 
@@ -208,17 +116,43 @@ Cases `V1`–`V23` run unchanged in CI. New and extended cases for v0.5:
 
 | # | Milestone | Status | Deliverable |
 | :-- | :-- | :-- | :-- |
-| **M17** | Standalone repo & fresh-clone gate | **Done** (`7e5c1db`) | `fenics-rs` submodule, `GlassOnTin/fieldsmith` remote, `V24.md`, CI gate |
-| **M18** | `aarch64` (`SM8750`) architecture datapoint | **Done** (`cfee968`) | `V25.md`, `scripts/v25-arm-compare.py`, 13 `SM8750` rows in `costs.csv` |
-| **M19** | Quarter-plate tangent junction | **Done** (`38495e8`) | Mesher fix (`f620a91`) + 5-row quarter table in `V3.md` and `v3_plate_hole.rs` |
-| **M20** | Mesh-leaf graded fill in PrusaSlicer | **Done** (`28412e3`) | 5 × 3 manifold grid + adaptive crossing/weld/component-orient fix + `slicer.md` & `v14_step.rs` |
-| **M21** | N100 Chrome compute profile | **Done** (`b9f83b3`) | Pass-specialized shader + visual-only rAF invalidation + N100 factorial appendix in `budgets.md` |
+| **M22** | Lattice axis rotation (`fill rotate=`) | Planned | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
+| **M23** | Exact-gradient overhang check | Planned | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
+| **M24** | Inter-layer peel criterion & orientation | Planned | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
+| **M25** | Interactive Pareto explorer in `Results` | Planned | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
 
 ---
 
-## Explicitly out of scope for v0.5
+## Explicitly out of scope for v0.7
 
+- Standalone continuum solvers without a `.fsm` workflow (such as displacement-only J2 shear
+  plasticity or Nédélec RF/acoustic edge elements).
 - Publishing `fenics-rs` to `crates.io` (consumed via git submodule).
-- New physics flows, viewport section-plane clipping, `.fsm` variables, or model-tree part
-  groups (scheduled for v0.6+ per [VISION §7](VISION.md#7-competitive-landscape-and-roadmap-direction)).
 - Any Fieldsmith-hosted compute, relay, or telemetry service.
+
+---
+
+## Appendix: v0.6 Closure Summary (`ab59756` → `e283ba1`, `V26`–`V43`)
+
+All 18 verification cases added after `v0.5.0` pass in CI:
+
+| ID | Capability delivered in v0.6 | Commit | Report |
+| :-- | :-- | :-- | :-- |
+| `V26` | Interactive GPU section-plane clipping (`x`/`y`/`z`, flip, `0..1` slider, mid-part default) | `3a5056c`, `8ea66f2` | [V26.md](docs/verification/V26.md) |
+| `V27` | Named `let` variables, arithmetic expressions, and bare-name parameter sweeps | `2c52bfe` | [V27.md](docs/verification/V27.md) |
+| `V28` | Modal mode-shape animation (`play`/`pause`/phase slider, `2π` & `Off` bit-exact) | `62bea33` | [V28.md](docs/verification/V28.md) |
+| `V29` | Robin convective thermal boundary conditions (`convection ... h= tinf=`) | `549aca5` | [V29.md](docs/verification/V29.md) |
+| `V30` | Prescribed Neumann heat-flux boundary conditions (`heatflux ... q=`) | `755d6b8` | [V30.md](docs/verification/V30.md) |
+| `V31` | In-UI 2D profile sketching on the Extrude inspector | `1023d3d` | [V31.md](docs/verification/V31.md) |
+| `V32` | Two-domain TPMS core thermal conduction re-solve (`conductivity_of(class, φ)`) | `1b4d6df` | [V32.md](docs/verification/V32.md) |
+| `V33` | `Results` lens surfacing and envelope integration of graded thermal cases | `eee8985` | [V33.md](docs/verification/V33.md) |
+| `V34` | Certified compliance lower bound (`C_h = fᵀu`) across static and thermal cases | `ebaef72` | [V34.md](docs/verification/V34.md) |
+| `V35` | Witness-constrained equilibrated P2 stress recovery upper bound (`C(σ*)`) | `0bc3dcf`, `e943b5a` | [V35.md](docs/verification/V35.md) |
+| `V36` | Rotated unit-cell coupon measurement of TPMS directional anisotropy (`45°/0°`) | `9eb2cb3`, `9de699c` | [V36.md](docs/verification/V36.md) |
+| `V37` | Per-case Gibson–Ashby yield-utilization factor in graded solves and `Results` | `36139a2`, `1ed52b5` | [V37.md](docs/verification/V37.md) |
+| `V38` | Per-case Gibson–Ashby elastic-buckling load factor in graded solves and `Results` | `1980f67` | [V38.md](docs/verification/V38.md) |
+| `V39` | Feature-combination pixel matrix (`overlays × document kinds × lenses`) | `c5f16ed` | [V39.md](docs/verification/V39.md) |
+| `V40` | Loud rendering failure banner and detectors (shader link, empty surface, mesh throw) | `80cf98a` | [V40.md](docs/verification/V40.md) |
+| `V41` | Fresh-clone headless new-user gate driving the README's exact commands | `b07a1a0`, `69a03ff` | [V41.md](docs/verification/V41.md) |
+| `V42` | Per-element cubic anisotropic stiffness kernel (`ortho.rs`) and corrected `[110]` fit | `7c1a662`..`38e95de` | [V42.md](docs/verification/V42.md) |
+| `V43` | Cubic compliance Gram equilibration certifying the upper bound on cubic elements | `e283ba1` | [V43.md](docs/verification/V43.md) |

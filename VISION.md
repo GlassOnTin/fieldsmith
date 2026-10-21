@@ -66,20 +66,25 @@ script, and an AI agent all operate on the same representation.
 
 A first-time user can complete a full design-to-print loop without reading a manual:
 
-1. **Shape.** Drop primitives or import a STEP/3MF bracket, subtract bolt holes, and fillet
+1. **Shape.** Drop primitives, sketch 2D extrusion profiles (`V31`), bind dimensions to named
+   `let` variables (`V27`), or import a STEP/3MF bracket, subtract bolt holes, and fillet
    stress-concentrating corners. The preview is raymarched on the GPU directly from the field
-   without waiting on a triangle mesh.
+   without waiting on a triangle mesh, with live section-plane clipping (`V26`) and multi-layer
+   transparency (`V16`).
 2. **Hold.** Click the inside of the mounting holes and mark them *Fixed*.
-3. **Push.** Select the loaded face, apply a force in N (or a pressure / distributed traction /
-   temperature), and orient it on the part.
+3. **Push.** Select the loaded face, apply a force in N (or a pressure, distributed traction,
+   prescribed temperature, Robin convection `V29`, or heat flux `V30`), and orient it on the part.
 4. **See.** A coarse P2 finite-element solve returns in roughly a second and refines in the
    background across a resolution ladder. The results table shows each rung's DOF count, wall
-   time, and rung-to-rung change.
+   time, rung-to-rung change, certified compliance bounds (`V34`, `V35`, `V43`), and animated
+   vibration mode shapes (`V28`).
 5. **Fill.** Choose *Gyroid*, *Schwarz-P*, or *Diamond* (sheet or network), set skin thickness
    and cell size, and grade density by stress. Mass updates in grams from integrating the final
    field.
-6. **Check.** Re-solve the graded part using fitted homogenised lattice stiffness (`V6`, `V7`).
-   Compare solid vs. graded peak stress, deflection, safety factor, and mass side by side.
+6. **Check.** Re-solve the graded part using fitted homogenised lattice stiffness (`V6`, `V7`),
+   direction-aware cubic anisotropy (`V36`, `V42`), two-domain core thermal conduction (`V32`,
+   `V33`), and Gibson–Ashby yield/buckling indicators (`V37`, `V38`). Compare solid vs. graded
+   peak stress, deflection, safety factor, and mass side by side.
 7. **Make.** Export a watertight 3MF in millimetres and scrub through layer slices before
    sending to PrusaSlicer or OrcaSlicer.
 
@@ -122,12 +127,17 @@ Engineers only use a tool whose numbers they can defend.
   and see the convergence achieved. When a stated budget or rung cap cannot meet the requested
   tolerance, Fieldsmith returns an explicit refusal rather than a stretched result.
 - **Fitted and verified lattice laws**: each TPMS family uses a homogenised stiffness law
-  `E*(ρ) = C · E_s · ρ^n` whose coefficients are fitted from unit-cell finite-element studies
-  (`V6`) and checked against resolved full-lattice beam solves (`V7`, within 2.1 %).
+  `E*(ρ) = C · E_s · ρ^n` and cubic stiffness tensor (`C11`, `C12`, `C44`) whose coefficients
+  are fitted from unit-cell finite-element studies (`V6`, `V36`) and checked against resolved
+  full-lattice beam and patch solves (`V7`, `V42`).
+- **Certified compliance brackets**: conforming P2 displacement solves provide a lower bound on
+  compliance (`V34`), paired with witness-constrained equilibrated P2 stress recovery for the
+  upper end across both isotropic and cubic-anisotropic elements (`V35`, `V43`).
 - **Integrated mass**: part mass comes from integrating occupancy of the final field, never
   from multiplying solid mass by a nominal target density.
-- **Executable verification suite**: `docs/verification/` (`V1`–`V34`) compares Fieldsmith
-  against closed-form elasticity, beam, plate-hole, modal, thermal, and mesh benchmarks in CI.
+- **Executable verification suite**: `docs/verification/` (`V1`–`V43`) compares Fieldsmith
+  against closed-form elasticity, beam, plate-hole, modal, thermal, mesh, and pixel-level UI
+  combination benchmarks (`V39`–`V41`) in CI.
 - **Documentation at the manual standard of the reference codes** (*Ansys Fluent*, *Abaqus*,
   *FreeFem++*, Stéphane Popinet's *Gerris* / *Basilisk*): every solver, element space, grading
   law, and constitutive model documents its mathematical foundation — the derivation, its
@@ -169,7 +179,7 @@ Engineers only use a tool whose numbers they can defend.
 │   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
 │   ├─ fieldsmith-mcp     stdio MCP server over fieldsmith-api              │
 │   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
-│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V34)        │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V43)        │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -228,6 +238,9 @@ hardware choice in the user's hands:
   kernel.
 - **G-code toolpath generation.** Fieldsmith exports verified, manifold 3MF/STL meshes and
   previews layer slices; PrusaSlicer, OrcaSlicer, and Cura generate machine toolpaths.
+- **Out-of-domain continuum physics (CFD, electromagnetics/RF, acoustics).** Fieldsmith focuses
+  on structural and thermal design of load-bearing manufactured parts; non-structural continuum
+  domains belong in dedicated `fenics-rs` applications rather than inside Fieldsmith.
 - **Vendor-hosted SaaS.** All collaboration and compute stay on git repositories and machines
   the user owns.
 
@@ -249,8 +262,9 @@ Two commercial categories border Fieldsmith:
   Fieldsmith covers a focused subset today (three TPMS families in sheet and network modes,
   single-material linear static, modal, and steady thermo-elastic analysis) while adding
   properties nTop does not offer: zero-install browser execution, open AGPL source, a diffable
-  text format, fitted and verified Gibson–Ashby laws in the repo (`V6`, `V7`), face-segmented
-  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V34`).
+  text format, fitted and verified Gibson–Ashby and cubic-anisotropic lattice laws in the repo
+  (`V6`, `V7`, `V36`, `V42`), certified compliance bounds (`V34`, `V35`, `V43`), face-segmented
+  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V43`).
 
 ### Roadmap priorities
 
@@ -258,68 +272,48 @@ New capabilities are ranked by one question: **does this put a high-value engine
 capability into the hands of anyone with a browser and their own hardware, while keeping the
 numbers verifiable?**
 
-In priority order beyond the v0.5 foundation cleanup: item 1 of the earlier list
-delivered (V26–V31); the former deeper-mechanics item delivered the error bounds, the
-measured anisotropy, and the indicator pair, with the nonlinear-material bullet and the
-cubic law's completion remaining; the thermal-coupled flows delivered their pair (V29,
-V32). The owner's 2026-10-20 direction re-ranks what remains:
+Every roadmap item is governed by two execution gates:
 
-1. **User-interface robustness and feature-combination testing.** The v0.6 rungs were each
-   verified per feature and still shipped basic user-facing failures the owner found in
-   minutes of use: the section toggle's first click was an inert plane (t = 0 is the no-cut
-   state, and the toggle-on did not move off it); the transparency slider read as "dimmer"
-   because the render path composited the background through closed walls and then hid its
-   own interior pass behind a missing uniform sync; and a mounted-but-unsynced render pass
-   drew silently nothing. Each had its pixel-gated e2e family, which asserts state values
-   and fixture pixels but not the combination space. The rung:
-   - *Feature-combination matrix*: every overlay control (section, opacity, thermal, modes,
-     sketch, sweeps) against every document kind (analytic solid, mesh leaf, filled) and
-     lens, driven through the real UI with VISIBLE pixel-change assertions — assert pixels,
-     not state, because a state variable can change correctly while the render stays dark.
-   - *Loud rendering failures*: a failed shader compile or a march that produces no surface
-     must surface (an error state the lens can show), never render a silently blank
-     viewport; the e2e then asserts non-blank on every state change, which no current
-     family does.
-   - *The new-user path as a gate*: one documented headless pass that follows the README
-     (clone → dev server → example → every lens) and reports what a first user would hit,
-     run on the ladder before each tag.
-2. **Interior inspection and parametric ergonomics.**
-   - *Interactive section-plane clipping* in the GPU raymarcher so engineers can slice through
-     a part in real time to inspect internal stress fields, thermal gradients, and graded TPMS
-     walls.
-   - *Named variables and expressions in `.fsm`* so dimensions, loads, and parameter sweeps
-     reference meaningful engineering parameters (`wall_t`, `bolt_pitch`) rather than raw node
-     indices.
-   - *Part/group hierarchy* in the model tree and in-UI 2D profile sketching for extrusions.
-3. **Deeper structural and lattice mechanics (where implicit fields excel).**
-   - *Rigorous error bounds*: pairing conforming displacement solves (lower bound on
-     compliance) with dual/equilibrated stress recovery so rung estimates become certified
-     brackets where the physics allows.
-   - *Anisotropic / direction-aware lattice homogenisation* and buckling/yield indicators for
-     thin TPMS walls.
-   - *Nonlinear material laws* (elasto-plasticity, brittle failure criteria, hyperelasticity)
-     for printed polymers and metals.
-4. **Coupled engineering flows.**
-   - *Thermal and heat-exchanger workflows*: convective and heat-flux boundary conditions and
-     two-domain TPMS core grading (builds directly on the M14 conduction kernel).
-   - *Wave / RF / acoustic problems*: added only when paired with appropriate finite-element
-     spaces (e.g. Nédélec edge elements or BEM/NEC-2 cross-checks) rather than forcing scalar
-     Lagrange elements outside their domain.
-5. **Field-native synthesis (where implicit fields + live FEM + `.fsm` text go beyond B-rep CAD).**
-   - *Stress-driven outer geometry (shells, ribs, and variable fillets)*: feeding the solved
-     `u_param` / `σ_vm(p)` 3D grid back into the body field `f(p)` itself — e.g. wall offsets
-     `t(p)` and smooth-boolean fillet radii `k(p)` that automatically thicken and widen at
-     stress risers without NURBS self-intersection failures.
-   - *Print-orientation anisotropy and overhang checks*: using the exact surface normal `∇f(p)`
-     for closed-form overhang bounds (`∇f · ẑ`) and orthotropic / Tsai-Wu layer-peel criteria
-     aligned with build-Z, including orientation sweeps `(θ, φ)`.
-   - *Multi-objective Pareto explorer*: driving multi-parameter sweeps across local and LAN
-     workers (`fieldsmith api` / `fieldsmith worker`) and plotting the Pareto frontier (mass vs.
-     safety factor, compliance, or first natural frequency) in `Results` so clicking a point
-     snaps the 3D viewport and `.fsm` source to that candidate.
+- **No Engine Islands.** No solver module or verification case (`V#`) lands unless it is either
+  (a) reachable end-to-end from a `.fsm` document in both `fieldsmith-cli` and the browser UI,
+  or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6` and `V36`
+  calibrate `fill.rs`).
+- **Pixels and first-user paths, not state-only assertions.** Every UI capability joins the
+  feature-combination pixel matrix (`V39`), surfaces rendering or empty-field errors loudly
+  (`V40`), and keeps the fresh-clone README new-user gate (`V41`) green.
+
+In priority order beyond `v0.6` (`V1`–`V43`):
+
+1. **Additive-native orientation and lattice alignment.**
+   - *Lattice axis rotation (`fill ... rotate=(rx, ry, rz)`)*: `V36` and `V42` proved that TPMS
+     stiffness varies by up to `2.22×` between `[100]` and `[110]`, yet `.fsm` currently locks
+     lattice axes to the global part axes. Rotating the lattice field independently of the part
+     lets engineers align the stiffest lattice direction with the principal load path without
+     changing the build-plate orientation.
+   - *Print-orientation overhang bounds and layer-peel criteria*: 3D-printed polymers fail by
+     inter-layer delamination (`σ_zz` peel and `τ_xz` / `τ_yz` shear across build layers) before
+     bulk isotropic yielding. Using the exact field normal `∇f(p)` for closed-form overhang
+     bounds (`∇f · b̂`, where `b̂` is the build axis) and applying orthotropic / Tsai–Wu
+     layer-bond utilization across candidate build orientations `(θ, φ)` directly answers "which
+     way should I print this bracket, and where will it peel?"
+   - *Coupon-fitted TPMS yield and buckling laws*: replacing the literature Gibson–Ashby
+     open-cell placeholders (`0.3 · ρ^1.5` and `0.05 · ρ^2` in `fill.rs`) with per-family
+     constants fitted from unit-cell finite-element studies.
+2. **Multi-objective Pareto explorer in `Results`.**
+   - Driving multi-parameter `let` sweeps across local and LAN workers (`fieldsmith api` /
+     `fieldsmith worker`) and plotting the Pareto frontier (`mass` vs. `safety factor`,
+     `compliance`, `layer-peel utilization`, or `f₁`) in `Results` so clicking a candidate point
+     snaps the 3D viewport and `.fsm` source to that design.
+3. **Field-native outer geometry synthesis & direct slice stacks.**
+   - *Stress-driven shells, ribs, and variable fillets*: feeding the solved `u_param` /
+     `σ_vm(p)` 3D grid back into the body field `f(p)` itself — wall offsets `t(p)` and
+     smooth-boolean fillet radii `k(p)` that thicken and widen at stress risers without NURBS
+     self-intersection failures.
    - *Direct field slice stacks*: emitting 2D Z-contour slice stacks (3MF Slice Extension)
      directly from `f(x, y, z_layer) = 0` (`slice_field`) to avoid multi-hundred-megabyte
      intermediate triangle meshes on dense lattices.
+4. **Multi-body assembly mechanics & closed-loop agentic synthesis.**
+   - *Tied/frictional contact and bolt preload* across multi-volume 3MF and STEP assemblies.
    - *Closed-loop agentic synthesis via `fieldsmith-mcp`*: end-to-end mechanical design tasks
      (propose `.fsm` → `ladder` / `sweep` → inspect failure region → refine → export manifold
      3MF) verified against explicit load, deflection, and mass targets.
@@ -332,7 +326,8 @@ V32). The owner's 2026-10-20 direction re-ranks what remains:
 2. Live preview and progressive background compute, never a blocking wizard.
 3. Direct manipulation in the viewport; exact expressions in the inspector.
 4. Every number carries units, provenance, and stated model assumptions.
-5. Verification cases (`V1`–`V34`) are executable tests in CI.
+5. Verification cases (`V1`–`V43`) are executable tests in CI, and every solver module connects
+   to a user-facing `.fsm` flow or a calibrated material law (no engine islands).
 6. One field representation; geometry, regions, physics, and lattices compose.
 7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.
 8. Quiet interface, loud geometry.

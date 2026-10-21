@@ -122,7 +122,7 @@ By what you want to do:
 
 The full build, including the verification suite:
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V38; V24/V25 in scripts/)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V43; V24/V25/V41 in scripts/)
     npm --prefix web install                  # once (if not done in Run the web app)
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
@@ -174,10 +174,10 @@ Physics
   strength and elastic collapse): a linear-elastic solver cannot measure plasticity or
   buckling. The rigorous buckling route (geometric-stiffness eigenproblem) is tracked, not
   built.
-- The compliance is a certified lower bound, and on the isotropic route the equilibrated
-  upper end certifies the bracket (V34, V35). The cubic-anisotropic route refuses
-  equilibration rather than mis-certifying. Lattice elements homogenise at sub-cell
-  mesh sizes; the resolved geometry is what V6/V7 measure.
+- The compliance is a certified lower bound, and the equilibrated upper end certifies the
+  bracket across both the isotropic and cubic-anisotropic routes through each element's
+  compliance tensor (V34, V35, V43). Lattice elements homogenise at sub-cell mesh sizes;
+  the resolved geometry is what V6/V7/V36 measure.
 
 Modelling and files
 
