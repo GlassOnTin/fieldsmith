@@ -60,6 +60,7 @@ function syncSlices(vp: Viewport) {
     sliceHost = vp;
     vp.overlays.add(sliceGroup);
   }
+  vp.setOverhang(store.lens === 'make' && ui.makeOverhangOn);
   const s = analysis.state;
   const ex = s.export;
   const on = store.lens === 'make' && ui.makeSliceOn;
@@ -119,11 +120,16 @@ function healthLines(m: ExportMeta): string[] {
       .reduce((a, b) => a + b, 0) === 0
       ? 'no defects'
       : `open ${defectWord(m.open_edges)} · non-manifold ${defectWord(m.non_manifold_edges)} · orient ${defectWord(m.orientation_defects)} · degen ${defectWord(m.degenerate_triangles)} · self-x ${defectWord(m.self_intersections)}`;
+  const overhangLine =
+    typeof m.overhang_area_mm2 === 'number' && typeof m.overhang_fraction === 'number' && typeof m.max_overhang_deg === 'number'
+      ? `overhang (> 45°) ${fmt(m.overhang_area_mm2, 1)} mm² (${fmt(m.overhang_fraction * 100, 1)}%) · max ${fmt(m.max_overhang_deg, 1)}°`
+      : null;
   return [
     `${m.what} at h ${m.h} mm · ${m.verts.toLocaleString()} verts · ${m.tris.toLocaleString()} tris`,
     `mesh volume ${fmt(m.mesh_volume, 1)} mm³ vs field ${fmt(m.field_volume, 1)} ± ${fmt(m.field_err, 1)} · Δ ${
       m.delta_pct >= 0 ? '+' : ''
     }${fmt(m.delta_pct, 3)}%`,
+    ...(overhangLine ? [overhangLine] : []),
     `${defects}`,
     `mesh ${fmt(m.mesh_ms / 1000, 2)} s · field ref ${fmt(m.ref_ms / 1000, 2)} s · defect scan ${fmt(m.scan_ms / 1000, 2)} s` +
       (m.build_ms > 0 ? ` · fill build ${fmt(m.build_ms / 1000, 2)} s` : ''),
@@ -195,6 +201,17 @@ function MakePanel() {
           onChange={(v) => ui.set('makeH', Number.parseFloat(v))}
           testId="make-h"
         />
+        <label class="plain">Overhang</label>
+        <div class="chips">
+          <button
+            class={ui.makeOverhangOn ? 'on' : ''}
+            data-testid="make-overhang-toggle"
+            title="Highlight downward-facing overhang surfaces (> 45° from +Z) from the exact field gradient ∇f(p)"
+            onClick={() => ui.set('makeOverhangOn', !ui.makeOverhangOn)}
+          >
+            {ui.makeOverhangOn ? 'hide (> 45°)' : 'show (> 45°)'}
+          </button>
+        </div>
         <button
           class={`btn${ex ? '' : ' primary'}`}
           data-testid="make-export"
@@ -215,8 +232,8 @@ function MakePanel() {
       {ex && (
         <>
           <div class="field-grid" data-testid="make-meta">
-            {healthLines(ex.meta).map((l, i) => (
-              <span class={i < 3 ? 'plain' : 'meta'} key={i}>
+            {healthLines(ex.meta).map((l, i, arr) => (
+              <span class={i < arr.length - 1 ? 'plain' : 'meta'} key={i}>
                 {l}
               </span>
             ))}

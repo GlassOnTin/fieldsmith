@@ -562,6 +562,10 @@ export interface ExportMeta {
   orientation_defects: number;
   degenerate_triangles: number;
   self_intersections: number;
+  total_area_mm2?: number;
+  overhang_area_mm2?: number;
+  overhang_fraction?: number;
+  max_overhang_deg?: number;
   build_ms: number;
   mesh_ms: number;
   ref_ms: number;

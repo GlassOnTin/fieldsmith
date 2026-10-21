@@ -5,6 +5,7 @@
 //! serde limitation, stated here and in the V22 notes, so the gap is contract rather
 //! than accident.
 
+use fieldsmith_core::overhang::OverhangReport;
 use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::{CaseResult, Provenance};
 
@@ -95,6 +96,17 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         equilibrate: bool,
     },
+    /// Exact-gradient surface overhang analysis (`M23`, `V45`) at mesh spacing `h` (mm,
+    /// default `0.25`), build orientation `build` (`[bx, by, bz]`, default `[0, 0, 1]`),
+    /// and threshold angle `threshold_deg` from build vertical (degrees, default `45`).
+    Overhang {
+        #[serde(default)]
+        h: Option<f64>,
+        #[serde(default)]
+        build: Option<[f64; 3]>,
+        #[serde(default)]
+        threshold_deg: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -134,6 +146,9 @@ pub struct Response {
     /// Present for the sweep question: one point per stated value, in order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sweep: Option<SweepJson>,
+    /// Present for the overhang question (`M23`, `V45`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overhang: Option<OverhangReport>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

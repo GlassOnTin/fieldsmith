@@ -1104,6 +1104,10 @@ struct ExportMeta {
     orientation_defects: usize,
     degenerate_triangles: usize,
     self_intersections: usize,
+    total_area_mm2: f64,
+    overhang_area_mm2: f64,
+    overhang_fraction: f64,
+    max_overhang_deg: f64,
     build_ms: f64,
     mesh_ms: f64,
     ref_ms: f64,
@@ -1221,6 +1225,12 @@ fn export_field(
     };
     let t0 = clock();
     let d = m.defects();
+    let ov = fieldsmith_core::overhang::evaluate_overhang(
+        &m,
+        field,
+        fieldsmith_core::overhang::DEFAULT_BUILD_AXIS,
+        fieldsmith_core::overhang::DEFAULT_OVERHANG_DEG,
+    );
     let scan_ms = clock() - t0;
     let meta = ExportMeta {
         what,
@@ -1236,6 +1246,10 @@ fn export_field(
         orientation_defects: d.orientation_defects,
         degenerate_triangles: d.degenerate_triangles,
         self_intersections: d.self_intersections,
+        total_area_mm2: ov.total_area_mm2,
+        overhang_area_mm2: ov.overhang_area_mm2,
+        overhang_fraction: ov.overhang_fraction,
+        max_overhang_deg: ov.max_overhang_deg,
         build_ms,
         mesh_ms,
         ref_ms,

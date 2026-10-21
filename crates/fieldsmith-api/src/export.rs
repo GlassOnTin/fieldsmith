@@ -7,6 +7,9 @@
 //! are the same floats the pre-refactor prints carried.
 
 use fieldsmith_core::fill;
+use fieldsmith_core::overhang::{
+    evaluate_overhang, OverhangReport, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG,
+};
 use fieldsmith_core::{Clock, Resolution};
 use fieldsmith_doc::{Document, NodeKind, Op};
 use fieldsmith_field::expr;
@@ -63,6 +66,7 @@ pub struct Export {
     /// Mesh volume against the field reference, percent (NaN when the reference is 0).
     pub delta_percent: f64,
     pub defects: Defects,
+    pub overhang: OverhangReport,
     /// Mesh build, field-reference, and defect-scan times (display facts, not contract).
     pub mesh_ms: f64,
     pub ref_ms: f64,
@@ -173,6 +177,7 @@ pub fn export(doc: &Document, opts: &ExportOpts, clock: Clock) -> Result<Export,
 
     let t0 = clock();
     let defects = tri.defects();
+    let overhang = evaluate_overhang(&tri, &field, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG);
     let scan_ms = clock() - t0;
 
     // When the document is a plain stack of add-shaped nodes — nothing subtracted or
@@ -250,6 +255,7 @@ pub fn export(doc: &Document, opts: &ExportOpts, clock: Clock) -> Result<Export,
         reference: v,
         delta_percent: delta,
         defects,
+        overhang,
         parts,
         graded,
         stl,

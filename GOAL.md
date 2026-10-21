@@ -85,9 +85,9 @@ skipping it.
       that changing `rotate` in the `Fill` lens visibly changes viewport pixels (`V39`).
 
 ### B. Overhang analysis from `∇f(p)` (`M23` — `V45`)
-- [ ] Surface overhang metric (`n(p) · (−b̂) > sin(α_max)`) implemented in `fieldsmith-core`,
+- [x] Surface overhang metric (`n(p) · (−b̂) > sin(α_max)`) implemented in `fieldsmith-core`,
       exposed in `fieldsmith check` / `fieldsmith api`, and rendered as an overlay in `Make`.
-- [ ] `V45` verifies overhang area on a sphere (`r = 10 mm`, exact cap area
+- [x] `V45` verifies overhang area on a sphere (`r = 10 mm`, exact cap area
       `2π r² (1 − sin α_max)`) and a `60°` tilted plate within `1.5 %` at default mesh spacing,
       plus pixel-delta verification of the `Make` overhang overlay.
 
@@ -116,8 +116,8 @@ skipping it.
 
 | # | Milestone | Status | Deliverable |
 | :-- | :-- | :-- | :-- |
-| **M22** | Lattice axis rotation (`fill rotate=`) | Planned | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
-| **M23** | Exact-gradient overhang check | Planned | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
+| **M22** | Lattice axis rotation (`fill rotate=`) | Done (`3c3026e`) | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
+| **M23** | Exact-gradient overhang check | Done | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
 | **M24** | Inter-layer peel criterion & orientation | Planned | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
 | **M25** | Interactive Pareto explorer in `Results` | Planned | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
 

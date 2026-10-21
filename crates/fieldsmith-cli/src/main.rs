@@ -205,7 +205,7 @@ fn run(args: &[String]) -> Result<(), String> {
     // Only the inspection verbs work without the grid registry: everything that evaluates
     // the body would silently see an all-outside field.
     match cmd {
-        "check" | "print" | "json" => {}
+        "check" | "print" | "json" if !args.iter().any(|a| a == "--overhang") => {}
         _ => {
             let missing = missing_grids(&doc);
             if !missing.is_empty() {
@@ -249,6 +249,36 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             }
             if problems.is_empty() {
+                if args.iter().any(|a| a == "--overhang") {
+                    let h = match opt(args, "--h") {
+                        Some(s) => Some(
+                            s.parse::<f64>()
+                                .map_err(|_| format!("bad --h value: {s}"))?,
+                        ),
+                        None => None,
+                    };
+                    let deg = match opt(args, "--overhang-angle") {
+                        Some(s) => s
+                            .parse::<f64>()
+                            .map_err(|_| format!("bad --overhang-angle value: {s}"))?,
+                        None => fieldsmith_core::overhang::DEFAULT_OVERHANG_DEG,
+                    };
+                    let rep = fieldsmith_core::overhang::check_overhang(
+                        &doc,
+                        h,
+                        fieldsmith_core::overhang::DEFAULT_BUILD_AXIS,
+                        deg,
+                    )?;
+                    println!(
+                        "overhang (> {:.1}° from +Z): {:.2} mm² of {:.2} mm² ({:.2} %, {} tris), max {:.1}°",
+                        rep.threshold_deg,
+                        rep.overhang_area_mm2,
+                        rep.total_area_mm2,
+                        rep.overhang_fraction * 100.0,
+                        rep.overhang_tris,
+                        rep.max_overhang_deg
+                    );
+                }
                 println!("ok");
                 for w in doc.material_warnings() {
                     println!("warning: {w}");
@@ -638,6 +668,15 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
             ex.defects.self_intersections
         );
     }
+    println!(
+        "overhang (> {:.1}° from +Z): {:.2} mm² of {:.2} mm² ({:.2} %, {} tris), max {:.1}°",
+        ex.overhang.threshold_deg,
+        ex.overhang.overhang_area_mm2,
+        ex.overhang.total_area_mm2,
+        ex.overhang.overhang_fraction * 100.0,
+        ex.overhang.overhang_tris,
+        ex.overhang.max_overhang_deg
+    );
     for p in &ex.parts {
         println!(
             "  volume {}: {} verts, {} tris, material {}, field volume {:.1} ± {:.1} mm³ ({:.2} s)",

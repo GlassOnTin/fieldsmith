@@ -65,6 +65,8 @@ class Ui {
   makeLayer = 0;
   /** Whether the slice preview contour overlay is shown. */
   makeSliceOn = true;
+  /** Whether the exact-gradient overhang overlay (> 45° from +Z) is shown in Make. */
+  makeOverhangOn = false;
   // Sweep panel display state (not undoable). The parameter defaults to the document's
   // first sweepable one (null until the user picks); from/to fall back to that
   // parameter's own value — the question is the user's to fill.

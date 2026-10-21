@@ -243,6 +243,7 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
       ui.set('sweepFrom', null);
       ui.set('sweepTo', null);
       ui.set('sweepCount', 5);
+      ui.set('makeOverhangOn', false);
       ui.set('probe', null);
     });
 
@@ -395,6 +396,31 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
     await lensVisit('setup', 2000);
     await lensVisit('fill', 2000);
     await lensVisit('make', 2000);
+
+    // Overhang overlay × Make lens (V45 / V39): toggling the overhang highlight (> 45° from +Z)
+    // tints the downward-facing bolt-hole ceilings on the bracket from the exact field gradient ∇f(p).
+    await settle();
+    await stash('__makeOvOff');
+    await page.locator('[data-testid="make-overhang-toggle"]').click();
+    await page.waitForFunction(() => window.fieldsmith.ui.makeOverhangOn === true, null, { timeout: 5000 });
+    await settle();
+    await stash('__makeOvOn');
+    const dOvOn = await diffCaps('__makeOvOff', '__makeOvOn');
+    check(
+      'solid × make: overhang toggle-on visibly tints downward-facing overhang pixels',
+      dOvOn.inChanged >= 20 && dOvOn.maxIn > 50,
+      `${dOvOn.inChanged}/${dOvOn.inBox} px changed, max Δ ${dOvOn.maxIn}/255`,
+    );
+    await page.locator('[data-testid="make-overhang-toggle"]').click();
+    await page.waitForFunction(() => window.fieldsmith.ui.makeOverhangOn === false, null, { timeout: 5000 });
+    await settle();
+    await stash('__makeOvOff2');
+    const dOvRt = await diffCaps('__makeOvOff', '__makeOvOff2');
+    check(
+      'solid × make: overhang toggle-off round-trips bit-identically',
+      dOvRt.maxAll === 0,
+      `whole-frame max Δ ${dOvRt.maxAll}`,
+    );
 
     // Section × solid (shape lens).
     await setLens('shape');

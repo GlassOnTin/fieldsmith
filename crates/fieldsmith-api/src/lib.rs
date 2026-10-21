@@ -18,6 +18,7 @@ pub mod schema;
 pub mod store;
 pub mod sweep_csv;
 
+use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
 use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
 use fieldsmith_doc::{fsm, param, Document, NodeKind};
@@ -216,6 +217,7 @@ pub fn respond(input: &str) -> Reply {
                         outcome: Some(outcome_json(&doc, o)),
                         single: None,
                         sweep: None,
+                        overhang: None,
                         error: None,
                     })
                 }
@@ -260,6 +262,7 @@ pub fn respond(input: &str) -> Reply {
                             modes: None,
                         }),
                         sweep: None,
+                        overhang: None,
                         error: None,
                     })
                 }
@@ -315,6 +318,7 @@ pub fn respond(input: &str) -> Reply {
                             }),
                         }),
                         sweep: None,
+                        overhang: None,
                         error: None,
                     })
                 }
@@ -451,8 +455,33 @@ pub fn respond(input: &str) -> Reply {
                     values,
                     points,
                 }),
+                overhang: None,
                 error: None,
             })
+        }
+        QuestionSpec::Overhang {
+            h,
+            build,
+            threshold_deg,
+        } => {
+            let axis = build.unwrap_or(DEFAULT_BUILD_AXIS);
+            let deg = threshold_deg.unwrap_or(DEFAULT_OVERHANG_DEG);
+            match check_overhang(&doc, h, axis, deg) {
+                Ok(rep) => ok_reply(schema::Response {
+                    apiv: APIV,
+                    engine: store::engine_identity(),
+                    status: Status::Ok,
+                    name: Some(name),
+                    question: Some(echo),
+                    warnings,
+                    outcome: None,
+                    single: None,
+                    sweep: None,
+                    overhang: Some(rep),
+                    error: None,
+                }),
+                Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
         }
     }
 }
@@ -498,6 +527,7 @@ fn error_reply(
             outcome: None,
             single: None,
             sweep: None,
+            overhang: None,
             error: Some(message.into()),
         },
         true,

@@ -63,6 +63,9 @@ uniform int u_hlN;
 uniform float u_clipOn;     // 1 = clip along the section plane (u_clipN / u_clipD)
 uniform vec3 u_clipN;       // plane normal (unit, field space); kept half: dot(p, N) - D >= 0
 uniform float u_clipD;
+uniform float u_overhangOn;  // 1 = highlight downward-facing overhang surfaces (n · (-u_buildDir) > u_overhangSin)
+uniform float u_overhangSin; // sin(α_max), default sin(45°)
+uniform vec3 u_buildDir;     // unit build axis b̂, default (0, 0, 1)
 in vec2 v_ndc;
 out vec4 fragColor;
 ${field}
@@ -232,7 +235,8 @@ void main() {
   }
 
   vec3 p = ro + rd * t;
-  vec3 n = cap ? -u_clipN : normalize(f.yzw);
+  vec3 nTrue = cap ? -u_clipN : normalize(f.yzw);
+  vec3 n = nTrue;
   if (dot(n, rd) > 0.0) n = -n;
   // Leaf identity is queried only when somebody will read it (part colours or highlights),
   // so the no-colour/ no-selection path costs nothing.
@@ -243,6 +247,12 @@ void main() {
     for (int i = 0; i < ${MAX_PARTCOLORS}; i++) {
       if (i >= u_leafN) break;
       if (abs(id.x - float(i)) < 0.5) { base = u_leafCol[i]; break; }
+    }
+  }
+  if (!cap && u_overhangOn > 0.5 && u_ghost < 0.5) {
+    float down = -dot(nTrue, u_buildDir);
+    if (down > u_overhangSin + 1e-5) {
+      base = mix(base, vec3(0.92, 0.18, 0.12), 0.78);
     }
   }
   vec3 col = shadeField(p, n, rd, id, base, t);
@@ -376,6 +386,9 @@ export class Viewport {
   private clipDU = { value: 0 };
   private clipPlane = new THREE.Plane();
   private clipPlaneArr: THREE.Plane[] | null = null;
+  private overhangOnU = { value: 0 };
+  private overhangSinU = { value: Math.SQRT1_2 };
+  private buildDirU = { value: new THREE.Vector3(0, 0, 1) };
   private dirty = true;
   private interacting = false;
   private idleTimer = 0;
@@ -542,6 +555,28 @@ export class Viewport {
     return this.clipPlaneArr;
   }
 
+  /** Toggle the exact-gradient overhang overlay (`n(p) · (-b̂) > sin(α_max)`). */
+  setOverhang(on: boolean, angleDeg = 45, buildDir: Vec3 = [0, 0, 1]) {
+    const nextOn = on ? 1 : 0;
+    const sinA = Math.sin((angleDeg * Math.PI) / 180);
+    const len = Math.hypot(buildDir[0], buildDir[1], buildDir[2]) || 1;
+    const bx = buildDir[0] / len;
+    const by = buildDir[1] / len;
+    const bz = buildDir[2] / len;
+    if (
+      this.overhangOnU.value !== nextOn ||
+      Math.abs(this.overhangSinU.value - sinA) > 1e-9 ||
+      Math.abs(this.buildDirU.value.x - bx) > 1e-9 ||
+      Math.abs(this.buildDirU.value.y - by) > 1e-9 ||
+      Math.abs(this.buildDirU.value.z - bz) > 1e-9
+    ) {
+      this.overhangOnU.value = nextOn;
+      this.overhangSinU.value = sinA;
+      this.buildDirU.value.set(bx, by, bz);
+      this.invalidate();
+    }
+  }
+
   private resize() {
     const w = Math.max(1, this.host.clientWidth);
     const h = Math.max(1, this.host.clientHeight);
@@ -604,6 +639,9 @@ export class Viewport {
       u_clipOn: this.clipOnU,
       u_clipN: this.clipNU,
       u_clipD: this.clipDU,
+      u_overhangOn: this.overhangOnU,
+      u_overhangSin: this.overhangSinU,
+      u_buildDir: this.buildDirU,
     };
     if (core && spec.grid && spec.source.includes('u_param')) {
       const g = spec.grid;
