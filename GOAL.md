@@ -119,7 +119,7 @@ skipping it.
 | **M22** | Lattice axis rotation (`fill rotate=`) | Done (`3c3026e`) | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
 | **M23** | Exact-gradient overhang check | Done (`0eeb0b2`) | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
 | **M24** | Inter-layer peel criterion & orientation | Done (`0456a86`) | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
-| **M25** | Interactive Pareto explorer in `Results` | Done | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
+| **M25** | Interactive Pareto explorer in `Results` | Done (`2c44e7d`) | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
 
 ---
 
