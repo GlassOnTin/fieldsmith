@@ -208,6 +208,7 @@ pub fn law_cubic_at(
         c11,
         c12: c11 * c12_ratio,
         c44: c11 * c44_ratio,
+        rot: None,
     };
     if !out.is_stable() {
         return None;
@@ -496,6 +497,7 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
+        rotate: spec.rotate,
         param,
         keep,
     })
@@ -555,6 +557,7 @@ pub fn graded_of(
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
+        rotate: spec.rotate,
         param: Grid3::constant(0.0),
         keep: keep.clone(),
     };
@@ -656,6 +659,7 @@ pub fn graded_of(
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
+        rotate: spec.rotate,
         param,
         keep: keep.clone(),
     };
@@ -705,6 +709,8 @@ pub fn graded_of(
     let cubic = cubic_fit(spec.family, spec.mode).map(|_| {
         let m_solid = fieldsmith_solve::ElasticMaterial::new(mat.e, mat.nu);
         let solid_c11 = m_solid.lame_lambda() + 2.0 * m_solid.lame_mu();
+        let rot = (spec.rotate != [0.0; 3])
+            .then(|| fieldsmith_field::dual::rotation_xyz_deg(spec.rotate));
         (0..base.mesh.tets.len())
             .map(|e| {
                 if class[e] != CLASS_LATTICE {
@@ -718,6 +724,7 @@ pub fn graded_of(
                     c11: law.c11 * s,
                     c12: law.c12 * s,
                     c44: law.c44 * s,
+                    rot,
                 })
             })
             .collect::<Vec<_>>()

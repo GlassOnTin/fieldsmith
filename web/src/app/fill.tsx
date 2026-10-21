@@ -6,7 +6,7 @@ import { Fragment } from 'preact';
 import { store } from '../doc/store';
 import { walk } from '../doc/types';
 import type { Document, Family, FillMode, Fill } from '../doc/types';
-import { NumRow, Seg, fmt } from './fields';
+import { NumRow, Seg, VecRow, fmt } from './fields';
 import { viewOverlays, statusItems } from './App';
 import { analysis } from './analysis';
 import { useApp } from './ui';
@@ -25,6 +25,7 @@ function defaultFill(): Fill {
     protect: [],
     margin: 2,
     case: null,
+    rotate: [0, 0, 0],
   };
 }
 
@@ -122,6 +123,15 @@ function FillPanel() {
               undoLabel="Set fill skin"
               testId="fill-skin"
               title="Solid skin kept under the outer surface"
+            />
+            <VecRow
+              label="Rotate"
+              unit="°"
+              step={15}
+              get={(d) => d.fill?.rotate ?? [0, 0, 0]}
+              set={(d, v) => d.fill && (d.fill.rotate = v)}
+              undoLabel="Rotate fill lattice"
+              testId="fill-rotate"
             />
             <NumRow
               label="ρ min"

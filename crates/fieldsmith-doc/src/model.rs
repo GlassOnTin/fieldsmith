@@ -521,6 +521,13 @@ pub struct Fill {
     pub margin: f64,
     /// Load case that drives the grading; `None` uses the envelope over all cases.
     pub case: Option<String>,
+    /// Euler X-Y-Z rotation (degrees) of the lattice frame relative to the part frame.
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub rotate: [f64; 3],
+}
+
+fn is_zero_vec3(v: &[f64; 3]) -> bool {
+    *v == [0.0; 3]
 }
 
 impl Default for Fill {
@@ -537,6 +544,7 @@ impl Default for Fill {
             protect: Vec::new(),
             margin: 2.0,
             case: None,
+            rotate: [0.0; 3],
         }
     }
 }

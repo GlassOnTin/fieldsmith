@@ -599,6 +599,7 @@ fn glsl_viewport_union_slots_cover_fill_references() {
         family: fieldsmith_doc::Family::Gyroid,
         mode: fieldsmith_doc::FillMode::Sheet,
         cell: 6.0,
+        rotate: [0.0; 3],
         param: Grid3::constant(0.4),
         keep,
     };

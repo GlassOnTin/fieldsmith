@@ -582,7 +582,7 @@ impl Attrs {
         // `rotate=`, `force=`); `dir=`, `step=` and `local=` are fixed at declaration,
         // so an expression there reads like a non-numeric value.
         let vocab: Option<&str> = match key {
-            "size" | "at" | "rotate" | "force" => Some(key),
+            "size" | "at" | "rotate" | "force" if !self.target.is_empty() => Some(key),
             _ => None,
         };
         match self.take(key) {
@@ -1150,6 +1150,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     protect: a.idents("protect")?,
                     margin: a.num_or("margin", d.margin)?,
                     case: a.string("case")?,
+                    rotate: a.vec3("rotate")?.unwrap_or(d.rotate),
                 };
                 a.finish()?;
                 doc.fill = Some(fill);
@@ -1526,6 +1527,9 @@ pub fn print(doc: &Document) -> String {
         line += &format!(" margin={}", n(f.margin));
         if let Some(c) = &f.case {
             line += &format!(" case={}", q(c));
+        }
+        if f.rotate != [0.0; 3] {
+            line += &format!(" rotate={}", v3(f.rotate));
         }
         let _ = writeln!(o, "{line}");
     }

@@ -11,15 +11,33 @@
 
 use fenics_assembly::elasticity::ElasticMaterial;
 
-/// Cubic stiffness constants (MPa) in the lattice's own frame.
+/// Cubic stiffness constants (MPa) in the lattice's own frame, plus an optional
+/// 3×3 rotation `R` mapping lattice-frame vectors to world-frame vectors.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CubicMaterial {
     pub c11: f64,
     pub c12: f64,
     pub c44: f64,
+    pub rot: Option<[[f64; 3]; 3]>,
 }
 
 impl CubicMaterial {
+    /// Unrotated cubic stiffness constants `(c11, c12, c44)` in MPa.
+    pub const fn new(c11: f64, c12: f64, c44: f64) -> CubicMaterial {
+        CubicMaterial {
+            c11,
+            c12,
+            c44,
+            rot: None,
+        }
+    }
+
+    /// Attach a lattice-to-world rotation matrix `r`.
+    pub const fn with_rot(mut self, r: [[f64; 3]; 3]) -> CubicMaterial {
+        self.rot = Some(r);
+        self
+    }
+
     /// The isotropic limit's constants: C11 = λ + 2μ, C12 = λ, C44 = μ.
     pub fn isotropic(youngs_modulus: f64, poissons_ratio: f64) -> CubicMaterial {
         let m = ElasticMaterial::new(youngs_modulus, poissons_ratio);
@@ -28,6 +46,7 @@ impl CubicMaterial {
             c11: lam + 2.0 * mu,
             c12: lam,
             c44: mu,
+            rot: None,
         }
     }
 
@@ -38,24 +57,86 @@ impl CubicMaterial {
     }
 }
 
-/// Voigt 6×6 stiffness of the cubic class in the lattice frame (row-major). Voigt
+/// Voigt 6×6 stiffness of the cubic class in the world frame (row-major). Voigt
 /// ordering (ε11, ε22, ε33, 2ε12, 2ε23, 2ε13) — the engineering shear strain convention,
 /// matching `stress::Stress`'s (σxx, σyy, σzz, σxy, σyz, σzx) stress ordering: the
 /// contraction D·(ε11, ε22, ε33, γ12, γ23, γ13) recovers the six stress components.
+/// When `m.rot` is `Some(R)`, each world engineering-strain basis vector is rotated into
+/// the lattice frame (`E_local = Rᵀ E_world R`) before contracting against the cubic D₀.
 pub fn d_voigt(m: &CubicMaterial) -> [[f64; 6]; 6] {
-    let mut d = [[0.0f64; 6]; 6];
+    let mut d0 = [[0.0f64; 6]; 6];
     // The 3×3 normal block: C11 on the diagonal, C12 off it.
-    for (i, row) in d.iter_mut().enumerate().take(3) {
+    for (i, row) in d0.iter_mut().enumerate().take(3) {
         for (j, v) in row.iter_mut().enumerate().take(3) {
             *v = if i == j { m.c11 } else { m.c12 };
         }
     }
     // Engineering shear strain (γ12 = 2ε12): σ12 = C44·γ12 = 2·C44·ε12, so the shear
     // diagonal carries C44 itself (not 2·C44 — the doubling is in the strain vector).
-    d[3][3] = m.c44;
-    d[4][4] = m.c44;
-    d[5][5] = m.c44;
+    d0[3][3] = m.c44;
+    d0[4][4] = m.c44;
+    d0[5][5] = m.c44;
+    let Some(r) = m.rot else {
+        return d0;
+    };
+    let b: [[f64; 6]; 6] = std::array::from_fn(|a| strain_basis_local(&r, a));
+    let mut d = [[0.0f64; 6]; 6];
+    for a in 0..6 {
+        for c in 0..6 {
+            let mut sum = 0.0;
+            for i in 0..6 {
+                for j in 0..6 {
+                    sum += b[a][i] * d0[i][j] * b[c][j];
+                }
+            }
+            d[a][c] = sum;
+        }
+    }
     d
+}
+
+/// World-frame unit engineering-strain basis `a` (`0: xx, 1: yy, 2: zz, 3: xy, 4: yz, 5: xz`,
+/// where unit γ_ij = 1 means symmetric tensor entries ε_ij = ε_ji = 0.5), transformed to the
+/// lattice frame via `E_local = Rᵀ E_world R` and re-packed into engineering-strain Voigt form.
+fn strain_basis_local(r: &[[f64; 3]; 3], a: usize) -> [f64; 6] {
+    let mut w = [[0.0f64; 3]; 3];
+    match a {
+        0 => w[0][0] = 1.0,
+        1 => w[1][1] = 1.0,
+        2 => w[2][2] = 1.0,
+        3 => {
+            w[0][1] = 0.5;
+            w[1][0] = 0.5;
+        }
+        4 => {
+            w[1][2] = 0.5;
+            w[2][1] = 0.5;
+        }
+        _ => {
+            w[0][2] = 0.5;
+            w[2][0] = 0.5;
+        }
+    }
+    let mut loc = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let mut s = 0.0;
+            for p in 0..3 {
+                for q in 0..3 {
+                    s += r[p][i] * w[p][q] * r[q][j];
+                }
+            }
+            loc[i][j] = s;
+        }
+    }
+    [
+        loc[0][0],
+        loc[1][1],
+        loc[2][2],
+        2.0 * loc[0][1],
+        2.0 * loc[1][2],
+        2.0 * loc[0][2],
+    ]
 }
 
 /// Element stiffness as 10×10 blocks of 3×3 for a CUBIC material in the mesh's own
@@ -132,6 +213,7 @@ mod tests {
                 c11: lam + 2.0 * mu,
                 c12: lam,
                 c44: (lam + 2.0 * mu - lam) / 2.0,
+                rot: None,
             };
             assert!(
                 c.is_stable(),

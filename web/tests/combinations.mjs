@@ -539,6 +539,30 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
     await setSlider('opacity-slider', 1);
     await page.waitForFunction(() => window.fieldsmith.ui.bodyAlpha === 1, null, { timeout: 10000 });
 
+    // Fill lattice rotation × opacity (V44 / V39): rotating the lattice in the Fill lens
+    // changes the interior lattice shader (`fs_core`) and visibly changes the viewport pixels.
+    await setLens('fill');
+    await setSlider('opacity-slider', 0.35);
+    await page.waitForFunction(() => Math.abs(window.fieldsmith.ui.bodyAlpha - 0.35) < 1e-6, null, { timeout: 5000 });
+    await settle();
+    await stash('__fillRot0');
+    const prevFillMs = await page.evaluate(() => window.fieldsmith.ui.compileMs);
+    await page.locator('[data-testid="fill-rotate-z"]').fill('45');
+    await page.locator('[data-testid="fill-rotate-z"]').press('Enter');
+    await page.waitForFunction((p) => window.fieldsmith.ui.compileMs !== p, prevFillMs, { timeout: 30000 });
+    await settle();
+    await stash('__fillRot45');
+    const dFillRot = await diffCaps('__fillRot0', '__fillRot45');
+    check(
+      'filled × fill-rotate-z: rotating lattice by 45° visibly changes the translucent frame',
+      dFillRot.inChanged >= 50 && dFillRot.maxIn > 12,
+      `${dFillRot.inChanged}/${dFillRot.inBox} px changed, max Δ ${dFillRot.maxIn}/255`,
+    );
+    await page.locator('[data-testid="fill-rotate-z"]').fill('0');
+    await page.locator('[data-testid="fill-rotate-z"]').press('Enter');
+    await setSlider('opacity-slider', 1);
+    await page.waitForFunction(() => window.fieldsmith.ui.bodyAlpha === 1, null, { timeout: 10000 });
+
     // Results on the filled kind.
     await setLens('results');
     await awaitLadder(page, 'filled');

@@ -113,6 +113,7 @@ export interface Fill {
   protect: string[];
   margin: number;
   case: string | null;
+  rotate?: Vec3;
 }
 
 export interface Material {
@@ -249,6 +250,7 @@ export function withLetTables<T extends Document>(doc: T): T {
   doc.consumed ??= [];
   doc.convections ??= [];
   doc.heat_fluxes ??= [];
+  if (doc.fill) doc.fill.rotate ??= [0, 0, 0];
   return doc;
 }
 

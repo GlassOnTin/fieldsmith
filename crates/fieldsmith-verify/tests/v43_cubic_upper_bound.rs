@@ -206,6 +206,7 @@ fn v43_cubic_upper_bound() {
         c11: 200.0,
         c12: 100.0,
         c44: 30.0,
+        rot: None,
     };
     assert!(cubic.is_stable());
     let (s11, _s12, _s44) = compliance_entries(&cubic);
@@ -265,6 +266,7 @@ fn v43_cubic_upper_bound() {
         c11: 200.0,
         c12: 100.0,
         c44: -30.0,
+        rot: None,
     };
     let bad_problem = Problem {
         material: Material {

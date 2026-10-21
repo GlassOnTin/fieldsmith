@@ -348,6 +348,7 @@ mod orthogonal_patch {
             c11: 120000.0,
             c12: 30000.0,
             c44: 20000.0,
+            rot: None,
         };
         assert!(m.is_stable());
         // u = a·(x, 0, 0): every node's u = a·x_c.

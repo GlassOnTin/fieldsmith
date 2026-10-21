@@ -152,6 +152,7 @@ fn mesh_bar_doc() -> Document {
         protect: vec![],
         margin: 0.0,
         case: None,
+        rotate: [0.0; 3],
     });
     doc
 }

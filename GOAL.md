@@ -74,13 +74,13 @@ skipping it.
 ## Acceptance criteria
 
 ### A. Lattice axis rotation (`M22` — `V44`)
-- [ ] `.fsm` grammar and printer round-trip `fill ... rotate=(rx, ry, rz)` (`V9` extended).
-- [ ] CPU field evaluator, GLSL raymarcher (`fs_core`), and adaptive 3MF exporter apply the
+- [x] `.fsm` grammar and printer round-trip `fill ... rotate=(rx, ry, rz)` (`V9` extended).
+- [x] CPU field evaluator, GLSL raymarcher (`fs_core`), and adaptive 3MF exporter apply the
       inverse rotation to lattice sample coordinates `p`, leaving outer body skins unrotated.
-- [ ] `fieldsmith-solve` rotates each lattice element's cubic stiffness and compliance tensors
+- [x] `fieldsmith-solve` rotates each lattice element's cubic stiffness and compliance tensors
       by `R(rx, ry, rz)` during assembly, stress recovery, and `dual.rs` upper-bound
       equilibration.
-- [ ] `V44` verifies that `fill ... rotate=(0, 0, 45)` on a `[100]`-loaded bar matches the
+- [x] `V44` verifies that `fill ... rotate=(0, 0, 45)` on a `[100]`-loaded bar matches the
       unrotated `[110]` patch stiffness and equilibrated compliance bound within `0.1 %`, and
       that changing `rotate` in the `Fill` lens visibly changes viewport pixels (`V39`).
 

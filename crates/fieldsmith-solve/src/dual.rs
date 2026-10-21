@@ -120,14 +120,32 @@ fn elem_compliance(problem: &Problem, e: usize) -> [[f64; 6]; 6] {
             let d = (c.c11 - c.c12) * (c.c11 + 2.0 * c.c12);
             let s11 = (c.c11 + c.c12) / d;
             let s12 = -c.c12 / d;
-            for (i, hrow) in h.iter_mut().enumerate().take(3) {
+            let mut h0 = [[0.0f64; 6]; 6];
+            for (i, hrow) in h0.iter_mut().enumerate().take(3) {
                 for (j, hv) in hrow.iter_mut().enumerate().take(3) {
                     *hv = if i == j { s11 } else { s12 };
                 }
             }
-            h[XY][XY] = 1.0 / c.c44;
-            h[XZ][XZ] = 1.0 / c.c44;
-            h[YZ][YZ] = 1.0 / c.c44;
+            h0[XY][XY] = 1.0 / c.c44;
+            h0[XZ][XZ] = 1.0 / c.c44;
+            h0[YZ][YZ] = 1.0 / c.c44;
+            match c.rot {
+                None => return h0,
+                Some(r) => {
+                    let b: [[f64; 6]; 6] = std::array::from_fn(|a| stress_basis_local(&r, a));
+                    for a in 0..6 {
+                        for cc in 0..6 {
+                            let mut sum = 0.0;
+                            for i in 0..6 {
+                                for j in 0..6 {
+                                    sum += b[a][i] * h0[i][j] * b[cc][j];
+                                }
+                            }
+                            h[a][cc] = sum;
+                        }
+                    }
+                }
+            }
         }
         None => {
             let young = problem.material.young[e];
@@ -143,6 +161,50 @@ fn elem_compliance(problem: &Problem, e: usize) -> [[f64; 6]; 6] {
         }
     }
     h
+}
+
+/// World-frame unit symmetric stress tensor `a` (`XX=0, YY=1, ZZ=2, XY=3, XZ=4, YZ=5`,
+/// where unit shear `a ∈ 3..6` has symmetric tensor entries `σ_ij = σ_ji = 1.0`), rotated
+/// into the lattice frame via `S_local = Rᵀ S_world R` and re-packed into `dual.rs` order.
+fn stress_basis_local(r: &[[f64; 3]; 3], a: usize) -> [f64; 6] {
+    let mut w = [[0.0f64; 3]; 3];
+    match a {
+        XX => w[0][0] = 1.0,
+        YY => w[1][1] = 1.0,
+        ZZ => w[2][2] = 1.0,
+        XY => {
+            w[0][1] = 1.0;
+            w[1][0] = 1.0;
+        }
+        XZ => {
+            w[0][2] = 1.0;
+            w[2][0] = 1.0;
+        }
+        _ => {
+            w[1][2] = 1.0;
+            w[2][1] = 1.0;
+        }
+    }
+    let mut loc = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let mut s = 0.0;
+            for p in 0..3 {
+                for q in 0..3 {
+                    s += r[p][i] * w[p][q] * r[q][j];
+                }
+            }
+            loc[i][j] = s;
+        }
+    }
+    [
+        loc[0][0],
+        loc[1][1],
+        loc[2][2],
+        loc[0][1],
+        loc[0][2],
+        loc[1][2],
+    ]
 }
 
 /// Constant strain 6-vector of the displacement field e_c·λ_a with vertex-shape gradient

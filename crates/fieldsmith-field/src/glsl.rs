@@ -476,7 +476,7 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             Some(self.expr(&fx.keep))
         };
         let param_expr = self.param_term(&fx.param);
-        let lattice = lattice_term(fx.family, fx.mode, fx.cell, &param_expr);
+        let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
         let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n", lit(fx.skin));
         if let Some(k) = keep {
             let _ = writeln!(b, "  inner = fs_min(inner, {k}(p));");
@@ -500,7 +500,7 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             Some(self.expr(&fx.keep))
         };
         let param_expr = self.param_term(&fx.param);
-        let lattice = lattice_term(fx.family, fx.mode, fx.cell, &param_expr);
+        let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
         let inner = match keep {
             Some(k) => format!("  vec4 inner = fs_min(lat, {k}(p));\n"),
             None => "  vec4 inner = lat;\n".to_string(),
@@ -537,20 +537,31 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
 
 /// The lattice sampler `vec4 lat = …` lines, in the mode's wall semantics (sheet walls thin
 /// by ±param, network struts thin by param), on the TPMS surfaces of `family`.
-fn lattice_term(family: Family, mode: FillMode, cell: f64, param_expr: &str) -> String {
+fn lattice_term(
+    family: Family,
+    mode: FillMode,
+    cell: f64,
+    rotate: V3,
+    param_expr: &str,
+) -> String {
     let fam = match family {
         Family::Gyroid => 0,
         Family::Primitive => 1,
         Family::Diamond => 2,
     };
+    let cell = lit(cell);
+    let tpms = if rotate == [0.0; 3] {
+        format!("  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n")
+    } else {
+        let l = mat_t(&rotation_xyz_deg(rotate));
+        format!("  mat3 L = {l};\n  vec4 s = fs_tpms_distance({fam}, {cell}, L * p);\n  s = vec4(s.x, s.yzw * L);\n")
+    };
     match mode {
         FillMode::Sheet => format!(
-            "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
-            cell = lit(cell)
+            "{tpms}  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
         ),
         FillMode::Network => format!(
-            "  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
-            cell = lit(cell)
+            "{tpms}  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
         ),
     }
 }
@@ -923,6 +934,7 @@ mod tests {
             family: Family::Gyroid,
             mode,
             cell: 6.0,
+            rotate: [0.0; 3],
             param: crate::lattice::Grid3 {
                 origin: [0.0; 3],
                 spacing: 1.0,

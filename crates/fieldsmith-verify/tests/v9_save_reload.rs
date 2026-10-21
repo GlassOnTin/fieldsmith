@@ -185,6 +185,20 @@ fn save_reload_graded_resolve_is_bit_identical() {
     let g1 = graded_of(&filled, &base1, now, false).expect("graded");
     let g2 = graded_of(&reloaded, &base2, now, false).expect("graded after reload");
     assert_same_graded(&g1, &g2, "graded bracket");
+
+    // Rotated lattice fill (`rotate=(15, 25, 45)`) round-trips in `.fsm` and reproduces
+    // the graded re-solve bit for bit.
+    let mut rotated = filled.clone();
+    rotated.fill.as_mut().expect("fill").rotate = [15.0, 25.0, 45.0];
+    let printed_rot = fieldsmith_doc::fsm::print(&rotated);
+    assert!(
+        printed_rot.contains("rotate=(15, 25, 45)"),
+        "expected rotate=(15, 25, 45) in:\n{printed_rot}"
+    );
+    let reloaded_rot = round_trip(&rotated);
+    let gr1 = graded_of(&rotated, &base1, now, false).expect("graded rotated");
+    let gr2 = graded_of(&reloaded_rot, &base2, now, false).expect("graded rotated after reload");
+    assert_same_graded(&gr1, &gr2, "graded bracket with rotated lattice");
 }
 
 /// A document with a mesh node round-trips with every mesh field and the patch selector

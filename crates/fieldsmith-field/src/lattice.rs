@@ -65,6 +65,25 @@ pub fn lattice_field(family: Family, mode: FillMode, a: f64, param: f64, p: V3) 
     }
 }
 
+/// Lattice solid field evaluated in a lattice frame rotated by Euler X-Y-Z `rotate` (degrees)
+/// relative to world space: sample at `Rᵀ p` and rotate the gradient back to world via `R g`.
+#[inline]
+pub fn lattice_field_rotated(
+    family: Family,
+    mode: FillMode,
+    a: f64,
+    param: f64,
+    rotate: V3,
+    p: V3,
+) -> D {
+    if rotate == [0.0; 3] {
+        return lattice_field(family, mode, a, param, p);
+    }
+    let r = rotation_xyz_deg(rotate);
+    let d = lattice_field(family, mode, a, param, mat_t_vec(&r, p));
+    D::new(d.v, mat_vec(&r, d.g))
+}
+
 /// Monotone table mapping relative density ρ ↔ lattice parameter for one family and mode,
 /// measured by sampling one periodic unit cell. Parameters are stored per unit cell size
 /// (i.e. for a = 1) and scale linearly with the cell size.
@@ -287,6 +306,7 @@ pub struct FillExpr {
     pub family: Family,
     pub mode: FillMode,
     pub cell: f64,
+    pub rotate: V3,
     /// Lattice parameter field (mm), already including density grading and min-wall limits.
     pub param: Grid3,
     /// Union of protected zones (shapes offset by the margin); `Empty` for none.
@@ -297,7 +317,14 @@ impl FillExpr {
     pub fn eval(&self, p: V3) -> D {
         let d = eval(&self.body, p);
         let core = D::new(-(d.v + self.skin), scale(d.g, -1.0));
-        let lat = lattice_field(self.family, self.mode, self.cell, self.param.sample(p), p);
+        let lat = lattice_field_rotated(
+            self.family,
+            self.mode,
+            self.cell,
+            self.param.sample(p),
+            self.rotate,
+            p,
+        );
         let mut inner = dmin(core, lat);
         if !matches!(self.keep, Expr::Empty) {
             inner = dmin(inner, eval(&self.keep, p));
@@ -322,7 +349,14 @@ impl FillExpr {
     /// zones, nothing within one `skin` of the body surface. Negative = see-through-solid.
     pub fn removed_skin(&self, p: V3) -> D {
         let d = eval(&self.body, p);
-        let lat = lattice_field(self.family, self.mode, self.cell, self.param.sample(p), p);
+        let lat = lattice_field_rotated(
+            self.family,
+            self.mode,
+            self.cell,
+            self.param.sample(p),
+            self.rotate,
+            p,
+        );
         let mut inner = lat;
         if !matches!(self.keep, Expr::Empty) {
             inner = dmin(inner, eval(&self.keep, p));
@@ -404,6 +438,7 @@ mod tests {
                 family: Family::Gyroid,
                 mode,
                 cell: 6.0,
+                rotate: [0.0; 3],
                 param: Grid3::constant(0.4),
                 keep: Expr::Offset {
                     d: 1.0,
@@ -448,6 +483,7 @@ mod tests {
             family: Family::Gyroid,
             mode: FillMode::Sheet,
             cell: 6.0,
+            rotate: [0.0; 3],
             param: Grid3::constant(0.4),
             // Radius swallows the box: keep is ~−50 at the body centre, so only the clip
             // term (−2.8) and the keep compete, and the clip wins by construction.
