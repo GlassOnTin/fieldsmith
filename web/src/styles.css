@@ -255,6 +255,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .results-panel .mini-btn:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
 .legend-gradient { height: 8px; border-radius: 4px; flex: 1; }
 .probe { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--text-2); }
+.pareto-block { grid-column: 1 / -1; margin: 4px 0; padding: 6px 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
+.pareto-svg { width: 100%; height: auto; display: block; }
+.pareto-axis { font-size: 9px; font-family: var(--mono); fill: var(--text-3); }
+.pareto-pt { fill: var(--text-3); stroke: var(--panel); stroke-width: 1; cursor: pointer; transition: r 120ms ease; }
+.pareto-pt.frontier { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
+.pareto-pt.selected { stroke: var(--text); stroke-width: 2; }
 
 /* ---- View opacity + part colours (M12) ---- */
 .opacity-panel {

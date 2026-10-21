@@ -576,7 +576,7 @@ export async function paramsTest(browser, url, { screens, docsDir }) {
       if (i === 0) continue;
       for (let k = 0; k < cb.length; k++) {
         if (k === 3) continue;
-        if (k === 0 || k === 1 || k === 2 || k === 8) {
+        if (k === 0 || k === 1 || k === 2 || k === 10) {
           if (cb[k] === cc[k]) cmp.cells++;
           else {
             cmp.mismatched++;
@@ -586,7 +586,7 @@ export async function paramsTest(browser, url, { screens, docsDir }) {
         }
         const n1 = Number(cb[k]);
         const n2 = Number(cc[k]);
-        const gate = k === 6 || k === 7 ? CHANGE_DRIFT_REL : SOLVE_DRIFT_REL;
+        const gate = k === 7 || k === 8 || k === 9 ? CHANGE_DRIFT_REL : SOLVE_DRIFT_REL;
         if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
           cmp.mismatched++;
           if (!cmp.mismatch) cmp.mismatch = `row ${i - 1} col ${k} (${CSV_COLS[k]}): not a finite number, native "${cb[k]}" vs web "${cc[k]}"`;
@@ -598,7 +598,7 @@ export async function paramsTest(browser, url, { screens, docsDir }) {
           if (!cmp.mismatch) cmp.mismatch = `row ${i - 1} col ${k} (${CSV_COLS[k]}): rel ${rel.toExponential(2)} > gate ${gate}, native ${cb[k]} vs web ${cc[k]}`;
         } else {
           cmp.cells++;
-          if (k === 6 || k === 7) {
+          if (k === 7 || k === 8 || k === 9) {
             if (rel > cmp.maxChangeDrift) cmp.maxChangeDrift = rel;
           } else if (rel > cmp.maxDrift) cmp.maxDrift = rel;
         }

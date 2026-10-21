@@ -11,7 +11,7 @@ import type { AnalysisHandle, AnalysisMeta, GradedHandleWithExport, HydrateEntry
 // This file once carried its own copies of the rung schedule; the sweep's mirror of the
 // native question engine needs the same constants, and one definition is one number.
 import { COARSE_DOFS, FINE_DOFS } from '../doc/wasm';
-import { applyAddr, parseAddr, resolveAddr } from '../doc/param';
+import { applyAddr, applyAddrs, parseAddr, resolveAddr } from '../doc/param';
 import { rustFloat } from '../doc/numfmt';
 import type { SweepRecord } from '../doc/wasm';
 
@@ -391,7 +391,7 @@ function doBytes(what: 'stl' | '3mf', name: string) {
  * same error texts, same record semantics as `fieldsmith-core/src/rung.rs`. Unlike the
  * native question, which discards partial work on a point failure, this worker streams
  * the points before the failing one so they stand in the table. */
-async function doSweep(doc: Document, addr: string, values: number[], rungs: number[]) {
+async function doSweep(doc: Document, addr: string, values: number[], rungs: number[], addr2?: string, values2?: number[]) {
   if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
   await ready;
   try {
@@ -401,11 +401,13 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
     }
     const a = parseAddr(addr); // throws param.ts's mirror of param::parse's text
     resolveAddr(doc, a); // throws param.ts's mirror of param::resolve's text
-    if (values.length === 0) {
+    const a2 = addr2 ? parseAddr(addr2) : null;
+    if (a2) resolveAddr(doc, a2);
+    if (values.length === 0 || (a2 && (!values2 || values2.length === 0))) {
       post({ type: 'sweepError', message: 'sweep: values is empty — name at least one value of the parameter' });
       return;
     }
-    if (!values.every(Number.isFinite)) {
+    if (!values.every(Number.isFinite) || (values2 && !values2.every(Number.isFinite))) {
       post({ type: 'sweepError', message: 'sweep: values must all be finite numbers' });
       return;
     }
@@ -429,11 +431,23 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
       });
       return;
     }
-    for (let i = 0; i < values.length; i++) {
-      const value = values[i];
+    const grid: { v1: number; v2?: number }[] = [];
+    if (a2 && values2 && values2.length > 0) {
+      for (const v1 of values) {
+        for (const v2 of values2) grid.push({ v1, v2 });
+      }
+    } else {
+      for (const v1 of values) grid.push({ v1 });
+    }
+    for (let i = 0; i < grid.length; i++) {
+      const { v1: value, v2: value2 } = grid[i];
       const d = structuredClone(doc);
       try {
-        applyAddr(d, a, value);
+        if (a2 && value2 !== undefined) {
+          applyAddrs(d, [[a, value], [a2, value2]], false);
+        } else {
+          applyAddr(d, a, value);
+        }
       } catch (e) {
         // The honest path: native's apply cannot fire after resolve (same comment in
         // lib.rs), but the mirror names the point if it ever does.
@@ -442,6 +456,10 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
       }
       const records: SweepRecord[] = [];
       let prev: { d: number; v: number; c: number } | null = null;
+      let lastMassG = 0;
+      let lastPeel = 0;
+      let lastYield = 0;
+      let lastF1: number | null = null;
       for (let r = 0; r < rungs.length; r++) {
         const t0 = performance.now();
         try {
@@ -453,6 +471,10 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
           const defl = Math.max(1e-9, ...meta.cases.map((c) => c.max_displacement));
           const vm = Math.max(1e-9, ...meta.cases.map((c) => c.max_vm_elem));
           const compl = Math.max(1e-9, ...meta.cases.map((c) => c.compliance));
+          lastMassG = meta.mass_g ?? 0;
+          lastPeel = Math.max(0, ...(meta.max_layer_peel ?? [0]));
+          lastYield = meta.yield_strength ?? 0;
+          lastF1 = meta.modes?.frequencies?.[0] ?? null;
           records.push({
             rung: r,
             target_dofs: rungs[r],
@@ -471,13 +493,25 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
           prev = { d: defl, v: vm, c: compl };
           out.free();
         } catch (e) {
-          post({ type: 'sweepError', message: `sweep point ${i + 1} of ${values.length} (param ${addr} = ${rustFloat(value)}): ${errText(e)}` });
+          post({ type: 'sweepError', message: `sweep point ${i + 1} of ${grid.length} (param ${addr} = ${rustFloat(value)}): ${errText(e)}` });
           return;
         }
       }
-      post({ type: 'sweepPoint', value, records });
+      const valMap: Record<string, number> = { [addr]: value };
+      if (addr2 && value2 !== undefined) valMap[addr2] = value2;
+      post({
+        type: 'sweepPoint',
+        value,
+        value2,
+        values: valMap,
+        mass_g: lastMassG,
+        layer_peel: lastPeel,
+        yield_strength: lastYield,
+        f1_hz: lastF1,
+        records,
+      });
     }
-    post({ type: 'sweepDone', count: values.length });
+    post({ type: 'sweepDone', count: grid.length });
   } catch (e) {
     // Anything outside the per-point paths (structuredClone, the load itself) reports
     // bare — the mirror's validation-phase throws already carry their native texts.
@@ -493,5 +527,5 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
   else if (m.type === 'bytes') doBytes(m.what, m.name);
   else if (m.type === 'import') void doImport(m.bytes, m.kind, m.src, m.opts);
   else if (m.type === 'hydrate') void doHydrate(m.entries);
-  else if (m.type === 'sweep') void doSweep(m.doc, m.addr, m.values, m.rungs);
+  else if (m.type === 'sweep') void doSweep(m.doc, m.addr, m.values, m.rungs, m.addr2, m.values2);
 };

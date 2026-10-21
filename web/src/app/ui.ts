@@ -77,6 +77,13 @@ class Ui {
   sweepTo: number | null = null;
   /** How many values the sweep steps from → to. */
   sweepCount = 5;
+  /** Optional second parameter for 2D grid sweeps (M25); null or '' = 1D sweep. */
+  sweepParam2: string | null = null;
+  sweepFrom2: number | null = null;
+  sweepTo2: number | null = null;
+  sweepCount2 = 2;
+  /** Y-axis metric for the Results Pareto frontier explorer (M25). */
+  paretoMetric: 'vm' | 'safety' | 'compliance' | 'peel' | 'deflection' | 'f1' = 'vm';
   // Viewport display state (not undoable, session-only).
   /** Body opacity: 1 = opaque, < 1 renders the body translucent and shows the lattice
    * through it. Resets on load — UI state is not persisted. */

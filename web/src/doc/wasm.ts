@@ -419,6 +419,8 @@ export interface AnalysisMeta {
   cases: CaseSummary[];
   /** Per-case peak inter-layer peel utilization (≥ 0; ≥ 1.0 exceeds layer bond). */
   max_layer_peel?: number[];
+  /** Solid part mass in grams (from field volume × material density). */
+  mass_g?: number;
   yield_strength: number;
   yield_z?: number;
   shear_z?: number;
@@ -686,9 +688,9 @@ export type WorkerIn =
   /** Register mesh grids in the worker's registry (fresh copies — the main-thread cache
    * keeps ownership of its own). Posted before `run`/`export` when the doc carries meshes. */
   | { type: 'hydrate'; entries: HydrateEntry[] }
-  /** The parameter sweep (GOAL v0.4 section D): every value runs the coarse/refined
-   * ladder on a copy of the document, records stream back per point. */
-  | { type: 'sweep'; doc: Document; addr: string; values: number[]; rungs: number[] };
+  /** The parameter sweep (GOAL v0.4 section D & v0.7 M25): 1D or 2D grid of values runs
+   * the coarse/refined ladder on a copy of the document, records stream back per point. */
+  | { type: 'sweep'; doc: Document; addr: string; values: number[]; addr2?: string; values2?: number[]; rungs: number[] };
 
 export type ExportDone = { meta: ExportMeta };
 
@@ -743,6 +745,16 @@ export type WorkerOut =
   | { type: 'bytesDone'; what: 'stl' | '3mf'; name: string; bytes: ArrayBuffer }
   /** The sweep, streaming: one post per point with that point's full record list
    * (`value` echoes the request order), then a `sweepDone` tally. */
-  | { type: 'sweepPoint'; value: number; records: SweepRecord[] }
+  | {
+      type: 'sweepPoint';
+      value: number;
+      value2?: number;
+      values?: Record<string, number>;
+      mass_g?: number;
+      layer_peel?: number;
+      yield_strength?: number;
+      f1_hz?: number | null;
+      records: SweepRecord[];
+    }
   | { type: 'sweepDone'; count: number }
   | { type: 'sweepError'; message: string };

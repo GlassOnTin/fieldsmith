@@ -37,6 +37,7 @@ import { gradedyieldTest } from './gradedyield.mjs';
 import { gradedbucklingTest } from './gradedbuckling.mjs';
 import { combinationsTest } from './combinations.mjs';
 import { renderfailTest } from './renderfail.mjs';
+import { paretoTest } from './pareto.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -217,6 +218,11 @@ try {
   if (!only || only === 'renderfail') {
     const ok = await renderfailTest(browser, url, { screens, docsDir });
     console.log(`renderfail test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'pareto') {
+    const ok = await paretoTest(browser, url, { screens, docsDir });
+    console.log(`pareto test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

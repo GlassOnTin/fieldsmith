@@ -233,31 +233,36 @@ export function applyAddr(doc: Document, addr: ParamAddr, value: number): void {
   writePlain(doc, addr.id, addr.attr, addr.comp, value);
 }
 
-/** Set one let and re-evaluate the lets and recorded expressions that read it, in
- * declaration order so derived lets chain. The errors name the applied let. */
-function applyLet(doc: Document, name: string, value: number): void {
+/** Set one or more lets simultaneously and re-evaluate all remaining lets and recorded
+ * expressions in declaration order. When `updateLetExpr` is true, also updates `l.expr`
+ * on the applied lets so `printFsm` emits the new literal. */
+function applyLets(doc: Document, applied: ReadonlyMap<string, number>, updateLetExpr = false): void {
   const lets = doc.lets as Let[];
-  const slot = lets.findIndex((l) => l.name === name);
-  if (slot < 0) throw new Error(`param ${name}: no let named '${name}'`);
-  lets[slot].value = value;
+  for (const [name, value] of applied) {
+    const slot = lets.findIndex((l) => l.name === name);
+    if (slot < 0) throw new Error(`param ${name}: no let named '${name}'`);
+    lets[slot].value = value;
+    if (updateLetExpr) lets[slot].expr = rustFloat(value);
+  }
+  const firstName = applied.keys().next().value ?? '';
   const exprs = lets.map((l) => [l.name, l.expr] as const);
   const values: [string, number][] = [];
   for (const [oname, expr] of exprs) {
-    // The applied let keeps the swept value; every other let re-evaluates in
-    // declaration order, so derived lets chain. Re-evaluating the applied let
+    // Applied lets keep their swept values; every other let re-evaluates in
+    // declaration order, so derived lets chain. Re-evaluating an applied let
     // itself would clobber the sweep with its const-folded declaration value.
-    if (oname === name) {
-      values.push([oname, value]);
+    if (applied.has(oname)) {
+      values.push([oname, applied.get(oname)!]);
       continue;
     }
     let v: number;
     try {
       v = evalFsmExpr(expr, values);
     } catch (e) {
-      throw new Error(`param ${name}: the let '${oname}' does not evaluate: ${(e as Error).message}`);
+      throw new Error(`param ${firstName}: the let '${oname}' does not evaluate: ${(e as Error).message}`);
     }
     if (!Number.isFinite(v)) {
-      throw new Error(`param ${name}: the let '${oname}' value is not finite`);
+      throw new Error(`param ${firstName}: the let '${oname}' value is not finite`);
     }
     values.push([oname, v]);
   }
@@ -268,13 +273,48 @@ function applyLet(doc: Document, name: string, value: number): void {
       v = evalFsmExpr(c.expr, values);
     } catch (e) {
       throw new Error(
-        `param ${name}: the expression for '${consumerSpec(c)}' does not evaluate: ${(e as Error).message}`,
+        `param ${firstName}: the expression for '${consumerSpec(c)}' does not evaluate: ${(e as Error).message}`,
       );
     }
     if (!Number.isFinite(v)) {
-      throw new Error(`param ${name}: the expression for '${consumerSpec(c)}' value is not finite`);
+      throw new Error(`param ${firstName}: the expression for '${consumerSpec(c)}' value is not finite`);
     }
     writePlain(doc, c.target, c.attr, c.comp, v);
+  }
+}
+
+/** Set one let and re-evaluate the lets and recorded expressions that read it, in
+ * declaration order so derived lets chain. The errors name the applied let. */
+function applyLet(doc: Document, name: string, value: number): void {
+  applyLets(doc, new Map([[name, value]]), false);
+}
+
+/** Apply multiple `(ParamAddr, value)` pairs simultaneously (1D or 2D sweeps and Pareto
+ * click-to-apply). When `updateLetExpr` is true, applied `let` statements also update
+ * their `expr` literal so `printFsm(doc)` reflects the applied values. */
+export function applyAddrs(doc: Document, pairs: readonly (readonly [ParamAddr, number])[], updateLetExpr = false): void {
+  const letMap = new Map<string, number>();
+  for (const [addr, value] of pairs) {
+    resolveAddr(doc, addr);
+    if (!Number.isFinite(value)) {
+      throw new Error(`param ${addrText(addr)}: value ${rustFloat(value)} is not finite`);
+    }
+    if (addr.attr === '') {
+      letMap.set(addr.id, value);
+    } else {
+      const c = (doc.consumed ?? []).find(
+        (c) => c.target === addr.id && c.attr === addr.attr && c.comp === addr.comp,
+      );
+      if (c) {
+        throw new Error(
+          `param ${addrText(addr)}: written by an expression ('${c.expr}') — sweep the let that drives it`,
+        );
+      }
+      writePlain(doc, addr.id, addr.attr, addr.comp, value);
+    }
+  }
+  if (letMap.size > 0) {
+    applyLets(doc, letMap, updateLetExpr);
   }
 }
 

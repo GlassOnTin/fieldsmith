@@ -102,11 +102,11 @@ skipping it.
       precision (`≤ 1e-6`), and verifies the `Results` lens ramp in headless e2e.
 
 ### D. Interactive Pareto explorer (`M25` — `V47`)
-- [ ] `Results` sweep panel supports 1D or 2D `let` parameter sweeps and renders an SVG scatter
+- [x] `Results` sweep panel supports 1D or 2D `let` parameter sweeps and renders an SVG scatter
       plot (`mass` vs. selected metric) marking the non-dominated Pareto front.
-- [ ] Clicking a plotted candidate updates the `.fsm` document's `let` bindings in a single
+- [x] Clicking a plotted candidate updates the `.fsm` document's `let` bindings in a single
       reversible transaction, updates the 3D viewport, and restores bit-identically on `Undo`.
-- [ ] `V47` drives a multi-point bracket sweep in headless Chromium, asserts the Pareto frontier
+- [x] `V47` drives a multi-point bracket sweep in headless Chromium, asserts the Pareto frontier
       markers match the computed non-dominated set, clicks a frontier point, asserts both `.fsm`
       source and viewport pixels update, and asserts `Ctrl+Z` restores the initial state.
 
@@ -118,8 +118,8 @@ skipping it.
 | :-- | :-- | :-- | :-- |
 | **M22** | Lattice axis rotation (`fill rotate=`) | Done (`3c3026e`) | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
 | **M23** | Exact-gradient overhang check | Done (`0eeb0b2`) | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
-| **M24** | Inter-layer peel criterion & orientation | Done | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
-| **M25** | Interactive Pareto explorer in `Results` | Planned | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
+| **M24** | Inter-layer peel criterion & orientation | Done (`0456a86`) | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
+| **M25** | Interactive Pareto explorer in `Results` | Done | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
 
 ---
 

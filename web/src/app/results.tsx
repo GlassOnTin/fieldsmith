@@ -11,7 +11,8 @@ import { viewportExtensions } from './ViewportHost';
 import type { Viewport } from '../view/viewport';
 import { addressableParams } from '../doc/param';
 import { analysis } from './analysis';
-import { sweep, useSweep } from './sweep';
+import { sweep, useSweep, computeParetoIndices, metricValueOf } from './sweep';
+import type { ParetoMetric, SweepPointRow } from './sweep';
 import { fmt } from './fields';
 import * as THREE from 'three';
 import type { LoadReport } from '../doc/wasm';
@@ -657,12 +658,112 @@ function AnalysisBadge() {
 }
 statusItems.push(AnalysisBadge);
 
-// ---- sweep ---------------------------------------------------------------------------
+// ---- sweep & Pareto explorer ---------------------------------------------------------
 
-/** The parameter sweep panel (GOAL v0.4 section D): the ladder question asked at each of a
- * stepped range of one numeric document parameter. The analysis worker's sweep arm runs it
- * — the mirror of the native Sweep question — the engine streams the points, and the
- * export writes the CLI's sweep CSV (web/src/app/sweep.ts holds the byte contracts). */
+const PARETO_METRIC_LABELS: Record<ParetoMetric, { label: string; unit: string }> = {
+  vm: { label: 'Max von Mises (MPa)', unit: 'MPa' },
+  safety: { label: 'Safety factor (×)', unit: '×' },
+  compliance: { label: 'Compliance (N·mm)', unit: 'N·mm' },
+  peel: { label: 'Layer peel (×)', unit: '×' },
+  deflection: { label: 'Max deflection (mm)', unit: 'mm' },
+  f1: { label: 'Mode 1 f₁ (Hz)', unit: 'Hz' },
+};
+
+function ParetoPlot(props: { points: SweepPointRow[]; selectedIndex: number | null; param: string; param2: string }) {
+  const { points, selectedIndex, param, param2 } = props;
+  const hasF1 = points.some((p) => p.f1_hz !== null && p.f1_hz > 0);
+  const metric: ParetoMetric = ui.paretoMetric === 'f1' && !hasF1 ? 'vm' : ui.paretoMetric;
+  const front = computeParetoIndices(points, metric);
+  const xs = points.map((p) => p.mass_g);
+  const ys = points.map((p) => metricValueOf(p, metric));
+  let xMin = Math.min(...xs), xMax = Math.max(...xs);
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  if (!(xMax > xMin + 1e-9)) { xMin -= 0.5; xMax += 0.5; }
+  if (!(yMax > yMin + 1e-9)) { yMin -= 0.5; yMax += 0.5; }
+  const W = 340, H = 148;
+  const padL = 44, padR = 14, padT = 14, padB = 26;
+  const pw = W - padL - padR;
+  const ph = H - padT - padB;
+  const sx = (x: number) => padL + ((x - xMin) / (xMax - xMin)) * pw;
+  const sy = (y: number) => padT + ph - ((y - yMin) / (yMax - yMin)) * ph;
+
+  const frontIndices = [...front].sort((a, b) => xs[a] - xs[b] || ys[a] - ys[b]);
+  const polyPoints = frontIndices.map((i) => `${sx(xs[i]).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(' ');
+  const mInfo = PARETO_METRIC_LABELS[metric];
+
+  return (
+    <div class="pareto-block" data-testid="pareto-explorer">
+      <div class="scale-row" style={{ marginBottom: '4px' }}>
+        <span class="plain">Frontier Y</span>
+        <select
+          class="select"
+          style={{ flex: 1 }}
+          value={metric}
+          data-testid="pareto-metric"
+          onChange={(e) => ui.set('paretoMetric', (e.target as HTMLSelectElement).value as ParetoMetric)}
+        >
+          <option value="vm">Max von Mises (MPa)</option>
+          <option value="safety">Safety factor (×)</option>
+          <option value="compliance">Compliance (N·mm)</option>
+          <option value="peel">Layer peel (×)</option>
+          <option value="deflection">Max deflection (mm)</option>
+          {hasF1 && <option value="f1">Mode 1 f₁ (Hz)</option>}
+        </select>
+      </div>
+      <svg class="pareto-svg" data-testid="pareto-plot" viewBox={`0 0 ${W} ${H}`}>
+        <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="var(--line-strong)" stroke-width="1" />
+        <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="var(--line-strong)" stroke-width="1" />
+        <text x={padL - 4} y={padT + 4} text-anchor="end" class="pareto-axis">{fmt(yMax, 1)}</text>
+        <text x={padL - 4} y={H - padB} text-anchor="end" class="pareto-axis">{fmt(yMin, 1)}</text>
+        <text x={padL} y={H - 8} text-anchor="start" class="pareto-axis">{fmt(xMin, 2)} g</text>
+        <text x={W - padR} y={H - 8} text-anchor="end" class="pareto-axis">{fmt(xMax, 2)} g</text>
+        <text x={(padL + W - padR) / 2} y={H - 8} text-anchor="middle" class="pareto-axis">mass (g)</text>
+        {frontIndices.length >= 2 && (
+          <polyline
+            data-testid="pareto-line"
+            fill="none"
+            stroke="var(--accent)"
+            stroke-width="1.5"
+            stroke-dasharray="3,2"
+            points={polyPoints}
+          />
+        )}
+        {points.map((p, i) => {
+          const isFront = front.has(i);
+          const isSel = selectedIndex === i;
+          const cx = sx(xs[i]);
+          const cy = sy(ys[i]);
+          const label = param2
+            ? `${param}=${fmt(p.value)}, ${param2}=${fmt(p.value2 ?? 0)}`
+            : `${param}=${fmt(p.value)}`;
+          return (
+            <circle
+              key={i}
+              cx={cx}
+              cy={cy}
+              r={isSel ? 6.5 : isFront ? 5.2 : 3.8}
+              class={`pareto-pt${isFront ? ' frontier' : ''}${isSel ? ' selected' : ''}`}
+              data-testid={`pareto-pt-${i}`}
+              data-index={String(i)}
+              data-pareto={isFront ? 'true' : 'false'}
+              data-selected={isSel ? 'true' : 'false'}
+              onClick={() => sweep.applyPoint(i)}
+            >
+              <title>{`${label} · mass ${fmt(xs[i], 2)} g · ${fmt(ys[i], 2)} ${mInfo.unit}${isFront ? ' (Pareto front)' : ''}`}</title>
+            </circle>
+          );
+        })}
+      </svg>
+      <div class="meta" data-testid="pareto-summary">
+        {front.size} of {points.length} on Pareto front ({mInfo.label} vs mass) — click a point to apply to document (Ctrl+Z to undo)
+      </div>
+    </div>
+  );
+}
+
+/** The parameter sweep panel (GOAL v0.4 section D & v0.7 M25): 1D or 2D grid sweep over
+ * numeric document parameters (`let` variables or statement attributes), streaming rows
+ * and an interactive Pareto scatter frontier. */
 function SweepSection() {
   const sw = useSweep();
   const params = addressableParams(store.doc);
@@ -671,7 +772,21 @@ function SweepSection() {
   const cur = params.find((p) => p.addr === sel)?.value ?? 0;
   const from = ui.sweepFrom ?? cur;
   const to = ui.sweepTo ?? cur;
-  const run = () => sweep.start(sel, from, to, Math.max(1, Math.round(ui.sweepCount)));
+  const sel2 = ui.sweepParam2 && params.some((p) => p.addr === ui.sweepParam2 && p.addr !== sel) ? ui.sweepParam2 : '';
+  const cur2 = sel2 ? (params.find((p) => p.addr === sel2)?.value ?? 0) : 0;
+  const from2 = ui.sweepFrom2 ?? cur2;
+  const to2 = ui.sweepTo2 ?? cur2;
+  const run = () =>
+    sweep.start(
+      sel,
+      from,
+      to,
+      Math.max(1, Math.round(ui.sweepCount)),
+      sel2 || null,
+      from2,
+      to2,
+      Math.max(1, Math.round(ui.sweepCount2)),
+    );
   return (
     <>
       <div class="field-grid" data-testid="sweep-panel">
@@ -714,6 +829,51 @@ function SweepSection() {
             Run
           </button>
         </div>
+        {params.length > 1 && (
+          <>
+            <span class="plain">Param 2</span>
+            <select
+              class="select"
+              value={sel2}
+              data-testid="sweep-param-2"
+              title="optional second parameter for a 2D grid sweep"
+              onChange={(e) => {
+                const v = (e.target as HTMLSelectElement).value;
+                ui.set('sweepParam2', v || null);
+                ui.set('sweepFrom2', null);
+                ui.set('sweepTo2', null);
+              }}
+            >
+              <option value="">None (1D)</option>
+              {params
+                .filter((p) => p.addr !== sel)
+                .map((p) => (
+                  <option key={p.addr} value={p.addr}>
+                    {p.addr}
+                    {p.value !== null ? ` = ${fmt(p.value)}` : ''}
+                  </option>
+                ))}
+            </select>
+            {sel2 && (
+              <>
+                <span class="plain">Values 2</span>
+                <div class="scale-row">
+                  <NumberInput value={from2} onChange={(v) => ui.set('sweepFrom2', v)} label="sweep 2 from" testId="sweep-from-2" />
+                  <NumberInput value={to2} onChange={(v) => ui.set('sweepTo2', v)} label="sweep 2 to" testId="sweep-to-2" />
+                  <NumberInput
+                    value={ui.sweepCount2}
+                    min={1}
+                    step={1}
+                    integer
+                    onChange={(v) => ui.set('sweepCount2', Math.max(1, Math.round(v)))}
+                    label="sweep 2 points"
+                    testId="sweep-count-2"
+                  />
+                </div>
+              </>
+            )}
+          </>
+        )}
         {sw.running && (
           <>
             <span class="plain">Progress</span>
@@ -722,15 +882,19 @@ function SweepSection() {
             </span>
           </>
         )}
+        {sw.points.length >= 2 && (
+          <ParetoPlot points={sw.points} selectedIndex={sw.selectedIndex} param={sw.param} param2={sw.param2} />
+        )}
         {sw.points.length > 0 && (
           <>
             <span class="plain">Points</span>
             <span class="meta">value · dofs · elements · wall ms · deflect mm · MPa</span>
             {sw.points.map((p, i) => {
               const last = p.records[p.records.length - 1];
+              const label = sw.param2 && p.value2 !== undefined ? `${fmt(p.value)}, ${fmt(p.value2)}` : fmt(p.value);
               return (
                 <Fragment key={i}>
-                  <span class="plain">{fmt(p.value)}</span>
+                  <span class="plain">{label}</span>
                   <span class="num" data-testid={`sweep-row-${i}`}>
                     {last ? `${last.dofs} dofs · ${last.elements} elements · wall ${fmt(last.wall_ms, 0)} ms · deflect ${fmt(last.tracked.deflection_mm)} mm · ${fmt(last.tracked.vm_mpa)} MPa` : ''}
                   </span>

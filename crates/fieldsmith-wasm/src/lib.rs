@@ -622,6 +622,7 @@ struct AnalysisMeta {
     /// Per-case summaries: name, maxima and the solve report (big arrays skipped).
     cases: Vec<fieldsmith_core::CaseResult>,
     max_layer_peel: Vec<f64>,
+    mass_g: f64,
     yield_strength: f64,
     yield_z: f64,
     shear_z: f64,
@@ -674,6 +675,7 @@ impl AnalysisOut {
             provenance: self.a.provenance.clone(),
             cases: self.a.cases.clone(),
             max_layer_peel: self.a.cases.iter().map(|c| c.max_layer_peel).collect(),
+            mass_g: self.a.mass_g,
             yield_strength: self.a.yield_strength,
             yield_z: self.a.yield_z,
             shear_z: self.a.shear_z,

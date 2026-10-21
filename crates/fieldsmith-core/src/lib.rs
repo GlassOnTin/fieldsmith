@@ -142,6 +142,7 @@ pub struct Analysis {
     pub mesh: P2Mesh,
     pub young: Vec<f64>,
     pub poisson: f64,
+    pub mass_g: f64,
     pub yield_strength: f64,
     pub yield_z: f64,
     pub shear_z: f64,
@@ -963,6 +964,7 @@ struct Prepared {
     fixed: Vec<u8>,
     mat: materials::Material,
     young: Vec<f64>,
+    mass_g: f64,
     h: f64,
     quality: Quality,
     mesh_ms: f64,
@@ -994,16 +996,15 @@ fn prepare(
         return Err(SetupError("add a load".into()));
     }
     let mat = material_of(doc)?;
+    let vol_mm3 = fieldsmith_field::volume::integrate(
+        &body,
+        fieldsmith_field::volume::default_spacing(&b) * 2.0,
+        None,
+    );
+    let mass_g = vol_mm3 * mat.density / 1000.0;
     let h = match res {
         Resolution::Size(h) => h,
-        Resolution::Dofs(n) => {
-            let v = fieldsmith_field::volume::integrate(
-                &body,
-                fieldsmith_field::volume::default_spacing(&b) * 2.0,
-                None,
-            );
-            size_for_dofs(v.max(1e-9), n)
-        }
+        Resolution::Dofs(n) => size_for_dofs(vol_mm3.max(1e-9), n),
     };
     let f = |p: [f64; 3]| expr::eval(&body, p).v;
     let (mut lin, _) = stuff(f, b.lo, b.hi, h);
@@ -1060,6 +1061,7 @@ fn prepare(
         fixed,
         mat,
         young,
+        mass_g,
         h,
         quality,
         mesh_ms: t_mesh - t0,
@@ -1181,6 +1183,7 @@ pub fn analyse_full(
         fixed,
         mat,
         young,
+        mass_g,
         h,
         quality,
         mesh_ms,
@@ -1312,6 +1315,7 @@ pub fn analyse_full(
         mesh,
         young,
         poisson: mat.nu,
+        mass_g,
         yield_strength: mat.yield_strength,
         yield_z,
         shear_z,

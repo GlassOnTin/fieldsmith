@@ -64,11 +64,11 @@ export class AnalysisEngine {
 
   /** Results lens: run the parameter sweep on the current document through this worker.
    * The sink receives one `sweepPoint` per value, then `sweepDone`/`sweepError`. */
-  runSweep(sink: (m: WorkerOut) => void, addr: string, values: number[], rungs: number[]) {
+  runSweep(sink: (m: WorkerOut) => void, addr: string, values: number[], rungs: number[], addr2?: string, values2?: number[]) {
     this.sweepSink = sink;
     const w = this.ensureWorker();
     this.feed(w);
-    w.postMessage({ type: 'sweep', doc: store.doc, addr, values, rungs });
+    w.postMessage({ type: 'sweep', doc: store.doc, addr, values, addr2, values2, rungs });
   }
 
   subscribe(l: () => void): () => void {
