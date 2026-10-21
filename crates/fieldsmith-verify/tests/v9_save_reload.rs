@@ -57,6 +57,18 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
             ca.name
         );
         assert_eq!(
+            ca.max_layer_peel.to_bits(),
+            cb.max_layer_peel.to_bits(),
+            "{label}: {} max_layer_peel",
+            ca.name
+        );
+        assert_eq!(
+            ca.peel_elem.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            cb.peel_elem.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            "{label}: {} peel_elem",
+            ca.name
+        );
+        assert_eq!(
             ca.max_displacement.to_bits(),
             cb.max_displacement.to_bits(),
             "{label}: {} deflection",
@@ -85,6 +97,19 @@ fn assert_same_results(a: &Analysis, b: &Analysis, label: &str) {
     for (ea, eb) in a.envelope_elem.iter().zip(b.envelope_elem.iter()) {
         assert_eq!(ea.to_bits(), eb.to_bits(), "{label}: envelope element vm");
     }
+    for (pa, pb) in a.peel_envelope_elem.iter().zip(b.peel_envelope_elem.iter()) {
+        assert_eq!(pa.to_bits(), pb.to_bits(), "{label}: envelope element peel");
+    }
+    assert_eq!(a.build_angles, b.build_angles, "{label}: build_angles");
+    assert_eq!(
+        a.best_build_angles, b.best_build_angles,
+        "{label}: best_build_angles"
+    );
+    assert_eq!(
+        a.min_peak_peel.to_bits(),
+        b.min_peak_peel.to_bits(),
+        "{label}: min_peak_peel"
+    );
 }
 
 fn assert_same_graded(a: &Graded, b: &Graded, label: &str) {
@@ -170,6 +195,39 @@ fn save_reload_resolve_is_bit_identical() {
     let a1 = analyse(&solid, res, now).expect("solid analysis");
     let a2 = analyse(&reloaded, res, now).expect("solid analysis after reload");
     assert_same_results(&a1, &a2, "solid bracket");
+
+    // Orthotropic layer-peel strengths (`yield_z`, `shear_z`) and `solve build=(theta, phi)`
+    // round-trip in `.fsm` and reproduce the layer-peel analysis bit for bit.
+    let mut ortho = solid.clone();
+    ortho.custom_materials.push(fieldsmith_doc::Material {
+        id: "petg_ortho".into(),
+        name: "PETG Ortho".into(),
+        e: 2100.0,
+        nu: 0.36,
+        density: 1270.0,
+        yield_strength: 50.0,
+        min_wall: 0.8,
+        alpha: None,
+        yield_z: Some(30.0),
+        shear_z: Some(25.0),
+        source: "test".into(),
+    });
+    ortho.material = "petg_ortho".into();
+    ortho.solve.build = Some([30.0, 15.0]);
+    let printed_ortho = fieldsmith_doc::fsm::print(&ortho);
+    assert!(
+        printed_ortho.contains("yield_z=30 shear_z=25"),
+        "expected yield_z=30 shear_z=25 in:\n{printed_ortho}"
+    );
+    assert!(
+        printed_ortho.contains("build=(30, 15)"),
+        "expected build=(30, 15) in:\n{printed_ortho}"
+    );
+    let reloaded_ortho = round_trip(&ortho);
+    let ao1 = analyse(&ortho, Resolution::Dofs(15_000), now).expect("ortho analysis");
+    let ao2 = analyse(&reloaded_ortho, Resolution::Dofs(15_000), now)
+        .expect("ortho analysis after reload");
+    assert_same_results(&ao1, &ao2, "ortho bracket with build=(30, 15)");
 }
 
 #[test]

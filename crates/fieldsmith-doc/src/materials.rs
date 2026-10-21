@@ -25,8 +25,37 @@ pub struct Material {
     /// `Document::validate`), not silently solved with a made-up one.
     #[serde(default)]
     pub alpha: Option<f64>,
+    /// Inter-layer (build-axis) tensile bond strength `S_z` (MPa). When `None`,
+    /// [`Material::effective_layer_strengths`] applies the documented default knockdown
+    /// (`0.60 × yield_strength`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yield_z: Option<f64>,
+    /// Inter-layer (build-axis) shear bond strength `S_s` (MPa). When `None`,
+    /// [`Material::effective_layer_strengths`] applies the von Mises shear yield default
+    /// (`yield_strength / √3`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shear_z: Option<f64>,
     /// Where the numbers come from.
     pub source: String,
+}
+
+/// Default inter-layer tensile knockdown factor relative to bulk `yield_strength`
+/// when `yield_z` is omitted on a material.
+pub const DEFAULT_YIELD_Z_RATIO: f64 = 0.60;
+
+impl Material {
+    /// Effective inter-layer tensile and shear bond strengths `(S_z, S_s)` in MPa:
+    /// uses explicit `yield_z` / `shear_z` when declared, falling back to
+    /// `0.60 × yield_strength` and `yield_strength / √3` otherwise.
+    pub fn effective_layer_strengths(&self) -> (f64, f64) {
+        let sz = self
+            .yield_z
+            .unwrap_or(DEFAULT_YIELD_Z_RATIO * self.yield_strength);
+        let ss = self
+            .shear_z
+            .unwrap_or(self.yield_strength / 3.0_f64.sqrt());
+        (sz, ss)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,6 +79,8 @@ fn m(
         density: rho,
         min_wall: wall,
         alpha,
+        yield_z: None,
+        shear_z: None,
         source: source.into(),
     }
 }

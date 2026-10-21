@@ -5,7 +5,7 @@ import { store } from '../doc/store';
 type Listener = () => void;
 
 export type GizmoMode = 'translate' | 'rotate';
-export type ResultMode = 'stress' | 'safety' | 'deflection' | 'vectors' | 'temperature';
+export type ResultMode = 'stress' | 'safety' | 'peel' | 'deflection' | 'vectors' | 'temperature';
 
 /** Deformed-shape exaggeration the panel starts at (the ×5 reset target). */
 export const RESULTS_SCALE_DEFAULT = 5;
@@ -43,7 +43,7 @@ class Ui {
    * set on (doc version + rung label), so a mode switch or a new solve falls back to the
    * auto bounds instead of miscolouring a different result with a stale range. The auto
    * lower bound is 0 for stress/deflection and the data minimum for temperature. */
-  resultsRange: { mode: 'stress' | 'deflection' | 'temperature'; levelKey: string; lo: number; hi: number } | null =
+  resultsRange: { mode: 'stress' | 'peel' | 'deflection' | 'temperature'; levelKey: string; lo: number; hi: number } | null =
     null;
   // Mode-shape animation (a modal run's shapes in the Results lens; not undoable).
   /** Which mode animates, 0-based; −1 = none — the mesh shows the static results.

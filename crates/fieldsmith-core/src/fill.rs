@@ -404,6 +404,12 @@ pub struct Graded {
     /// Envelope over the graded cases: nodal and per-element von Mises.
     pub envelope: Vec<f64>,
     pub envelope_elem: Vec<f64>,
+    /// Envelope over the graded cases: per-element inter-layer peel utilization.
+    pub peel_envelope_elem: Vec<f64>,
+    pub best_build_angles: [f64; 2],
+    pub min_peak_peel: f64,
+    pub worst_build_angles: [f64; 2],
+    pub max_peak_peel: f64,
     /// Driving stress at which the grade reaches ρmax (90th percentile over lattice-region
     /// elements; above it the density clamps at ρmax).
     pub sigma_ref: f64,
@@ -791,6 +797,23 @@ pub fn graded_of(
             thermal_cases.push(case);
         }
     }
+    // Inter-layer peel utilization across all graded cases for the document's build orientation.
+    let (yield_z, shear_z) = mat.effective_layer_strengths();
+    let build_angles = doc.solve.build.unwrap_or([0.0, 0.0]);
+    let b_hat = crate::overhang::build_axis_from_angles(build_angles[0], build_angles[1]);
+    for c in cases.iter_mut().chain(thermal_cases.iter_mut()) {
+        crate::populate_case_peel(c, b_hat, yield_z, shear_z);
+        for (e, &cls) in class.iter().enumerate() {
+            if cls == CLASS_VOID {
+                c.peel_elem[e] = 0.0;
+            }
+        }
+        c.max_layer_peel = c.peel_elem.iter().copied().fold(0.0, f64::max);
+    }
+    let all_for_sweep: Vec<CaseResult> = cases.iter().chain(&thermal_cases).cloned().collect();
+    let (best_build_angles, min_peak_peel, worst_build_angles, max_peak_peel) =
+        crate::sweep_build_orientations(&all_for_sweep, yield_z, shear_z, Some(&class));
+
     // The envelope covers every case — mechanical and thermal — matching the solid
     // path's semantics (analyse folds over `cases` after its thermal block pushed the
     // thermal cases in). Without this a load-free graded document reads a zero envelope.
@@ -806,6 +829,9 @@ pub fn graded_of(
         .collect();
     let envelope_elem = (0..base.mesh.tets.len())
         .map(|e| all_cases.clone().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
+        .collect();
+    let peel_envelope_elem = (0..base.mesh.tets.len())
+        .map(|e| all_cases.clone().map(|c| c.peel_elem[e]).fold(0.0, f64::max))
         .collect();
 
     // Strength utilization per solid case: the max over NON-VOID elements of the
@@ -874,6 +900,11 @@ pub fn graded_of(
         thermal_cases,
         envelope,
         envelope_elem,
+        peel_envelope_elem,
+        best_build_angles,
+        min_peak_peel,
+        worst_build_angles,
+        max_peak_peel,
         sigma_ref,
         mass_g,
         solid_mass_g,

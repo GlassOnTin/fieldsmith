@@ -1175,6 +1175,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     Some(Some(Val::Num(v))) => Some(v),
                     Some(Some(_)) => return Err(err("tref must be a number, e.g. tref=20".into())),
                 };
+                doc.solve.build = a.pair("build")?.map(|(th, ph)| [th, ph]);
                 a.finish()?;
             }
             "custommaterial" => {
@@ -1191,6 +1192,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     // Thermal expansion 1/°C (e.g. 2e-5 for an aluminium class); optional,
                     // and a thermal document refuses a material without one.
                     alpha: a.num("a")?,
+                    yield_z: a.num("yield_z")?,
+                    shear_z: a.num("shear_z")?,
                     source: a
                         .string("source")?
                         .unwrap_or_else(|| "User supplied".into()),
@@ -1411,6 +1414,12 @@ pub fn print(doc: &Document) -> String {
         if let Some(a) = m.alpha {
             line += &format!(" a={}", n(a));
         }
+        if let Some(yz) = m.yield_z {
+            line += &format!(" yield_z={}", n(yz));
+        }
+        if let Some(sz) = m.shear_z {
+            line += &format!(" shear_z={}", n(sz));
+        }
         line += &format!(" source={}", q(&m.source));
         let _ = writeln!(o, "{line}");
     }
@@ -1542,6 +1551,9 @@ pub fn print(doc: &Document) -> String {
     }
     if let Some(t) = doc.solve.t_ref {
         solve_line += &format!(" tref={}", n(t));
+    }
+    if let Some([th, ph]) = doc.solve.build {
+        solve_line += &format!(" build=({}, {})", n(th), n(ph));
     }
     if solve_line.len() > "solve".len() {
         let _ = writeln!(o, "{solve_line}");

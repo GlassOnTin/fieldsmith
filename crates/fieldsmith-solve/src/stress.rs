@@ -50,6 +50,46 @@ pub fn min_compressive(s: &Stress) -> f64 {
     principal_stresses(s)[0].min(0.0)
 }
 
+/// Inter-layer normal (`σ_nn`) and shear (`τ_nt`) tractions (MPa) on the layer plane
+/// whose unit normal is `b_hat = [bx, by, bz]`.
+///
+/// For symmetric Cauchy stress `σ = [σ_xx, σ_yy, σ_zz, σ_xy, σ_yz, σ_zx]`:
+/// - `t = σ · b̂`
+/// - `σ_nn = b̂ · t = b̂ᵀ σ b̂` (positive in inter-layer tension / peel, negative in compression)
+/// - `τ_nt = ‖t − σ_nn b̂‖` (non-negative inter-layer shear magnitude)
+pub fn layer_tractions(s: &Stress, b_hat: [f64; 3]) -> (f64, f64) {
+    let [xx, yy, zz, xy, yz, zx] = *s;
+    let [bx, by, bz] = b_hat;
+    let tx = xx * bx + xy * by + zx * bz;
+    let ty = xy * bx + yy * by + yz * bz;
+    let tz = zx * bx + yz * by + zz * bz;
+    let sigma_nn = bx * tx + by * ty + bz * tz;
+    let sx = tx - sigma_nn * bx;
+    let sy = ty - sigma_nn * by;
+    let sz = tz - sigma_nn * bz;
+    let tau_nt = (sx * sx + sy * sy + sz * sz).sqrt();
+    (sigma_nn, tau_nt)
+}
+
+/// Quadratic inter-layer bond index `(max(0, σ_nn) / S_z)² + (τ_nt / S_s)²` (dimensionless;
+/// `1.0` at inter-layer failure onset). Compressive normal traction (`σ_nn ≤ 0`) does not
+/// peel layers apart.
+pub fn layer_peel_quadratic(s: &Stress, b_hat: [f64; 3], yield_z: f64, shear_z: f64) -> f64 {
+    if yield_z <= 0.0 || shear_z <= 0.0 {
+        return 0.0;
+    }
+    let (sigma_nn, tau_nt) = layer_tractions(s, b_hat);
+    let r_n = sigma_nn.max(0.0) / yield_z;
+    let r_t = tau_nt / shear_z;
+    r_n * r_n + r_t * r_t
+}
+
+/// Linear-in-load inter-layer peel utilization `√((max(0, σ_nn) / S_z)² + (τ_nt / S_s)²)`
+/// (dimensionless, `≥ 0`; `1.0` at inter-layer bond failure onset).
+pub fn layer_peel_utilization(s: &Stress, b_hat: [f64; 3], yield_z: f64, shear_z: f64) -> f64 {
+    layer_peel_quadratic(s, b_hat, yield_z, shear_z).sqrt()
+}
+
 /// Stress in element `e` at reference point `xi`.
 pub fn element_stress(
     mesh: &P2Mesh,

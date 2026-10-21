@@ -238,10 +238,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .axis-checks { display: flex; gap: 10px; }
 
 /* Results lens */
-.results-panel { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 10px 12px; z-index: 5; min-width: 250px; max-width: 372px; font-size: 12px; }
+.results-panel { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 10px 12px; z-index: 5; min-width: 250px; max-width: 400px; font-size: 12px; }
 .results-panel .field-grid { display: grid; grid-template-columns: 84px 1fr; gap: 4px 8px; align-items: center; }
 .results-panel .show-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
 .results-panel .show-row .seg { flex: 1; min-width: 0; }
+.results-panel .show-row .seg button { padding: 0 4px; font-size: 11px; }
 .legend-block { margin: 8px 0 2px; }
 .legend-range { display: flex; align-items: center; gap: 8px; }
 .results-panel .legend-range .numbox { width: 78px; flex: none; }
@@ -309,5 +310,5 @@ button, input, select, textarea { font: inherit; color: inherit; }
    * toggles top-left (78 = toggle column height + gap). */
   .opacity-panel { top: 78px; left: 10px; bottom: auto; right: auto; }
   .clip-panel { top: 122px; left: 10px; bottom: auto; right: auto; }
-  .results-panel { max-width: min(372px, calc(100vw - 24px)); }
+  .results-panel { max-width: min(400px, calc(100vw - 24px)); }
 }

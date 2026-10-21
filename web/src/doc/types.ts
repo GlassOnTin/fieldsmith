@@ -124,6 +124,8 @@ export interface Material {
   yield_strength: number;
   density: number;
   min_wall: number;
+  yield_z?: number | null;
+  shear_z?: number | null;
   source: string;
 }
 
@@ -162,7 +164,7 @@ export interface Document {
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
-  solve: { size: number | null; modes: number | null; t_ref: number | null };
+  solve: { size: number | null; modes: number | null; t_ref: number | null; build?: [number, number] | null };
   /** Named scalars and the recorded expression reads. Optional because the Rust side
    * omits both when empty (serde skip_serializing_if) — plain documents carry neither
    * key in their JSON; backfilled by [`withLetTables`] at every intake site. */

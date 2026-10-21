@@ -92,12 +92,12 @@ skipping it.
       plus pixel-delta verification of the `Make` overhang overlay.
 
 ### C. Orthotropic layer-peel criterion & build orientation (`M24` — `V46`)
-- [ ] `.fsm` material/solve statements accept build orientation `build=(θ, φ)` and inter-layer
+- [x] `.fsm` material/solve statements accept build orientation `build=(θ, φ)` and inter-layer
       tensile/shear strengths (`yield_z`, `shear_z`).
-- [ ] `fieldsmith-core` computes per-element and nodal layer-peel utilization alongside bulk
-      von Mises; `Results` lens mode chip adds `Layer peel` and reports peak utilization and
+- [x] `fieldsmith-core` computes per-element and nodal layer-peel utilization alongside bulk
+      von Mises; `Results` lens mode chip adds `Layer peel` (`Peel`) and reports peak utilization and
       governing orientation.
-- [ ] `V46` verifies exact closed-form layer-peel utilization on an off-axis uniaxial bar across
+- [x] `V46` verifies exact closed-form layer-peel utilization on an off-axis uniaxial bar across
       `θ ∈ {0°, 30°, 45°, 60°, 90°}` (`σ_nn = σ₀ cos²θ`, `τ_nt = σ₀ sin θ cos θ`) to solver
       precision (`≤ 1e-6`), and verifies the `Results` lens ramp in headless e2e.
 
@@ -117,8 +117,8 @@ skipping it.
 | # | Milestone | Status | Deliverable |
 | :-- | :-- | :-- | :-- |
 | **M22** | Lattice axis rotation (`fill rotate=`) | Done (`3c3026e`) | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
-| **M23** | Exact-gradient overhang check | Done | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
-| **M24** | Inter-layer peel criterion & orientation | Planned | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
+| **M23** | Exact-gradient overhang check | Done (`0eeb0b2`) | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
+| **M24** | Inter-layer peel criterion & orientation | Done | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
 | **M25** | Interactive Pareto explorer in `Results` | Planned | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
 
 ---

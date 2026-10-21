@@ -621,7 +621,15 @@ struct AnalysisMeta {
     provenance: fieldsmith_core::Provenance,
     /// Per-case summaries: name, maxima and the solve report (big arrays skipped).
     cases: Vec<fieldsmith_core::CaseResult>,
+    max_layer_peel: Vec<f64>,
     yield_strength: f64,
+    yield_z: f64,
+    shear_z: f64,
+    build_angles: [f64; 2],
+    best_build_angles: [f64; 2],
+    min_peak_peel: f64,
+    worst_build_angles: [f64; 2],
+    max_peak_peel: f64,
     poisson: f64,
     /// First mode frequencies when the caller asked for a modal run alongside the statics.
     modes: Option<fieldsmith_solve::ModalResult>,
@@ -665,7 +673,15 @@ impl AnalysisOut {
         to_json(&AnalysisMeta {
             provenance: self.a.provenance.clone(),
             cases: self.a.cases.clone(),
+            max_layer_peel: self.a.cases.iter().map(|c| c.max_layer_peel).collect(),
             yield_strength: self.a.yield_strength,
+            yield_z: self.a.yield_z,
+            shear_z: self.a.shear_z,
+            build_angles: self.a.build_angles,
+            best_build_angles: self.a.best_build_angles,
+            min_peak_peel: self.a.min_peak_peel,
+            worst_build_angles: self.a.worst_build_angles,
+            max_peak_peel: self.a.max_peak_peel,
             poisson: self.a.poisson,
             modes: self.a.modes.clone(),
         })
@@ -752,6 +768,18 @@ impl AnalysisOut {
         Float64Array::from(&self.a.envelope_elem[..])
     }
 
+    /// Element-centroid inter-layer peel utilization of one case (dimensionless).
+    #[wasm_bindgen(js_name = peelElem)]
+    pub fn peel_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.a.cases[case].peel_elem[..])
+    }
+
+    /// Max over cases of element-centroid inter-layer peel utilization (dimensionless).
+    #[wasm_bindgen(js_name = peelElemEnvelope)]
+    pub fn peel_elem_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.a.peel_envelope_elem[..])
+    }
+
     /// Nodal temperature of one case (°C) — empty when the case is mechanical, so the
     /// caller checks `length` rather than a nullable handle.
     pub fn temperature(&self, case: usize) -> Float64Array {
@@ -818,6 +846,7 @@ struct GradedMeta {
     provenance: Provenance,
     /// The graded re-solve, one per load case, same order as the solid cases.
     cases: Vec<fieldsmith_core::CaseResult>,
+    max_layer_peel: Vec<f64>,
     /// Per-solid-case strength-utilization factor (the max element von Mises over the
     /// fraction-scaled law yield, see `fill::Graded`): `None` entries where the document
     /// material states no yield. Length and order = `cases`, mechanical slots only.
@@ -834,6 +863,13 @@ struct GradedMeta {
     solid_cases: Vec<CaseSummary>,
     fill: FillInfo,
     yield_strength: f64,
+    yield_z: f64,
+    shear_z: f64,
+    build_angles: [f64; 2],
+    best_build_angles: [f64; 2],
+    min_peak_peel: f64,
+    worst_build_angles: [f64; 2],
+    max_peak_peel: f64,
     poisson: f64,
 }
 
@@ -879,6 +915,13 @@ impl GradedOut {
         to_json(&GradedMeta {
             provenance: self.base.provenance.clone(),
             cases: self.g.cases.clone(),
+            max_layer_peel: self
+                .g
+                .cases
+                .iter()
+                .chain(&self.g.thermal_cases)
+                .map(|c| c.max_layer_peel)
+                .collect(),
             yield_utilization: self.g.yield_utilization.clone(),
             buckling_utilization: self.g.buckling_utilization.clone(),
             thermal_cases: self.g.thermal_cases.clone(),
@@ -909,6 +952,13 @@ impl GradedOut {
                 solve_ms: self.g.solve_ms,
             },
             yield_strength: self.base.yield_strength,
+            yield_z: self.base.yield_z,
+            shear_z: self.base.shear_z,
+            build_angles: self.base.build_angles,
+            best_build_angles: self.g.best_build_angles,
+            min_peak_peel: self.g.min_peak_peel,
+            worst_build_angles: self.g.worst_build_angles,
+            max_peak_peel: self.g.max_peak_peel,
             poisson: self.base.poisson,
         })
     }
@@ -1003,6 +1053,29 @@ impl GradedOut {
     #[wasm_bindgen(js_name = vmElemEnvelope)]
     pub fn vm_elem_envelope(&self) -> Float64Array {
         Float64Array::from(&self.g.envelope_elem[..])
+    }
+
+    /// Graded element-centroid inter-layer peel utilization of one mechanical case (dimensionless).
+    #[wasm_bindgen(js_name = peelElem)]
+    pub fn peel_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].peel_elem[..])
+    }
+
+    /// Graded element-centroid inter-layer peel utilization of one thermal case (dimensionless).
+    #[wasm_bindgen(js_name = thermalPeelElem)]
+    pub fn thermal_peel_elem(&self, case: usize) -> Float64Array {
+        let p = self
+            .g
+            .thermal_cases
+            .get(case)
+            .map(|c| c.peel_elem.as_slice());
+        Float64Array::from(p.unwrap_or(&[]))
+    }
+
+    /// Graded max over cases of element-centroid inter-layer peel utilization (dimensionless).
+    #[wasm_bindgen(js_name = peelElemEnvelope)]
+    pub fn peel_elem_envelope(&self) -> Float64Array {
+        Float64Array::from(&self.g.peel_envelope_elem[..])
     }
 
     /// Nodal temperature of one mechanical case (°C) — always empty: the graded `cases` are

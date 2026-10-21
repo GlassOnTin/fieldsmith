@@ -17,8 +17,8 @@ use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
-    compliance, element_stress, element_stress_thermal, min_compressive, nodal_stress,
-    nodal_stress_mat, nodal_stress_thermal, solve, solve_conduction, thermal_load,
+    compliance, element_stress, element_stress_thermal, layer_peel_utilization, min_compressive,
+    nodal_stress, nodal_stress_mat, nodal_stress_thermal, solve, solve_conduction, thermal_load,
     upper_compliance, von_mises, HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions,
     Stress, ThermalRefData, V3,
 };
@@ -75,6 +75,19 @@ pub struct CaseResult {
     /// other per-element fields.
     #[serde(skip)]
     pub sigma_min_elem: Vec<f64>,
+    /// Element-centroid stress tensors `σ` (MPa) — kept in memory for layer-peel and
+    /// build-orientation evaluation.
+    #[serde(skip)]
+    pub stress_elem: Vec<Stress>,
+    /// Nodal inter-layer peel utilization `√((max(0, σ_nn)/S_z)² + (τ_nt/S_s)²)` (dimensionless).
+    #[serde(skip)]
+    pub peel_nodal: Vec<f64>,
+    /// Element-centroid inter-layer peel utilization (dimensionless).
+    #[serde(skip)]
+    pub peel_elem: Vec<f64>,
+    /// Peak element-centroid inter-layer peel utilization across this case.
+    #[serde(skip)]
+    pub max_layer_peel: f64,
     pub max_von_mises: f64,
     pub max_vm_elem: f64,
     pub max_displacement: f64,
@@ -130,11 +143,20 @@ pub struct Analysis {
     pub young: Vec<f64>,
     pub poisson: f64,
     pub yield_strength: f64,
+    pub yield_z: f64,
+    pub shear_z: f64,
+    pub build_angles: [f64; 2],
+    pub best_build_angles: [f64; 2],
+    pub min_peak_peel: f64,
+    pub worst_build_angles: [f64; 2],
+    pub max_peak_peel: f64,
     pub cases: Vec<CaseResult>,
     /// Max over cases of nodal von Mises.
     pub envelope: Vec<f64>,
     /// Max over cases of element-centroid von Mises.
     pub envelope_elem: Vec<f64>,
+    /// Max over cases of element-centroid inter-layer peel utilization.
+    pub peel_envelope_elem: Vec<f64>,
     /// Boundary triangles of the P2 mesh: 6 node ids each (corners, then midsides 01, 12, 20).
     pub surface: Vec<[u32; 6]>,
     /// Element that owns each surface facet (index into `mesh.tets`), same order as `surface`.
@@ -268,9 +290,36 @@ pub fn elem_von_mises_thermal(
     alpha: f64,
     dt: &[f64],
 ) -> Vec<f64> {
+    elem_stress_thermal(mesh, u, young, poisson, alpha, dt)
+        .iter()
+        .map(von_mises)
+        .collect()
+}
+
+/// Element-centroid stress tensor for each element (`xi = [0.25; 3]`), isotropic.
+pub fn elem_stress(mesh: &P2Mesh, u: &[f64], young: &[f64], poisson: f64) -> Vec<Stress> {
+    (0..mesh.tets.len())
+        .map(|e| element_stress(mesh, u, e, young[e], poisson, [0.25; 3]))
+        .collect()
+}
+
+/// Element-centroid stress tensor routed by material (cubic elements use the cubic kernel).
+pub fn elem_stress_mat(mesh: &P2Mesh, u: &[f64], mat: &Material) -> Vec<Stress> {
+    (0..mesh.tets.len())
+        .map(|e| fieldsmith_solve::element_stress_mat(mesh, u, e, mat, [0.25; 3]))
+        .collect()
+}
+
+/// Element-centroid stress tensor for a thermal case (`element_stress_thermal` at `[0.25; 3]`).
+pub fn elem_stress_thermal(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha: f64,
+    dt: &[f64],
+) -> Vec<Stress> {
     use fenics_element::{FiniteElement, P2Tetrahedron};
-    // The P2 basis at the reference centroid [1/4, 1/4, 1/4]: −1/8 on each vertex,
-    // +1/4 on each midside (sums to 1 — the partition-checked interpolation weights).
     let phi = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
     (0..mesh.tets.len())
         .map(|e| {
@@ -280,10 +329,78 @@ pub fn elem_von_mises_thermal(
                 .zip(phi.iter())
                 .map(|(&n, p)| dt[n as usize] * p)
                 .sum();
-            let s = element_stress_thermal(mesh, u, e, young[e], poisson, alpha, dt_c, [0.25; 3]);
-            von_mises(&s)
+            element_stress_thermal(mesh, u, e, young[e], poisson, alpha, dt_c, [0.25; 3])
         })
         .collect()
+}
+
+/// Populate `peel_nodal`, `peel_elem`, and `max_layer_peel` on a solved `CaseResult`
+/// for build axis `b_hat` and inter-layer strengths `(yield_z, shear_z)`.
+pub fn populate_case_peel(case: &mut CaseResult, b_hat: [f64; 3], yield_z: f64, shear_z: f64) {
+    case.peel_nodal = case
+        .stress
+        .iter()
+        .map(|s| layer_peel_utilization(s, b_hat, yield_z, shear_z))
+        .collect();
+    case.peel_elem = case
+        .stress_elem
+        .iter()
+        .map(|s| layer_peel_utilization(s, b_hat, yield_z, shear_z))
+        .collect();
+    case.max_layer_peel = case.peel_elem.iter().copied().fold(0.0, f64::max);
+}
+
+/// Sweep build orientations `(theta_deg, phi_deg)` over the upper hemisphere
+/// (`theta ∈ {0°, 15°, …, 90°}`, `phi ∈ {0°, 30°, …, 330°}`) across `cases` to find the
+/// build orientation that minimizes and maximizes peak element-centroid layer-peel
+/// utilization (`(best_angles, min_peak, worst_angles, max_peak)`).
+pub fn sweep_build_orientations(
+    cases: &[CaseResult],
+    yield_z: f64,
+    shear_z: f64,
+    class: Option<&[u8]>,
+) -> ([f64; 2], f64, [f64; 2], f64) {
+    if cases.is_empty() || yield_z <= 0.0 || shear_z <= 0.0 {
+        return ([0.0, 0.0], 0.0, [0.0, 0.0], 0.0);
+    }
+    let mut best_ang = [0.0, 0.0];
+    let mut best_val = f64::INFINITY;
+    let mut worst_ang = [0.0, 0.0];
+    let mut worst_val = 0.0_f64;
+    for ti in 0..=6 {
+        let theta = (ti as f64) * 15.0;
+        let phi_steps = if ti == 0 { 1 } else { 12 };
+        for pi in 0..phi_steps {
+            let phi = (pi as f64) * 30.0;
+            let b_hat = crate::overhang::build_axis_from_angles(theta, phi);
+            let mut peak = 0.0_f64;
+            for c in cases {
+                for (e, s) in c.stress_elem.iter().enumerate() {
+                    if let Some(cls) = class {
+                        if cls.get(e).copied() == Some(crate::fill::CLASS_VOID) {
+                            continue;
+                        }
+                    }
+                    let u = layer_peel_utilization(s, b_hat, yield_z, shear_z);
+                    if u > peak {
+                        peak = u;
+                    }
+                }
+            }
+            if peak < best_val {
+                best_val = peak;
+                best_ang = [theta, phi];
+            }
+            if peak > worst_val || worst_val == 0.0 {
+                worst_val = peak;
+                worst_ang = [theta, phi];
+            }
+        }
+    }
+    if !best_val.is_finite() {
+        best_val = 0.0;
+    }
+    (best_ang, best_val, worst_ang, worst_val)
 }
 
 /// Support constraints as a per-node bit mask: bit 0/1/2 = x/y/z fixed. Shared by the solid and
@@ -701,17 +818,19 @@ pub fn run_case(
     // conforming solve used.
     let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
     let routed = problem.material.cubic.is_some();
-    let (stress, vm_elem) = if routed {
+    let (stress, stress_elem) = if routed {
         (
             nodal_stress_mat(mesh, &u, &problem.material),
-            elem_von_mises_mat(mesh, &u, &problem.material),
+            elem_stress_mat(mesh, &u, &problem.material),
         )
     } else {
         (
             nodal_stress(mesh, &u, &problem.material.young, problem.material.poisson),
-            elem_von_mises(mesh, &u, &problem.material.young, problem.material.poisson),
+            elem_stress(mesh, &u, &problem.material.young, problem.material.poisson),
         )
     };
+    let vm_elem: Vec<f64> = stress_elem.iter().map(von_mises).collect();
+    let sigma_min_elem: Vec<f64> = stress_elem.iter().map(min_compressive).collect();
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
     let max_d = (0..mesh.nodes.len())
         .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
@@ -725,11 +844,6 @@ pub fn run_case(
     } else {
         None
     };
-    let sigma_min_elem = if routed {
-        elem_min_compress_principal_mat(mesh, &u, &problem.material)
-    } else {
-        elem_min_compress_principal(mesh, &u, &problem.material.young, problem.material.poisson)
-    };
     Ok(CaseResult {
         name,
         max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
@@ -741,6 +855,10 @@ pub fn run_case(
         stress,
         von_mises: vm,
         sigma_min_elem,
+        stress_elem,
+        peel_nodal: Vec::new(),
+        peel_elem: vec![0.0; mesh.tets.len()],
+        max_layer_peel: 0.0,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
@@ -793,9 +911,10 @@ pub fn run_thermal_case(
     };
     let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
     let stress = nodal_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
+    let stress_elem = elem_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
-    let vm_elem = elem_von_mises_thermal(mesh, &u, young, poisson, alpha, &dt);
-    let sigma_min_elem = elem_min_compress_principal_thermal(mesh, &u, young, poisson, alpha, &dt);
+    let vm_elem: Vec<f64> = stress_elem.iter().map(von_mises).collect();
+    let sigma_min_elem: Vec<f64> = stress_elem.iter().map(min_compressive).collect();
     let max_d = (0..mesh.nodes.len())
         .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
         .fold(0.0, f64::max);
@@ -818,6 +937,10 @@ pub fn run_thermal_case(
         stress,
         von_mises: vm,
         sigma_min_elem,
+        stress_elem,
+        peel_nodal: Vec::new(),
+        peel_elem: vec![0.0; mesh.tets.len()],
+        max_layer_peel: 0.0,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
@@ -1128,6 +1251,17 @@ pub fn analyse_full(
         }
         thermal_ms = clock() - t_thermal;
     }
+    // Inter-layer peel utilization across all cases for the document's build orientation
+    // (`solve build=(theta, phi)`, default `+Z`), plus a hemisphere orientation sweep.
+    let (yield_z, shear_z) = mat.effective_layer_strengths();
+    let build_angles = doc.solve.build.unwrap_or([0.0, 0.0]);
+    let b_hat = crate::overhang::build_axis_from_angles(build_angles[0], build_angles[1]);
+    for c in &mut cases {
+        populate_case_peel(c, b_hat, yield_z, shear_z);
+    }
+    let (best_build_angles, min_peak_peel, worst_build_angles, max_peak_peel) =
+        sweep_build_orientations(&cases, yield_z, shear_z, None);
+
     // Envelope over every case — mechanical and thermal: the tracked readout is the
     // worst stress the part can see from any of them.
     let envelope = (0..nn)
@@ -1135,6 +1269,9 @@ pub fn analyse_full(
         .collect();
     let envelope_elem = (0..mesh.tets.len())
         .map(|e| cases.iter().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
+        .collect();
+    let peel_envelope_elem = (0..mesh.tets.len())
+        .map(|e| cases.iter().map(|c| c.peel_elem[e]).fold(0.0, f64::max))
         .collect();
     // Density g/cm³ → N·s²/mm⁴ (the modal solve's units, mm-N-s).
     let modal = match modes {
@@ -1176,9 +1313,17 @@ pub fn analyse_full(
         young,
         poisson: mat.nu,
         yield_strength: mat.yield_strength,
+        yield_z,
+        shear_z,
+        build_angles,
+        best_build_angles,
+        min_peak_peel,
+        worst_build_angles,
+        max_peak_peel,
         cases,
         envelope,
         envelope_elem,
+        peel_envelope_elem,
         surface,
         surface_owner,
         surface_region,

@@ -385,15 +385,28 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                 );
                 println!(
-                    "| case | peak von Mises (MPa) | max deflection (mm) |\n\
-                     | :-- | --: | --: |"
+                    "| case | peak von Mises (MPa) | max deflection (mm) | peak layer peel (×) |\n\
+                     | :-- | --: | --: | --: |"
                 );
                 for c in &a.cases {
                     println!(
-                        "| {} | {:.2} | {:.4} |",
-                        c.name, c.max_vm_elem, c.max_displacement
+                        "| {} | {:.2} | {:.4} | {:.2} |",
+                        c.name, c.max_vm_elem, c.max_displacement, c.max_layer_peel
                     );
                 }
+                println!(
+                    "build orientation ({:.0}°, {:.0}°): layer peel S_z {:.1} MPa, S_s {:.1} MPa; best build ({:.0}°, {:.0}°) → {:.2}×, worst ({:.0}°, {:.0}°) → {:.2}×",
+                    a.build_angles[0],
+                    a.build_angles[1],
+                    a.yield_z,
+                    a.shear_z,
+                    a.best_build_angles[0],
+                    a.best_build_angles[1],
+                    a.min_peak_peel,
+                    a.worst_build_angles[0],
+                    a.worst_build_angles[1],
+                    a.max_peak_peel
+                );
                 for c in &a.cases {
                     if let Some(r) = &c.conduction {
                         // A thermal case always carries a nodal temperature field (the
@@ -444,17 +457,29 @@ fn run(args: &[String]) -> Result<(), String> {
                 );
                 for c in &a.cases {
                     println!(
-                        "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm{}",
+                        "{}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm, peak layer peel {:.2}×{}",
                         c.name,
                         c.max_vm_elem,
                         c.max_von_mises,
                         c.max_displacement,
+                        c.max_layer_peel,
                         c.conduction
                             .as_ref()
                             .map(|r| format!(", conduction {} iterations", r.iterations))
                             .unwrap_or_default()
                     );
                 }
+                println!(
+                    "build ({:.0}°, {:.0}°): best orientation ({:.0}°, {:.0}°) → {:.2}× peel (worst ({:.0}°, {:.0}°) → {:.2}×)",
+                    a.build_angles[0],
+                    a.build_angles[1],
+                    a.best_build_angles[0],
+                    a.best_build_angles[1],
+                    a.min_peak_peel,
+                    a.worst_build_angles[0],
+                    a.worst_build_angles[1],
+                    a.max_peak_peel
+                );
                 if let Some(m) = &a.modes {
                     for (mi, &f) in m.frequencies.iter().enumerate() {
                         println!("mode {}: {:.2} Hz", mi + 1, f);
@@ -724,12 +749,12 @@ fn graded_shape(g: &fieldsmith_core::fill::Graded) -> ([usize; 3], (f64, f64)) {
 }
 
 fn print_case_table(cases: &[CaseResult], caption: &str) {
-    println!("| {caption} case | peak von Mises (MPa) | max deflection (mm) |");
-    println!("| :-- | --: | --: |");
+    println!("| {caption} case | peak von Mises (MPa) | max deflection (mm) | peak layer peel (×) |");
+    println!("| :-- | --: | --: | --: |");
     for c in cases {
         println!(
-            "| {} | {:.2} | {:.4} |",
-            c.name, c.max_vm_elem, c.max_displacement
+            "| {} | {:.2} | {:.4} | {:.2} |",
+            c.name, c.max_vm_elem, c.max_displacement, c.max_layer_peel
         );
     }
 }
@@ -737,8 +762,8 @@ fn print_case_table(cases: &[CaseResult], caption: &str) {
 fn print_case_lines(cases: &[CaseResult], tag: &str) {
     for c in cases {
         println!(
-            "{tag} {}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm",
-            c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement
+            "{tag} {}: peak von Mises {:.2} MPa (element centroids; nodal {:.2}), max deflection {:.4} mm, peak layer peel {:.2}×",
+            c.name, c.max_vm_elem, c.max_von_mises, c.max_displacement, c.max_layer_peel
         );
     }
 }

@@ -455,6 +455,22 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
     const dMode = await diffCaps('__solidRes', '__solidDefl');
     check('solid × results: the mode chip stress → deflection changes the frame', dMode.inChanged > 0, `${dMode.inChanged} px changed`);
 
+    // Peel mode chip: inter-layer peel utilization along the build axis, with orientation summary.
+    await page.locator('[data-testid="results-mode"] button[data-value="peel"]').click();
+    await page.waitForFunction(() => window.fieldsmith.ui.resultsMode === 'peel', null, { timeout: 5000 });
+    await page.waitForTimeout(350);
+    await stash('__solidPeel');
+    const dPeel = await diffCaps('__solidRes', '__solidPeel');
+    const peelUi = await page.evaluate(() => ({
+      caption: document.querySelector('[data-testid="legend"] .meta')?.textContent ?? '',
+      summary: document.querySelector('[data-testid="results-peel-summary"]')?.textContent ?? '',
+    }));
+    check(
+      'solid × results: peel mode colours inter-layer peel utilization and reports best build orientation',
+      dPeel.inChanged > 0 && peelUi.caption.includes('inter-layer peel utilization') && peelUi.summary.includes('best ('),
+      `${dPeel.inChanged} px vs stress, summary "${peelUi.summary}"`,
+    );
+
     // Vectors: grey base + white arrows over the deformed shape.
     await page.locator('[data-testid="results-mode"] button[data-value="vectors"]').click();
     await page.waitForFunction(() => window.fieldsmith.ui.resultsMode === 'vectors', null, { timeout: 5000 });

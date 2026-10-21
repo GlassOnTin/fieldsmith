@@ -562,6 +562,10 @@ pub struct SolveSettings {
     /// The statement's unit is °C like the temperature values. M14.
     #[serde(default)]
     pub t_ref: Option<f64>,
+    /// Build orientation `(theta_deg, phi_deg)` in degrees (`theta` tilt from `+Z`, `phi`
+    /// azimuth in XY from `+X` toward `+Y`). `None` defaults to `+Z` (`(0, 0)`). M24.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<[f64; 2]>,
 }
 
 impl Document {
@@ -1063,6 +1067,29 @@ impl Document {
         if let Some(t) = self.solve.t_ref {
             if !t.is_finite() {
                 errs.push("solve tref= is not a finite number".into());
+            }
+        }
+        if let Some([th, ph]) = self.solve.build {
+            if !th.is_finite() || !ph.is_finite() {
+                errs.push("solve build= angles must be finite numbers".into());
+            }
+        }
+        for m in &self.custom_materials {
+            if let Some(yz) = m.yield_z {
+                if !(yz.is_finite() && yz > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' yield_z must be a positive finite number",
+                        m.id
+                    ));
+                }
+            }
+            if let Some(sz) = m.shear_z {
+                if !(sz.is_finite() && sz > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' shear_z must be a positive finite number",
+                        m.id
+                    ));
+                }
             }
         }
         // The thermal flow refuses a material with no sourced expansion coefficient

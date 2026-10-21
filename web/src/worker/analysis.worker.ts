@@ -39,6 +39,7 @@ function pack(
     fillParamData?: () => Float32Array;
     thermalU?: (i: number) => Float64Array;
     thermalVmElem?: (i: number) => Float64Array;
+    thermalPeelElem?: (i: number) => Float64Array;
     thermalTemperature?: (i: number) => Float64Array;
   },
   keep = false,
@@ -47,10 +48,12 @@ function pack(
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
+  const peelElem: Float64Array[] = [];
   const temperature: (Float64Array | null)[] = [];
   for (let c = 0; c < meta.cases.length; c++) {
     u.push(out.u(c).slice());
     vmElem.push(out.vmElem(c).slice());
+    peelElem.push(out.peelElem(c).slice());
     const t = out.temperature(c);
     temperature.push(t.length ? t : null);
   }
@@ -68,6 +71,7 @@ function pack(
     }
     u.push(out.thermalU(i).slice());
     vmElem.push(out.thermalVmElem(i).slice());
+    peelElem.push(out.thermalPeelElem ? out.thermalPeelElem(i).slice() : new Float64Array(vmElem[0]?.length ?? 0));
     const t = out.thermalTemperature(i);
     temperature.push(t.length ? t : null);
   }
@@ -119,8 +123,10 @@ function pack(
     regionFacetOffsets: out.regionFacetOffsets().slice(),
     u,
     vmElem,
+    peelElem,
     temperature,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
+    peelElemEnvelope: out.peelElemEnvelope().slice(),
     modeShapes,
     class: out.class ? out.class().slice() : null,
     fillParam,
@@ -132,7 +138,7 @@ function pack(
 
 /** The message carries the buffers by transfer, so nothing is copied across the boundary. */
 function transfersOf(r: LevelResult): ArrayBuffer[] {
-  const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, ...r.u, ...r.vmElem];
+  const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, r.peelElemEnvelope, ...r.u, ...r.vmElem, ...r.peelElem];
   for (const t of r.temperature) if (t) ls.push(t);
   if (r.modeShapes) ls.push(r.modeShapes);
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);

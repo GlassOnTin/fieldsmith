@@ -417,7 +417,16 @@ export interface ModalInfo {
 export interface AnalysisMeta {
   provenance: Provenance;
   cases: CaseSummary[];
+  /** Per-case peak inter-layer peel utilization (≥ 0; ≥ 1.0 exceeds layer bond). */
+  max_layer_peel?: number[];
   yield_strength: number;
+  yield_z?: number;
+  shear_z?: number;
+  build_angles?: [number, number];
+  best_build_angles?: [number, number];
+  min_peak_peel?: number;
+  worst_build_angles?: [number, number];
+  max_peak_peel?: number;
   poisson: number;
   /** Fill levels only: the fill's thermal cases re-solved through the core — conduction on
    * the fill's per-element conductivity map, expansion on the graded moduli — in
@@ -465,6 +474,10 @@ export interface AnalysisHandle {
   vmElem(ci: number): Float64Array;
   vmEnvelope(): Float64Array;
   vmElemEnvelope(): Float64Array;
+  /** Element-centroid inter-layer peel utilization per case (×). */
+  peelElem(ci: number): Float64Array;
+  /** Envelope inter-layer peel utilization per element across cases (×). */
+  peelElemEnvelope(): Float64Array;
   /** Nodal temperature of one case (°C); empty when the case is mechanical. */
   temperature(ci: number): Float64Array;
   /** Mass-normalised mode shapes the run solved (solid handle only): how many. 0 without
@@ -524,6 +537,8 @@ export interface GradedHandle extends AnalysisHandle {
   /** Element-centroid von Mises of one graded thermal case (MPa), the readout statistic
    * per V3.md. Packed into the level's `cases` by the worker; direct getter for e2e. */
   thermalVmElem(ci: number): Float64Array;
+  /** Element-centroid inter-layer peel utilization of one graded thermal case (×). */
+  thermalPeelElem(ci: number): Float64Array;
   /** Most-compressive principal stress of one graded mechanical case at the element
    * centroids (MPa, ≤ 0) — the buckling indicator's load measure; direct getter for e2e. */
   sigmaMinElem(ci: number): Float64Array;
@@ -622,10 +637,14 @@ export interface LevelResult {
   u: Float64Array[];
   /** Element-centroid von Mises per case (MPa). */
   vmElem: Float64Array[];
+  /** Element-centroid inter-layer peel utilization per case (×). */
+  peelElem: Float64Array[];
   /** Nodal °C per case; null for mechanical cases (M14). */
   temperature: (Float64Array | null)[];
   /** Max over cases of element-centroid von Mises (MPa). */
   vmElemEnvelope: Float64Array;
+  /** Max over cases of element-centroid inter-layer peel utilization (×). */
+  peelElemEnvelope: Float64Array;
   /** Modal runs only: the mass-normalised mode shapes concatenated, one 3-per-node block
    * per mode (block k spans k·3·nodes .. (k+1)·3·nodes, mesh-node order); null otherwise. */
   modeShapes: Float64Array | null;

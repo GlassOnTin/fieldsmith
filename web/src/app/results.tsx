@@ -90,6 +90,10 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u
     for (let j = 0; j < 3; j++) m += t[lvl.surfaceFacets[6 * f + j]];
     return { value: m / 3, unit: '°C' };
   }
+  if (mode === 'peel') {
+    const peel = (ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope)?.[owner] ?? 0;
+    return { value: peel, unit: '×' };
+  }
   const vm = (ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope)[owner];
   if (mode === 'safety') return { value: vm > 0 ? lvl.meta.yield_strength / vm : Infinity, unit: 'SF' };
   return { value: vm, unit: 'MPa' };
@@ -131,6 +135,13 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     if (!(minVm > 0)) return 5;
     return Math.min(lvl.meta.yield_strength / minVm, 5);
   }
+  if (mode === 'peel') {
+    const arr = ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope;
+    if (!arr || !arr.length) return 1;
+    let hi = 1e-9;
+    for (const v of arr) if (v > hi) hi = v;
+    return hi;
+  }
   if (mode === 'temperature') {
     const t = tempField(lvl, ci);
     if (!t) return 1;
@@ -158,6 +169,16 @@ function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
 function legendLabels(lvl: LevelResult, mode: ResultMode, ci: number, max: number, yieldMpa: number): { min: string; max: string; caption: string } {
   if (mode === 'stress') return { min: '0', max: `${fmt(max)} MPa`, caption: 'von Mises stress, element centroids' };
   if (mode === 'safety') return { min: `≥ ${fmt(max)}`, max: '0', caption: `safety factor = yield ÷ stress (yield ${fmt(yieldMpa)} MPa); red shades below 1.0, blue above` };
+  if (mode === 'peel') {
+    const b = lvl.meta.build_angles ?? [0, 0];
+    const sz = lvl.meta.yield_z ?? 0;
+    const ss = lvl.meta.shear_z ?? 0;
+    return {
+      min: '0',
+      max: `${fmt(max, 2)} ×`,
+      caption: `inter-layer peel utilization along build (${fmt(b[0], 0)}°, ${fmt(b[1], 0)}°), S_z ${fmt(sz, 1)} / S_s ${fmt(ss, 1)} MPa; ≥ 1.0 exceeds layer bond`,
+    };
+  }
   if (mode === 'deflection') return { min: '0', max: `${fmt(max)} mm`, caption: 'displacement magnitude' };
   if (mode === 'temperature') {
     const have = !!tempField(lvl, ci);
@@ -181,7 +202,7 @@ function rangeFor(
   ci: number,
 ): { lo: number; hi: number; auto: boolean; levelKey: string; unit: string } | null {
   if (mode === 'safety' || mode === 'vectors') return null;
-  const unit = mode === 'stress' ? 'MPa' : mode === 'temperature' ? '°C' : 'mm';
+  const unit = mode === 'stress' ? 'MPa' : mode === 'peel' ? '×' : mode === 'temperature' ? '°C' : 'mm';
   const levelKey = `${analysis.state.resultsFor ?? ''}:${lvl.label}`;
   const r = ui.resultsRange;
   if (r && r.mode === mode && r.levelKey === levelKey) {
@@ -190,8 +211,8 @@ function rangeFor(
   return { lo: modeMin(lvl, mode, ci), hi: modeMax(lvl, mode, ci), auto: true, levelKey, unit };
 }
 
-function isRamped(m: ResultMode): m is 'stress' | 'deflection' | 'temperature' {
-  return m === 'stress' || m === 'deflection' || m === 'temperature';
+function isRamped(m: ResultMode): m is 'stress' | 'peel' | 'deflection' | 'temperature' {
+  return m === 'stress' || m === 'peel' || m === 'deflection' || m === 'temperature';
 }
 
 // ---- mesh ----------------------------------------------------------------------------
@@ -224,6 +245,7 @@ function modelDiag(lvl: LevelResult): number {
 const MODE_NAMES: Record<ResultMode, string> = {
   stress: 'stress',
   safety: 'safety',
+  peel: 'peel',
   deflection: 'deflection',
   vectors: 'vectors',
   temperature: 'temperature',
@@ -314,6 +336,7 @@ function rebuild(lvl: LevelResult) {
   const nFacets = lvl.surfaceRegion.length;
   const u = shown.u;
   const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+  const peelArr = ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope;
   const vmax = shown.animating ? shown.rampMax : modeMax(lvl, mode, ci);
   // Null range (safety / vectors) means "not adjustable"; those modes colour by their own
   // math and never touch the ramped normaliser below.
@@ -328,6 +351,7 @@ function rebuild(lvl: LevelResult) {
   for (let f = 0; f < nFacets; f++) {
     const owner = lvl.surfaceOwner[f];
     if (mode === 'stress') rampColor((vmArr[owner] - rngLo) / denom, col);
+    else if (mode === 'peel') rampColor((((peelArr?.[owner] ?? 0) - rngLo) / denom), col);
     else if (mode === 'safety') {
       // Diverging about the critical SF: 1 → the map's centre, ≥ cap → blue, → 0 → full
       // red. A vanishing vm means infinite SF, so it clamps onto the blue end.
@@ -846,6 +870,17 @@ function ResultsPanel() {
             <span class="num">{fmt(Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem)))} MPa</span>
             <span class="plain">Max deflection</span>
             <span class="num">{fmt(Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement)))} mm</span>
+            {lvl.meta.max_layer_peel && lvl.meta.max_layer_peel.length > 0 && (
+              <>
+                <span class="plain">Layer peel</span>
+                <span class="num" data-testid="results-peel-summary">
+                  ×{fmt(Math.max(0, ...lvl.meta.max_layer_peel), 2)} at ({fmt(lvl.meta.build_angles?.[0] ?? 0, 0)}°, {fmt(lvl.meta.build_angles?.[1] ?? 0, 0)}°)
+                  {lvl.meta.best_build_angles != null && lvl.meta.min_peak_peel != null
+                    ? ` · best (${fmt(lvl.meta.best_build_angles[0], 0)}°, ${fmt(lvl.meta.best_build_angles[1], 0)}°) → ×${fmt(lvl.meta.min_peak_peel, 2)}`
+                    : ''}
+                </span>
+              </>
+            )}
             <span class="plain">Elements</span>
             <span class="num">{lvl.meta.provenance.elements} tet · {lvl.meta.provenance.dofs} dofs</span>
             <span class="plain">Timing</span>
