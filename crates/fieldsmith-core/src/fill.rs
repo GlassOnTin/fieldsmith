@@ -458,6 +458,11 @@ fn check_spec(spec: &Fill) -> Result<(), SetupError> {
             "fill skin, margin and min wall must be non-negative".into(),
         ));
     }
+    if let Some(sm) = spec.skin_max {
+        if !sm.is_finite() || sm < spec.skin {
+            return Err(SetupError("fill skin_max must be at least skin".into()));
+        }
+    }
     if spec.curve <= 0.0 {
         return Err(SetupError("fill curve must be positive".into()));
     }
@@ -512,10 +517,17 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
     }
     let keep = keep_zones(doc, &spec)?;
     let cal = calibration(spec.family, spec.mode);
+    let mut p_lo = cal.param_for(spec.rho_min, spec.cell);
     let mut p0 = cal.param_for(spec.rho_max, spec.cell);
     if spec.mode == FillMode::Sheet {
+        p_lo = p_lo.max(spec.min_wall);
         p0 = p0.max(spec.min_wall);
     }
+    let param_range = if (p0 - p_lo).abs() <= 1e-9 {
+        [p0 - 1.0, p0]
+    } else {
+        [p_lo, p0]
+    };
     let spacing = (spec.cell / 2.0).max(1e-3);
     let mut param = grid_over(&b, spacing, spec.cell)?;
     if param.dims.iter().any(|&d| d < 2) {
@@ -526,6 +538,8 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
     Ok(FillExpr {
         body,
         skin: spec.skin,
+        skin_max: spec.skin_max.unwrap_or(spec.skin),
+        param_range,
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
@@ -586,6 +600,8 @@ pub fn graded_of(
     let probe = FillExpr {
         body: body.clone(),
         skin: spec.skin,
+        skin_max: spec.skin,
+        param_range: [0.0, 0.0],
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
@@ -659,13 +675,26 @@ pub fn graded_of(
         }
     }
     // Smooth the grades over about a cell (one masked box blur, in-core samples weighted only)
-    // so the parameter field varies smoothly rather than per mesh element.
+    // so the parameter field varies smoothly rather than per mesh element. When `skin_max > skin`,
+    // boundary nodes (`vsum > 0`) also join the blur and halo out by `r` so trilinear samples in
+    // the outer skin band interpolate local boundary stress smoothly without clamping to ρmin.
     let r = ((spec.cell / spacing) / 2.0).round().max(1.0) as usize;
-    let rho = masked_blur(&rho, &core, r);
+    let skin_max = spec.skin_max.unwrap_or(spec.skin);
+    let rho = if skin_max > spec.skin {
+        blur_populated(&rho, &vsum, &core, r)
+    } else {
+        masked_blur(&rho, &core, r)
+    };
 
     // Parameter grid (mm). Sheet walls are raised to the min printable wall; network struts are
     // not — the ρ↔param relation is family-dependent and the strut thinnest at ρmin is already
     // printable-ish, so network min-wall is disclosed rather than enforced.
+    let mut p_lo = cal.param_for(spec.rho_min, spec.cell);
+    let mut p_hi = cal.param_for(spec.rho_max, spec.cell);
+    if spec.mode == FillMode::Sheet {
+        p_lo = p_lo.max(spec.min_wall);
+        p_hi = p_hi.max(spec.min_wall);
+    }
     let mut param = grid_over(&b, spacing, pad)?;
     let mut rho_design = [f64::MAX, 0.0f64];
     for (i, &vs) in vsum.iter().enumerate() {
@@ -688,6 +717,8 @@ pub fn graded_of(
     let fill = FillExpr {
         body: body.clone(),
         skin: spec.skin,
+        skin_max,
+        param_range: [p_lo, p_hi],
         family: spec.family,
         mode: spec.mode,
         cell: spec.cell,
@@ -1027,6 +1058,44 @@ fn masked_blur(a: &Grid3, mask: &Grid3, r: usize) -> Grid3 {
                             let w = mask.data[idx];
                             sum += a.data[idx] * w;
                             wsum += w;
+                        }
+                    }
+                }
+                if wsum > 0.0 {
+                    out.data[base] = sum / wsum;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Box-blur pass for variable-skin fills (`skin_max > skin`), averaging over populated nodes
+/// (`vsum > 0` or `core > 0`) and extending the boundary average one radius `r` into the
+/// outer padding so trilinear samples in the skin band do not drop toward `rho_min`.
+fn blur_populated(a: &Grid3, vsum: &[f32], core: &Grid3, r: usize) -> Grid3 {
+    let [nx, ny, nz] = a.dims;
+    let mut out = a.clone();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let base = (k * ny + j) * nx + i;
+                let mut sum = 0.0f32;
+                let mut wsum = 0.0f32;
+                for dk in 0..(2 * r + 1) {
+                    let kk = (k + dk) as isize - r as isize;
+                    let kk = kk.clamp(0, nz as isize - 1) as usize;
+                    for dj in 0..(2 * r + 1) {
+                        let jj = (j + dj) as isize - r as isize;
+                        let jj = jj.clamp(0, ny as isize - 1) as usize;
+                        for di in 0..(2 * r + 1) {
+                            let ii = (i + di) as isize - r as isize;
+                            let ii = ii.clamp(0, nx as isize - 1) as usize;
+                            let idx = (kk * ny + jj) * nx + ii;
+                            if vsum[idx] > 1e-9 || core.data[idx] > 0.0 {
+                                sum += a.data[idx];
+                                wsum += 1.0;
+                            }
                         }
                     }
                 }

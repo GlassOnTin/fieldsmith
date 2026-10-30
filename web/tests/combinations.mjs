@@ -630,6 +630,22 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
     );
     await page.locator('[data-testid="fill-rotate-z"]').fill('0');
     await page.locator('[data-testid="fill-rotate-z"]').press('Enter');
+    await settle();
+    await stash('__fillSkinBase');
+    const prevSkinMs = await page.evaluate(() => window.fieldsmith.ui.compileMs);
+    await page.locator('[data-testid="fill-skin-max"]').fill('3.5');
+    await page.locator('[data-testid="fill-skin-max"]').press('Enter');
+    await page.waitForFunction((p) => window.fieldsmith.ui.compileMs !== p, prevSkinMs, { timeout: 30000 });
+    await settle();
+    await stash('__fillSkinMax35');
+    const dFillSkinMax = await diffCaps('__fillSkinBase', '__fillSkinMax35');
+    check(
+      'filled × fill-skin-max: thickening max skin to 3.5 mm visibly changes the translucent frame',
+      dFillSkinMax.inChanged >= 50 && dFillSkinMax.maxIn > 12,
+      `${dFillSkinMax.inChanged}/${dFillSkinMax.inBox} px changed, max Δ ${dFillSkinMax.maxIn}/255`,
+    );
+    await page.locator('[data-testid="fill-skin-max"]').fill('1');
+    await page.locator('[data-testid="fill-skin-max"]').press('Enter');
     await setSlider('opacity-slider', 1);
     await page.waitForFunction(() => window.fieldsmith.ui.bodyAlpha === 1, null, { timeout: 10000 });
 

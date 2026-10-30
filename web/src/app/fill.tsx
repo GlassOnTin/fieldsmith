@@ -119,10 +119,30 @@ function FillPanel() {
               min={0}
               step={0.2}
               get={(d) => d.fill?.skin ?? 1.2}
-              set={(d, v) => d.fill && (d.fill.skin = v)}
+              set={(d, v) => {
+                if (!d.fill) return;
+                d.fill.skin = v;
+                if (d.fill.skin_max != null && d.fill.skin_max < v) {
+                  d.fill.skin_max = null;
+                }
+              }}
               undoLabel="Set fill skin"
               testId="fill-skin"
               title="Solid skin kept under the outer surface"
+            />
+            <NumRow
+              label="Max skin"
+              unit="mm"
+              min={0}
+              step={0.2}
+              get={(d) => d.fill?.skin_max ?? d.fill?.skin ?? 1.2}
+              set={(d, v) => {
+                if (!d.fill) return;
+                d.fill.skin_max = v <= d.fill.skin ? null : v;
+              }}
+              undoLabel="Set max stress skin"
+              testId="fill-skin-max"
+              title="Peak outer skin thickness at high-stress regions (grades from Skin at ρmin to Max skin at ρmax)"
             />
             <VecRow
               label="Rotate"

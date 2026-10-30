@@ -477,7 +477,8 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
         };
         let param_expr = self.param_term(&fx.param);
         let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
-        let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n", lit(fx.skin));
+        let skin_expr = skin_term(fx, &param_expr);
+        let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {skin_expr}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n");
         if let Some(k) = keep {
             let _ = writeln!(b, "  inner = fs_min(inner, {k}(p));");
         }
@@ -501,13 +502,13 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
         };
         let param_expr = self.param_term(&fx.param);
         let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
+        let skin_expr = skin_term(fx, &param_expr);
         let inner = match keep {
             Some(k) => format!("  vec4 inner = fs_min(lat, {k}(p));\n"),
             None => "  vec4 inner = lat;\n".to_string(),
         };
         let b = format!(
-            "  vec4 d = {body_fn}(p);\n{lattice}{inner}  return fs_max(vec4(d.x + {}, d.yzw), inner);\n",
-            lit(fx.skin)
+            "  vec4 d = {body_fn}(p);\n{lattice}{inner}  return fs_max(vec4(d.x + {skin_expr}, d.yzw), inner);\n",
         );
         let _ = writeln!(self.out, "vec4 fs_core(vec3 p) {{\n{b}}}");
         "fs_core".into()
@@ -532,6 +533,23 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             lit(grid.spacing)
         );
         "fs_grid(p)".into()
+    }
+}
+
+/// Local skin thickness expression in GLSL: literal `fx.skin` when uniform, or linear
+/// interpolation between `skin` and `skin_max` driven by `param_expr`.
+fn skin_term(fx: &FillExpr, param_expr: &str) -> String {
+    let span = fx.param_range[1] - fx.param_range[0];
+    if fx.skin_max <= fx.skin || span <= 1e-9 {
+        lit(fx.skin)
+    } else {
+        format!(
+            "({} + {} * clamp(({param_expr} - {}) / {}, 0.0, 1.0))",
+            lit(fx.skin),
+            lit(fx.skin_max - fx.skin),
+            lit(fx.param_range[0]),
+            lit(span),
+        )
     }
 }
 
@@ -931,6 +949,8 @@ mod tests {
         let fx = FillExpr {
             body: body.clone(),
             skin: 1.2,
+            skin_max: 1.2,
+            param_range: [0.0, 1.0],
             family: Family::Gyroid,
             mode,
             cell: 6.0,

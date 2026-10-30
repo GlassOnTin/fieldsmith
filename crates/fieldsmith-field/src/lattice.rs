@@ -298,11 +298,13 @@ impl Grid3 {
     }
 }
 
-/// The filled part: `max(body, min(−(body + skin), lattice(param(p)), keep))`.
+/// The filled part: `max(body, min(−(body + skin(p)), lattice(param(p)), keep))`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FillExpr {
     pub body: Expr,
     pub skin: f64,
+    pub skin_max: f64,
+    pub param_range: [f64; 2],
     pub family: Family,
     pub mode: FillMode,
     pub cell: f64,
@@ -314,14 +316,28 @@ pub struct FillExpr {
 }
 
 impl FillExpr {
+    /// Local skin thickness (mm) at lattice parameter `param_val` (interpolated linearly
+    /// between `skin` at `param_range[0]` and `skin_max` at `param_range[1]`).
+    #[inline]
+    pub fn skin_at_param(&self, param_val: f64) -> f64 {
+        let span = self.param_range[1] - self.param_range[0];
+        if self.skin_max <= self.skin || span <= 1e-9 {
+            return self.skin;
+        }
+        let t = ((param_val - self.param_range[0]) / span).clamp(0.0, 1.0);
+        self.skin + (self.skin_max - self.skin) * t
+    }
+
     pub fn eval(&self, p: V3) -> D {
         let d = eval(&self.body, p);
-        let core = D::new(-(d.v + self.skin), scale(d.g, -1.0));
+        let pv = self.param.sample(p);
+        let sk = self.skin_at_param(pv);
+        let core = D::new(-(d.v + sk), scale(d.g, -1.0));
         let lat = lattice_field_rotated(
             self.family,
             self.mode,
             self.cell,
-            self.param.sample(p),
+            pv,
             self.rotate,
             p,
         );
@@ -335,7 +351,8 @@ impl FillExpr {
     /// Classify a point inside the body: 0 = skin or protected (solid), 1 = lattice core.
     pub fn in_core(&self, p: V3) -> bool {
         let d = eval(&self.body, p).v;
-        if d >= -self.skin {
+        let sk = self.skin_at_param(self.param.sample(p));
+        if d >= -sk {
             return false;
         }
         if !matches!(self.keep, Expr::Empty) && eval(&self.keep, p).v < 0.0 {
@@ -349,11 +366,13 @@ impl FillExpr {
     /// zones, nothing within one `skin` of the body surface. Negative = see-through-solid.
     pub fn removed_skin(&self, p: V3) -> D {
         let d = eval(&self.body, p);
+        let pv = self.param.sample(p);
+        let sk = self.skin_at_param(pv);
         let lat = lattice_field_rotated(
             self.family,
             self.mode,
             self.cell,
-            self.param.sample(p),
+            pv,
             self.rotate,
             p,
         );
@@ -361,7 +380,7 @@ impl FillExpr {
         if !matches!(self.keep, Expr::Empty) {
             inner = dmin(inner, eval(&self.keep, p));
         }
-        dmax(D::new(d.v + self.skin, d.g), inner)
+        dmax(D::new(d.v + sk, d.g), inner)
     }
 }
 
@@ -435,6 +454,8 @@ mod tests {
                     round: 0.0,
                 }),
                 skin: 1.2,
+                skin_max: 1.2,
+                param_range: [0.0, 1.0],
                 family: Family::Gyroid,
                 mode,
                 cell: 6.0,
@@ -480,6 +501,8 @@ mod tests {
                 round: 0.0,
             }),
             skin: 1.2,
+            skin_max: 1.2,
+            param_range: [0.0, 1.0],
             family: Family::Gyroid,
             mode: FillMode::Sheet,
             cell: 6.0,

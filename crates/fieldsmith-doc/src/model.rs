@@ -509,6 +509,11 @@ pub struct Fill {
     pub cell: f64,
     /// Solid skin thickness kept under the outer surface (mm).
     pub skin: f64,
+    /// Optional peak skin thickness (mm) at high-stress regions; when `Some(sm)` with
+    /// `sm > skin`, the outer shell thickens linearly with the local lattice grade from
+    /// `skin` (at `rho_min`) to `skin_max` (at `rho_max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin_max: Option<f64>,
     /// Relative density bounds of the lattice region (0..1).
     pub rho_min: f64,
     pub rho_max: f64,
@@ -537,6 +542,7 @@ impl Default for Fill {
             mode: FillMode::Sheet,
             cell: 6.0,
             skin: 1.2,
+            skin_max: None,
             rho_min: 0.2,
             rho_max: 0.8,
             curve: 1.0,
@@ -1135,6 +1141,11 @@ impl Document {
         if let Some(f) = &self.fill {
             if f.cell <= 0.0 {
                 errs.push("Fill cell size must be positive".into());
+            }
+            if let Some(sm) = f.skin_max {
+                if !sm.is_finite() || sm < f.skin {
+                    errs.push("Fill skin_max must be at least skin".into());
+                }
             }
             if !(0.0 < f.rho_min && f.rho_min <= f.rho_max && f.rho_max <= 1.0) {
                 errs.push("Fill densities must satisfy 0 < ρmin ≤ ρmax ≤ 1".into());

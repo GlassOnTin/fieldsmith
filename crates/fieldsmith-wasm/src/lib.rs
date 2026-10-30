@@ -830,6 +830,8 @@ struct FillInfo {
     mode: String,
     cell: f64,
     skin: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skin_max: Option<f64>,
     rho_min: f64,
     rho_max: f64,
     curve: f64,
@@ -955,6 +957,7 @@ impl GradedOut {
                     mode: format!("{:?}", self.g.spec.mode),
                     cell: self.g.spec.cell,
                     skin: self.g.spec.skin,
+                    skin_max: self.g.spec.skin_max,
                     rho_min: self.g.spec.rho_min,
                     rho_max: self.g.spec.rho_max,
                     curve: self.g.spec.curve,

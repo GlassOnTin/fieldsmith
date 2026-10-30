@@ -1143,6 +1143,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     mode,
                     cell: a.num_or("cell", d.cell)?,
                     skin: a.num_or("skin", d.skin)?,
+                    skin_max: a.num("skin_max")?,
                     rho_min,
                     rho_max,
                     curve: a.num_or("curve", d.curve)?,
@@ -1539,6 +1540,9 @@ pub fn print(doc: &Document) -> String {
         }
         if f.rotate != [0.0; 3] {
             line += &format!(" rotate={}", v3(f.rotate));
+        }
+        if let Some(sm) = f.skin_max {
+            line += &format!(" skin_max={}", n(sm));
         }
         let _ = writeln!(o, "{line}");
     }

@@ -106,6 +106,7 @@ export interface Fill {
   mode: FillMode;
   cell: number;
   skin: number;
+  skin_max?: number | null;
   rho_min: number;
   rho_max: number;
   curve: number;
