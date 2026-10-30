@@ -76,17 +76,19 @@ A first-time user can complete a full design-to-print loop without reading a man
    prescribed temperature, Robin convection `V29`, or heat flux `V30`), and orient it on the part.
 4. **See.** A coarse P2 finite-element solve returns in roughly a second and refines in the
    background across a resolution ladder. The results table shows each rung's DOF count, wall
-   time, rung-to-rung change, certified compliance bounds (`V34`, `V35`, `V43`), and animated
-   vibration mode shapes (`V28`).
+   time, rung-to-rung change, certified compliance bounds (`V34`, `V35`, `V43`), inter-layer
+   peel utilization across build orientations (`V46`), animated vibration mode shapes (`V28`),
+   and an interactive Pareto frontier explorer (`V47`).
 5. **Fill.** Choose *Gyroid*, *Schwarz-P*, or *Diamond* (sheet or network), set skin thickness
-   and cell size, and grade density by stress. Mass updates in grams from integrating the final
-   field.
+   and cell size, orient the lattice axes (`V44`), and grade density by stress. Mass updates in
+   grams from integrating the final field.
 6. **Check.** Re-solve the graded part using fitted homogenised lattice stiffness (`V6`, `V7`),
-   direction-aware cubic anisotropy (`V36`, `V42`), two-domain core thermal conduction (`V32`,
-   `V33`), and Gibson–Ashby yield/buckling indicators (`V37`, `V38`). Compare solid vs. graded
-   peak stress, deflection, safety factor, and mass side by side.
-7. **Make.** Export a watertight 3MF in millimetres and scrub through layer slices before
-   sending to PrusaSlicer or OrcaSlicer.
+   direction-aware rotated cubic anisotropy (`V36`, `V42`, `V44`), two-domain core thermal
+   conduction (`V32`, `V33`), inter-layer bond peel/shear (`V46`), and per-family yield/buckling
+   indicators (`V37`, `V38`). Compare solid vs. graded peak stress, deflection, safety factor,
+   and mass side by side.
+7. **Make.** Inspect exact-gradient overhang area (`V45`), export a watertight 3MF in
+   millimetres, and scrub through layer slices before sending to PrusaSlicer or OrcaSlicer.
 
 ### Interaction principles
 
@@ -135,9 +137,9 @@ Engineers only use a tool whose numbers they can defend.
   upper end across both isotropic and cubic-anisotropic elements (`V35`, `V43`).
 - **Integrated mass**: part mass comes from integrating occupancy of the final field, never
   from multiplying solid mass by a nominal target density.
-- **Executable verification suite**: `docs/verification/` (`V1`–`V43`) compares Fieldsmith
-  against closed-form elasticity, beam, plate-hole, modal, thermal, mesh, and pixel-level UI
-  combination benchmarks (`V39`–`V41`) in CI.
+- **Executable verification suite**: `docs/verification/` (`V1`–`V47`) compares Fieldsmith
+  against closed-form elasticity, beam, plate-hole, modal, thermal, mesh, additive-orientation,
+  and pixel-level UI combination benchmarks (`V39`–`V41`) in CI.
 - **Documentation at the manual standard of the reference codes** (*Ansys Fluent*, *Abaqus*,
   *FreeFem++*, Stéphane Popinet's *Gerris* / *Basilisk*): every solver, element space, grading
   law, and constitutive model documents its mathematical foundation — the derivation, its
@@ -179,7 +181,7 @@ Engineers only use a tool whose numbers they can defend.
 │   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
 │   ├─ fieldsmith-mcp     stdio MCP server over fieldsmith-api              │
 │   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
-│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V43)        │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V47)        │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -263,8 +265,10 @@ Two commercial categories border Fieldsmith:
   single-material linear static, modal, and steady thermo-elastic analysis) while adding
   properties nTop does not offer: zero-install browser execution, open AGPL source, a diffable
   text format, fitted and verified Gibson–Ashby and cubic-anisotropic lattice laws in the repo
-  (`V6`, `V7`, `V36`, `V42`), certified compliance bounds (`V34`, `V35`, `V43`), face-segmented
-  mesh/STEP field leaves (`V10`, `V14`), and an automated verification ladder (`V1`–`V43`).
+  (`V6`, `V7`, `V36`, `V42`, `V44`), certified compliance bounds (`V34`, `V35`, `V43`),
+  exact-gradient overhang and layer-peel checks (`V45`, `V46`), interactive Pareto sweep
+  exploration (`V47`), face-segmented mesh/STEP field leaves (`V10`, `V14`), and an automated
+  verification ladder (`V1`–`V47`).
 
 ### Roadmap priorities
 
@@ -282,41 +286,27 @@ Every roadmap item is governed by two execution gates:
   feature-combination pixel matrix (`V39`), surfaces rendering or empty-field errors loudly
   (`V40`), and keeps the fresh-clone README new-user gate (`V41`) green.
 
-In priority order beyond `v0.6` (`V1`–`V43`):
+In priority order beyond `v0.7` (`V1`–`V47`):
 
-1. **Additive-native orientation and lattice alignment.**
-   - *Lattice axis rotation (`fill ... rotate=(rx, ry, rz)`)*: `V36` and `V42` proved that TPMS
-     stiffness varies by up to `2.22×` between `[100]` and `[110]`, yet `.fsm` currently locks
-     lattice axes to the global part axes. Rotating the lattice field independently of the part
-     lets engineers align the stiffest lattice direction with the principal load path without
-     changing the build-plate orientation.
-   - *Print-orientation overhang bounds and layer-peel criteria*: 3D-printed polymers fail by
-     inter-layer delamination (`σ_zz` peel and `τ_xz` / `τ_yz` shear across build layers) before
-     bulk isotropic yielding. Using the exact field normal `∇f(p)` for closed-form overhang
-     bounds (`∇f · b̂`, where `b̂` is the build axis) and applying orthotropic / Tsai–Wu
-     layer-bond utilization across candidate build orientations `(θ, φ)` directly answers "which
-     way should I print this bracket, and where will it peel?"
-   - *Coupon-fitted TPMS yield and buckling laws*: replacing the literature Gibson–Ashby
-     open-cell placeholders (`0.3 · ρ^1.5` and `0.05 · ρ^2` in `fill.rs`) with per-family
-     constants fitted from unit-cell finite-element studies.
-2. **Multi-objective Pareto explorer in `Results`.**
-   - Driving multi-parameter `let` sweeps across local and LAN workers (`fieldsmith api` /
-     `fieldsmith worker`) and plotting the Pareto frontier (`mass` vs. `safety factor`,
-     `compliance`, `layer-peel utilization`, or `f₁`) in `Results` so clicking a candidate point
-     snaps the 3D viewport and `.fsm` source to that design.
-3. **Field-native outer geometry synthesis & direct slice stacks.**
-   - *Stress-driven shells, ribs, and variable fillets*: feeding the solved `u_param` /
-     `σ_vm(p)` 3D grid back into the body field `f(p)` itself — wall offsets `t(p)` and
-     smooth-boolean fillet radii `k(p)` that thicken and widen at stress risers without NURBS
-     self-intersection failures.
-   - *Direct field slice stacks*: emitting 2D Z-contour slice stacks (3MF Slice Extension)
-     directly from `f(x, y, z_layer) = 0` (`slice_field`) to avoid multi-hundred-megabyte
-     intermediate triangle meshes on dense lattices.
-4. **Multi-body assembly mechanics & closed-loop agentic synthesis.**
-   - *Tied/frictional contact and bolt preload* across multi-volume 3MF and STEP assemblies.
-   - *Closed-loop agentic synthesis via `fieldsmith-mcp`*: end-to-end mechanical design tasks
-     (propose `.fsm` → `ladder` / `sweep` → inspect failure region → refine → export manifold
-     3MF) verified against explicit load, deflection, and mass targets.
+1. **Coupon-fitted per-family TPMS yield and buckling laws (`V48`).**
+   - Replace the literature Gibson–Ashby open-cell placeholders (`0.3 · ρ^1.5` and `0.05 · ρ^2`
+     in `fill.rs`) with per-family and per-mode constants (`c_y · ρ^{n_y}` and `c_b · ρ^{n_b}`)
+     fitted from resolved unit-cell finite-element studies across all six TPMS classes,
+     distinguishing stretching-dominated sheets from bending-dominated strut networks.
+2. **Direct field slice stacks & 3MF Slice Extension (`V49`).**
+   - Emit 2D Z-contour slice stacks (`<s:slicestack>` in the 3MF Slice Extension) and instant
+     in-browser layer contours directly from `f(x, y, z_layer) = 0` (`slice_field`) without
+     requiring a full 3D intermediate triangle mesh on dense lattices.
+3. **Field-native stress-driven shell and wall thickening (`V50`).**
+   - Feed the solved 3D stress parameter field back into the outer body wall (`fill ...
+     skin_max=<mm>`), thickening load-bearing shells at stress risers and fillets smoothly in
+     both the GPU raymarcher and CPU field evaluator without NURBS self-intersection failures.
+4. **Closed-loop agentic synthesis via `fieldsmith-mcp` & multi-body assembly mechanics (`V51`).**
+   - Extend `fieldsmith-mcp` with parametric design mutation tools (`set_let`, `set_fill`,
+     `set_build`, and `sweep` solves) so an automated loop can propose `.fsm` → `sweep` /
+     `ladder` → inspect yield, buckling, overhang, and layer-peel limits → refine parameters
+     and orientation → export a verified 3MF meeting explicit structural and mass targets.
+   - Tied/frictional contact and bolt preload across multi-volume 3MF and STEP assemblies.
 
 ---
 
@@ -326,7 +316,7 @@ In priority order beyond `v0.6` (`V1`–`V43`):
 2. Live preview and progressive background compute, never a blocking wizard.
 3. Direct manipulation in the viewport; exact expressions in the inspector.
 4. Every number carries units, provenance, and stated model assumptions.
-5. Verification cases (`V1`–`V43`) are executable tests in CI, and every solver module connects
+5. Verification cases (`V1`–`V47`) are executable tests in CI, and every solver module connects
    to a user-facing `.fsm` flow or a calibrated material law (no engine islands).
 6. One field representation; geometry, regions, physics, and lattices compose.
 7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.

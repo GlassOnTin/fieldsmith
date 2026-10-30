@@ -1,22 +1,22 @@
-# Fieldsmith — Goal (v0.7: Additive-Native Orientation, Lattice Alignment & Pareto Exploration)
+# Fieldsmith — Goal (v0.8: Coupon-Fitted Yield/Buckling Laws, Direct Slice Stacks, Stress-Driven Skins & Agentic Synthesis)
 
-This file defines **what "done" means for v0.7**. The [VISION](VISION.md) defines *why* and
+This file defines **what "done" means for v0.8**. The [VISION](VISION.md) defines *why* and
 *where next*; this file defines the concrete, testable acceptance bar for the current release.
 Previous goals are preserved in git history (`v0.2.0` at `a52b6b8`, `v0.3` at `0b92e1c`,
-`v0.4.0` at `295e80e`, `v0.5.0` at `ab59756`, and `v0.6` closed across `V26`–`V43` at
-`e283ba1`, summarised in the appendix below). If an acceptance criterion or tolerance turns out
-to be wrong, update this file in a reviewed commit with the measured reason rather than
-skipping it.
+`v0.4.0` at `295e80e`, `v0.5.0` at `ab59756`, `v0.6.0` at `d3cdd37`, and `v0.7.0` at `d806c55`,
+summarised in the appendix below). If an acceptance criterion or tolerance turns out to be wrong,
+update this file in a reviewed commit with the measured reason rather than skipping it.
 
 ---
 
 ## The goal in one sentence
 
-> An engineer can orient a lattice's cubic-anisotropic axes (`fill ... rotate=(rx, ry, rz)`)
-> independently of the part (`V44`), evaluate exact-gradient overhang bounds and inter-layer
-> bond peel/shear utilization across build orientations `(θ, φ)` (`V45`, `V46`), and explore a
-> multi-parameter sweep's Pareto frontier interactively in `Results` where clicking a point
-> snaps the 3D viewport and `.fsm` document to that candidate (`V47`).
+> An engineer can evaluate graded TPMS parts against per-family coupon-fitted yield and buckling
+> laws (`V48`), preview and export 2D Z-contour slice stacks (3MF Slice Extension) directly from
+> the implicit field without building a 3D triangle mesh (`V49`), thicken outer load-bearing
+> shells in proportion to the solved stress field (`fill ... skin_max=<mm>`, `V50`), and run a
+> closed-loop agentic design synthesis pass through `fieldsmith-mcp` to meet explicit structural
+> and mass targets (`V51`).
 
 ---
 
@@ -24,10 +24,10 @@ skipping it.
 
 1. **No Engine Islands:** No solver module or verification case (`V#`) lands unless it is either
    (a) reachable end-to-end from a `.fsm` document in both `fieldsmith-cli` and the browser UI,
-   or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6` and `V36`
-   calibrate `fill.rs`). Standalone solver modules exercised only by a synthetic test are
-   out of bounds.
-2. **Pixels and first-user paths, not state-only assertions:** Every UI control added in v0.7
+   or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6`, `V36`,
+   and `V48` calibrate `fill.rs`). Standalone solver modules exercised only by a synthetic test
+   are out of bounds.
+2. **Pixels and first-user paths, not state-only assertions:** Every UI control added in v0.8
    joins the `V39` feature-combination pixel matrix (`web/tests/combinations.mjs`), surfaces
    any rendering or empty-field failure through `ui.renderError` (`V40`), and keeps the
    fresh-clone README new-user gate (`V41`) green.
@@ -44,71 +44,77 @@ skipping it.
 
 ## The reference task
 
-1. **Rotated TPMS lattice alignment (`M22`, `V44`).** Add `rotate=(rx, ry, rz)` (degrees, ZYX
-   Euler matching primitive rotation) to the `fill` statement in `.fsm`, the GLSL raymarcher,
-   the CPU field evaluator / adaptive dual contourer, the per-element rotated cubic stiffness
-   tensor (`R · C · Rᵀ`), and the `Fill` lens inspector. Verify on a uniaxial bar that rotating
-   a diamond-network or primitive-sheet fill by `45°` about Z reproduces the `V36` `[110]`
-   modulus (`2.22×` / `2.07×` of `[100]`) and updates the raymarched preview pixels.
-2. **Exact-gradient overhang map and orientation check (`M23`, `V45`).** Compute the exact
-   outward surface normal `n(p) = ∇f(p) / ‖∇f(p)‖` across surface facets and in the shader for
-   a declared build axis `b̂(θ, φ)` (default `+Z`, threshold `α_max = 45°` from build vertical).
-   Expose overhang area fraction and worst overhang angle in `Make` / CLI (`--overhang`) and
-   render the overhang highlight overlay in the viewport, verified against closed-form sphere
-   and inclined-plane overhang areas (`V45`).
-3. **Inter-layer peel and shear utilization (`M24`, `V46`).** Add build-axis layer-bond
-   evaluation (`σ_nn = b̂ᵀ σ b̂` inter-layer tension and `τ_nt = ‖σ b̂ − σ_nn b̂‖` inter-layer
-   shear, combined via a quadratic layer-bond criterion `(max(0, σ_nn) / S_z)² + (τ_nt / S_s)²`)
-   with material `yield_z=` / `shear_z=` parameters (or a stated default z-bond knockdown ratio
-   when omitted). Expose the `layer-peel` mode in `Results` and a build-orientation sweep over
-   `(θ, φ)` that identifies the orientation minimizing peak layer-peel utilization (`V46`).
-4. **Interactive Pareto frontier explorer in `Results` (`M25`, `V47`).** Extend the `Results`
-   sweep runner to support 2-parameter `let` grids (or multi-point sweeps) and plot a 2D scatter
-   frontier (`mass (g)` on X vs. `max von Mises`, `safety factor`, `compliance`, `layer-peel`,
-   or `f₁` on Y) with Pareto-optimal points highlighted. Clicking a point in the plot updates
-   the `.fsm` `let` bindings, re-renders the 3D viewport, and supports `Undo` back to the prior
-   state (`V47`).
+1. **Coupon-fitted per-family TPMS yield and buckling laws (`M26`, `V48`).** Extend the
+   resolved-FE unit-cell coupon harness (`fieldsmith_verify::coupon`) to measure the interior
+   95th-percentile von Mises stress concentration `k_y(ρ) = σ_vm,95 / |Σ|` (giving initial
+   yield `σ_y*(ρ) / σ_ys = 1 / k_y(ρ)`) and the feature-slenderness / compressive-concentration
+   elastic buckling ratio `σ_el*(ρ) / E_s` across all six `(Family, FillMode)` classes. Fit
+   per-family power laws `c_y · ρ^{n_y}` and `c_b · ρ^{n_b}`, wire them into
+   `strength_extended(family, mode, yield_mpa, phi)` and
+   `buckling_extended(family, mode, young_mpa, phi)` in `fill.rs`, expose the active law
+   constants in `GradedOut::metaJson` and `Results`, and verify in `V48` (plus `V37`/`V38`).
+2. **Direct field slice stacks & 3MF Slice Extension (`M27`, `V49`).** Implement 2D marching
+   squares with gradient root polishing and closed-polygon contour stitching (`slice_field` and
+   `slice_stack` in `fieldsmith-mesh`), plus a 3MF Slice Extension writer and reader
+   (`write_3mf_slicestack` / `read_3mf_slicestack`). Expose `--slices` in `fieldsmith export`,
+   `sliceFieldAt` / `exportSliceStack3mf` in `fieldsmith-wasm`, and instant field-direct layer
+   preview plus `Download Slice 3MF` in `Make` without requiring a 3D mesh export first (`V49`).
+3. **Field-native stress-driven shell thickening (`M28`, `V50`).** Add `skin_max=<mm>` to the
+   `fill` statement in `.fsm` so the outer solid skin thickness `skin(p) ∈ [skin, skin_max]`
+   scales continuously with the solved stress field alongside the interior lattice grading across
+   the CPU evaluator, the GLSL raymarcher (`fs_field` and `fs_core`), the graded FEA re-solve,
+   and the `Fill` lens inspector (`V50`).
+4. **Closed-loop agentic synthesis via `fieldsmith-mcp` (`M29`, `V51`).** Extend `fieldsmith-mcp`
+   with parametric design mutation tools (`set_let`, `set_fill`, `set_build`, and `sweep`
+   support in `solve` plus `slices` in `export`) and verify an end-to-end closed-loop synthesis
+   workflow in `V51`: start from an under-designed bracket `.fsm`, run an MCP sweep/solve,
+   inspect yield, buckling, layer-peel, and overhang metrics, apply the Pareto-optimal
+   parameters and build orientation through MCP tools, and export a verified 3MF meeting all
+   stated structural and mass targets.
 
 ---
 
 ## Acceptance criteria
 
-### A. Lattice axis rotation (`M22` — `V44`)
-- [x] `.fsm` grammar and printer round-trip `fill ... rotate=(rx, ry, rz)` (`V9` extended).
-- [x] CPU field evaluator, GLSL raymarcher (`fs_core`), and adaptive 3MF exporter apply the
-      inverse rotation to lattice sample coordinates `p`, leaving outer body skins unrotated.
-- [x] `fieldsmith-solve` rotates each lattice element's cubic stiffness and compliance tensors
-      by `R(rx, ry, rz)` during assembly, stress recovery, and `dual.rs` upper-bound
-      equilibration.
-- [x] `V44` verifies that `fill ... rotate=(0, 0, 45)` on a `[100]`-loaded bar matches the
-      unrotated `[110]` patch stiffness and equilibrated compliance bound within `0.1 %`, and
-      that changing `rotate` in the `Fill` lens visibly changes viewport pixels (`V39`).
+### A. Coupon-fitted TPMS yield & buckling laws (`M26` — `V48`)
+- [ ] `fieldsmith_verify::coupon` measures interior `vm_int_p95`, `yield_ratio`, `comp_int_p95`,
+      and `buckling_ratio` on resolved unit-cell coupons.
+- [ ] `fieldsmith_core::fill` replaces the scalar open-cell placeholders (`0.3 · ρ^1.5` and
+      `0.05 · ρ^2`) with per-`(Family, FillMode)` coupon-fitted power laws `strength_law` and
+      `buckling_law`, exposed in `GradedOut::metaJson` and `fieldsmith-api`.
+- [ ] `V48` verifies the fitted yield and buckling laws across all six TPMS classes and confirms
+      that stretching-dominated sheets vs. bending-dominated networks produce the expected
+      directional shift in `yield_utilization` and `buckling_utilization` on a `.fsm` solve.
 
-### B. Overhang analysis from `∇f(p)` (`M23` — `V45`)
-- [x] Surface overhang metric (`n(p) · (−b̂) > sin(α_max)`) implemented in `fieldsmith-core`,
-      exposed in `fieldsmith check` / `fieldsmith api`, and rendered as an overlay in `Make`.
-- [x] `V45` verifies overhang area on a sphere (`r = 10 mm`, exact cap area
-      `2π r² (1 − sin α_max)`) and a `60°` tilted plate within `1.5 %` at default mesh spacing,
-      plus pixel-delta verification of the `Make` overhang overlay.
+### B. Direct field slice stacks (`M27` — `V49`)
+- [ ] `fieldsmith_mesh::slice` extracts closed, consistently oriented 2D polygon contours
+      directly from `f(x, y, z) = 0` and writes/reads 3MF Slice Extension (`<s:slicestack>`)
+      archives.
+- [ ] `fieldsmith-cli` (`export --slices`), `fieldsmith-wasm`, and the `Make` lens preview and
+      export slice stacks directly from the implicit field without building a 3D triangle mesh.
+- [ ] `V49` verifies closed-form slice areas on a sphere (`π(R² − z²)` within `1 %`), closed
+      polygon loops (`0` open chains) on a graded lattice bracket, 3MF `<s:slicestack>`
+      round-trip, and `Make` slice preview pixel updates (`V39`).
 
-### C. Orthotropic layer-peel criterion & build orientation (`M24` — `V46`)
-- [x] `.fsm` material/solve statements accept build orientation `build=(θ, φ)` and inter-layer
-      tensile/shear strengths (`yield_z`, `shear_z`).
-- [x] `fieldsmith-core` computes per-element and nodal layer-peel utilization alongside bulk
-      von Mises; `Results` lens mode chip adds `Layer peel` (`Peel`) and reports peak utilization and
-      governing orientation.
-- [x] `V46` verifies exact closed-form layer-peel utilization on an off-axis uniaxial bar across
-      `θ ∈ {0°, 30°, 45°, 60°, 90°}` (`σ_nn = σ₀ cos²θ`, `τ_nt = σ₀ sin θ cos θ`) to solver
-      precision (`≤ 1e-6`), and verifies the `Results` lens ramp in headless e2e.
+### C. Stress-driven outer shell thickening (`M28` — `V50`)
+- [ ] `.fsm` parser and printer round-trip `fill ... skin_max=<mm>` (`V9` extended), with
+      validation requiring `skin_max >= skin`.
+- [ ] `FillExpr` (CPU) and `glsl.rs` (`fs_field` and `fs_core`) interpolate local skin thickness
+      `skin(p) ∈ [skin, skin_max]` from the solved stress parameter grid `u_param`, preserving
+      GPU/CPU `V16` agreement.
+- [ ] `V50` verifies that setting `skin_max > skin` on a loaded cantilever/bracket thickens the
+      high-stress root skin in `FillExpr`, increases integrated mass, reduces graded compliance
+      and peak deflection in the FEA re-solve, and visibly updates viewport pixels in `Fill`
+      (`V39`).
 
-### D. Interactive Pareto explorer (`M25` — `V47`)
-- [x] `Results` sweep panel supports 1D or 2D `let` parameter sweeps and renders an SVG scatter
-      plot (`mass` vs. selected metric) marking the non-dominated Pareto front.
-- [x] Clicking a plotted candidate updates the `.fsm` document's `let` bindings in a single
-      reversible transaction, updates the 3D viewport, and restores bit-identically on `Undo`.
-- [x] `V47` drives a multi-point bracket sweep in headless Chromium, asserts the Pareto frontier
-      markers match the computed non-dominated set, clicks a frontier point, asserts both `.fsm`
-      source and viewport pixels update, and asserts `Ctrl+Z` restores the initial state.
+### D. Closed-loop agentic synthesis via `fieldsmith-mcp` (`M29` — `V51`)
+- [ ] `fieldsmith-mcp` exposes `set_let`, `set_fill`, `set_build`, `solve` (`kind: "sweep"`),
+      and `export` (`slices: true`) over stdio JSON-RPC.
+- [ ] `V51` drives an automated closed-loop synthesis session over `fieldsmith-mcp`: starting
+      from an initial `.fsm` design that violates yield/peel targets, the loop queries `solve` /
+      `sweep`, updates `let` variables, lattice rotation/skin, and build orientation `(θ, φ)`,
+      verifies the refined design meets all safety-factor, layer-peel, overhang, and mass gates,
+      and exports a defect-free 3MF.
 
 ---
 
@@ -116,14 +122,14 @@ skipping it.
 
 | # | Milestone | Status | Deliverable |
 | :-- | :-- | :-- | :-- |
-| **M22** | Lattice axis rotation (`fill rotate=`) | Done (`3c3026e`) | Rotated cubic tensor + GLSL/CPU lattice transform + `Fill` inspector + `V44.md` |
-| **M23** | Exact-gradient overhang check | Done (`0eeb0b2`) | `∇f` overhang area & angle in CLI/API + `Make` viewport overlay + `V45.md` |
-| **M24** | Inter-layer peel criterion & orientation | Done (`0456a86`) | Build-Z peel/shear utilization + `Results` mode chip + orientation check + `V46.md` |
-| **M25** | Interactive Pareto explorer in `Results` | Done (`2c44e7d`) | 1D/2D `let` sweep frontier plot + click-to-apply + undo round-trip + `V47.md` |
+| **M26** | Coupon-fitted TPMS yield & buckling laws | Pending | Per-family yield/buckling laws in `fill.rs` + `coupon.rs` + `V48.md` |
+| **M27** | Direct field slice stacks (3MF Slice Ext) | Pending | `fieldsmith_mesh::slice` + CLI `--slices` + `Make` field slice preview/export + `V49.md` |
+| **M28** | Stress-driven outer shell thickening | Pending | `fill ... skin_max=` across `.fsm`, GLSL, CPU, solver, and `Fill` UI + `V50.md` |
+| **M29** | Closed-loop agentic synthesis (`mcp`) | Pending | `set_let`/`set_fill`/`set_build`/sweep in `fieldsmith-mcp` + closed-loop `V51.md` |
 
 ---
 
-## Explicitly out of scope for v0.7
+## Explicitly out of scope for v0.8
 
 - Standalone continuum solvers without a `.fsm` workflow (such as displacement-only J2 shear
   plasticity or Nédélec RF/acoustic edge elements).
@@ -132,27 +138,31 @@ skipping it.
 
 ---
 
-## Appendix: v0.6 Closure Summary (`ab59756` → `e283ba1`, `V26`–`V43`)
+## Appendix: v0.6 (`V26`–`V43`) & v0.7 (`V44`–`V47`) Closure Summary
 
-All 18 verification cases added after `v0.5.0` pass in CI:
+All 22 verification cases added across `v0.6.0` (`d3cdd37`) and `v0.7.0` (`d806c55`) pass in CI:
 
-| ID | Capability delivered in v0.6 | Commit | Report |
+| ID | Capability delivered | Release / Commit | Report |
 | :-- | :-- | :-- | :-- |
-| `V26` | Interactive GPU section-plane clipping (`x`/`y`/`z`, flip, `0..1` slider, mid-part default) | `3a5056c`, `8ea66f2` | [V26.md](docs/verification/V26.md) |
-| `V27` | Named `let` variables, arithmetic expressions, and bare-name parameter sweeps | `2c52bfe` | [V27.md](docs/verification/V27.md) |
-| `V28` | Modal mode-shape animation (`play`/`pause`/phase slider, `2π` & `Off` bit-exact) | `62bea33` | [V28.md](docs/verification/V28.md) |
-| `V29` | Robin convective thermal boundary conditions (`convection ... h= tinf=`) | `549aca5` | [V29.md](docs/verification/V29.md) |
-| `V30` | Prescribed Neumann heat-flux boundary conditions (`heatflux ... q=`) | `755d6b8` | [V30.md](docs/verification/V30.md) |
-| `V31` | In-UI 2D profile sketching on the Extrude inspector | `1023d3d` | [V31.md](docs/verification/V31.md) |
-| `V32` | Two-domain TPMS core thermal conduction re-solve (`conductivity_of(class, φ)`) | `1b4d6df` | [V32.md](docs/verification/V32.md) |
-| `V33` | `Results` lens surfacing and envelope integration of graded thermal cases | `eee8985` | [V33.md](docs/verification/V33.md) |
-| `V34` | Certified compliance lower bound (`C_h = fᵀu`) across static and thermal cases | `ebaef72` | [V34.md](docs/verification/V34.md) |
-| `V35` | Witness-constrained equilibrated P2 stress recovery upper bound (`C(σ*)`) | `0bc3dcf`, `e943b5a` | [V35.md](docs/verification/V35.md) |
-| `V36` | Rotated unit-cell coupon measurement of TPMS directional anisotropy (`45°/0°`) | `9eb2cb3`, `9de699c` | [V36.md](docs/verification/V36.md) |
-| `V37` | Per-case Gibson–Ashby yield-utilization factor in graded solves and `Results` | `36139a2`, `1ed52b5` | [V37.md](docs/verification/V37.md) |
-| `V38` | Per-case Gibson–Ashby elastic-buckling load factor in graded solves and `Results` | `1980f67` | [V38.md](docs/verification/V38.md) |
-| `V39` | Feature-combination pixel matrix (`overlays × document kinds × lenses`) | `c5f16ed` | [V39.md](docs/verification/V39.md) |
-| `V40` | Loud rendering failure banner and detectors (shader link, empty surface, mesh throw) | `80cf98a` | [V40.md](docs/verification/V40.md) |
-| `V41` | Fresh-clone headless new-user gate driving the README's exact commands | `b07a1a0`, `69a03ff` | [V41.md](docs/verification/V41.md) |
-| `V42` | Per-element cubic anisotropic stiffness kernel (`ortho.rs`) and corrected `[110]` fit | `7c1a662`..`38e95de` | [V42.md](docs/verification/V42.md) |
-| `V43` | Cubic compliance Gram equilibration certifying the upper bound on cubic elements | `e283ba1` | [V43.md](docs/verification/V43.md) |
+| `V26` | Interactive GPU section-plane clipping (`x`/`y`/`z`, flip, `0..1` slider, mid-part default) | v0.6 (`3a5056c`) | [V26.md](docs/verification/V26.md) |
+| `V27` | Named `let` variables, arithmetic expressions, and bare-name parameter sweeps | v0.6 (`2c52bfe`) | [V27.md](docs/verification/V27.md) |
+| `V28` | Modal mode-shape animation (`play`/`pause`/phase slider, `2π` & `Off` bit-exact) | v0.6 (`62bea33`) | [V28.md](docs/verification/V28.md) |
+| `V29` | Robin convective thermal boundary conditions (`convection ... h= tinf=`) | v0.6 (`549aca5`) | [V29.md](docs/verification/V29.md) |
+| `V30` | Prescribed Neumann heat-flux boundary conditions (`heatflux ... q=`) | v0.6 (`755d6b8`) | [V30.md](docs/verification/V30.md) |
+| `V31` | In-UI 2D profile sketching on the Extrude inspector | v0.6 (`1023d3d`) | [V31.md](docs/verification/V31.md) |
+| `V32` | Two-domain TPMS core thermal conduction re-solve (`conductivity_of(class, φ)`) | v0.6 (`1b4d6df`) | [V32.md](docs/verification/V32.md) |
+| `V33` | `Results` lens surfacing and envelope integration of graded thermal cases | v0.6 (`eee8985`) | [V33.md](docs/verification/V33.md) |
+| `V34` | Certified compliance lower bound (`C_h = fᵀu`) across static and thermal cases | v0.6 (`ebaef72`) | [V34.md](docs/verification/V34.md) |
+| `V35` | Witness-constrained equilibrated P2 stress recovery upper bound (`C(σ*)`) | v0.6 (`e943b5a`) | [V35.md](docs/verification/V35.md) |
+| `V36` | Rotated unit-cell coupon measurement of TPMS directional anisotropy (`45°/0°`) | v0.6 (`9de699c`) | [V36.md](docs/verification/V36.md) |
+| `V37` | Per-case Gibson–Ashby yield-utilization factor in graded solves and `Results` | v0.6 (`1ed52b5`) | [V37.md](docs/verification/V37.md) |
+| `V38` | Per-case Gibson–Ashby elastic-buckling load factor in graded solves and `Results` | v0.6 (`1980f67`) | [V38.md](docs/verification/V38.md) |
+| `V39` | Feature-combination pixel matrix (`overlays × document kinds × lenses`) | v0.6 (`c5f16ed`) | [V39.md](docs/verification/V39.md) |
+| `V40` | Loud rendering failure banner and detectors (shader link, empty surface, mesh throw) | v0.6 (`80cf98a`) | [V40.md](docs/verification/V40.md) |
+| `V41` | Fresh-clone headless new-user gate driving the README's exact commands | v0.6 (`69a03ff`) | [V41.md](docs/verification/V41.md) |
+| `V42` | Per-element cubic anisotropic stiffness kernel (`ortho.rs`) and corrected `[110]` fit | v0.6 (`38e95de`) | [V42.md](docs/verification/V42.md) |
+| `V43` | Cubic compliance Gram equilibration certifying the upper bound on cubic elements | v0.6 (`e283ba1`) | [V43.md](docs/verification/V43.md) |
+| `V44` | Rotated TPMS lattice alignment (`fill ... rotate=(rx, ry, rz)`) across field, solver, and UI | v0.7 (`3c3026e`) | [V44.md](docs/verification/V44.md) |
+| `V45` | Exact-gradient overhang analysis (`n(p) = ∇f/‖∇f‖`) in CLI, API, and `Make` overlay | v0.7 (`0eeb0b2`) | [V45.md](docs/verification/V45.md) |
+| `V46` | Orthotropic inter-layer peel/shear utilization and build-orientation sweep `(θ, φ)` | v0.7 (`0456a86`) | [V46.md](docs/verification/V46.md) |
+| `V47` | Interactive 1D/2D `let` Pareto frontier explorer in `Results` with click-to-apply & Undo | v0.7 (`2c44e7d`) | [V47.md](docs/verification/V47.md) |
