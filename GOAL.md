@@ -122,7 +122,7 @@ update this file in a reviewed commit with the measured reason rather than skipp
 
 | # | Milestone | Status | Deliverable |
 | :-- | :-- | :-- | :-- |
-| **M26** | Coupon-fitted TPMS yield & buckling laws | Pending | Per-family yield/buckling laws in `fill.rs` + `coupon.rs` + `V48.md` |
+| **M26** | Coupon-fitted TPMS yield & buckling laws | Done (`e8765f3`) | Per-family yield/buckling laws in `fill.rs` + `coupon.rs` + `V48.md` |
 | **M27** | Direct field slice stacks (3MF Slice Ext) | Pending | `fieldsmith_mesh::slice` + CLI `--slices` + `Make` field slice preview/export + `V49.md` |
 | **M28** | Stress-driven outer shell thickening | Pending | `fill ... skin_max=` across `.fsm`, GLSL, CPU, solver, and `Fill` UI + `V50.md` |
 | **M29** | Closed-loop agentic synthesis (`mcp`) | Pending | `set_let`/`set_fill`/`set_build`/sweep in `fieldsmith-mcp` + closed-loop `V51.md` |

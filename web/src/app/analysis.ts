@@ -231,7 +231,8 @@ export class AnalysisEngine {
     } else if (m.type === 'error') {
       this.set({ status: 'error', levelLabel: '', error: m.message, errorKind: m.kind ?? 'failure', resultsFor: this.launchVersion });
     } else if (m.type === 'exportDone') {
-      this.set({ export: { meta: m.mesh.meta, version: this.makeVersion } });
+      ui.set('makeSliceOn', true);
+      this.set({ export: { meta: m.mesh.meta, version: this.makeVersion }, slice: null });
     } else if (m.type === 'exportError') {
       if (m.trapped && this.worker) {
         // The instance is poisoned: retire it (the next request spawns a fresh one; the
@@ -264,16 +265,36 @@ export class AnalysisEngine {
     w.postMessage({ type: 'export', doc: store.doc, h, solid });
   }
 
-  /** Make lens: slice the export mesh at z (latest request wins in the worker). */
+  /** Make lens: slice the export mesh (or direct implicit field) at z (latest request wins in the worker). */
   sliceAt(z: number) {
-    if (!(this.state.export instanceof Object)) return;
-    this.ensureWorker().postMessage({ type: 'slice', z });
+    const w = this.ensureWorker();
+    if (this.state.export instanceof Object) {
+      w.postMessage({ type: 'slice', z });
+    } else {
+      this.feed(w);
+      w.postMessage({ type: 'slice', z, doc: store.doc, h: ui.makeH, solid: ui.makeSolid });
+    }
   }
 
   /** Make lens: fetch the export's file bytes and trigger the browser download. */
   downloadMesh(what: 'stl' | '3mf') {
     if (!(this.state.export instanceof Object)) return;
     this.ensureWorker().postMessage({ type: 'bytes', what, name: store.doc.name });
+  }
+
+  /** Make lens: export a 2D slice stack (`<s:slicestack>` in 3MF Slice Extension) directly from the field. */
+  downloadSlices3mf() {
+    const w = this.ensureWorker();
+    this.feed(w);
+    w.postMessage({
+      type: 'bytes',
+      what: 'slices-3mf',
+      name: store.doc.name,
+      doc: store.doc,
+      layerH: ui.makeLayerH,
+      h: ui.makeH,
+      solid: ui.makeSolid,
+    });
   }
 
   /** Kill the in-flight run (an edit cancels and restarts); an import in flight dies with

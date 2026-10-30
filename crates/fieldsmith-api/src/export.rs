@@ -17,6 +17,7 @@ use fieldsmith_field::volume::{self, VolumeEstimate};
 use fieldsmith_mesh::{
     adaptive::{self, AdaptiveOpts, Sample},
     export::{surface, write_3mf_volumes, Defects, TriMesh, Volume3mf},
+    slice::{slice_stack, write_3mf_slicestack},
 };
 
 /// What the caller wants built and at what fineness.
@@ -263,6 +264,110 @@ pub fn export(doc: &Document, opts: &ExportOpts, clock: Clock) -> Result<Export,
         mesh_ms,
         ref_ms,
         scan_ms,
+        ms: clock() - t_all,
+    })
+}
+
+/// Options for direct implicit-field slice-stack export (`--slices`, M27 / V49).
+pub struct ExportSlicesOpts {
+    /// X/Y marching-squares grid spacing (mm).
+    pub h: f64,
+    /// Z layer thickness (mm).
+    pub layer_h: f64,
+    /// Solid body even on fill documents (skip the graded re-solve).
+    pub solid_only: bool,
+    /// Build 3MF Slice Extension (`<s:slicestack>`) bytes.
+    pub mf: bool,
+}
+
+/// Result of direct implicit-field slice-stack export (`export_slices`).
+pub struct ExportSlices {
+    pub h: f64,
+    pub layer_h: f64,
+    pub layers: usize,
+    pub polygons: usize,
+    pub open_chains: usize,
+    pub stack_volume: f64,
+    pub reference: VolumeEstimate,
+    pub delta_percent: f64,
+    pub graded: Option<ExportGraded>,
+    pub mf: Option<Vec<u8>>,
+    pub slice_ms: f64,
+    pub ref_ms: f64,
+    pub ms: f64,
+}
+
+/// Export a document directly as a 2D Z-slice stack (`<s:slicestack>` in 3MF Slice Extension)
+/// without constructing a 3D surface triangle mesh.
+pub fn export_slices(
+    doc: &Document,
+    opts: &ExportSlicesOpts,
+    clock: Clock,
+) -> Result<ExportSlices, String> {
+    let h = opts.h;
+    if !h.is_finite() || h <= 0.0 {
+        return Err("h must be positive and finite".into());
+    }
+    let layer_h = opts.layer_h;
+    if !layer_h.is_finite() || layer_h <= 0.0 {
+        return Err("layer_h must be positive and finite".into());
+    }
+    let t_all = clock();
+
+    let e = expr::compile_body(doc);
+    let b = expr::bounds(&e);
+    if b.is_empty() {
+        return Err("document has no solid".into());
+    }
+
+    let (graded, field) = if doc.fill.is_some() && !opts.solid_only {
+        let t0 = clock();
+        let (_, g) = fill::graded(doc, Resolution::Dofs(150_000), clock).map_err(|x| x.0)?;
+        let ms = clock() - t0;
+        let graded = ExportGraded {
+            mass_g: g.mass_g,
+            solid_mass_g: g.solid_mass_g,
+            ms,
+        };
+        (Some(graded), expr::Expr::Filled(Box::new(g.fill)))
+    } else {
+        (None, e)
+    };
+
+    let t0 = clock();
+    let stack = slice_stack(|p| expr::eval(&field, p).v, b.lo, b.hi, layer_h, h);
+    let slice_ms = clock() - t0;
+
+    let t0 = clock();
+    let v = volume::volume(&field, h);
+    let ref_ms = clock() - t0;
+
+    let v_stack = stack.volume();
+    let delta = if v.volume > 0.0 {
+        (v_stack - v.volume) / v.volume * 100.0
+    } else {
+        f64::NAN
+    };
+
+    let mf = if opts.mf {
+        Some(write_3mf_slicestack(&doc.name, &doc.material, &stack))
+    } else {
+        None
+    };
+
+    Ok(ExportSlices {
+        h,
+        layer_h,
+        layers: stack.layers.len(),
+        polygons: stack.polygon_count(),
+        open_chains: stack.open_chains(),
+        stack_volume: v_stack,
+        reference: v,
+        delta_percent: delta,
+        graded,
+        mf,
+        slice_ms,
+        ref_ms,
         ms: clock() - t_all,
     })
 }

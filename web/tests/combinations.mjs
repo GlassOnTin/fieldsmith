@@ -244,6 +244,7 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
       ui.set('sweepTo', null);
       ui.set('sweepCount', 5);
       ui.set('makeOverhangOn', false);
+      ui.set('makeSliceOn', false);
       ui.set('probe', null);
     });
 
@@ -420,6 +421,33 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
       'solid × make: overhang toggle-off round-trips bit-identically',
       dOvRt.maxAll === 0,
       `whole-frame max Δ ${dOvRt.maxAll}`,
+    );
+
+    // Direct field slice overlay × Make lens (V49 / V39): toggling the layer preview on
+    // without building a 3D mesh slices the implicit field directly and renders the Z contour.
+    await page.locator('[data-testid="make-slice-toggle"]').click();
+    await page.waitForFunction(
+      () => window.fieldsmith.ui.makeSliceOn === true && (window.fieldsmith.analysis.state.slice?.segs?.length ?? 0) > 0,
+      null,
+      { timeout: 15000 },
+    );
+    await settle();
+    await stash('__makeSlOn');
+    const dSlOn = await diffCaps('__makeOvOff', '__makeSlOn');
+    check(
+      'solid × make: direct field slice toggle-on visibly draws contour pixels without mesh export',
+      dSlOn.inChanged >= 5 && dSlOn.maxIn > 20,
+      `${dSlOn.inChanged}/${dSlOn.inBox} px changed, max Δ ${dSlOn.maxIn}/255`,
+    );
+    await page.locator('[data-testid="make-slice-toggle"]').click();
+    await page.waitForFunction(() => window.fieldsmith.ui.makeSliceOn === false, null, { timeout: 5000 });
+    await settle();
+    await stash('__makeSlOff2');
+    const dSlRt = await diffCaps('__makeOvOff', '__makeSlOff2');
+    check(
+      'solid × make: direct field slice toggle-off round-trips bit-identically',
+      dSlRt.maxAll === 0,
+      `whole-frame max Δ ${dSlRt.maxAll}`,
     );
 
     // Section × solid (shape lens).

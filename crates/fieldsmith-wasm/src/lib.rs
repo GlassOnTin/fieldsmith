@@ -1179,6 +1179,45 @@ impl GradedOut {
         let field = Expr::Filled(Box::new(self.g.fill.clone()));
         export_field(&field, &self.name, &self.material, h, "graded fill", 0.0)
     }
+
+    /// Slice the stored graded fill directly at height `z` (mm) with X/Y spacing `h` (mm),
+    /// returning packed `[x0, y0, x1, y1, ...]` contour segments without meshing.
+    #[wasm_bindgen(js_name = sliceFieldAt)]
+    pub fn slice_field_at(&self, z: f64, h: f64) -> Float64Array {
+        let field = Expr::Filled(Box::new(self.g.fill.clone()));
+        let b = expr::bounds(&field);
+        if b.is_empty() {
+            return Float64Array::from(&[][..]);
+        }
+        let layer = fieldsmith_mesh::slice::slice_field(
+            |p| expr::eval(&field, p).v,
+            b.lo,
+            b.hi,
+            z,
+            h.max(0.05),
+        );
+        Float64Array::from(&layer.packed_segments()[..])
+    }
+
+    /// Export the stored graded fill as a 3MF Slice Extension archive (`<s:slicestack>`)
+    /// at layer height `layer_h` (mm) and X/Y grid spacing `h` (mm) without 3D meshing.
+    #[wasm_bindgen(js_name = exportSliceStack3mf)]
+    pub fn export_slice_stack_3mf(&self, layer_h: f64, h: f64) -> Result<Uint8Array, JsValue> {
+        let field = Expr::Filled(Box::new(self.g.fill.clone()));
+        let b = expr::bounds(&field);
+        if b.is_empty() {
+            return Err(js_err("document has no solid"));
+        }
+        let stack = fieldsmith_mesh::slice::slice_stack(
+            |p| expr::eval(&field, p).v,
+            b.lo,
+            b.hi,
+            layer_h.max(0.05),
+            h.max(0.05),
+        );
+        let bytes = fieldsmith_mesh::slice::write_3mf_slicestack(&self.name, &self.material, &stack);
+        Ok(Uint8Array::from(bytes.as_slice()))
+    }
 }
 
 #[derive(Serialize)]
@@ -1389,4 +1428,67 @@ pub fn export_graded(doc_json: &str, h: f64) -> Result<MeshOut, JsValue> {
         "graded fill",
         clock() - t0,
     )
+}
+
+/// Slice the implicit field directly at height `z` (mm) with X/Y spacing `h` (mm) without
+/// building a 3D surface mesh. Returns packed `[x0, y0, x1, y1, ...]` contour segments.
+#[wasm_bindgen(js_name = sliceFieldAt)]
+pub fn slice_field_at(
+    doc_json: &str,
+    z: f64,
+    h: f64,
+    solid: bool,
+) -> Result<Float64Array, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let body = expr::compile_body(&doc);
+    let b = expr::bounds(&body);
+    if b.is_empty() {
+        return Ok(Float64Array::from(&[][..]));
+    }
+    let field = if doc.fill.is_some() && !solid {
+        let (_, g) = graded(&doc, Resolution::Dofs(150_000), clock).map_err(js_err)?;
+        expr::Expr::Filled(Box::new(g.fill))
+    } else {
+        body
+    };
+    let layer = fieldsmith_mesh::slice::slice_field(
+        |p| expr::eval(&field, p).v,
+        b.lo,
+        b.hi,
+        z,
+        h.max(0.05),
+    );
+    Ok(Float64Array::from(&layer.packed_segments()[..]))
+}
+
+/// Export a 2D slice stack (`<s:slicestack>` in 3MF Slice Extension) directly from the
+/// implicit field at layer height `layer_h` (mm) and X/Y grid spacing `h` (mm).
+#[wasm_bindgen(js_name = exportSliceStack3mf)]
+pub fn export_slice_stack_3mf(
+    doc_json: &str,
+    layer_h: f64,
+    h: f64,
+    solid: bool,
+) -> Result<Uint8Array, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let body = expr::compile_body(&doc);
+    let b = expr::bounds(&body);
+    if b.is_empty() {
+        return Err(js_err("document has no solid"));
+    }
+    let field = if doc.fill.is_some() && !solid {
+        let (_, g) = graded(&doc, Resolution::Dofs(150_000), clock).map_err(js_err)?;
+        expr::Expr::Filled(Box::new(g.fill))
+    } else {
+        body
+    };
+    let stack = fieldsmith_mesh::slice::slice_stack(
+        |p| expr::eval(&field, p).v,
+        b.lo,
+        b.hi,
+        layer_h.max(0.05),
+        h.max(0.05),
+    );
+    let bytes = fieldsmith_mesh::slice::write_3mf_slicestack(&doc.name, &doc.material, &stack);
+    Ok(Uint8Array::from(bytes.as_slice()))
 }

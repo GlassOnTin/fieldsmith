@@ -6,7 +6,7 @@
 // without a re-solve; it dies with the worker on the next run or edit.
 import type { Document, Node } from '../doc/types';
 import { walk } from '../doc/types';
-import { loadWasm, analyse, analyseGraded, exportSolid, exportGraded, importMesh, meshGrid, hydrateGrid, meshHydrated } from '../doc/wasm';
+import { loadWasm, analyse, analyseGraded, exportSolid, exportGraded, sliceFieldAt, exportSliceStack3mf, importMesh, meshGrid, hydrateGrid, meshHydrated } from '../doc/wasm';
 import type { AnalysisHandle, AnalysisMeta, GradedHandleWithExport, HydrateEntry, LevelResult, MeshHandle, WorkerIn, WorkerOut } from '../doc/wasm';
 // This file once carried its own copies of the rung schedule; the sweep's mirror of the
 // native question engine needs the same constants, and one definition is one number.
@@ -149,10 +149,10 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** The export mesh is being sliced (wasm runs on this thread to completion). */
+/** The export mesh or field is being sliced (wasm runs on this thread to completion). */
 let slicing = false;
 /** A scrub that arrived mid-slice: answered with the newest z once the running one returns. */
-let sliceQueued: number | null = null;
+let sliceQueued: { z: number; doc?: Document; h?: number; solid?: boolean } | null = null;
 
 /** The mesh hashes the document carries (its own and sidecar-loaded). */
 function docMeshHashes(doc: Document): string[] {
@@ -346,25 +346,39 @@ async function doExport(doc: Document, h: number, solid: boolean) {
   }
 }
 
-/** Layer preview: one slice of the export mesh. A scrub posts faster than the wasm answer
- * returns, so only the newest request survives — the older computation is dropped. */
-function doSlice(z: number) {
+/** Layer preview: one slice of the export mesh (or direct implicit field when no mesh is
+ * built yet). A scrub posts faster than the wasm answer returns, so only the newest request
+ * survives — the older computation is dropped. */
+async function doSlice(z: number, doc?: Document, h?: number, solid?: boolean) {
   if (slicing) {
-    sliceQueued = z;
-    return;
-  }
-  if (!mesh) {
-    post({ type: 'sliceDone', z, segs: null });
+    sliceQueued = { z, doc, h, solid };
     return;
   }
   slicing = true;
   try {
-    let segs = mesh.sliceAt(z).slice();
+    if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+    await ready;
+    let segs: Float64Array;
+    if (mesh) {
+      segs = mesh.sliceAt(z).slice();
+    } else if (doc) {
+      const sh = h ?? 0.25;
+      const isSolid = solid ?? doc.fill === null;
+      if (!isSolid && doc.fill !== null && graded) {
+        segs = graded.sliceFieldAt(z, sh).slice();
+      } else {
+        segs = sliceFieldAt(doc, z, sh, isSolid).slice();
+      }
+    } else {
+      slicing = false;
+      post({ type: 'sliceDone', z, segs: null });
+      return;
+    }
     slicing = false;
     if (sliceQueued !== null) {
-      const z2 = sliceQueued;
+      const q = sliceQueued;
       sliceQueued = null;
-      doSlice(z2);
+      void doSlice(q.z, q.doc, q.h, q.solid);
       return; // newer request already answered the panel
     }
     post({ type: 'sliceDone', z, segs }, [segs.buffer as ArrayBuffer]);
@@ -375,7 +389,39 @@ function doSlice(z: number) {
   }
 }
 
-function doBytes(what: 'stl' | '3mf', name: string) {
+async function doBytes(
+  what: 'stl' | '3mf' | 'slices-3mf',
+  name: string,
+  doc?: Document,
+  layerH?: number,
+  h?: number,
+  solid?: boolean,
+) {
+  if (what === 'slices-3mf') {
+    if (!doc) {
+      post({ type: 'exportError', message: 'no document for slice stack export' });
+      return;
+    }
+    try {
+      if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+      await ready;
+      const lh = layerH ?? 1.0;
+      const sh = h ?? 0.25;
+      const isSolid = solid ?? doc.fill === null;
+      const bytes = (
+        !isSolid && doc.fill !== null && graded
+          ? graded.exportSliceStack3mf(lh, sh)
+          : exportSliceStack3mf(doc, lh, sh, isSolid)
+      ).slice();
+      post(
+        { type: 'bytesDone', what: '3mf', name: `${name}-slices`, bytes: bytes.buffer as ArrayBuffer },
+        [bytes.buffer as ArrayBuffer],
+      );
+    } catch (e) {
+      post({ type: 'exportError', message: errText(e) });
+    }
+    return;
+  }
   if (!mesh) {
     post({ type: 'exportError', message: 'export the mesh first' });
     return;
@@ -523,8 +569,8 @@ async function doSweep(doc: Document, addr: string, values: number[], rungs: num
   const m = e.data;
   if (m.type === 'run') void run(m.doc);
   else if (m.type === 'export') void doExport(m.doc, m.h, m.solid);
-  else if (m.type === 'slice') doSlice(m.z);
-  else if (m.type === 'bytes') doBytes(m.what, m.name);
+  else if (m.type === 'slice') void doSlice(m.z, m.doc, m.h, m.solid);
+  else if (m.type === 'bytes') void doBytes(m.what, m.name, m.doc, m.layerH, m.h, m.solid);
   else if (m.type === 'import') void doImport(m.bytes, m.kind, m.src, m.opts);
   else if (m.type === 'hydrate') void doHydrate(m.entries);
   else if (m.type === 'sweep') void doSweep(m.doc, m.addr, m.values, m.rungs, m.addr2, m.values2);

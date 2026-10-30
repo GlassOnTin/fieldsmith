@@ -633,7 +633,73 @@ fn export_cmd(doc: &Document, args: &[String]) -> Result<(), String> {
     }
     let solid_only = args.iter().any(|a| a == "--solid");
     let adaptive = args.iter().any(|a| a == "--adaptive");
+    let slices = args.iter().any(|a| a == "--slices");
     let t_all = clock();
+
+    if slices {
+        let Some(mf_path) = threemf.as_deref() else {
+            return Err("export --slices: give --3mf PATH".into());
+        };
+        if stl.is_some() {
+            return Err("export --slices: STL cannot carry 2D slice stacks; use --3mf PATH".into());
+        }
+        let layer_h = match opt(args, "--layer-h") {
+            Some(s) => s
+                .parse::<f64>()
+                .map_err(|_| format!("bad --layer-h value: {s}"))?,
+            None => 1.0,
+        };
+        let ex = fieldsmith_api::export::export_slices(
+            doc,
+            &fieldsmith_api::export::ExportSlicesOpts {
+                h,
+                layer_h,
+                solid_only,
+                mf: true,
+            },
+            clock,
+        )?;
+        if let Some(g) = &ex.graded {
+            println!(
+                "{}: graded fill (mass {:.2} g of {:.2} g solid) built in {:.1} s",
+                doc.name,
+                g.mass_g,
+                g.solid_mass_g,
+                g.ms / 1000.0
+            );
+        }
+        println!(
+            "slices {} layers, {} closed polygons, {} open chains at layer_h={} mm, h={} mm ({:.2} s)",
+            ex.layers,
+            ex.polygons,
+            ex.open_chains,
+            ex.layer_h,
+            ex.h,
+            ex.slice_ms / 1000.0
+        );
+        println!(
+            "field volume {:.1} ± {:.1} mm³, slice stack volume {:.1} mm³, Δ {:+.3} % (field ref {:.1} s)",
+            ex.reference.volume,
+            ex.reference.error,
+            ex.stack_volume,
+            ex.delta_percent,
+            ex.ref_ms / 1000.0
+        );
+        if let Some(bytes) = ex.mf {
+            let t0 = clock();
+            std::fs::write(mf_path, &bytes).map_err(|x| format!("{mf_path}: {x}"))?;
+            println!(
+                "wrote 3MF slice stack {mf_path} ({:.2} MiB, {:.2} s)",
+                bytes.len() as f64 / (1 << 20) as f64,
+                (clock() - t0) / 1000.0
+            );
+        }
+        println!(
+            "export total {:.2} s (layer_h {layer_h:.3} mm, h {h:.3} mm)",
+            (clock() - t_all) / 1000.0
+        );
+        return Ok(());
+    }
 
     // The export core lives in fieldsmith-api (the MCP tool and the worker host run the
     // same path); this verb keeps the prose and the file writes.

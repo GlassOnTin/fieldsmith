@@ -606,7 +606,11 @@ export interface MeshHandle {
 }
 
 /** A graded handle also exports its stored fill without re-solving. */
-export type GradedHandleWithExport = GradedHandle & { export(h: number): MeshHandle };
+export type GradedHandleWithExport = GradedHandle & {
+  export(h: number): MeshHandle;
+  sliceFieldAt(z: number, h: number): Float64Array;
+  exportSliceStack3mf(layerH: number, h: number): Uint8Array;
+};
 
 export function exportSolid(doc: Document, h: number): MeshHandle {
   return w.exportSolid(JSON.stringify(doc), h);
@@ -615,6 +619,16 @@ export function exportSolid(doc: Document, h: number): MeshHandle {
 /** Export the graded fill, building it (stress solve included) when no handle is at hand. */
 export function exportGraded(doc: Document, h: number): MeshHandle {
   return w.exportGraded(JSON.stringify(doc), h);
+}
+
+/** Slice the implicit field directly at height `z` (mm) with X/Y spacing `h` (mm). */
+export function sliceFieldAt(doc: Document, z: number, h: number, solid: boolean): Float64Array {
+  return w.sliceFieldAt(JSON.stringify(doc), z, h, solid);
+}
+
+/** Export a 2D slice stack (`<s:slicestack>` in 3MF Slice Extension) directly from the field. */
+export function exportSliceStack3mf(doc: Document, layerH: number, h: number, solid: boolean): Uint8Array {
+  return w.exportSliceStack3mf(JSON.stringify(doc), layerH, h, solid);
 }
 
 /** The graded parameter grid riding a fill level: spec `[ox, oy, oz, spacing]`, dims
@@ -682,10 +696,10 @@ export interface HydrateEntry {
 export type WorkerIn =
   | { type: 'run'; doc: Document }
   | { type: 'export'; doc: Document; h: number; solid: boolean }
-  /** Scrub request for the layer preview of the last export (no-op while none exists). */
-  | { type: 'slice'; z: number }
-  /** Fetch the last export's file bytes as a copy; name echoes back for the filename. */
-  | { type: 'bytes'; what: 'stl' | '3mf'; name: string }
+  /** Scrub request for the layer preview (slices the export mesh when built, else the field). */
+  | { type: 'slice'; z: number; doc?: Document; h?: number; solid?: boolean }
+  /** Fetch the export's file bytes (or direct slice-stack 3MF bytes); name echoes back. */
+  | { type: 'bytes'; what: 'stl' | '3mf' | 'slices-3mf'; name: string; doc?: Document; layerH?: number; h?: number; solid?: boolean }
   /** Voxelise an imported model in the worker (rayon threads); the grids come back in
    * `importDone` for the main-thread cache. */
   | { type: 'import'; bytes: ArrayBuffer; kind: 'glb' | 'stl' | 'obj' | '3mf'; src: string; opts: { units?: string; up?: string; voxel?: number; ids?: string[] } }

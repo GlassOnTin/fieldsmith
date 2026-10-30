@@ -64,9 +64,9 @@ function syncSlices(vp: Viewport) {
   const s = analysis.state;
   const ex = s.export;
   const on = store.lens === 'make' && ui.makeSliceOn;
-  // Contours belong to one export (doc edition + mesh); they persist through a scrub until
-  // the fresh layer's answer arrives.
-  if (!on || !(ex instanceof Object) || !s.slice || s.slice.z !== sliceWantedZ()) {
+  // Contours belong to the current document (from the export mesh when built, else the field
+  // directly); they persist through a scrub until the fresh layer's answer arrives.
+  if (!on || !s.slice || s.slice.z !== sliceWantedZ()) {
     if (sliceSig !== 'off') {
       sliceSig = 'off';
       while (sliceGroup.children.length) {
@@ -77,7 +77,8 @@ function syncSlices(vp: Viewport) {
     }
     return;
   }
-  const key = `${ex.version}|${ex.meta.h}|${ex.meta.verts}|${s.slice.z}|${s.slice.segs.length}`;
+  const exTag = ex instanceof Object ? `${ex.version}|${ex.meta.h}|${ex.meta.verts}` : `field|${store.docVersion}|${ui.makeH}`;
+  const key = `${exTag}|${s.slice.z}|${s.slice.segs.length}`;
   if (key === sliceSig) return;
   sliceSig = key;
   while (sliceGroup.children.length) {
@@ -149,7 +150,7 @@ function MakePanel() {
   const z = sliceWantedZ();
   useEffect(() => {
     if (store.lens !== 'make' || !ui.makeSliceOn) return;
-    if (!z) return;
+    if (z === null) return;
     if (analysis.state.slice?.z !== z) analysis.sliceAt(z);
   });
 
@@ -246,48 +247,54 @@ function MakePanel() {
               Download STL
             </button>
           </div>
-
-          <div class="field-grid">
-            <label class="plain">Layer height</label>
-            <Seg<string>
-              value={String(ui.makeLayerH)}
-              options={[
-                { value: '0.5', label: '0.5' },
-                { value: '1', label: '1' },
-                { value: '2', label: '2' },
-              ]}
-              onChange={(v) => ui.set('makeLayerH', Number.parseFloat(v))}
-              testId="make-layer-h"
-            />
-            <label class="plain">Layer</label>
-            <div class="chips" data-testid="make-slice">
-              <input
-                type="range"
-                min={0}
-                max={nLayers - 1}
-                step={1}
-                value={layer}
-                onInput={(e) => {
-                  const v = Number.parseFloat((e.target as HTMLInputElement).value);
-                  ui.set('makeLayer', Math.round(v));
-                }}
-                title={`z ${fmt(zr ? zr[0] + (layer + 0.5) * ui.makeLayerH : 0)} mm of ${fmt(zr ? zr[1] - zr[0] : 0)} mm`}
-              />
-              <button
-                class={ui.makeSliceOn ? 'on' : ''}
-                title="Slice preview of the exported mesh"
-                onClick={() => ui.set('makeSliceOn', !ui.makeSliceOn)}
-              >
-                {ui.makeSliceOn ? 'hide' : 'show'}
-              </button>
-            </div>
-            <span class="plain">at z</span>
-            <span class="num" data-testid="make-layer-z">
-              {fmt(zr ? zr[0] + (layer + 0.5) * ui.makeLayerH : 0)} mm · layer {layer + 1}/{nLayers}
-            </span>
-          </div>
         </>
       )}
+
+      <div class="field-grid">
+        <label class="plain">Layer height</label>
+        <Seg<string>
+          value={String(ui.makeLayerH)}
+          options={[
+            { value: '0.5', label: '0.5' },
+            { value: '1', label: '1' },
+            { value: '2', label: '2' },
+          ]}
+          onChange={(v) => ui.set('makeLayerH', Number.parseFloat(v))}
+          testId="make-layer-h"
+        />
+        <label class="plain">Layer</label>
+        <div class="chips" data-testid="make-slice">
+          <input
+            type="range"
+            min={0}
+            max={nLayers - 1}
+            step={1}
+            value={layer}
+            onInput={(e) => {
+              const v = Number.parseFloat((e.target as HTMLInputElement).value);
+              ui.set('makeLayer', Math.round(v));
+            }}
+            title={`z ${fmt(zr ? zr[0] + (layer + 0.5) * ui.makeLayerH : 0)} mm of ${fmt(zr ? zr[1] - zr[0] : 0)} mm`}
+          />
+          <button
+            class={ui.makeSliceOn ? 'on' : ''}
+            data-testid="make-slice-toggle"
+            title="Slice preview of the part (field-direct or exported mesh)"
+            onClick={() => ui.set('makeSliceOn', !ui.makeSliceOn)}
+          >
+            {ui.makeSliceOn ? 'hide' : 'show'}
+          </button>
+        </div>
+        <span class="plain">at z</span>
+        <span class="num" data-testid="make-layer-z">
+          {fmt(zr ? zr[0] + (layer + 0.5) * ui.makeLayerH : 0)} mm · layer {layer + 1}/{nLayers}
+        </span>
+      </div>
+      <div class="chips">
+        <button class="btn" data-testid="make-download-slices" onClick={() => analysis.downloadSlices3mf()}>
+          Download Slice 3MF
+        </button>
+      </div>
 
       {!ex && s.export !== 'running' && <div class="hint">No export yet: pick a mesh spacing and build one.</div>}
     </div>
