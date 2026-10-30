@@ -264,11 +264,12 @@ Two commercial categories border Fieldsmith:
   Fieldsmith covers a focused subset today (three TPMS families in sheet and network modes,
   single-material linear static, modal, and steady thermo-elastic analysis) while adding
   properties nTop does not offer: zero-install browser execution, open AGPL source, a diffable
-  text format, fitted and verified Gibson–Ashby and cubic-anisotropic lattice laws in the repo
-  (`V6`, `V7`, `V36`, `V42`, `V44`), certified compliance bounds (`V34`, `V35`, `V43`),
-  exact-gradient overhang and layer-peel checks (`V45`, `V46`), interactive Pareto sweep
-  exploration (`V47`), face-segmented mesh/STEP field leaves (`V10`, `V14`), and an automated
-  verification ladder (`V1`–`V47`).
+  text format, coupon-fitted Gibson–Ashby, cubic-anisotropic, yield, and buckling lattice laws in
+  the repo (`V6`, `V7`, `V36`, `V42`, `V44`, `V48`), certified compliance bounds (`V34`, `V35`,
+  `V43`), exact-gradient overhang and layer-peel checks (`V45`, `V46`), interactive Pareto sweep
+  exploration (`V47`), direct 2D field slice stacks (`V49`), stress-driven outer shell thickening
+  (`V50`), closed-loop MCP synthesis (`V51`), face-segmented mesh/STEP field leaves (`V10`, `V14`),
+  and an automated verification ladder (`V1`–`V51`).
 
 ### Roadmap priorities
 
@@ -280,33 +281,41 @@ Every roadmap item is governed by two execution gates:
 
 - **No Engine Islands.** No solver module or verification case (`V#`) lands unless it is either
   (a) reachable end-to-end from a `.fsm` document in both `fieldsmith-cli` and the browser UI,
-  or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6` and `V36`
-  calibrate `fill.rs`).
+  or (b) directly calibrating a coefficient table consumed by `.fsm` solves (as `V6`, `V36`, and
+  `V48` calibrate `fill.rs`).
 - **Pixels and first-user paths, not state-only assertions.** Every UI capability joins the
   feature-combination pixel matrix (`V39`), surfaces rendering or empty-field errors loudly
   (`V40`), and keeps the fresh-clone README new-user gate (`V41`) green.
 
-In priority order beyond `v0.7` (`V1`–`V47`):
+Delivered in `v0.8` (`V48`–`V51`):
 
-1. **Coupon-fitted per-family TPMS yield and buckling laws (`V48`).**
-   - Replace the literature Gibson–Ashby open-cell placeholders (`0.3 · ρ^1.5` and `0.05 · ρ^2`
-     in `fill.rs`) with per-family and per-mode constants (`c_y · ρ^{n_y}` and `c_b · ρ^{n_b}`)
-     fitted from resolved unit-cell finite-element studies across all six TPMS classes,
-     distinguishing stretching-dominated sheets from bending-dominated strut networks.
-2. **Direct field slice stacks & 3MF Slice Extension (`V49`).**
-   - Emit 2D Z-contour slice stacks (`<s:slicestack>` in the 3MF Slice Extension) and instant
+1. **Coupon-fitted per-family TPMS yield and buckling laws (`V48`, `e8765f3`).**
+   - Replaced scalar open-cell placeholders in `fill.rs` with per-family and per-mode constants
+     (`c_y · ρ^{n_y}` and `c_b · ρ^{n_b}`) fitted from resolved unit-cell finite-element studies
+     across all six TPMS classes, distinguishing stretching-dominated sheets from
+     bending-dominated strut networks.
+2. **Direct field slice stacks & 3MF Slice Extension (`V49`, `0f4d75a`).**
+   - Emits 2D Z-contour slice stacks (`<s:slicestack>` in the 3MF Slice Extension) and instant
      in-browser layer contours directly from `f(x, y, z_layer) = 0` (`slice_field`) without
-     requiring a full 3D intermediate triangle mesh on dense lattices.
-3. **Field-native stress-driven shell and wall thickening (`V50`).**
-   - Feed the solved 3D stress parameter field back into the outer body wall (`fill ...
+     requiring a 3D intermediate triangle mesh on dense lattices.
+3. **Field-native stress-driven shell and wall thickening (`V50`, `76f9a50`).**
+   - Feeds the solved 3D stress parameter field back into the outer body wall (`fill ...
      skin_max=<mm>`), thickening load-bearing shells at stress risers and fillets smoothly in
-     both the GPU raymarcher and CPU field evaluator without NURBS self-intersection failures.
-4. **Closed-loop agentic synthesis via `fieldsmith-mcp` & multi-body assembly mechanics (`V51`).**
-   - Extend `fieldsmith-mcp` with parametric design mutation tools (`set_let`, `set_fill`,
+     both the GPU raymarcher and CPU field evaluator.
+4. **Closed-loop agentic synthesis via `fieldsmith-mcp` (`V51`, `cf724d3`).**
+   - Extended `fieldsmith-mcp` with parametric design mutation tools (`set_let`, `set_fill`,
      `set_build`, and `sweep` solves) so an automated loop can propose `.fsm` → `sweep` /
      `ladder` → inspect yield, buckling, overhang, and layer-peel limits → refine parameters
      and orientation → export a verified 3MF meeting explicit structural and mass targets.
-   - Tied/frictional contact and bolt preload across multi-volume 3MF and STEP assemblies.
+
+In priority order beyond `v0.8` (`V1`–`V51`):
+
+1. **Multi-body assembly mechanics & bolt preload.**
+   - Tied/bonded contact and bolt preload across multi-volume 3MF and STEP assemblies.
+2. **Spatially varying cell-size and multi-zone lattice fields.**
+   - Smooth transitions between lattice cell sizes and families across functional regions.
+3. **Topology optimization / level-set field evolution.**
+   - Stress- and compliance-driven outer boundary evolution directly on the implicit field grid.
 
 ---
 
@@ -316,7 +325,7 @@ In priority order beyond `v0.7` (`V1`–`V47`):
 2. Live preview and progressive background compute, never a blocking wizard.
 3. Direct manipulation in the viewport; exact expressions in the inspector.
 4. Every number carries units, provenance, and stated model assumptions.
-5. Verification cases (`V1`–`V47`) are executable tests in CI, and every solver module connects
+5. Verification cases (`V1`–`V51`) are executable tests in CI, and every solver module connects
    to a user-facing `.fsm` flow or a calibrated material law (no engine islands).
 6. One field representation; geometry, regions, physics, and lattices compose.
 7. Nothing unencrypted leaves the machine, and remote compute runs on user-owned hardware.

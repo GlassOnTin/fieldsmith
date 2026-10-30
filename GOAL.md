@@ -77,40 +77,40 @@ update this file in a reviewed commit with the measured reason rather than skipp
 ## Acceptance criteria
 
 ### A. Coupon-fitted TPMS yield & buckling laws (`M26` — `V48`)
-- [ ] `fieldsmith_verify::coupon` measures interior `vm_int_p95`, `yield_ratio`, `comp_int_p95`,
+- [x] `fieldsmith_verify::coupon` measures interior `vm_int_p95`, `yield_ratio`, `comp_int_p95`,
       and `buckling_ratio` on resolved unit-cell coupons.
-- [ ] `fieldsmith_core::fill` replaces the scalar open-cell placeholders (`0.3 · ρ^1.5` and
+- [x] `fieldsmith_core::fill` replaces the scalar open-cell placeholders (`0.3 · ρ^1.5` and
       `0.05 · ρ^2`) with per-`(Family, FillMode)` coupon-fitted power laws `strength_law` and
       `buckling_law`, exposed in `GradedOut::metaJson` and `fieldsmith-api`.
-- [ ] `V48` verifies the fitted yield and buckling laws across all six TPMS classes and confirms
+- [x] `V48` verifies the fitted yield and buckling laws across all six TPMS classes and confirms
       that stretching-dominated sheets vs. bending-dominated networks produce the expected
       directional shift in `yield_utilization` and `buckling_utilization` on a `.fsm` solve.
 
 ### B. Direct field slice stacks (`M27` — `V49`)
-- [ ] `fieldsmith_mesh::slice` extracts closed, consistently oriented 2D polygon contours
+- [x] `fieldsmith_mesh::slice` extracts closed, consistently oriented 2D polygon contours
       directly from `f(x, y, z) = 0` and writes/reads 3MF Slice Extension (`<s:slicestack>`)
       archives.
-- [ ] `fieldsmith-cli` (`export --slices`), `fieldsmith-wasm`, and the `Make` lens preview and
+- [x] `fieldsmith-cli` (`export --slices`), `fieldsmith-wasm`, and the `Make` lens preview and
       export slice stacks directly from the implicit field without building a 3D triangle mesh.
-- [ ] `V49` verifies closed-form slice areas on a sphere (`π(R² − z²)` within `1 %`), closed
+- [x] `V49` verifies closed-form slice areas on a sphere (`π(R² − z²)` within `1 %`), closed
       polygon loops (`0` open chains) on a graded lattice bracket, 3MF `<s:slicestack>`
       round-trip, and `Make` slice preview pixel updates (`V39`).
 
 ### C. Stress-driven outer shell thickening (`M28` — `V50`)
-- [ ] `.fsm` parser and printer round-trip `fill ... skin_max=<mm>` (`V9` extended), with
+- [x] `.fsm` parser and printer round-trip `fill ... skin_max=<mm>` (`V9` extended), with
       validation requiring `skin_max >= skin`.
-- [ ] `FillExpr` (CPU) and `glsl.rs` (`fs_field` and `fs_core`) interpolate local skin thickness
+- [x] `FillExpr` (CPU) and `glsl.rs` (`fs_field` and `fs_core`) interpolate local skin thickness
       `skin(p) ∈ [skin, skin_max]` from the solved stress parameter grid `u_param`, preserving
       GPU/CPU `V16` agreement.
-- [ ] `V50` verifies that setting `skin_max > skin` on a loaded cantilever/bracket thickens the
+- [x] `V50` verifies that setting `skin_max > skin` on a loaded cantilever/bracket thickens the
       high-stress root skin in `FillExpr`, increases integrated mass, reduces graded compliance
       and peak deflection in the FEA re-solve, and visibly updates viewport pixels in `Fill`
       (`V39`).
 
 ### D. Closed-loop agentic synthesis via `fieldsmith-mcp` (`M29` — `V51`)
-- [ ] `fieldsmith-mcp` exposes `set_let`, `set_fill`, `set_build`, `solve` (`kind: "sweep"`),
+- [x] `fieldsmith-mcp` exposes `set_let`, `set_fill`, `set_build`, `solve` (`kind: "sweep"`),
       and `export` (`slices: true`) over stdio JSON-RPC.
-- [ ] `V51` drives an automated closed-loop synthesis session over `fieldsmith-mcp`: starting
+- [x] `V51` drives an automated closed-loop synthesis session over `fieldsmith-mcp`: starting
       from an initial `.fsm` design that violates yield/peel targets, the loop queries `solve` /
       `sweep`, updates `let` variables, lattice rotation/skin, and build orientation `(θ, φ)`,
       verifies the refined design meets all safety-factor, layer-peel, overhang, and mass gates,
@@ -124,8 +124,8 @@ update this file in a reviewed commit with the measured reason rather than skipp
 | :-- | :-- | :-- | :-- |
 | **M26** | Coupon-fitted TPMS yield & buckling laws | Done (`e8765f3`) | Per-family yield/buckling laws in `fill.rs` + `coupon.rs` + `V48.md` |
 | **M27** | Direct field slice stacks (3MF Slice Ext) | Done (`0f4d75a`) | `fieldsmith_mesh::slice` + CLI `--slices` + `Make` field slice preview/export + `V49.md` |
-| **M28** | Stress-driven outer shell thickening | Pending | `fill ... skin_max=` across `.fsm`, GLSL, CPU, solver, and `Fill` UI + `V50.md` |
-| **M29** | Closed-loop agentic synthesis (`mcp`) | Pending | `set_let`/`set_fill`/`set_build`/sweep in `fieldsmith-mcp` + closed-loop `V51.md` |
+| **M28** | Stress-driven outer shell thickening | Done (`76f9a50`) | `fill ... skin_max=` across `.fsm`, GLSL, CPU, solver, and `Fill` UI + `V50.md` |
+| **M29** | Closed-loop agentic synthesis (`mcp`) | Done (`cf724d3`) | `set_let`/`set_fill`/`set_build`/sweep in `fieldsmith-mcp` + closed-loop `V51.md` |
 
 ---
 
@@ -138,9 +138,9 @@ update this file in a reviewed commit with the measured reason rather than skipp
 
 ---
 
-## Appendix: v0.6 (`V26`–`V43`) & v0.7 (`V44`–`V47`) Closure Summary
+## Appendix: v0.6 (`V26`–`V43`), v0.7 (`V44`–`V47`), & v0.8 (`V48`–`V51`) Closure Summary
 
-All 22 verification cases added across `v0.6.0` (`d3cdd37`) and `v0.7.0` (`d806c55`) pass in CI:
+All 26 verification cases added across `v0.6.0` (`d3cdd37`), `v0.7.0` (`d806c55`), and `v0.8.0` pass in CI:
 
 | ID | Capability delivered | Release / Commit | Report |
 | :-- | :-- | :-- | :-- |
@@ -166,3 +166,7 @@ All 22 verification cases added across `v0.6.0` (`d3cdd37`) and `v0.7.0` (`d806c
 | `V45` | Exact-gradient overhang analysis (`n(p) = ∇f/‖∇f‖`) in CLI, API, and `Make` overlay | v0.7 (`0eeb0b2`) | [V45.md](docs/verification/V45.md) |
 | `V46` | Orthotropic inter-layer peel/shear utilization and build-orientation sweep `(θ, φ)` | v0.7 (`0456a86`) | [V46.md](docs/verification/V46.md) |
 | `V47` | Interactive 1D/2D `let` Pareto frontier explorer in `Results` with click-to-apply & Undo | v0.7 (`2c44e7d`) | [V47.md](docs/verification/V47.md) |
+| `V48` | Coupon-fitted per-family TPMS yield and buckling laws across all six `(Family, FillMode)` classes | v0.8 (`e8765f3`) | [V48.md](docs/verification/V48.md) |
+| `V49` | Direct field slice stacks (`slice_field`, `slice_stack`) & 3MF Slice Extension (`<s:slicestack>`) | v0.8 (`0f4d75a`) | [V49.md](docs/verification/V49.md) |
+| `V50` | Field-native stress-driven outer shell thickening (`fill ... skin_max=<mm>`) | v0.8 (`76f9a50`) | [V50.md](docs/verification/V50.md) |
+| `V51` | Closed-loop agentic synthesis via `fieldsmith-mcp` (`set_let`, `set_fill`, `set_build`, `sweep`) | v0.8 (`cf724d3`) | [V51.md](docs/verification/V51.md) |

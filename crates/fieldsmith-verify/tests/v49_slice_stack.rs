@@ -164,7 +164,7 @@ fn v49_direct_field_slice_stack() {
 
     r.section(
         "Sphere Cross-Section Accuracy (`R = 15 mm`, `h = 0.25 mm`)",
-        &format!(
+        format!(
             "| Z plane (mm) | Polygons | Vertices | Exact `π(R²−z²)` (mm²) | Sliced area (mm²) | Relative error |\n\
              | --: | --: | --: | --: | --: | --: |\n\
              {}",
@@ -173,7 +173,7 @@ fn v49_direct_field_slice_stack() {
     )
     .section(
         "Graded TPMS Bracket Slice Stack (`examples/bracket-filled.fsm`)",
-        &format!(
+        format!(
             "- Layers (`layer_h = 1.0 mm`, `h = 0.35 mm`): `{}`\n\
              - Closed polygons: `{}` (`{ccw_outer}` CCW outer boundaries, `{cw_holes}` CW interior lattice holes)\n\
              - Open segment chains: `{}`\n\

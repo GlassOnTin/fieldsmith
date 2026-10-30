@@ -9,9 +9,9 @@
 //!    - Exact overhanging lower cap area `A_overhang(α_max) = 2π r² (1 − sin α_max)`;
 //!    - Exact overhang fraction `(1 − sin α_max) / 2`;
 //!    - Exact maximum overhang angle `90.0°` at the south pole (`n = (0, 0, -1)`).
-//!    At the default export mesh spacing `h = 0.25 mm`, overhang area and overhang
-//!    fraction match the closed-form spherical cap within `1.5 %`, and worst overhang
-//!    angle matches `90°` within `0.5°`.
+//!      At the default export mesh spacing `h = 0.25 mm`, overhang area and overhang
+//!      fraction match the closed-form spherical cap within `1.5 %`, and worst overhang
+//!      angle matches `90°` within `0.5°`.
 //!
 //! 2. **Tilted plate (`60°` overhang angle from build vertical)**:
 //!    - A flat plate `box plate size=(40, 20, 2) rotate=(30, 0, 0)` (tilted `30°` from

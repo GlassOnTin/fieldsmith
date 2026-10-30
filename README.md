@@ -97,16 +97,19 @@ the solved field.
   conduction (`temperature`), convection bands (`convection`), prescribed heat fluxes
   (`heatflux`); modal analysis.
 - TPMS lattice fill (gyroid, primitive, diamond; sheet and network), graded by solved
-  stress, with lattice axis rotation (`V44`), per-element yield and buckling factors (`V37`,
-  `V38`), inter-layer peel/shear utilization across build orientations (`V46`), and an
+  stress, with lattice axis rotation (`V44`), stress-driven outer shell thickening
+  (`skin_max`, `V50`), coupon-fitted per-family yield and buckling factors (`V37`, `V38`,
+  `V48`), inter-layer peel/shear utilization across build orientations (`V46`), and an
   interactive Pareto sweep explorer (`V47`) in the Results lens.
 - Certified numbers where the physics allows: the compliance is a lower bound (V34), and
   an equilibrated stress field raises an upper end (V35, V43) to bracket the truth.
-- Binary STL and 3MF export (millimetres, part name and material recorded), with
-  exact-gradient overhang analysis (`V45`).
+- Binary STL, 3MF mesh, and direct 2D 3MF Slice Extension (`<s:slicestack>`, `V49`) export
+  (millimetres, part name and material recorded), with exact-gradient overhang analysis
+  (`V45`).
 - Automation: `fieldsmith api` (one JSON request in, one envelope out), the
-  `fieldsmith-mcp` binary (stdio MCP server over that API), and the `session` and
-  `worker` verbs to hand jobs to machines you own over Noise-encrypted connections.
+  `fieldsmith-mcp` binary (stdio MCP server over that API with closed-loop parametric
+  synthesis tools, `V51`), and the `session` and `worker` verbs to hand jobs to machines
+  you own over Noise-encrypted connections.
 
 ## Where to look next
 
@@ -125,7 +128,7 @@ By what you want to do:
 
 The full build, including the verification suite:
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V47; V24/V25/V41 in scripts/)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V51; V24/V25/V41 in scripts/)
     npm --prefix web install                  # once (if not done in Run the web app)
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
