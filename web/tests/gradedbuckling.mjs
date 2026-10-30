@@ -50,17 +50,19 @@ async function awaitLadder(page, tag) {
   }
 }
 
-// The buckling law the engine applies (constants mirrored from fill.rs — BUCKLING_COEF /
-// BUCKLING_EXP, the band floor RHO_LO = 0.18 and the band-top clamp at RHO_HI = 0.40).
-// A test-side copy by design: the native unit gate owns the law.
-const BUCKLING_COEF = 0.05;
+// The buckling law the engine applies (gyroid-sheet coupon-fitted constants mirrored
+// from fill.rs — law_buckling_params(Gyroid, Sheet) = (0.9212, 3.263), the band floor
+// RHO_LO = 0.18 and the band-top clamp at RHO_HI = 0.40). A test-side copy by design:
+// the native unit gate (V48) owns the per-family law table.
+const BUCKLING_COEF = 0.9212;
+const BUCKLING_EXP = 3.263;
 const RHO_LO = 0.18;
 const RHO_HI = 0.4;
 
 function bucklingExtended(e, phi) {
   if (phi <= 0) return 0;
-  if (phi < RHO_LO) return e * BUCKLING_COEF * Math.pow(RHO_LO, 2.0) * (phi / RHO_LO);
-  return e * BUCKLING_COEF * Math.pow(Math.min(phi, RHO_HI), 2.0);
+  if (phi < RHO_LO) return e * BUCKLING_COEF * Math.pow(RHO_LO, BUCKLING_EXP) * (phi / RHO_LO);
+  return e * BUCKLING_COEF * Math.pow(Math.min(phi, RHO_HI), BUCKLING_EXP);
 }
 
 /** Max over LATTICE elements (class === 1) of the compressive magnitude over the law's

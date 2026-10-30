@@ -52,11 +52,12 @@ async function awaitLadder(page, tag) {
   }
 }
 
-// The strength law the engine applies to the fraction (constants mirrored from
-// fill.rs — STRENGTH_COEF / STRENGTH_EXP / the [RHO_LO, RHO_HI] band with its
-// extensions). A test-side copy by design: the native unit gate owns the law.
-const STRENGTH_COEF = 0.3;
-const STRENGTH_EXP = 1.5;
+// The strength law the engine applies to the fraction (gyroid-sheet coupon-fitted
+// constants mirrored from fill.rs — law_strength_params(Gyroid, Sheet) = (0.3976, 1.064)
+// and the [RHO_LO, RHO_HI] band with its extensions). A test-side copy by design:
+// the native unit gate (V48) owns the per-family law table.
+const STRENGTH_COEF = 0.3976;
+const STRENGTH_EXP = 1.064;
 const RHO_LO = 0.18;
 const RHO_HI = 0.4;
 

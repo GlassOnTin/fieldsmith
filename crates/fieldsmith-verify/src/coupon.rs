@@ -28,7 +28,7 @@ use fieldsmith_doc::{Family, FillMode};
 use fieldsmith_field::lattice::{calibration, lattice_field};
 use fieldsmith_mesh::{quality, stuff, TetMesh, V3};
 use fieldsmith_solve::p2::face_nodes;
-use fieldsmith_solve::stress::element_stress;
+use fieldsmith_solve::stress::{element_stress, min_compressive, von_mises};
 use fieldsmith_solve::{solve, Material, P2Mesh, Problem, SolverOptions};
 use std::time::Instant;
 
@@ -301,6 +301,15 @@ pub struct CouponResult {
     pub sxx_int: f64,
     /// Volume-weighted σxx over the whole coupon (MPa).
     pub sxx_all: f64,
+    /// Volume-weighted 95th-percentile von Mises stress over the interior band (MPa).
+    pub vm_int_p95: f64,
+    /// Dimensionless initial-yield strength ratio `σ_y*(ρ) / σ_ys = Σ / vm_int_p95`.
+    pub yield_ratio: f64,
+    /// Volume-weighted 95th-percentile compressive principal stress magnitude in the interior (MPa).
+    pub comp_int_p95: f64,
+    /// Dimensionless elastic-buckling ratio `σ_el*(ρ) / E_s` from the coupon's resolved thin
+    /// feature `(feature / cell)²` and interior compressive concentration `Σ / comp_int_p95`.
+    pub buckling_ratio: f64,
     /// Equilibrium identity error ∫σxx dV vs Σ Fₓ·x (%).
     pub ident_energy_err: f64,
     /// Equilibrium identity error ⟨σxx⟩ₘₐₜ vs −Σ/(ρ·L²) (%).
@@ -729,6 +738,9 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
     let mut vol = 0.0;
     let mut sxx_all = 0.0;
     let mut vol_all = 0.0;
+    let mut vm_sq_int = 0.0;
+    let mut vm_samples: Vec<(f64, f64)> = Vec::new();
+    let mut comp_samples: Vec<(f64, f64)> = Vec::new();
     for e in 0..mesh.tets.len() {
         let tt = &mesh.tets[e];
         let mut c = [0.0f64; 3];
@@ -738,8 +750,8 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
                 *cj += n[j] / 4.0;
             }
         }
-        let interior = c[0] >= cell
-            && c[0] <= l - cell
+        let interior = c[0] >= band
+            && c[0] <= l - band
             && c[1] >= cell
             && c[1] <= l - cell
             && c[2] >= cell
@@ -749,10 +761,60 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         if interior {
             sxx += s[0] * v;
             vol += v;
+            let vm = von_mises(&s);
+            vm_sq_int += vm * vm * v;
+            vm_samples.push((vm, v));
+            comp_samples.push((-min_compressive(&s), v));
         }
         sxx_all += s[0] * v;
         vol_all += v;
     }
+    let vol_quantile = |samples: &mut [(f64, f64)], q_frac: f64| -> f64 {
+        if samples.is_empty() {
+            return f64::NAN;
+        }
+        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let total_v: f64 = samples.iter().map(|x| x.1).sum();
+        let target = q_frac * total_v;
+        let mut acc = 0.0;
+        for &(val, w) in samples.iter() {
+            acc += w;
+            if acc >= target {
+                return val;
+            }
+        }
+        samples.last().unwrap().0
+    };
+    let vm_int_rms = if vol > 0.0 {
+        (vm_sq_int / vol).sqrt()
+    } else {
+        f64::NAN
+    };
+    let vm_int_p95 = vol_quantile(&mut vm_samples, 0.95);
+    let comp_int_p95 = vol_quantile(&mut comp_samples, 0.95);
+    // Hill–Mandel interior energy equivalence: in the periodic interior band where `e_star_int`
+    // is measured from `strain_slope` (free of platen boundary-layer artefacts), the ratio of
+    // macroscopic stress Σ to interior solid-phase RMS equivalent stress is
+    // `sqrt(rho_mesh * E*_int / E_s)`, and `vm_int_p95 / vm_int_rms` is the interior 95th-
+    // percentile stress concentration factor of the unit-cell geometry.
+    let e_rel = e_star_int.unwrap_or(0.0) / spec.young;
+    let hm_scale = (rho_mesh * e_rel).max(0.0).sqrt();
+    let yield_ratio = if vm_int_p95 > 0.0 && vm_int_rms > 0.0 && hm_scale > 0.0 {
+        hm_scale * (vm_int_rms / vm_int_p95)
+    } else {
+        f64::NAN
+    };
+    let euler_k = match spec.mode {
+        FillMode::Sheet => {
+            4.0 * std::f64::consts::PI * std::f64::consts::PI / (3.0 * (1.0 - spec.nu * spec.nu))
+        }
+        FillMode::Network => std::f64::consts::PI * std::f64::consts::PI,
+    };
+    let buckling_ratio = if comp_int_p95 > 0.0 && vm_int_rms > 0.0 && hm_scale > 0.0 {
+        hm_scale * (vm_int_rms / comp_int_p95) * euler_k * (feature / cell).powi(2)
+    } else {
+        f64::NAN
+    };
     log.push(format!(
         "interior elements: sigma_xx {:.4} MPa (vol-weighted, {} mm3); whole coupon sigma_xx {:.4} (macro stress {:.4})",
         sxx / vol,
@@ -781,22 +843,24 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         l - band,
         eps_full.unwrap_or(f64::NAN)
     ));
-    log.push(format!(
-        "RESULT family={:?} mode={:?} rho={} cell={} n={} hmul={} band={} dofs={} rho_mesh={:.5} E_int={} E_full={} iters={} secs={:.1}",
-        spec.family,
-        spec.mode,
-        spec.rho,
-        cell,
-        spec.n,
-        spec.hmul,
-        spec.band,
-        mesh.ndofs(),
-        rho_mesh,
-        e_star_int.map(|e| format!("{e:.2}")).unwrap_or_else(|| "n/a".into()),
-        e_star_full.map(|e| format!("{e:.2}")).unwrap_or_else(|| "n/a".into()),
-        rep.iterations,
-        mesh_secs + solve_secs
-    ));
+        log.push(format!(
+            "RESULT family={:?} mode={:?} rho={} cell={} n={} hmul={} band={} dofs={} rho_mesh={:.5} E_int={} E_full={} yield_ratio={:.5} buckling_ratio={:.5} iters={} secs={:.1}",
+            spec.family,
+            spec.mode,
+            spec.rho,
+            cell,
+            spec.n,
+            spec.hmul,
+            spec.band,
+            mesh.ndofs(),
+            rho_mesh,
+            e_star_int.map(|e| format!("{e:.2}")).unwrap_or_else(|| "n/a".into()),
+            e_star_full.map(|e| format!("{e:.2}")).unwrap_or_else(|| "n/a".into()),
+            yield_ratio,
+            buckling_ratio,
+            rep.iterations,
+            mesh_secs + solve_secs
+        ));
 
     CouponResult {
         t_param: t,
@@ -820,6 +884,10 @@ pub fn run(spec: &CouponSpec) -> CouponResult {
         nu_int,
         sxx_int: sxx / vol,
         sxx_all: sxx_all / vol_all,
+        vm_int_p95,
+        yield_ratio,
+        comp_int_p95,
+        buckling_ratio,
         ident_energy_err: err_int,
         ident_hill_err: err_hill,
         area_planar: area_nodes,

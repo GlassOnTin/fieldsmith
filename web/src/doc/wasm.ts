@@ -518,6 +518,10 @@ export interface FillInfo {
   /** Achieved design density after wall clamps (min, max) — what the lattice actually is. */
   rho_design: [number, number];
   sigma_ref: number;
+  strength_coef?: number;
+  strength_exp?: number;
+  buckling_coef?: number;
+  buckling_exp?: number;
   mass_g: number;
   solid_mass_g: number;
   fill_ms: number;

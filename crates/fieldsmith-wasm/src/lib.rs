@@ -837,6 +837,10 @@ struct FillInfo {
     /// Achieved design density after wall clamps (min, max) — what the lattice actually is.
     rho_design: [f64; 2],
     sigma_ref: f64,
+    strength_coef: f64,
+    strength_exp: f64,
+    buckling_coef: f64,
+    buckling_exp: f64,
     mass_g: f64,
     solid_mass_g: f64,
     fill_ms: f64,
@@ -937,21 +941,35 @@ impl GradedOut {
                     max_displacement: c.max_displacement,
                 })
                 .collect(),
-            fill: FillInfo {
-                family: format!("{:?}", self.g.spec.family),
-                mode: format!("{:?}", self.g.spec.mode),
-                cell: self.g.spec.cell,
-                skin: self.g.spec.skin,
-                rho_min: self.g.spec.rho_min,
-                rho_max: self.g.spec.rho_max,
-                curve: self.g.spec.curve,
-                min_wall: self.g.spec.min_wall,
-                rho_design: self.g.rho_design,
-                sigma_ref: self.g.sigma_ref,
-                mass_g: self.g.mass_g,
-                solid_mass_g: self.g.solid_mass_g,
-                fill_ms: self.g.fill_ms,
-                solve_ms: self.g.solve_ms,
+            fill: {
+                let (strength_coef, strength_exp) = fieldsmith_core::fill::law_strength_params(
+                    self.g.spec.family,
+                    self.g.spec.mode,
+                );
+                let (buckling_coef, buckling_exp) = fieldsmith_core::fill::law_buckling_params(
+                    self.g.spec.family,
+                    self.g.spec.mode,
+                );
+                FillInfo {
+                    family: format!("{:?}", self.g.spec.family),
+                    mode: format!("{:?}", self.g.spec.mode),
+                    cell: self.g.spec.cell,
+                    skin: self.g.spec.skin,
+                    rho_min: self.g.spec.rho_min,
+                    rho_max: self.g.spec.rho_max,
+                    curve: self.g.spec.curve,
+                    min_wall: self.g.spec.min_wall,
+                    rho_design: self.g.rho_design,
+                    sigma_ref: self.g.sigma_ref,
+                    strength_coef,
+                    strength_exp,
+                    buckling_coef,
+                    buckling_exp,
+                    mass_g: self.g.mass_g,
+                    solid_mass_g: self.g.solid_mass_g,
+                    fill_ms: self.g.fill_ms,
+                    solve_ms: self.g.solve_ms,
+                }
             },
             yield_strength: self.base.yield_strength,
             yield_z: self.base.yield_z,

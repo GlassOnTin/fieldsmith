@@ -255,62 +255,88 @@ fn law_extended(family: Family, mode: FillMode, phi: f64) -> f64 {
     s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (1.0 - s_hi)
 }
 
-/// The lattice's yield-strength law (the STRENGTH side of Gibson–Ashby, the open-cell
-/// bending-dominated scaling `σ_y*(ρ) ≈ 0.3·σ_ys·ρ^1.5`): **literature-cited defaults,
-/// not fitted by this tool** — this project's coupons run a linear-elastic solver, which
-/// cannot measure plasticity, so the constants come from Gibson–Ashby, *Cellular Solids*
-/// (the open-cell scaling named there and used unchanged here). They are per-family
-/// placeholders in that sense and adjustable once a non-linear fit session exists.
-pub const STRENGTH_COEF: f64 = 0.3;
-pub const STRENGTH_EXP: f64 = 1.5;
+/// Coupon-measured initial-yield strength law `σ_y*(ρ) / σ_ys = c_y · ρ^{n_y}` per family and
+/// mode (V48), fitted in log-log space to the 18 resolved-FE unit-cell compression coupons in
+/// `fieldsmith_verify::coupon` across `ρ ∈ {0.2, 0.3, 0.4}` (`N = 3` cells per side). Each
+/// coupon's `yield_ratio` combines the Hill–Mandel interior energy equivalence
+/// `Σ / σ_eq,rms = √(ρ_mesh · E*_int / E_s)` on the 1-cell interior strain band with the
+/// interior 95th-percentile-to-RMS von Mises concentration factor `vm_int_p95 / vm_int_rms`.
+/// Stretching-dominated minimal sheets (`gyroid sheet` `n_y = 1.064`, `diamond sheet`
+/// `n_y = 1.155`) scale near-linearly with density, whereas bending-dominated strut networks
+/// (`gyroid network` `n_y = 1.376`, `primitive network` `n_y = 1.440`, `diamond network`
+/// `n_y = 1.678`) scale more steeply.
+pub fn law_strength_params(family: Family, mode: FillMode) -> (f64, f64) {
+    match (family, mode) {
+        (Family::Gyroid, FillMode::Sheet) => (0.3976, 1.064),
+        (Family::Primitive, FillMode::Sheet) => (0.7654, 1.445),
+        (Family::Diamond, FillMode::Sheet) => (0.4833, 1.155),
+        (Family::Gyroid, FillMode::Network) => (0.4858, 1.376),
+        (Family::Primitive, FillMode::Network) => (0.9716, 1.440),
+        (Family::Diamond, FillMode::Network) => (0.6348, 1.678),
+    }
+}
 
-/// The strength law on its own measured-style band, extended like the stiffness law:
-/// zero at φ = 0, the open-cell scaling on the band, a linear bridge to the full solid
-/// strength at φ = 1. No family argument: the open-cell placeholder carries no
-/// per-family constant yet — one arrives only with a non-linear fit session.
-pub fn strength_extended(yield_mpa: f64, phi: f64) -> f64 {
+/// Dimensionless initial-yield strength `σ_y*(ρ) / σ_ys` on the measured band `[RHO_LO, RHO_HI]`.
+pub fn law_strength(family: Family, mode: FillMode, rho: f64) -> f64 {
+    let (c, n) = law_strength_params(family, mode);
+    c * rho.clamp(RHO_LO, RHO_HI).powf(n)
+}
+
+/// The per-family strength law extended continuously over `φ ∈ [0, 1]`: zero at `φ = 0`,
+/// linear ramp to `RHO_LO`, the coupon-fitted power law on `[RHO_LO, RHO_HI]`, and a linear
+/// bridge to the full solid yield strength `yield_mpa` at `φ = 1`.
+pub fn strength_extended(family: Family, mode: FillMode, yield_mpa: f64, phi: f64) -> f64 {
     if phi <= 0.0 {
         return 0.0;
     }
-    let raw = yield_mpa * STRENGTH_COEF * phi.powf(STRENGTH_EXP);
+    let (c, n) = law_strength_params(family, mode);
     if phi < RHO_LO {
-        return yield_mpa * STRENGTH_COEF * RHO_LO.powf(STRENGTH_EXP) * phi / RHO_LO;
+        return yield_mpa * c * RHO_LO.powf(n) * phi / RHO_LO;
     }
     if phi <= RHO_HI {
-        return raw;
+        return yield_mpa * c * phi.powf(n);
     }
-    let s_hi = yield_mpa * STRENGTH_COEF * RHO_HI.powf(STRENGTH_EXP);
+    let s_hi = yield_mpa * c * RHO_HI.powf(n);
     s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (yield_mpa - s_hi)
 }
 
-/// The lattice's elastic-buckling law (the open-cell elastic-collapse scaling
-/// `σ_el*(ρ) ≈ 0.05·E_s·φ²`): **literature-cited defaults, not fitted by this tool** —
-/// Gibson & Ashby, *Cellular Solids*, ch. 6 (the strut-buckling scaling; Ashby 2006,
-/// *Phil. Trans. R. Soc. A* 364, states the 0.05 coefficient; Ohno–Okumura–Okada 2008
-/// verify it against Kelvin-cell FEM). Like the strength law these are placeholders a
-/// linear-elastic solve cannot fit: buckling is not measured by any linear solver — a
-/// geometric-stiffness eigenproblem is the rigorous route, tracked on the rung.
-///
-/// Design reading the two laws combine into: elastic buckling dominates plastic yield
-/// only where `0.05·E_s·φ² < 0.3·σ_ys·φ^1.5`, i.e. `φ < 36·(σ_ys/E_s)²` — at PETG's
-/// σ_ys/E_s ≈ 31e-3 that crossover sits at φ ≈ 0.035, far below any graded wall, so for
-/// these materials the buckling factor's usual role is to show HOW far yield binds first.
-pub const BUCKLING_COEF: f64 = 0.05;
-pub const BUCKLING_EXP: f64 = 2.0;
+/// Coupon-measured elastic-buckling law `σ_el*(ρ) / E_s = c_b · ρ^{n_b}` per family and mode
+/// (V48), fitted in log-log space to the 18 resolved-FE unit-cell coupons across
+/// `ρ ∈ {0.2, 0.3, 0.4}`. Each coupon's `buckling_ratio` combines the resolved thin-feature
+/// slenderness `(feature / cell)²` (sheet wall thickness `t` with clamped saddle half-wave
+/// `4π² / (3(1 − ν²))`; network chamfer-measured thinnest strut diameter `2R` with fixed-fixed
+/// nodal half-cell `π²`) with the Hill–Mandel interior compressive stress concentration
+/// `√(ρ_mesh · E*_int / E_s) · (vm_int_rms / comp_int_p95)`.
+pub fn law_buckling_params(family: Family, mode: FillMode) -> (f64, f64) {
+    match (family, mode) {
+        (Family::Gyroid, FillMode::Sheet) => (0.9212, 3.263),
+        (Family::Primitive, FillMode::Sheet) => (1.8223, 3.275),
+        (Family::Diamond, FillMode::Sheet) => (0.6456, 3.208),
+        (Family::Gyroid, FillMode::Network) => (2.5959, 2.811),
+        (Family::Primitive, FillMode::Network) => (4.7479, 2.786),
+        (Family::Diamond, FillMode::Network) => (2.9288, 3.095),
+    }
+}
 
-/// The buckling law's stress: zero at φ = 0, a linear ramp up to the band floor, the
-/// quadratic scaling on the band, and CLAMPED to the band-top value above it — the
-/// most conservative continuation, since the extrapolation past the band carries no
-/// citation and an underestimate at a dense wall would hide a risk. The call site reads
-/// lattice elements only (a solid skin does not strut-buckle; its check is the yield's).
-pub fn buckling_extended(young_mpa: f64, phi: f64) -> f64 {
+/// Dimensionless elastic-buckling stress `σ_el*(ρ) / E_s` on the measured band `[RHO_LO, RHO_HI]`.
+pub fn law_buckling(family: Family, mode: FillMode, rho: f64) -> f64 {
+    let (c, n) = law_buckling_params(family, mode);
+    c * rho.clamp(RHO_LO, RHO_HI).powf(n)
+}
+
+/// The per-family buckling law's critical stress (MPa): zero at `φ = 0`, linear ramp up to
+/// `RHO_LO`, the coupon-fitted power law on `[RHO_LO, RHO_HI]`, and clamped to the band-top
+/// value above `RHO_HI` (conservative for dense lattice walls; solid skin elements are checked
+/// by yield instead).
+pub fn buckling_extended(family: Family, mode: FillMode, young_mpa: f64, phi: f64) -> f64 {
     if phi <= 0.0 {
         return 0.0;
     }
+    let (c, n) = law_buckling_params(family, mode);
     if phi < RHO_LO {
-        return young_mpa * BUCKLING_COEF * RHO_LO.powf(BUCKLING_EXP) * phi / RHO_LO;
+        return young_mpa * c * RHO_LO.powf(n) * phi / RHO_LO;
     }
-    young_mpa * BUCKLING_COEF * phi.min(RHO_HI).powf(BUCKLING_EXP)
+    young_mpa * c * phi.min(RHO_HI).powf(n)
 }
 
 /// Relative stiffness of a filled element from its material fraction φ and the mesh-to-cell
@@ -848,7 +874,7 @@ pub fn graded_of(
                     if class[e] == CLASS_VOID {
                         continue;
                     }
-                    let sy = strength_extended(mat.yield_strength, rho_elem[e]);
+                    let sy = strength_extended(spec.family, spec.mode, mat.yield_strength, rho_elem[e]);
                     let r = c.vm_elem[e] / sy;
                     if r > worst {
                         worst = r;
@@ -878,7 +904,7 @@ pub fn graded_of(
                 if sc <= 0.0 {
                     continue;
                 }
-                let r = sc / buckling_extended(mat.e, rho_elem[e]);
+                let r = sc / buckling_extended(spec.family, spec.mode, mat.e, rho_elem[e]);
                 if r > worst {
                     worst = r;
                 }
@@ -1102,28 +1128,32 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 
     #[test]
     fn the_buckling_law_is_a_subordinate_readout_above_its_crossover() {
-        // The two laws' crossover reading (the BUCKLING comment's `φ < 36·(σ_ys/E)²`):
-        // the RAW scalings meet at φ* by that algebra — asserted as an identity of the
-        // constants, so editing a coefficient re-arms the check.
         let (e, sy) = (1500.0f64, 47.0f64);
-        let phi_star = (6.0 * sy / e).powi(2);
-        let raw_b = e * BUCKLING_COEF * phi_star.powf(BUCKLING_EXP);
-        let raw_s = sy * STRENGTH_COEF * phi_star.powf(STRENGTH_EXP);
-        assert!(
-            (raw_b - raw_s).abs() <= 1e-12 * raw_s,
-            "the raw laws cross at φ*: {raw_b} vs {raw_s}"
-        );
-        // PETG's φ* ≈ 0.0353 sits below the band floor, so on every in-band density the
-        // yield allowable is the binding (smaller) one — the buckling factor's usual
-        // role for these materials is to show how far yield binds first, with the
-        // buckling regime reached only at very light walls.
-        for phi in [RHO_LO, 0.22, 0.3, RHO_HI] {
-            assert!(
-                strength_extended(sy, phi) < buckling_extended(e, phi),
-                "at φ = {phi} the yield allowable {0} binds below the buckling allowable {1}",
-                strength_extended(sy, phi),
-                buckling_extended(e, phi)
-            );
+        for fam in [Family::Gyroid, Family::Primitive, Family::Diamond] {
+            for mode in [FillMode::Sheet, FillMode::Network] {
+                let (cy, ny) = law_strength_params(fam, mode);
+                let (cb, nb) = law_buckling_params(fam, mode);
+                let phi_star = ((sy * cy) / (e * cb)).powf(1.0 / (nb - ny));
+                let raw_b = e * cb * phi_star.powf(nb);
+                let raw_s = sy * cy * phi_star.powf(ny);
+                assert!(
+                    (raw_b - raw_s).abs() <= 1e-12 * raw_s,
+                    "{fam:?}/{mode:?}: raw laws cross at φ* = {phi_star}: {raw_b} vs {raw_s}"
+                );
+                assert!(
+                    phi_star < RHO_LO,
+                    "{fam:?}/{mode:?}: PETG crossover φ* = {phi_star} must sit below RHO_LO"
+                );
+                for phi in [RHO_LO, 0.22, 0.3, RHO_HI] {
+                    assert!(
+                        strength_extended(fam, mode, sy, phi)
+                            < buckling_extended(fam, mode, e, phi),
+                        "{fam:?}/{mode:?} at φ = {phi}: yield allowable {0} binds below buckling {1}",
+                        strength_extended(fam, mode, sy, phi),
+                        buckling_extended(fam, mode, e, phi)
+                    );
+                }
+            }
         }
     }
 
