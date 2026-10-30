@@ -194,13 +194,60 @@ pub struct FitJson {
 }
 
 /// A one-rung answer: the provenance, the case results (thermal cases carry their
-/// nodal temperature array), and the modes question's frequencies.
+/// nodal temperature array), the modes question's frequencies, and — when the
+/// document carries a `fill` statement — the graded fill re-solve summary.
 #[derive(Debug, Serialize)]
 pub struct SingleResult {
     pub provenance: Provenance,
     pub cases: Vec<CaseResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<ModesJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peel: Option<PeelSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graded: Option<GradedSummary>,
+}
+
+/// Solid inter-layer peel and mass summary attached to [`SingleResult`] when `solve build=(...)`
+/// is set on a solid document.
+#[derive(Debug, Serialize)]
+pub struct PeelSummary {
+    pub mass_g: f64,
+    pub yield_strength: f64,
+    pub yield_z: f64,
+    pub shear_z: f64,
+    pub build_angles: [f64; 2],
+    pub best_build_angles: [f64; 2],
+    pub min_peak_peel: f64,
+    pub worst_build_angles: [f64; 2],
+    pub max_peak_peel: f64,
+    pub max_layer_peel: Vec<f64>,
+}
+
+/// Graded fill re-solve summary attached to [`SingleResult`] when `doc.fill` is present.
+#[derive(Debug, Serialize)]
+pub struct GradedSummary {
+    pub mass_g: f64,
+    pub solid_mass_g: f64,
+    pub rho_design: [f64; 2],
+    pub sigma_ref: f64,
+    pub yield_strength: f64,
+    pub yield_z: f64,
+    pub shear_z: f64,
+    pub build_angles: [f64; 2],
+    pub best_build_angles: [f64; 2],
+    pub min_peak_peel: f64,
+    pub worst_build_angles: [f64; 2],
+    pub max_peak_peel: f64,
+    pub yield_utilization: Vec<Option<f64>>,
+    pub buckling_utilization: Vec<f64>,
+    pub max_layer_peel: Vec<f64>,
+    pub strength_coef: f64,
+    pub strength_exp: f64,
+    pub buckling_coef: f64,
+    pub buckling_exp: f64,
+    pub fill_ms: f64,
+    pub solve_ms: f64,
 }
 
 /// The modes question's answer.

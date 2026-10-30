@@ -280,7 +280,13 @@ function MakePanel() {
             class={ui.makeSliceOn ? 'on' : ''}
             data-testid="make-slice-toggle"
             title="Slice preview of the part (field-direct or exported mesh)"
-            onClick={() => ui.set('makeSliceOn', !ui.makeSliceOn)}
+            onClick={() => {
+              const next = !ui.makeSliceOn;
+              if (next && ui.makeLayer === 0 && nLayers > 1) {
+                ui.set('makeLayer', Math.floor(nLayers / 2));
+              }
+              ui.set('makeSliceOn', next);
+            }}
           >
             {ui.makeSliceOn ? 'hide' : 'show'}
           </button>

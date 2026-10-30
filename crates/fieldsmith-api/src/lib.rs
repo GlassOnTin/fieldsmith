@@ -229,15 +229,6 @@ pub fn respond(input: &str) -> Reply {
             h,
             equilibrate,
         } => {
-            if doc.fill.is_some() {
-                return error_reply(
-                    APIV,
-                    Some(&name),
-                    Some(&echo),
-                    warnings,
-                    "the api runs the solid path — remove the fill statement",
-                );
-            }
             let res = match (dofs, h) {
                 (Some(n), _) => Resolution::Dofs(n),
                 (None, Some(h)) => Resolution::Size(h),
@@ -245,26 +236,109 @@ pub fn respond(input: &str) -> Reply {
             };
             match analyse_full(&doc, res, question::clock, None, equilibrate) {
                 Ok(a) => {
-                    let fieldsmith_core::Analysis {
-                        provenance, cases, ..
-                    } = a;
-                    ok_reply(schema::Response {
-                        apiv: APIV,
-                        engine: store::engine_identity(),
-                        status: Status::Ok,
-                        name: Some(name),
-                        question: Some(echo),
-                        warnings,
-                        outcome: None,
-                        single: Some(schema::SingleResult {
-                            provenance,
-                            cases,
-                            modes: None,
-                        }),
-                        sweep: None,
-                        overhang: None,
-                        error: None,
-                    })
+                    if doc.fill.is_some() {
+                        match fieldsmith_core::fill::graded_of(&doc, &a, question::clock, equilibrate) {
+                            Ok(g) => {
+                                let (strength_coef, strength_exp) =
+                                    fieldsmith_core::fill::law_strength_params(
+                                        g.spec.family,
+                                        g.spec.mode,
+                                    );
+                                let (buckling_coef, buckling_exp) =
+                                    fieldsmith_core::fill::law_buckling_params(
+                                        g.spec.family,
+                                        g.spec.mode,
+                                    );
+                                let max_layer_peel = g
+                                    .cases
+                                    .iter()
+                                    .chain(&g.thermal_cases)
+                                    .map(|c| c.max_layer_peel)
+                                    .collect();
+                                let mut cases = g.cases;
+                                cases.extend(g.thermal_cases);
+                                ok_reply(schema::Response {
+                                    apiv: APIV,
+                                    engine: store::engine_identity(),
+                                    status: Status::Ok,
+                                    name: Some(name),
+                                    question: Some(echo),
+                                    warnings,
+                                    outcome: None,
+                                    single: Some(schema::SingleResult {
+                                        provenance: a.provenance,
+                                        cases,
+                                        modes: None,
+                                        peel: None,
+                                        graded: Some(schema::GradedSummary {
+                                            mass_g: g.mass_g,
+                                            solid_mass_g: g.solid_mass_g,
+                                            rho_design: g.rho_design,
+                                            sigma_ref: g.sigma_ref,
+                                            yield_strength: a.yield_strength,
+                                            yield_z: a.yield_z,
+                                            shear_z: a.shear_z,
+                                            build_angles: a.build_angles,
+                                            best_build_angles: g.best_build_angles,
+                                            min_peak_peel: g.min_peak_peel,
+                                            worst_build_angles: g.worst_build_angles,
+                                            max_peak_peel: g.max_peak_peel,
+                                            yield_utilization: g.yield_utilization,
+                                            buckling_utilization: g.buckling_utilization,
+                                            max_layer_peel,
+                                            strength_coef,
+                                            strength_exp,
+                                            buckling_coef,
+                                            buckling_exp,
+                                            fill_ms: g.fill_ms,
+                                            solve_ms: g.solve_ms,
+                                        }),
+                                    }),
+                                    sweep: None,
+                                    overhang: None,
+                                    error: None,
+                                })
+                            }
+                            Err(SetupError(e)) => {
+                                error_reply(APIV, Some(&name), Some(&echo), warnings, e)
+                            }
+                        }
+                    } else {
+                        let peel = doc.solve.build.is_some().then(|| schema::PeelSummary {
+                            mass_g: a.mass_g,
+                            yield_strength: a.yield_strength,
+                            yield_z: a.yield_z,
+                            shear_z: a.shear_z,
+                            build_angles: a.build_angles,
+                            best_build_angles: a.best_build_angles,
+                            min_peak_peel: a.min_peak_peel,
+                            worst_build_angles: a.worst_build_angles,
+                            max_peak_peel: a.max_peak_peel,
+                            max_layer_peel: a.cases.iter().map(|c| c.max_layer_peel).collect(),
+                        });
+                        let fieldsmith_core::Analysis {
+                            provenance, cases, ..
+                        } = a;
+                        ok_reply(schema::Response {
+                            apiv: APIV,
+                            engine: store::engine_identity(),
+                            status: Status::Ok,
+                            name: Some(name),
+                            question: Some(echo),
+                            warnings,
+                            outcome: None,
+                            single: Some(schema::SingleResult {
+                                provenance,
+                                cases,
+                                modes: None,
+                                peel,
+                                graded: None,
+                            }),
+                            sweep: None,
+                            overhang: None,
+                            error: None,
+                        })
+                    }
                 }
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
@@ -316,6 +390,8 @@ pub fn respond(input: &str) -> Reply {
                                 n_requested: n_req,
                                 frequencies_hz: run.modal.frequencies,
                             }),
+                            peel: None,
+                            graded: None,
                         }),
                         sweep: None,
                         overhang: None,

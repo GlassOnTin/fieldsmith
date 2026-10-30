@@ -209,6 +209,17 @@ export async function makeTest(browser, url, { screens, docsDir }) {
     stl.length === 84 + 50 * tris,
     `${stl.length} vs ${84 + 50 * tris}`,
   );
+
+  const slice3mf = await clickDownload('make-download-slices');
+  const sliceEntries = zipEntries(slice3mf);
+  const sliceModel = sliceEntries.find((e) => e.name.endsWith('.model'));
+  const sliceXml = sliceModel?.body.toString('utf8') ?? '';
+  const polyCount = (sliceXml.match(/<s:polygon /g) ?? []).length;
+  check(
+    'Slice 3MF carries <s:slicestack> and closed <s:polygon> contours',
+    sliceXml.includes('<s:slicestack') && polyCount > 20,
+    `${polyCount} closed <s:polygon> loops across <s:slice> layers`,
+  );
   const dlShot = resolve(screens, 'make-03-download.png');
   await page.screenshot({ path: dlShot });
 

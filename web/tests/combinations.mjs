@@ -245,6 +245,7 @@ export async function combinationsTest(browser, url, { screens, docsDir }) {
       ui.set('sweepCount', 5);
       ui.set('makeOverhangOn', false);
       ui.set('makeSliceOn', false);
+      ui.set('makeLayer', 0);
       ui.set('probe', null);
     });
 

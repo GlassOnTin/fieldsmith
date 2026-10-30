@@ -3,6 +3,7 @@
 // run; the worker dies so a long solve never wedges the session. The Make lens shares this
 // worker: export/slice/bytes round-trips go through it (the worker keeps the graded handle
 // and the export mesh), replies guard on the same generation counter as the ladder.
+import { sliceFieldAt } from '../doc/wasm';
 import type { ExportMeta, ImportOut, LevelResult, WorkerOut } from '../doc/wasm';
 import { store } from '../doc/store';
 import { meshcache } from '../doc/meshcache';
@@ -267,13 +268,22 @@ export class AnalysisEngine {
 
   /** Make lens: slice the export mesh (or direct implicit field) at z (latest request wins in the worker). */
   sliceAt(z: number) {
-    const w = this.ensureWorker();
     if (this.state.export instanceof Object) {
-      w.postMessage({ type: 'slice', z });
-    } else {
-      this.feed(w);
-      w.postMessage({ type: 'slice', z, doc: store.doc, h: ui.makeH, solid: ui.makeSolid });
+      this.ensureWorker().postMessage({ type: 'slice', z });
+      return;
     }
+    if (ui.makeSolid || store.doc.fill === null) {
+      try {
+        const segs = sliceFieldAt(store.doc, z, ui.makeH, true).slice();
+        this.set({ slice: { z, segs } });
+      } catch (e) {
+        this.set({ exportError: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
+    const w = this.ensureWorker();
+    this.feed(w);
+    w.postMessage({ type: 'slice', z, doc: store.doc, h: ui.makeH, solid: ui.makeSolid });
   }
 
   /** Make lens: fetch the export's file bytes and trigger the browser download. */
