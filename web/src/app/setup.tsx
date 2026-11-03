@@ -1095,18 +1095,27 @@ function LoadInspector({ id }: { id: string }) {
   useApp();
   const l = store.doc.loads.find((x) => x.id === id);
   if (!l) return null;
-  const setKind = (t: 'force' | 'pressure' | 'distributed') => {
+  const setKind = (t: 'force' | 'pressure' | 'preload' | 'distributed') => {
     if (t === l.kind.type) return;
     store.transact('Set load kind', (d) => {
       const load = loadIn(d, id);
       // Expression reads recorded against the old kind have nothing left to write.
-      const gone = load.kind.type === 'force' ? ['force'] : load.kind.type === 'distributed' ? ['total'] : ['mpa'];
+      const gone =
+        load.kind.type === 'force'
+          ? ['force']
+          : load.kind.type === 'distributed'
+            ? ['total']
+            : load.kind.type === 'preload'
+              ? ['newtons']
+              : ['mpa'];
       load.kind =
         t === 'force'
           ? { type: 'force', vector: [0, 0, -100] }
           : t === 'pressure'
             ? { type: 'pressure', mpa: 1 }
-            : { type: 'distributed', expr: '0.01', dir: { form: 'local', v: [0, 0, -1] } };
+            : t === 'preload'
+              ? { type: 'preload', newtons: 5000 }
+              : { type: 'distributed', expr: '0.01', dir: { form: 'local', v: [0, 0, -1] } };
       for (const attr of gone) {
         d.consumed = (d.consumed ?? []).filter((c) => !(c.target === id && c.attr === attr));
       }
@@ -1136,11 +1145,12 @@ function LoadInspector({ id }: { id: string }) {
           commit={(rid) => store.transact('Set load region', (d) => void (loadIn(d, id).region = rid))}
         />
         <label class="plain">Type</label>
-        <Seg<'force' | 'pressure' | 'distributed'>
+        <Seg<'force' | 'pressure' | 'preload' | 'distributed'>
           value={l.kind.type}
           options={[
             { value: 'force', label: 'Force' },
             { value: 'pressure', label: 'Pressure' },
+            { value: 'preload', label: 'Preload', title: 'Axial bolt clamping preload in Newtons (inward normal or split-axis pinch)' },
             { value: 'distributed', label: 'Fn', title: 'Force per unit area from a compiled fn over the face' },
           ]}
           onChange={setKind}
@@ -1174,22 +1184,77 @@ function LoadInspector({ id }: { id: string }) {
           </>
         )}
         {l.kind.type === 'pressure' && (
-          <NumRow
-            label="Pressure"
-            unit="MPa"
-            min={0}
-            get={(d) => {
-              const k = loadIn(d, id).kind;
-              return k.type === 'pressure' ? k.mpa : 0;
-            }}
-            set={(d, v) => {
-              const k = loadIn(d, id).kind;
-              if (k.type === 'pressure') k.mpa = v;
-            }}
-            undoLabel="Set pressure"
-            testId="pressure"
-            title="Positive pushes into the face"
-          />
+          <>
+            <NumRow
+              label="Pressure"
+              unit="MPa"
+              min={0}
+              get={(d) => {
+                const k = loadIn(d, id).kind;
+                return k.type === 'pressure' ? k.mpa : 0;
+              }}
+              set={(d, v) => {
+                const k = loadIn(d, id).kind;
+                if (k.type === 'pressure') k.mpa = v;
+              }}
+              undoLabel="Set pressure"
+              testId="pressure"
+              title="Positive pushes into the face"
+              driven={drivenExpr(store.doc, id, 'mpa')}
+            />
+            <TextInputRow
+              label="Case"
+              value={l.case}
+              commit={(v) => store.transact('Set load case', (d) => void (loadIn(d, id).case = v))}
+              testId="load-case"
+              title="Named load case; the Results lens can switch between cases"
+            />
+          </>
+        )}
+        {l.kind.type === 'preload' && (
+          <>
+            <NumRow
+              label="Preload"
+              unit="N"
+              min={0.1}
+              step={500}
+              get={(d) => {
+                const k = loadIn(d, id).kind;
+                return k.type === 'preload' ? k.newtons : 0;
+              }}
+              set={(d, v) => {
+                const k = loadIn(d, id).kind;
+                if (k.type === 'preload') k.newtons = v;
+              }}
+              undoLabel="Set bolt preload"
+              testId="preload"
+              title="Total axial bolt clamping force (N) distributed over the washer seat or split across opposed clamping faces"
+              driven={drivenExpr(store.doc, id, 'newtons')}
+            />
+            <VecRow
+              label="Pinch axis"
+              get={(d) => {
+                const k = loadIn(d, id).kind;
+                return k.type === 'preload' ? k.axis ?? [0, 0, 0] : [0, 0, 0];
+              }}
+              set={(d, v) => {
+                const k = loadIn(d, id).kind;
+                if (k.type !== 'preload') return;
+                if (v[0] === 0 && v[1] === 0 && v[2] === 0) delete k.axis;
+                else k.axis = v;
+              }}
+              undoLabel="Set preload axis"
+              testId="preload-axis"
+              step={1}
+            />
+            <TextInputRow
+              label="Case"
+              value={l.case}
+              commit={(v) => store.transact('Set load case', (d) => void (loadIn(d, id).case = v))}
+              testId="load-case"
+              title="Named load case; the Results lens can switch between cases"
+            />
+          </>
         )}
       </div>
       {l.kind.type === 'distributed' && (

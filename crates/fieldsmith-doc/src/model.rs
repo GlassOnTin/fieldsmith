@@ -391,6 +391,14 @@ pub enum LoadKind {
     Force { vector: [f64; 3] },
     /// Pressure in MPa acting against the outward normal (positive pushes into the part).
     Pressure { mpa: f64 },
+    /// Axial bolt clamping preload in N applied over the region (inward normal clamping
+    /// traction `newtons / area`, or an opposed `±newtons` clamping pinch along `axis`
+    /// when `axis` is non-zero and facets span both sides of the region mid-plane).
+    Preload {
+        newtons: f64,
+        #[serde(default, skip_serializing_if = "is_zero_vec3")]
+        axis: [f64; 3],
+    },
     /// Force per unit area (N/mm²) from a compiled `fn` over the region's face-local
     /// coordinates, applied in `dir`. `total` optionally rescales the function so the
     /// applied resultant equals that many newtons (signed against the stated direction).
@@ -607,8 +615,10 @@ impl Document {
         out
     }
 
-    /// Labelling warnings for the solve and export: per-volume labels change nothing in
-    /// the solve (analysis stays single-material) and only travel with the 3MF export.
+    /// Multi-material assembly note for the solve and export: volumes carrying an
+    /// explicit `material <id> on <node>` distinct from the base document material are
+    /// evaluated with their assigned per-volume properties (E, CTE, density) and travel
+    /// with the 3MF export.
     pub fn material_warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
         let mixed: Vec<String> = self
@@ -619,7 +629,7 @@ impl Document {
             .collect();
         if !mixed.is_empty() {
             out.push(format!(
-                "Volumes {} carry a different material label; the solve evaluates all of them with '{}'. Labels travel with the 3MF export.",
+                "Volumes {} carry a different material label; the solve evaluates each volume with its assigned material alongside base '{}' and exports labels to 3MF.",
                 mixed.join(", "),
                 self.material
             ));
@@ -922,6 +932,19 @@ impl Document {
                     l.id, l.region
                 ));
             }
+            if let LoadKind::Preload { newtons, axis } = &l.kind {
+                let what = format!("load '{}'", l.id);
+                if !newtons.is_finite() {
+                    errs.push(format!("{what}: preload= is not a finite number"));
+                } else if *newtons == 0.0 {
+                    errs.push(format!(
+                        "{what}: preload=0 makes the clamping load vanish; give the intended bolt preload in N"
+                    ));
+                }
+                if !axis.iter().all(|c| c.is_finite()) {
+                    errs.push(format!("{what}: axis has a non-finite component"));
+                }
+            }
             if let LoadKind::Distributed { expr, dir, total } = &l.kind {
                 let what = format!("load '{}'", l.id);
                 match crate::loaddist::LoadFn::compile(expr) {
@@ -1115,6 +1138,20 @@ impl Document {
                     ));
                 }
             }
+            Self::for_each_labelled(&self.root, &mut |n, mid| {
+                if !n.suppressed {
+                    if let Some(m) = crate::materials::find(self, mid) {
+                        if m.alpha.is_none() {
+                            errs.push(format!(
+                                "The thermal flow needs a thermal-expansion coefficient and material \
+                                 '{mid}' on '{}' states none — pick a material whose sheet states a CTE, or \
+                                 give a custom material an a= value",
+                                n.id
+                            ));
+                        }
+                    }
+                }
+            });
         }
         if crate::materials::find(self, &self.material).is_none() {
             errs.push(format!("Unknown material '{}'", self.material));

@@ -975,7 +975,13 @@ function ResultsPanel() {
               <Seg<ResultMode>
                 value={mode}
                 options={(Object.keys(MODE_NAMES) as ResultMode[]).map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
-                onChange={(v) => ui.set('resultsMode', v)}
+                onChange={(v) => {
+                  if (v === 'temperature' && ci >= 0 && !tempField(lvl, ci)) {
+                    const ti = lvl.meta.cases.findIndex((_, i) => !!tempField(lvl, i));
+                    if (ti >= 0) ui.set('resultsCase', ti);
+                  }
+                  ui.set('resultsMode', v);
+                }}
                 testId="results-mode"
               />
             </div>

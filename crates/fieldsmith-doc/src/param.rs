@@ -185,13 +185,16 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
                 let k = need_index(addr, attr)?;
                 check_index(addr, attr, k)
             }
-            (LoadKind::Pressure { .. }, "mpa") | (LoadKind::Distributed { .. }, "total") => {
+            (LoadKind::Pressure { .. }, "mpa")
+            | (LoadKind::Preload { .. }, "newtons")
+            | (LoadKind::Distributed { .. }, "total") => {
                 no_index(addr, attr)
             }
             _ => {
                 let takes = match &load.kind {
                     LoadKind::Force { .. } => "force[0-2] (force.n)",
                     LoadKind::Pressure { .. } => "mpa",
+                    LoadKind::Preload { .. } => "newtons",
                     LoadKind::Distributed { .. } => "total",
                 };
                 Err(format!(
@@ -361,6 +364,7 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
         match (&mut load.kind, attr, comp) {
             (LoadKind::Force { vector }, "force", Some(k)) => vector[k] = v,
             (LoadKind::Pressure { mpa }, "mpa", None) => *mpa = v,
+            (LoadKind::Preload { newtons, .. }, "newtons", None) => *newtons = v,
             (LoadKind::Distributed { total, .. }, "total", None) => *total = Some(v),
             _ => unreachable!("the writer was checked against this statement"),
         }
@@ -423,6 +427,7 @@ fn load_kind_name(kind: &LoadKind) -> &'static str {
     match kind {
         LoadKind::Force { .. } => "force",
         LoadKind::Pressure { .. } => "pressure",
+        LoadKind::Preload { .. } => "preload",
         LoadKind::Distributed { .. } => "distributed",
     }
 }

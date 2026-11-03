@@ -162,11 +162,22 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
       checkIndex(addr, attr, needIndex(addr, attr));
       return;
     }
-    if ((load.kind.type === 'pressure' && attr === 'mpa') || (load.kind.type === 'distributed' && attr === 'total')) {
+    if (
+      (load.kind.type === 'pressure' && attr === 'mpa') ||
+      (load.kind.type === 'preload' && attr === 'newtons') ||
+      (load.kind.type === 'distributed' && attr === 'total')
+    ) {
       noIndex(addr, attr);
       return;
     }
-    const takes = load.kind.type === 'force' ? 'force[0-2] (force.n)' : load.kind.type === 'pressure' ? 'mpa' : 'total';
+    const takes =
+      load.kind.type === 'force'
+        ? 'force[0-2] (force.n)'
+        : load.kind.type === 'pressure'
+          ? 'mpa'
+          : load.kind.type === 'preload'
+            ? 'newtons'
+            : 'total';
     throw new Error(
       `param ${addrText(addr)}: load ${JSON.stringify(id)} (${load.kind.type}) has no numeric parameter ${JSON.stringify(attr)} — its parameters are ${takes}`,
     );
@@ -353,6 +364,7 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   if (load) {
     if (load.kind.type === 'force') load.kind.vector[comp as number] = v;
     else if (load.kind.type === 'pressure') load.kind.mpa = v;
+    else if (load.kind.type === 'preload') load.kind.newtons = v;
     else load.kind.total = v;
     return;
   }
@@ -568,6 +580,7 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
   if (load) {
     if (load.kind.type === 'force') return load.kind.vector[addr.comp as number];
     if (load.kind.type === 'pressure') return load.kind.mpa;
+    if (load.kind.type === 'preload') return load.kind.newtons;
     return load.kind.total ?? null;
   }
   const temp = doc.temperatures.find((t) => t.id === addr.id);
@@ -610,6 +623,7 @@ export function addressableParams(doc: Document): { addr: string; value: number 
     if (l.kind.type === 'force') {
       for (let i = 0; i < 3; i++) push(l.id, 'force', i, l.kind.vector[i]);
     } else if (l.kind.type === 'pressure') push(l.id, 'mpa', null, l.kind.mpa);
+    else if (l.kind.type === 'preload') push(l.id, 'newtons', null, l.kind.newtons);
     else push(l.id, 'total', null, l.kind.total ?? null);
   }
   for (const t of doc.temperatures) push(t.id, 'celsius', null, t.celsius);

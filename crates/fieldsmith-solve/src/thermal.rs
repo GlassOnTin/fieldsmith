@@ -716,3 +716,33 @@ pub fn thermal_load(
     }
     f
 }
+
+/// Multi-material nodal thermal load: one thermal expansion coefficient `alpha_elem[e]`
+/// and one modulus `young[e]` per element (V53). When all `alpha_elem[e]` equal a single
+/// scalar `alpha`, the arithmetic is bit-identical to [`thermal_load`].
+pub fn thermal_load_multi(
+    mesh: &P2Mesh,
+    dt: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    rd: &ThermalRefData,
+) -> Vec<f64> {
+    assert_eq!(young.len(), mesh.tets.len(), "one modulus per element");
+    assert_eq!(alpha_elem.len(), mesh.tets.len(), "one alpha per element");
+    assert_eq!(dt.len(), mesh.nodes.len(), "one ΔT per node");
+    let mut f = vec![0.0; mesh.ndofs()];
+    for (e, (&y, &alpha)) in young.iter().zip(alpha_elem.iter()).enumerate() {
+        let m = fenics_assembly::elasticity::ElasticMaterial::new(y, poisson);
+        let beta = (3.0 * m.lame_lambda() + 2.0 * m.lame_mu()) * alpha;
+        let t = &mesh.tets[e];
+        let le = element_thermal_integrals(mesh, e, dt, rd);
+        for a in 0..10 {
+            let row = t[a] as usize * 3;
+            for i in 0..3 {
+                f[row + i] += beta * le[a][i];
+            }
+        }
+    }
+    f
+}

@@ -102,7 +102,7 @@ Engineers only use a tool whose numbers they can defend:
 
 ## 4. Settled execution gates
 
-Every feature or verification case (`V#`) added to the repository must satisfy four gates:
+Every feature or verification case (`V#`) added to the repository must satisfy five gates:
 
 1. **No Engine Islands.** No solver module or verification case (`V#`) lands unless it is either
    (a) reachable end-to-end from a `.fsm` document or workbench in both `fieldsmith-cli` and the
@@ -117,6 +117,12 @@ Every feature or verification case (`V#`) added to the repository must satisfy f
 4. **Hardware budget referee.** The 32-thread workstation ([`budgets.md`](docs/verification/budgets.md))
    is the pass/fail interactive referee; secondary hardware (`N100`, `SM8750`) populates
    empirical rows in [`data/costs/costs.csv`](data/costs/costs.csv).
+5. **Interactive tutorials and exploratory agentic UX verification.** Every major capability
+   lands with a new or updated interactive lesson in [`web/src/app/tutorials.tsx`](web/src/app/tutorials.tsx)
+   and is verified by two separate subagent passes: (a) an exploratory browser student (`chrome-devtools`)
+   that walks the tutorial while intentionally poking edge cases, clicking wrong buttons, and
+   testing Undo/recovery, and (b) an MCP co-pilot agent driving the same workflow through
+   `fieldsmith-mcp` / `/api/mcp`.
 
 ---
 
@@ -146,8 +152,10 @@ Every feature or verification case (`V#`) added to the repository must satisfy f
 For what Fieldsmith already does and verifies today, see [`README.md`](README.md) and
 [`docs/verification/`](docs/verification/). In priority order, the next milestones are:
 
-1. **Multi-body assembly mechanics & bolt preload** — tied/bonded contact and bolt preload
-   across multi-volume 3MF and STEP assemblies.
+1. **Multi-body assembly mechanics & bolt preload (`V53`, `T10` — done)** — per-volume material
+   stiffness, density, and thermal expansion (`material <id> on <node>`) plus axial bolt preload
+   clamping (`load <id> <region> preload=<N> [axis=(...)]`). Next extension: nonlinear penalty
+   gasket separation across unbonded contact interfaces.
 2. **Spatially varying cell-size and multi-zone lattice fields** — smooth transitions between
    lattice cell sizes and families across functional regions.
 3. **Topology optimization / level-set field evolution** — stress- and compliance-driven outer

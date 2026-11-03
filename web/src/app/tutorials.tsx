@@ -795,6 +795,7 @@ cylinder combustor_casing r=chamber_r + liner_wall + 8 h=64 at=(0, 0, 38) blend=
 color "#475569" on combustor_casing
 cylinder chamber_bore r=chamber_r h=58 at=(0, 0, 43) subtract blend=4
 cylinder nozzle_body r=12 h=24 at=(0, 0, 16) blend=2.5
+material cucrzr on nozzle_body
 color "#d97706" on nozzle_body
 cylinder swirl_chamber r=8 h=14 at=(0, 0, 11) subtract blend=1.5
 cylinder exit_orifice r=orifice_r h=16 at=(0, 0, 22) subtract
@@ -843,12 +844,12 @@ solve tref=20
           '3 named regions (flange_mount, hot_combustor_wall, hx_coolant_walls) connect the 3D combustor geometry to the structural support, 1.8 MPa internal pressure load, and heat-exchanger thermal boundary conditions.',
       },
       {
-        title: '4. Solving 3D Combustor Liner Thermal Gradient & Hoop Stress',
+        title: '4. Solving 3D Multi-Material Combustor Liner & CuCrZr Nozzle Thermal Stress',
         lens: 'results',
         instruction:
-          'Tap "Go to Results →" (tab 3). In the Results panel on the bottom-left, click "Combustor Thermal & HX" in the Case selector, then click "Temperature" in the Show selector to see the steep radial temperature drop from the hot inner combustor liner & nozzle tip (~650–665 °C) across "liner_wall" into the 55–60 °C heat-exchanger channels. Then click "Stress" in the Show selector to check the thermal-expansion stress in the 316L stainless steel liner wall and verify that the Low-NOx nozzle lowers both NOx emissions and peak liner thermal stress.',
+          'Notice that "nozzle_body" is assigned CuCrZr copper alloy ("material cucrzr on nozzle_body", E = 128 GPa, α = 17.0×10⁻⁶ /K) inside the 316L stainless steel combustor jacket ("material ss316l", E = 193 GPa, α = 16.0×10⁻⁶ /K). Tap "Go to Results →" (tab 3). In the Results panel on the bottom-left, click "Combustor Thermal & HX" in the Case selector, then click "Temperature" in the Show selector to see the steep radial temperature drop from the hot inner combustor liner & CuCrZr nozzle tip (~650–665 °C) across "liner_wall" into the 55–60 °C heat-exchanger channels. Then click "Stress" in the Show selector to inspect the bi-metallic thermal-expansion stress across the CuCrZr nozzle and 316L liner wall.',
         expected:
-          'The 3D solver computes the steady-state temperature field between the combustion chamber and the 4 heat-exchanger channels, plus the resulting thermal and pressure stress fields across the nozzle and liner.',
+          'The 3D solver computes the steady-state temperature field between the combustion chamber and the 4 heat-exchanger channels, plus the resulting multi-material thermal and pressure stress fields across the CuCrZr nozzle and SS316L liner.',
       },
     ],
     theoryChapter: {
@@ -905,12 +906,128 @@ solve tref=20
       },
     ],
   },
+  {
+    id: 'T10',
+    code: 'T10',
+    title: 'Multi-Material Bolted Assembly & Bolt Preload — V53',
+    subtitle:
+      'Assemble a CuCrZr copper-alloy injector spool bolted to a 316L stainless-steel housing flange, apply axial bolt preload clamping, and evaluate cold clamping vs hot bi-metallic differential expansion.',
+    level: 'Flagship Multi-Physics',
+    verificationBadge: 'V53 · Multi-Body Assembly · Per-Volume Material & Bolt Preload',
+    starterFsmName: 'T10-multibody-bolted-flange-preload.fsm',
+    starterFsm: `fieldsmith 1
+name "T10 — Multi-Material Bolted Injector Flange (CuCrZr + SS316L)"
+material ss316l
+
+let bolt_preload = 16000
+let hot_wall_temp = 340
+
+cylinder lower_housing r=26 h=10 at=(0, 0, -5) blend=1
+color "#475569" on lower_housing
+cylinder upper_spool r=26 h=10 at=(0, 0, 5) blend=1
+material cucrzr on upper_spool
+color "#d97706" on upper_spool
+cylinder boss_neck r=15 h=12 at=(0, 0, 14) blend=2
+material cucrzr on boss_neck
+color "#d97706" on boss_neck
+cylinder central_bore r=9 h=36 at=(0, 0, 4) subtract
+cylinder bolt_pocket_ring r=20 h=3 at=(0, 0, 9.5) subtract
+cylinder bolt_relief_ring r=17 h=3 at=(0, 0, 9.5) add
+material cucrzr on bolt_relief_ring
+
+region base_mount = lower_housing.bottom
+region washer_seat = upper_spool.top
+region inner_bore = central_bore.side
+region outer_rim = lower_housing.side
+
+support mount_fix base_mount fixed=xyz
+load m8_preload washer_seat preload=bolt_preload case="1. Cold Bolt Preload + Bore Pressure"
+load chamber_p inner_bore pressure=8.5 case="1. Cold Bolt Preload + Bore Pressure"
+temperature hot_bore inner_bore temp=0 + hot_wall_temp case="2. Hot Bi-Metallic Thermal Mismatch"
+temperature cool_rim outer_rim temp=45 case="2. Hot Bi-Metallic Thermal Mismatch"
+solve size=3.5 tref=20
+`,
+    userSteps: [
+      {
+        title: '1. Inspecting a Multi-Material Assembly: CuCrZr Spool on an SS316L Flange',
+        lens: 'shape',
+        instruction:
+          'High-heat-flux propulsion and power hardware frequently joins a high-conductivity copper alloy ("CuCrZr", E = 128 GPa, α = 17.0×10⁻⁶ /K, bronze top half) to a structural stainless-steel housing ("SS316L", E = 193 GPa, α = 16.0×10⁻⁶ /K, slate bottom half). In the Model (1) feature tree on the left, click "upper_spool" to open its Node Inspector: notice the "Volume material" dropdown is set to "CuCrZr copper alloy (LPBF)", overriding the document’s default "316L stainless (LPBF)". Each tetrahedron in the 3D mesh automatically inherits the Young’s modulus E_e, thermal expansion α_e, and density ρ_e of the volume containing its centroid.',
+        expected:
+          'Selecting "upper_spool" or "boss_neck" in the Model tree displays "CuCrZr copper alloy (LPBF)" in the Volume material selector (`[data-testid="node-material"]`), while "lower_housing" uses the document default "316L stainless (LPBF)".',
+      },
+      {
+        title: '2. Configuring Axial Bolt Preload Clamping in Setup (2)',
+        lens: 'setup',
+        instruction:
+          'Before a pressurized joint sees internal pressure, its bolts are torqued to clamp the mating flanges together. Tap "Go to Setup →" (tab 2) and click the load "m8_preload" under Loads. Notice its Type is set to "Preload" with "Preload = 16000 N" on region "washer_seat". A Preload load applies a self-equilibrating clamping traction (16 kN total axial clamping force) distributed across the washer bearing face (or opposing pinch traction across a split bolt bore when a Clamp axis is set). You can edit the Preload (N) value directly in the Inspector to test tighter or looser bolt torque.',
+        expected:
+          'Clicking "m8_preload" in Setup opens the Load Inspector with Type = "Preload" (`[data-testid="preload"]`) set to 16,000 N alongside the 8.5 MPa internal bore pressure load.',
+      },
+      {
+        title: '3. Solving & Comparing Cold Bolt Preload vs Hot Bi-Metallic Expansion in Results (3)',
+        lens: 'results',
+        instruction:
+          'Tap "Go to Results →" (tab 3) and click "Solve" if results are not yet shown. First inspect Case "1. Cold Bolt Preload + Bore Pressure" to verify how the 16 kN bolt preload compresses the upper CuCrZr flange down onto the SS316L base while resisting the 8.5 MPa bore pressure. Next, switch the Case selector to "2. Hot Bi-Metallic Thermal Mismatch" and toggle between "Temperature" and "Stress": because CuCrZr expands faster per degree than SS316L (α = 17.0 vs 16.0 ppm/K) and runs hotter near the 340 °C bore, differential thermal expansion generates interface shear and hoop stress across the bonded joint.',
+        expected:
+          'Both load cases solve on the multi-material P2 tetrahedral mesh, reporting the combined CuCrZr + SS316L assembly mass, cold clamping stress/deflection, and hot bi-metallic thermal stress.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle: 'Chapter 10 — Multi-Body Assembly Mechanics, Per-Element Thermo-Elasticity & Bolt Preload Clamping (V53)',
+      summary:
+        'How Fieldsmith assigns per-volume constitutive properties (E_e, α_e, ρ_e) across multi-body CSG assemblies and models axial bolt preload clamping alongside bi-metallic thermal mismatch.',
+      sections: [
+        {
+          heading: '10.1 Centroid-Classified Per-Element Constitutive Assembly',
+          equations: 'K = ∑_e ∫_(Ω_e) B^T D(E_e, ν) B dΩ,   M_total = ∑_e V_e · ρ_e\nf_th = ∑_e ∫_(Ω_e) B^T D(E_e, ν) · [α_e · (T(x) − T_ref) · I] dΩ',
+          body: 'When additive primitives carry distinct `material <id> on <node>` overrides, Fieldsmith evaluates each non-suppressed additive volume’s signed distance field φ_i(c_e) at every P2 tetrahedron centroid c_e. Following CSG last-writer-wins semantics, element e receives the Young’s modulus E_e, thermal expansion coefficient α_e, and mass density ρ_e of the last volume containing c_e. Even under uniform temperature change ΔT, a jump in α_e across an internal material interface produces an unbalanced thermal strain jump Δα · ΔT that drives realistic bi-metallic interface stress.',
+        },
+        {
+          heading: '10.2 Bolt Preload Clamping Traction & Joint Separation Margin',
+          equations: 'Single Washer Face: t(x) = −(F_preload / A_washer) · n(x)\nOpposed Bore Pinch (axis â): t(x) = ∓(F_preload / A_±) · â   for   (x − x̄)·â ≷ 0',
+          body: 'Torquing a fastener stretches the bolt shank to tension F_preload while clamping the flange washer seat with an equal and opposite compressive traction. In Fieldsmith, `load <id> <region> preload=<N>` integrates the region’s surface area and applies an inward normal clamping traction summing to F_preload Newtons (or, when `axis=(ax, ay, az)` is provided on a shared bore/collar region, splits the region across its axial centroid into opposing ±F_preload pinch tractions that squeeze the upper and lower flanges together).',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: 'Assign CuCrZr Alloy to Upper Spool Volume via API',
+        description:
+          'Set per-volume material cucrzr on the upper_spool node while keeping the lower housing on ss316l.',
+        tool: 'set_material',
+        arguments: {
+          node: 'upper_spool',
+          material: 'cucrzr',
+        },
+      },
+      {
+        title: 'Increase Bolt Preload Clamping Force to 22 kN via API',
+        description:
+          'Update the bolt_preload parameter from 16,000 N to 22,000 N to increase flange clamping compression.',
+        tool: 'set_param',
+        arguments: {
+          addr: 'bolt_preload',
+          value: 22000,
+        },
+      },
+      {
+        title: 'Run Multi-Material Assembly & Bolt Preload FEA Solve via API',
+        description:
+          'Solve both the cold bolt-preload case and the hot bi-metallic thermal mismatch case.',
+        tool: 'solve_study',
+        arguments: {
+          include_fine: false,
+        },
+      },
+    ],
+  },
 ];
 
 export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = false) {
   const sheet = TUTORIAL_SHEETS.find((s) => s.id === sheetId) ?? TUTORIAL_SHEETS[0];
   ui.set('bodyAlpha', 1);
-  if (sheet.id === 'T9') {
+  if (sheet.id === 'T9' || sheet.id === 'T10') {
     ui.set('clip', { axis: 0, dir: 1, on: true, t: 0 });
   } else {
     ui.set('clip', { axis: 1, dir: 1, on: false, t: 0 });
@@ -1663,9 +1780,10 @@ curl -s -X POST ${origin}/api/mcp \\
 • export_fsm()                            — Return canonical .fsm text of the active workspace
 • add_primitive(kind, id, op, blend, ...) — Add/cut/intersect box, cylinder, sphere, capsule, or torus
 • set_param(addr, value)                  — Update a let variable (e.g. "orifice_r") or attribute ("nozzle.radius")
+• set_material(material, node?)           — Set document material or per-volume material override (e.g. cucrzr on nozzle_body)
 • add_region(id, selectors)               — Define a named surface region (e.g. ["chamber_bore.side"])
 • add_support(id, region, fixed)          — Fix [x, y, z] displacements on a region
-• add_load(id, region, kind, ...)         — Apply force (N) or pressure (MPa) load on a region
+• add_load(id, region, kind/preload, ...) — Apply force (N), pressure (MPa), or bolt preload (N) on a region
 • add_temperature(id, region, celsius)    — Apply fixed temperature (°C) boundary condition
 • add_convection(id, region, h, t_inf)    — Apply heat-exchanger convective cooling h·(T − T_inf)
 • add_heatflux(id, region, q)             — Apply surface heat flux (W/mm²)
@@ -1680,7 +1798,7 @@ curl -s -X POST ${origin}/api/mcp \\
   );
 }
 
-viewOverlays.push(function TutorialsOverlayHost() {
+function TutorialsOverlayHost() {
   useApp();
   return (
     <>
@@ -1688,9 +1806,14 @@ viewOverlays.push(function TutorialsOverlayHost() {
       <McpSetupModal />
     </>
   );
-});
+}
+{
+  const idx = viewOverlays.findIndex((fn) => fn.name === 'TutorialsOverlayHost');
+  if (idx >= 0) viewOverlays[idx] = TutorialsOverlayHost;
+  else viewOverlays.push(TutorialsOverlayHost);
+}
 
-statusItems.push(function TutorialsStatusItem() {
+function TutorialsStatusItem() {
   return (
     <>
       <span class="sep">|</span>
@@ -1700,7 +1823,7 @@ statusItems.push(function TutorialsStatusItem() {
         style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
         onClick={toggleTutorialsDrawer}
       >
-        Tutorials (T1–T9)
+        Tutorials (T1–T10)
       </button>
       <span class="sep">|</span>
       <button
@@ -1714,13 +1837,18 @@ statusItems.push(function TutorialsStatusItem() {
       </button>
     </>
   );
-});
+}
+{
+  const idx = statusItems.findIndex((fn) => fn.name === 'TutorialsStatusItem');
+  if (idx >= 0) statusItems[idx] = TutorialsStatusItem;
+  else statusItems.push(TutorialsStatusItem);
+}
 
 extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T9)',
+    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T10)',
     run: () => toggleTutorialsDrawer(),
   },
   {

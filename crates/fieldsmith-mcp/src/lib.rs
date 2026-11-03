@@ -363,8 +363,26 @@ impl Server {
     fn add_load(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
         let case = case_or_default(&args, "Load 1");
-        let kind: LoadKind = field("kind", &args)?;
+        let kind: LoadKind = if args.get("kind").is_some() {
+            field("kind", &args)?
+        } else if let Some(n) = args.get("preload").or_else(|| args.get("newtons")).and_then(Value::as_f64) {
+            let axis: [f64; 3] = args
+                .get("axis")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or([0.0; 3]);
+            LoadKind::Preload { newtons: n, axis }
+        } else if let Some(p) = args.get("pressure").or_else(|| args.get("mpa")).and_then(Value::as_f64) {
+            LoadKind::Pressure { mpa: p }
+        } else if let Some(v) = args.get("force").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+            LoadKind::Force { vector: v }
+        } else {
+            return Err("add_load: missing kind (or force / pressure / preload)".into());
+        };
+        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
         self.add_entity("load", args, |d, id| {
+            if let Some(ref rid) = replace_id {
+                d.loads.retain(|l| l.id != *rid);
+            }
             d.loads.push(Load {
                 id,
                 region,
@@ -444,11 +462,17 @@ impl Server {
     }
 
     fn set_material(&mut self, args: Value) -> Result<Value, String> {
-        let node = text_field("node", &args)?;
         let material = text_field("material", &args)?;
+        let node = args.get("node").and_then(Value::as_str).unwrap_or("");
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        if d.set_node_material(&node, &material) {
-            Ok(json!({"node": node, "material": material}))
+        if node.is_empty() {
+            d.material = material.clone();
+            let problems = d.validate();
+            return Ok(json!({"material": material, "problems": problems}));
+        }
+        if d.set_node_material(node, &material) {
+            let problems = d.validate();
+            Ok(json!({"node": node, "material": material, "problems": problems}))
         } else {
             Err(format!("set_material: no shape named {node:?}"))
         }

@@ -307,6 +307,45 @@ pub fn nodal_stress_thermal(
     acc
 }
 
+/// Multi-material [`nodal_stress_thermal`]: one thermal expansion coefficient
+/// `alpha_elem[e]` per element (V53). Bit-identical to [`nodal_stress_thermal`] when
+/// `alpha_elem` is uniform.
+pub fn nodal_stress_thermal_multi(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    dt: &[f64],
+) -> Vec<Stress> {
+    let pts = P2Tetrahedron.nodal_coordinates();
+    let mut acc = vec![[0.0f64; 6]; mesh.nodes.len()];
+    let mut w = vec![0.0f64; mesh.nodes.len()];
+    assert_eq!(young.len(), mesh.tets.len(), "one modulus per element");
+    assert_eq!(alpha_elem.len(), mesh.tets.len(), "one alpha per element");
+    assert_eq!(dt.len(), mesh.nodes.len(), "one ΔT per node");
+    for (e, (&y, &alpha)) in young.iter().zip(alpha_elem.iter()).enumerate() {
+        let vol = mesh.tet_volume(e).abs();
+        let t = &mesh.tets[e];
+        for (a, xi) in pts.iter().enumerate() {
+            let s = element_stress_thermal(mesh, u, e, y, poisson, alpha, dt[t[a] as usize], *xi);
+            let n = t[a] as usize;
+            for k in 0..6 {
+                acc[n][k] += vol * s[k];
+            }
+            w[n] += vol;
+        }
+    }
+    for (s, wn) in acc.iter_mut().zip(&w) {
+        if *wn > 0.0 {
+            for v in s.iter_mut() {
+                *v /= wn;
+            }
+        }
+    }
+    acc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

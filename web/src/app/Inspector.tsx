@@ -414,7 +414,7 @@ function NodeInspector({ node }: { node: Node }) {
           class="select"
           value={node.material ?? ''}
           data-testid="node-material"
-          title="For the slicer with the 3MF export; the solve still evaluates the whole part with the document material"
+          title="Per-volume material for multi-body assemblies (E, CTE, density, yield) and 3MF export"
           onChange={(e) =>
             store.transact(`Label ${id}`, (d) => {
               const v = (e.target as HTMLSelectElement).value;

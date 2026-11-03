@@ -18,9 +18,9 @@ use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     compliance, element_stress, element_stress_thermal, layer_peel_utilization, min_compressive,
-    nodal_stress, nodal_stress_mat, nodal_stress_thermal, solve, solve_conduction, thermal_load,
-    upper_compliance, von_mises, HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions,
-    Stress, ThermalRefData, V3,
+    nodal_stress, nodal_stress_mat, nodal_stress_thermal, nodal_stress_thermal_multi, solve,
+    solve_conduction, thermal_load, thermal_load_multi, upper_compliance, von_mises, HeatFluxBc,
+    P2Mesh, Problem, RobinBc, SolveReport, SolverOptions, Stress, ThermalRefData, V3,
 };
 use serde::Serialize;
 
@@ -335,6 +335,40 @@ pub fn elem_stress_thermal(
         .collect()
 }
 
+/// Multi-material [`elem_stress_thermal`]: one thermal expansion coefficient
+/// `alpha_elem[e]` per element (V53).
+pub fn elem_stress_thermal_multi(
+    mesh: &P2Mesh,
+    u: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    dt: &[f64],
+) -> Vec<Stress> {
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let phi = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
+    (0..mesh.tets.len())
+        .map(|e| {
+            let t = &mesh.tets[e];
+            let dt_c: f64 = t
+                .iter()
+                .zip(phi.iter())
+                .map(|(&n, p)| dt[n as usize] * p)
+                .sum();
+            element_stress_thermal(
+                mesh,
+                u,
+                e,
+                young[e],
+                poisson,
+                alpha_elem[e],
+                dt_c,
+                [0.25; 3],
+            )
+        })
+        .collect()
+}
+
 /// Populate `peel_nodal`, `peel_elem`, and `max_layer_peel` on a solved `CaseResult`
 /// for build axis `b_hat` and inter-layer strengths `(yield_z, shear_z)`.
 pub fn populate_case_peel(case: &mut CaseResult, b_hat: [f64; 3], yield_z: f64, shear_z: f64) {
@@ -600,6 +634,46 @@ pub fn case_force_report(
         };
         let mut resultant = [0.0f64; 3];
         let mut moment = [0.0f64; 3];
+        // Pre-compute split-axis preload geometry when `axis != [0, 0, 0]`.
+        let preload_split: Option<([f64; 3], [f64; 3], f64, f64)> = match l.kind {
+            LoadKind::Preload { axis, .. } if axis != [0.0; 3] => {
+                let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+                if len == 0.0 {
+                    return Err(SetupError(format!(
+                        "load '{}': preload axis is the zero vector",
+                        l.id
+                    )));
+                }
+                let ahat = axis.map(|c| c / len);
+                let mut c_mean = [0.0f64; 3];
+                for &fi in &fs {
+                    let fc = facets[fi].centroid(mesh);
+                    let fa = facets[fi].area(mesh);
+                    for k in 0..3 {
+                        c_mean[k] += fa * fc[k];
+                    }
+                }
+                for c in &mut c_mean {
+                    *c /= area;
+                }
+                let mut a_pos = 0.0f64;
+                let mut a_neg = 0.0f64;
+                for &fi in &fs {
+                    let fc = facets[fi].centroid(mesh);
+                    let fa = facets[fi].area(mesh);
+                    let proj = (fc[0] - c_mean[0]) * ahat[0]
+                        + (fc[1] - c_mean[1]) * ahat[1]
+                        + (fc[2] - c_mean[2]) * ahat[2];
+                    if proj >= 0.0 {
+                        a_pos += fa;
+                    } else {
+                        a_neg += fa;
+                    }
+                }
+                Some((ahat, c_mean, a_pos, a_neg))
+            }
+            _ => None,
+        };
         for (i, &fi) in fs.iter().enumerate() {
             let fct = &facets[fi];
             let a = fct.area(mesh);
@@ -611,6 +685,23 @@ pub fn case_force_report(
                 None => match l.kind {
                     LoadKind::Force { vector } => vector.map(|c| c / area),
                     LoadKind::Pressure { mpa } => fct.normal(mesh).map(|c| -mpa * c),
+                    LoadKind::Preload { newtons, .. } => match preload_split {
+                        Some((ahat, c_mean, a_pos, a_neg))
+                            if a_pos > 1e-6 * area && a_neg > 1e-6 * area =>
+                        {
+                            let fc = fct.centroid(mesh);
+                            let proj = (fc[0] - c_mean[0]) * ahat[0]
+                                + (fc[1] - c_mean[1]) * ahat[1]
+                                + (fc[2] - c_mean[2]) * ahat[2];
+                            if proj >= 0.0 {
+                                ahat.map(|c| -(newtons / a_pos) * c)
+                            } else {
+                                ahat.map(|c| (newtons / a_neg) * c)
+                            }
+                        }
+                        Some((ahat, _, _, _)) => ahat.map(|c| -(newtons / area) * c),
+                        None => fct.normal(mesh).map(|c| -(newtons / area) * c),
+                    },
                     LoadKind::Distributed { .. } => unreachable!("dist is Some here"),
                 },
             };
@@ -661,8 +752,10 @@ pub fn case_force_report(
                 fit_extent: Some(dz.frame.extent),
             },
             None => {
-                let mag =
-                    (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2)).sqrt();
+                let mag = match l.kind {
+                    LoadKind::Preload { newtons, .. } => newtons.abs(),
+                    _ => (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2)).sqrt(),
+                };
                 LoadReport {
                     id: l.id.clone(),
                     region: l.region.clone(),
@@ -950,6 +1043,122 @@ pub fn run_thermal_case(
     })
 }
 
+/// Multi-material thermal case solve (`V53`): uses per-element thermal expansion
+/// `alpha_elem[e]` alongside per-element `young[e]`. Bit-identical to [`run_thermal_case`]
+/// when `alpha_elem` is uniform.
+#[allow(clippy::too_many_arguments)]
+pub fn run_thermal_case_multi(
+    doc: &Document,
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    fixed: &[u8],
+    facets: &[Facet],
+    name: String,
+    h: f64,
+    k: &[f64],
+    equilibrate: bool,
+) -> Result<CaseResult, SetupError> {
+    let d = case_temperatures(doc, mesh, facets, &name, h)?;
+    let robin = case_convections(doc, mesh, facets, &name, h)?;
+    let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
+    let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
+        .map_err(SetupError)?;
+    let t_ref = doc.solve.t_ref.unwrap_or(20.0);
+    let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
+    let force = thermal_load_multi(mesh, &dt, young, poisson, alpha_elem, &ThermalRefData::new());
+    let problem = Problem {
+        mesh: mesh.clone(),
+        material: Material {
+            young: young.to_vec(),
+            poisson,
+            cubic: None,
+        },
+        fixed: fixed.to_vec(),
+        force,
+    };
+    let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+    let stress = nodal_stress_thermal_multi(mesh, &u, young, poisson, alpha_elem, &dt);
+    let stress_elem = elem_stress_thermal_multi(mesh, &u, young, poisson, alpha_elem, &dt);
+    let vm: Vec<f64> = stress.iter().map(von_mises).collect();
+    let vm_elem: Vec<f64> = stress_elem.iter().map(von_mises).collect();
+    let sigma_min_elem: Vec<f64> = stress_elem.iter().map(min_compressive).collect();
+    let max_d = (0..mesh.nodes.len())
+        .map(|i| (u[3 * i].powi(2) + u[3 * i + 1].powi(2) + u[3 * i + 2].powi(2)).sqrt())
+        .fold(0.0, f64::max);
+    Ok(CaseResult {
+        name,
+        max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
+        max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
+        max_displacement: max_d,
+        compliance: compliance(&problem.force, &u),
+        compliance_upper: if equilibrate {
+            Some(
+                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
+                    .map_err(SetupError)?
+                    .j,
+            )
+        } else {
+            None
+        },
+        u,
+        stress,
+        von_mises: vm,
+        sigma_min_elem,
+        stress_elem,
+        peel_nodal: Vec::new(),
+        peel_elem: vec![0.0; mesh.tets.len()],
+        max_layer_peel: 0.0,
+        vm_elem,
+        solve: rep,
+        load_reports: Vec::new(),
+        temperature: Some(t),
+        conduction: Some(creport),
+    })
+}
+
+/// Collect non-suppressed additive nodes carrying an explicit `material` label distinct
+/// from `doc.material`, paired with their world-frame compiled SDF expression and
+/// resolved [`materials::Material`].
+fn collect_labelled_volumes(
+    doc: &Document,
+    nodes: &[fieldsmith_doc::Node],
+    parent_xforms: &[expr::Rigid],
+    out: &mut Vec<(String, expr::Expr, materials::Material)>,
+) -> Result<(), SetupError> {
+    for n in nodes {
+        if n.suppressed {
+            continue;
+        }
+        if n.op != fieldsmith_doc::Op::Subtract {
+            if let Some(mid) = &n.material {
+                if mid != &doc.material {
+                    let m = materials::find(doc, mid).ok_or_else(|| {
+                        SetupError(format!("unknown material '{mid}' on '{}'", n.id))
+                    })?;
+                    let mut e = expr::compile_node(doc, n);
+                    for xf in parent_xforms.iter().rev() {
+                        e = expr::Expr::Xform {
+                            m: *xf,
+                            e: Box::new(e),
+                        };
+                    }
+                    out.push((n.id.clone(), e, m));
+                }
+            }
+            if let fieldsmith_doc::NodeKind::Group { children, .. } = &n.kind {
+                let mut next = parent_xforms.to_vec();
+                if !n.transform.is_identity() {
+                    next.push(expr::Rigid::from_doc(&n.transform));
+                }
+                collect_labelled_volumes(doc, children, &next, out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The meshing and constraint stage of the pipeline, shared by the static (`analyse_full`)
 /// and modal (`analyse_modes`) paths: field → resolution size → voxel mesh → P2 mesh +
 /// boundary facets → region maps → support mask. `need_loads` selects the static path's
@@ -964,6 +1173,8 @@ struct Prepared {
     fixed: Vec<u8>,
     mat: materials::Material,
     young: Vec<f64>,
+    alpha_elem: Vec<Option<f64>>,
+    rho_avg: f64,
     mass_g: f64,
     h: f64,
     quality: Quality,
@@ -1001,7 +1212,6 @@ fn prepare(
         fieldsmith_field::volume::default_spacing(&b) * 2.0,
         None,
     );
-    let mass_g = vol_mm3 * mat.density / 1000.0;
     let h = match res {
         Resolution::Size(h) => h,
         Resolution::Dofs(n) => size_for_dofs(vol_mm3.max(1e-9), n),
@@ -1048,9 +1258,44 @@ fn prepare(
         }
     }
 
-    // Supports.
+    // Supports and per-volume material assignments (V53).
     let fixed = fixed_mask(doc, &mesh, &facets, h)?;
-    let young = vec![mat.e; mesh.tets.len()];
+    let mut labelled = Vec::new();
+    collect_labelled_volumes(doc, &doc.root, &[], &mut labelled)?;
+    let mut young = vec![mat.e; mesh.tets.len()];
+    let mut alpha_elem = vec![mat.alpha; mesh.tets.len()];
+    let mut rho_avg = mat.density;
+    let mut mass_g = vol_mm3 * mat.density / 1000.0;
+    if !labelled.is_empty() {
+        let mut weighted_rho = 0.0f64;
+        let mut total_tet_vol = 0.0f64;
+        for (e, tet) in mesh.tets.iter().enumerate() {
+            let v0 = mesh.nodes[tet[0] as usize];
+            let v1 = mesh.nodes[tet[1] as usize];
+            let v2 = mesh.nodes[tet[2] as usize];
+            let v3 = mesh.nodes[tet[3] as usize];
+            let c = [
+                0.25 * (v0[0] + v1[0] + v2[0] + v3[0]),
+                0.25 * (v0[1] + v1[1] + v2[1] + v3[1]),
+                0.25 * (v0[2] + v1[2] + v2[2] + v3[2]),
+            ];
+            let mut m_e = &mat;
+            for (_, vexpr, vmat) in &labelled {
+                if expr::eval(vexpr, c).v <= 0.25 * h {
+                    m_e = vmat;
+                }
+            }
+            young[e] = m_e.e;
+            alpha_elem[e] = m_e.alpha;
+            let tv = mesh.tet_volume(e).abs();
+            weighted_rho += tv * m_e.density;
+            total_tet_vol += tv;
+        }
+        if total_tet_vol > 0.0 {
+            rho_avg = weighted_rho / total_tet_vol;
+            mass_g = vol_mm3 * rho_avg / 1000.0;
+        }
+    }
     Ok(Prepared {
         mesh,
         facets,
@@ -1061,6 +1306,8 @@ fn prepare(
         fixed,
         mat,
         young,
+        alpha_elem,
+        rho_avg,
         mass_g,
         h,
         quality,
@@ -1092,6 +1339,7 @@ pub fn analyse_modes(
         fixed,
         mat,
         young,
+        rho_avg,
         h,
         quality,
         mesh_ms,
@@ -1103,7 +1351,7 @@ pub fn analyse_modes(
         &mesh,
         &young,
         mat.nu,
-        mat.density * 1e-9,
+        rho_avg * 1e-9,
         &fixed,
         &fieldsmith_solve::ModeOptions {
             count,
@@ -1183,6 +1431,8 @@ pub fn analyse_full(
         fixed,
         mat,
         young,
+        alpha_elem,
+        rho_avg,
         mass_g,
         h,
         quality,
@@ -1221,7 +1471,7 @@ pub fn analyse_full(
     let mut thermal_ms = 0.0;
     let thermal_cases = doc.thermal_cases();
     if !thermal_cases.is_empty() {
-        let alpha = mat.alpha.ok_or_else(|| {
+        let _ = mat.alpha.ok_or_else(|| {
             SetupError(format!(
                 "The thermal flow needs a thermal-expansion coefficient and material '{}' \
                  states none — pick a material whose sheet states a CTE, or give a custom \
@@ -1229,6 +1479,18 @@ pub fn analyse_full(
                 doc.material
             ))
         })?;
+        let mut alphas = Vec::with_capacity(alpha_elem.len());
+        for &a in &alpha_elem {
+            let av = a.ok_or_else(|| {
+                SetupError(
+                    "The thermal flow needs a thermal-expansion coefficient on every assigned \
+                     volume material — pick a material whose sheet states a CTE, or give a custom \
+                     material an a= value"
+                        .into(),
+                )
+            })?;
+            alphas.push(av);
+        }
         let t_thermal = clock();
         // Unit conductivity: the static path's conduction semantics stay the pinned
         // k ≡ 1 solve; the graded re-resolve (fill.rs) passes the core's per-element map.
@@ -1236,12 +1498,12 @@ pub fn analyse_full(
         for name in thermal_cases {
             // Thermal cases prescribe no boundary traction; the expansion pseudo-load is
             // the body, the supports' reaction tractions are free.
-            let case = run_thermal_case(
+            let case = run_thermal_case_multi(
                 doc,
                 &mesh,
                 &young,
                 mat.nu,
-                alpha,
+                &alphas,
                 &fixed,
                 &facets,
                 name,
@@ -1286,7 +1548,7 @@ pub fn analyse_full(
                 &mesh,
                 &young,
                 mat.nu,
-                mat.density * 1e-9,
+                rho_avg * 1e-9,
                 &fixed,
                 &fieldsmith_solve::ModeOptions {
                     count,

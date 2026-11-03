@@ -39,12 +39,13 @@ pub use pcg::{solve, SolveReport, SolverOptions};
 pub use stress::{
     element_stress, element_stress_cubic, element_stress_mat, element_stress_thermal,
     layer_peel_quadratic, layer_peel_utilization, layer_tractions, min_compressive, nodal_stress,
-    nodal_stress_mat, nodal_stress_thermal, principal_stresses, von_mises, Stress,
+    nodal_stress_mat, nodal_stress_thermal, nodal_stress_thermal_multi, principal_stresses,
+    von_mises, Stress,
 };
 pub use thermal::{
     assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
-    element_thermal_integrals, solve_conduction, thermal_load, Csr, HeatFluxBc, RobinBc,
-    ThermalRefData,
+    element_thermal_integrals, solve_conduction, thermal_load, thermal_load_multi, Csr,
+    HeatFluxBc, RobinBc, ThermalRefData,
 };
 
 pub type V3 = [f64; 3];

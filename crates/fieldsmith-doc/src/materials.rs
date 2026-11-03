@@ -102,6 +102,8 @@ pub fn library() -> Vec<Material> {
           "EOS Ti64 data sheet: E 110 ± 7 GPa, Rp0.2 1030 ± 70 MPa (mean − 1σ used), density 4.41 g/cm³. CTE 9.0 ×10⁻⁶/°C (25–100 °C, ASTM E228) from the EOS Ti64 Grade 23 sheet."),
         m("ss316l", "316L stainless (LPBF)", 180000.0, 0.30, 470.0, 7.98, 0.4, Some(15.7e-6),
           "EOS StainlessSteel 316L data sheet: E ≈ 180–185 GPa, Rp0.2 ≈ 470–530 MPa (lower bound used), density 7.98 g/cm³. CTE 15.7 ×10⁻⁶/°C (25–100 °C, ASTM E228)."),
+        m("cucrzr", "CuCrZr copper alloy (LPBF)", 128000.0, 0.34, 420.0, 8.91, 0.4, Some(17.0e-6),
+          "Age-hardened CuCrZr LPBF data sheet class values: E ≈ 128 GPa, Rp0.2 ≈ 420 MPa, density 8.91 g/cm³. CTE 17.0 ×10⁻⁶/°C (20–300 °C, ASTM E228)."),
     ]
 }
 

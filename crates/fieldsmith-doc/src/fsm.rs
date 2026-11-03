@@ -1026,6 +1026,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     LoadKind::Force { vector: v }
                 } else if let Some(p) = a.num("pressure")? {
                     LoadKind::Pressure { mpa: p }
+                } else if let Some(n) = a.expr_num("preload", "newtons")? {
+                    let axis = a.vec3("axis")?.unwrap_or([0.0; 3]);
+                    LoadKind::Preload { newtons: n, axis }
                 } else if let Some(src) = a.string("fn")? {
                     // Compiled here, so a bad function names its character, not a
                     // distant validate error.
@@ -1055,7 +1058,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     }
                 } else {
                     return Err(err(
-                        "load needs force=(x, y, z), pressure=value, or fn=...".into()
+                        "load needs force=(x, y, z), pressure=value, preload=value, or fn=...".into()
                     ));
                 };
                 doc.consumed.append(&mut a.consumed);
@@ -1470,6 +1473,13 @@ pub fn print(doc: &Document) -> String {
         let kind = match &l.kind {
             LoadKind::Force { vector } => format!("force={}", p.v3_for(&l.id, "force", *vector)),
             LoadKind::Pressure { mpa } => format!("pressure={}", n(*mpa)),
+            LoadKind::Preload { newtons, axis } => {
+                let mut k = format!("preload={}", p.num_for(&l.id, "newtons", None, *newtons));
+                if *axis != [0.0; 3] {
+                    k += &format!(" axis={}", v3(*axis));
+                }
+                k
+            }
             LoadKind::Distributed { expr, dir, total } => {
                 let mut k = format!("fn={}", q(expr));
                 match dir {
