@@ -2519,8 +2519,13 @@ async function renderCandleTransientVideoWebm(
   const frames = vis.frames ?? [];
   if (frames.length === 0) throw new Error('No transient frames to render');
 
-  const width = 640;
-  const height = 380;
+  const width = 560;
+  const topBannerH = 52;
+  const sceneH = 600;
+  const bottomBannerH = 52;
+  const height = topBannerH + sceneH + bottomBannerH; // 704 (exact multiple of 16 for VP8/VP9)
+  const dstAspect = width / sceneH;
+
   const compCanvas = document.createElement('canvas');
   compCanvas.width = width;
   compCanvas.height = height;
@@ -2558,51 +2563,76 @@ async function renderCandleTransientVideoWebm(
 
     ctx.fillStyle = '#090d16';
     ctx.fillRect(0, 0, width, height);
-    if (srcCanvas) {
+    if (srcCanvas && srcCanvas.width > 0 && srcCanvas.height > 0) {
       try {
-        ctx.drawImage(srcCanvas, 0, 0, width, height);
+        // Preserve strict 1:1 isotropic pixel aspect ratio (sw / sh === width / sceneH)
+        // by taking the centered upright crop from srcCanvas so the vertical candle + lens
+        // assembly is never stretched or squashed regardless of the browser window shape.
+        const srcW = srcCanvas.width;
+        const srcH = srcCanvas.height;
+        const srcAspect = srcW / srcH;
+        let sx = 0;
+        let sy = 0;
+        let sw = srcW;
+        let sh = srcH;
+        if (srcAspect > dstAspect) {
+          sh = srcH;
+          sw = Math.round(srcH * dstAspect);
+          sx = Math.round((srcW - sw) * 0.5);
+        } else {
+          sw = srcW;
+          sh = Math.round(srcW / dstAspect);
+          sy = Math.round((srcH - sh) * 0.5);
+        }
+        ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, topBannerH, width, sceneH);
       } catch {
         // ignore cross-context draw error if any
       }
     }
 
     // Top HUD Telemetry Banner
-    ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
-    ctx.fillRect(0, 0, width, 46);
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, 0, width, topBannerH);
     ctx.fillStyle = '#f8fafc';
     ctx.font = 'bold 12px Inter, system-ui, sans-serif';
     ctx.fillText(
       `FIELDSMITH V56 — SOLAR-FOCUSED CANDLE IGNITION & BUOYANT FLAME`,
       12,
-      18,
+      20,
     );
     ctx.fillStyle = f.ignited ? '#fbbf24' : '#38bdf8';
     ctx.font = 'bold 11px JetBrains Mono, monospace';
     ctx.fillText(
       `t = ${f.time_s.toFixed(2)} s | ${f.phase_name}`,
       12,
-      36,
+      39,
     );
 
-    // Bottom Telemetry Bar + Timeline Progress
+    // Bottom Telemetry Bar + Timeline Progress (2 clean lines)
     const sootNm = f.lens_soot_thickness_nm ?? 0;
     const tauPct = f.lens_transmittance_pct ?? 91.8;
-    ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
-    ctx.fillRect(0, height - 44, width, 44);
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, height - bottomBannerH, width, bottomBannerH);
     ctx.fillStyle = '#e2e8f0';
     ctx.font = '10.5px JetBrains Mono, monospace';
     ctx.fillText(
-      `T_wick: ${f.wick_temp_k.toFixed(0)} K | T_flame: ${f.peak_flame_temp_k.toFixed(0)} K | P_rad: ${f.radiant_power_w.toFixed(1)} W | Smoke: ${f.smoke_emission_ug_s.toFixed(1)} μg/s | Lens Soot: ${sootNm.toFixed(1)} nm (τ=${tauPct.toFixed(1)}%)`,
+      `T_wick: ${f.wick_temp_k.toFixed(0)} K | T_flame: ${f.peak_flame_temp_k.toFixed(0)} K | H_f: ${f.flame_height_mm.toFixed(1)} mm | P_rad: ${f.radiant_power_w.toFixed(1)} W`,
       12,
-      height - 22,
+      height - 34,
+    );
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(
+      `Smoke: ${f.smoke_emission_ug_s.toFixed(1)} μg/s | Lens Soot: ${sootNm.toFixed(1)} nm (τ_lens=${tauPct.toFixed(1)}%) | u_z: ${f.peak_updraft_m_s.toFixed(2)} m/s`,
+      12,
+      height - 18,
     );
 
     // Progress bar along bottom edge
     const pct = (k + 1) / frames.length;
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(12, height - 10, width - 24, 4);
+    ctx.fillRect(12, height - 8, width - 24, 4);
     ctx.fillStyle = f.ignited ? '#f97316' : '#38bdf8';
-    ctx.fillRect(12, height - 10, (width - 24) * pct, 4);
+    ctx.fillRect(12, height - 8, (width - 24) * pct, 4);
 
     onProgress(Math.round(pct * 100), k);
     await new Promise((r) => window.setTimeout(r, 42));
@@ -2665,6 +2695,10 @@ function SolarCandleViewportHud({
     setRenderingVideo(true);
     setVideoPct(0);
     const prevIdx = candleShared.overlay.frameIdx;
+    if (liveViewport) {
+      liveViewport.camera.up.set(0, 0, 1);
+      viewApi.fit(false);
+    }
     try {
       const url = await renderCandleTransientVideoWebm(
         vis,
@@ -2875,7 +2909,16 @@ function SolarCandleViewportHud({
                   loop
                   muted
                   data-testid="transient-video-player"
-                  style={{ width: '100%', maxHeight: '165px', borderRadius: '4px', border: '1px solid var(--line)', background: '#000' }}
+                  style={{
+                    width: '210px',
+                    height: '264px',
+                    aspectRatio: '560 / 704',
+                    objectFit: 'contain',
+                    alignSelf: 'center',
+                    borderRadius: '4px',
+                    border: '1px solid var(--line)',
+                    background: '#090d16',
+                  }}
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10.5px' }}>
                   <span class="num" style={{ color: 'var(--ok)' }}>✓ Real-time rendered video ready (30 fps WebM)</span>
@@ -3020,7 +3063,7 @@ function SolarCandle3DTwin({
     const host = mountRef.current;
     if (!host) return;
     const width = Math.max(host.clientWidth, 420);
-    const height = Math.max(host.clientHeight, 285);
+    const height = Math.max(host.clientHeight, 340);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height);
@@ -3031,10 +3074,10 @@ function SolarCandle3DTwin({
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, width / height, 1, 2000);
     camera.up.set(0, 0, 1);
-    camera.position.set(0, -165, 76);
+    camera.position.set(55, -215, 92);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 62);
+    controls.target.set(0, 0, 66);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.update();
@@ -3114,12 +3157,22 @@ function SolarCandle3DTwin({
 
   const handleRenderVideo = async () => {
     const ctx = sceneRef.current;
+    const host = mountRef.current;
     if (!ctx || renderingVideo) return;
     setPlaying(false);
     setRenderingVideo(true);
     setVideoPct(0);
     const prevIdx = safeIdx;
+    const prevW = Math.max(host?.clientWidth ?? 420, 320);
+    const prevH = Math.max(host?.clientHeight ?? 340, 240);
+    const recW = 560;
+    const recH = 600;
     try {
+      ctx.camera.up.set(0, 0, 1);
+      ctx.camera.aspect = recW / recH;
+      ctx.camera.updateProjectionMatrix();
+      ctx.renderer.setSize(recW, recH, false);
+
       const url = await renderCandleTransientVideoWebm(
         vis,
         (k) => {
@@ -3149,6 +3202,9 @@ function SolarCandle3DTwin({
     } catch (e) {
       ui.notify(`Video render failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
+      ctx.camera.aspect = prevW / prevH;
+      ctx.camera.updateProjectionMatrix();
+      ctx.renderer.setSize(prevW, prevH);
       setFrameIdx(prevIdx);
       setRenderingVideo(false);
     }
@@ -3215,7 +3271,7 @@ function SolarCandle3DTwin({
 
       <div
         ref={mountRef}
-        style={{ width: '100%', height: '285px', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}
+        style={{ width: '100%', height: '340px', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}
       />
 
       {/* Time-Dependent Transient Playback Scrubber, Milestone Recap Cards & Real-Time Video Synthesis */}
@@ -3361,7 +3417,16 @@ function SolarCandle3DTwin({
                 loop
                 muted
                 data-testid="transient-video-player"
-                style={{ width: '320px', height: '190px', borderRadius: '4px', background: '#000', border: '1px solid var(--line)' }}
+                style={{
+                  width: '240px',
+                  height: '302px',
+                  aspectRatio: '560 / 704',
+                  objectFit: 'contain',
+                  flexShrink: 0,
+                  borderRadius: '4px',
+                  background: '#090d16',
+                  border: '1px solid var(--line)',
+                }}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11.5px' }}>
                 <strong style={{ color: '#fbbf24' }}>Real-Time Rendered Multiphysics Video (30 fps .webm)</strong>
