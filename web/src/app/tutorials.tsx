@@ -9,7 +9,7 @@ import { store, type Lens } from '../doc/store';
 import { printFsm } from '../doc/wasm';
 import { extraCommands, openText, viewApi } from './commands';
 import { viewOverlays, statusItems } from './App';
-import { markWorkspaceRevisionSeen } from './systems';
+import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { ui, useApp } from './ui';
 
 export interface TutorialStep {
@@ -94,12 +94,12 @@ load pull pin force=(103.5, 0, -386.4)
           'In the 3D view, fixed bolt-hole surfaces are highlighted as the "bolt" support, and force arrows on the upper hole show the 400 N "pull" load.',
       },
       {
-        title: '3. Checking Stress, Deflection & Whether the Calculation Has Settled',
+        title: '3. Checking Stress, Deflection, 3D Volumetric Iso-Shells & Real-Time Video',
         lens: 'results',
         instruction:
-          'Tap "Go to Results →" (or tab 3). To compute stress inside a 3D shape, Fieldsmith divides the bracket into thousands of tiny 4-sided pyramids (tetrahedra) and solves for how every corner moves. How do we know the grid is fine enough to trust? Fieldsmith automatically solves twice — first on a Coarse mesh, then on a finer Refined mesh — so you can verify the numbers settle. Compare the Peak von Mises stress (a combined measure of tension and shear) against PETG’s yield strength (47 MPa, where the plastic starts to permanently bend).',
+          'Tap "Go to Results →" (or tab 3). To compute stress inside a 3D shape, Fieldsmith divides the bracket into thousands of tiny 4-sided pyramids (tetrahedra) and solves twice — first on a Coarse mesh, then on a finer Refined mesh — so you can verify the numbers settle. Compare the Peak von Mises stress against PETG’s yield strength (47 MPa). Try switching the "Colourmap" (`[data-testid="results-colormap"]`) to "Flame" or "Turbo", toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to see glowing volumetric stress shells inside the fillet, click the 4 Milestone Recap pills (`1. Unloaded (0%)` → `4. Full Load (100%)`), and click "🎬 Render Video" (`[data-testid="results-render-video"]`) to record a real-time 30 fps `.webm` video!',
         expected:
-          'Peak von Mises stress settles around ~37.9 MPa (safely below the 47 MPa yield limit of PETG), and the tip bends downward by ~0.72 mm.',
+          'Peak von Mises stress settles around ~37.9 MPa (safely below the 47 MPa yield limit of PETG), tip deflection is ~0.72 mm, and "🎬 Render Video" produces an upright 560×704 `.webm` video with embedded telemetry.',
       },
     ],
     theoryChapter: {
@@ -275,12 +275,12 @@ solve tref=20
           'Setup tree shows Support s1 (fixed bolts), Load l1 (Mechanical case), and Temperatures t_cold (20 °C) and t_hot (220 °C).',
       },
       {
-        title: '2. View the Temperature Map & Compare Mechanical vs. Thermal Stress',
+        title: '2. View the Temperature Map, ParaView Flame Volume & Real-Time Thermal Video',
         lens: 'results',
         instruction:
-          'Switch to Results (3). First tap "Temperature" in the results mode bar to see how heat conducts steadily from the 220 °C upper hole down to the 20 °C mounting bolts. Next tap "Stress", expand "More ▾", and switch the "Case" selector between "Mechanical", "Thermal", and "Envelope" (which shows the worst-case stress across both).',
+          'Switch to Results (3). First tap "Temperature" in the results mode bar, set Colourmap (`[data-testid="results-colormap"]`) to "Flame", and toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to see how heat conducts volumetrically from the 220 °C upper hole down to the 20 °C mounting bolts. Use the Transient Ramp slider or click the 4 Milestone Recap pills (`0% → 35% → 70% → 100%`) and click "🎬 Render Video" (`[data-testid="results-render-video"]`) to synthesise a real-time `.webm` video of the thermal conduction and expansion stress!',
         expected:
-          'The Temperature view shows a smooth 20 °C → 220 °C gradient; the Thermal stress view shows high stress around the two base bolt holes where expansion is prevented.',
+          'The Temperature view shows a smooth 20 °C → 220 °C volumetric gradient; the Thermal stress view shows high stress around the two base bolt holes where expansion is prevented, and "🎬 Render Video" exports a 30 fps `.webm` video.',
       },
     ],
     theoryChapter: {
@@ -356,12 +356,12 @@ solve modes=4
           'The pedestal consists of a bolted base flange, a slender cylindrical stem, and a heavy top sensor stage — a classic mass-on-a-spring geometry.',
       },
       {
-        title: '2. Animate the 4 Vibration Modes in Results (3)',
+        title: '2. Animate & Record Real-Time .webm Video of the 4 Vibration Modes in Results (3)',
         lens: 'results',
         instruction:
-          'Switch to Results (3). In the "Modes" row of the Results card, tap Mode 1, 2, 3, or 4 and tap "Play". Mode 1 and Mode 2 are side-to-side rocking of the heavy top stage in X and Y; Mode 3 is twisting (torsion) around the vertical stem; Mode 4 is vertical bouncing.',
+          'Switch to Results (3). In the "Modes" row of the Results card, tap Mode 1, 2, 3, or 4 and tap "Play". Mode 1 and Mode 2 are side-to-side rocking of the heavy top stage in X and Y; Mode 3 is twisting (torsion) around the vertical stem; Mode 4 is vertical bouncing. Click the 4 Phase Milestone Recap pills (`1. +Peak (0°)`, `2. Node (90°)`, `3. −Peak (180°)`, `4. Full Cycle (360°)`) or click "🎬 Render Video" (`[data-testid="results-render-video"]`) to synthesise a real-time 30 fps `.webm` video of the vibrating mode shape!',
         expected:
-          'All 4 natural frequencies (in Hz) are listed; tapping Play animates the exact 3D flexing motion of each vibration mode.',
+          'All 4 natural frequencies (in Hz) are listed; tapping Play animates the 3D flexing motion and "🎬 Render Video" records a full harmonic oscillation cycle to `.webm`.',
       },
     ],
     theoryChapter: {
@@ -820,20 +820,20 @@ solve tref=20
 `,
     userSteps: [
       {
-        title: '1. Inside a Swirl Atomiser Nozzle & Cooled Combustor Cutaway',
+        title: '1. Inside a Swirl Atomiser Nozzle & 3D Volumetric Spray / Flame Cutaway',
         lens: 'shape',
         instruction:
-          'Liquid fuel cannot burn cleanly as a solid stream — it must first be shattered into a fine mist of microscopic droplets (atomisation) so it evaporates and mixes evenly with air. Look at the 3D cutaway in the viewport (sliced across X = 0): at the bottom is the bronze Swirl Atomiser ("nozzle_body"). Two angled tangential fuel ports ("swirl_port_pos" and "swirl_port_neg", offset by "swirl_offset = 5.5 mm") inject fuel off-centre into the internal vortex chamber ("swirl_chamber"). Because the fuel enters tangentially, it spins into a high-speed whirlpool and shoots out through the central orifice ("exit_orifice", radius "orifice_r = 3.2 mm") as a thin hollow cone that breaks up into droplets inside the combustion chamber ("chamber_bore").',
+          'Liquid fuel cannot burn cleanly as a solid stream — it must first be shattered into a fine mist of microscopic droplets (atomisation) so it evaporates and mixes evenly with air. Look at the 3D cutaway in the viewport alongside the live "3D Volumetric Swirl Spray, Turbulent Flame & NOx Plume" HUD (`[data-testid="coupled-viewport-hud"]`): at the bottom is the bronze CuCrZr Swirl Atomiser ("nozzle_body"). Two angled tangential fuel ports ("swirl_port_pos/neg") spin fuel into a high-speed vortex that shoots out of "exit_orifice" as a 3D hollow spray cone, igniting into 6 nested ParaView volumetric swirl-flame shells quenched by the 4 radial dilution jets ("dilution_jet_x/y") at z = 48 mm.',
         expected:
-          'In the 3D cutaway, you can see the internal swirl chamber, the two angled tangential swirl ports, the central exit orifice, the secondary dilution-air quenching holes, and the 4 vertical heat-exchanger channels bored into the outer combustor jacket.',
+          'In the 3D cutaway, you can see the internal swirl chamber, the 3D hollow-cone fuel spray, the volumetric turbulent flame core, the 4 radial dilution-jet cooling streams, and the 4 vertical heat-exchanger channels.',
       },
       {
-        title: '2. Why Droplet Size Controls Thermal NOx — Tuning the Nozzle Live',
+        title: '2. Why Droplet Size Controls Thermal NOx — Tuning the Nozzle & Recording .webm Video',
         lens: 'shape',
         instruction:
-          'When nitrogen (N₂) and oxygen (O₂) in air are heated above ~1530 °C (1800 K), they react to form Nitrogen Oxides (NOx) — a regulated pollutant that causes smog and acid rain. Why does nozzle geometry control NOx? In the interactive NOx Predictor card above, notice that with the wide baseline orifice ("orifice_r = 3.2 mm") and wide swirl slots ("swirl_slot_r = 2.4 mm"), the fuel spins slowly and forms large 54.1 μm droplets (Sauter Mean Diameter, D₃₂). Large droplets take 3.26 ms to evaporate, burning in hot diffusion-flame pockets around each droplet and spiking NOx to 44.3 ppm (exceeding the 25 ppm limit). Click "Apply Low-NOx Fine-Swirl Nozzle (18.5 ppm)" (or drag "orifice_r" down to 2.1 mm and "swirl_offset" up to 7.2 mm) and watch both the 3D nozzle orifice and predicted NOx update live!',
+          'When nitrogen (N₂) and oxygen (O₂) in air are heated above ~1530 °C (1800 K), they react to form Nitrogen Oxides (NOx). In the interactive NOx Predictor card above (or the 3D Viewport HUD), notice that with the wide baseline orifice ("orifice_r = 3.2 mm"), large 54.1 μm droplets (D₃₂) take 3.26 ms to evaporate, burning in hot diffusion pockets and spiking NOx to 44.3 ppm. Click "Apply Low-NOx Fine-Swirl Nozzle (18.5 ppm)" (`[data-testid="t9-preset-low-nox"]`) to watch the 3D spray cone widen, droplets shrink to 29.8 μm, and the flame transition to a lean premixed blue-amber core. Use the 5 Milestone Recap pills (`1. Spray Cone` → `5. Steady HX`) and click "🎬 Render Video" (`[data-testid="render-transient-video"]`) in the HUD to record a real-time 30 fps `.webm` video!',
         expected:
-          'Tightening orifice_r to 2.1 mm, swirl_slot_r to 1.6 mm, and swirl_offset to 7.2 mm raises the Swirl Number S_g from 1.53 to 2.95, shrinks droplet diameter D₃₂ from 54.1 μm to 29.8 μm, cuts evaporation time to 0.99 ms, and drops NOx from 44.3 ppm to 18.5 ppm (PASS ≤ 25 ppm).',
+          'Tightening orifice_r to 2.1 mm raises Swirl Number S_g from 1.53 to 2.95, shrinks D₃₂ from 54.1 μm to 29.8 μm, drops NOx from 44.3 ppm to 18.5 ppm (PASS ≤ 25 ppm), and synthesises an inline `.webm` video.',
       },
       {
         title: '3. Setting Up Flame, Pressure & Heat-Exchanger Regions',
@@ -847,9 +847,9 @@ solve tref=20
         title: '4. Solving 3D Multi-Material Combustor Liner & CuCrZr Nozzle Thermal Stress',
         lens: 'results',
         instruction:
-          'Notice that "nozzle_body" is assigned CuCrZr copper alloy ("material cucrzr on nozzle_body", E = 128 GPa, α = 17.0×10⁻⁶ /K) inside the 316L stainless steel combustor jacket ("material ss316l", E = 193 GPa, α = 16.0×10⁻⁶ /K). Tap "Go to Results →" (tab 3). In the Results panel on the bottom-left, click "Combustor Thermal & HX" in the Case selector, then click "Temperature" in the Show selector to see the steep radial temperature drop from the hot inner combustor liner & CuCrZr nozzle tip (~650–665 °C) across "liner_wall" into the 55–60 °C heat-exchanger channels. Then click "Stress" in the Show selector to inspect the bi-metallic thermal-expansion stress across the CuCrZr nozzle and 316L liner wall.',
+          'Notice that "nozzle_body" is assigned CuCrZr copper alloy ("material cucrzr on nozzle_body", E = 128 GPa, α = 17.0×10⁻⁶ /K) inside the 316L stainless steel combustor jacket ("material ss316l", E = 193 GPa, α = 16.0×10⁻⁶ /K). Tap "Go to Results →" (tab 3). In the Results panel on the bottom-left, click "Combustor Thermal & HX" in the Case selector, select "Temperature", switch Colourmap (`[data-testid="results-colormap"]`) to "Flame", and toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to visualise the steep radial temperature drop from the hot inner liner (~650 °C) into the 55–60 °C heat-exchanger channels. Then click "🎬 Render Video" (`[data-testid="results-render-video"]`) to record the transient thermal-stress ramp!',
         expected:
-          'The 3D solver computes the steady-state temperature field between the combustion chamber and the 4 heat-exchanger channels, plus the resulting multi-material thermal and pressure stress fields across the CuCrZr nozzle and SS316L liner.',
+          'The 3D solver computes the steady-state temperature field and multi-material thermal stress across the CuCrZr nozzle and SS316L liner, with volumetric iso-shells and `.webm` video export.',
       },
     ],
     theoryChapter: {
@@ -968,9 +968,9 @@ solve size=3.5 tref=20
         title: '3. Solving & Comparing Cold Bolt Preload vs Hot Bi-Metallic Expansion in Results (3)',
         lens: 'results',
         instruction:
-          'Tap "Go to Results →" (tab 3) and click "Solve" if results are not yet shown. First inspect Case "1. Cold Bolt Preload + Bore Pressure" to verify how the 16 kN bolt preload compresses the upper CuCrZr flange down onto the SS316L base while resisting the 8.5 MPa bore pressure. Next, switch the Case selector to "2. Hot Bi-Metallic Thermal Mismatch" and toggle between "Temperature" and "Stress": because CuCrZr expands faster per degree than SS316L (α = 17.0 vs 16.0 ppm/K) and runs hotter near the 340 °C bore, differential thermal expansion generates interface shear and hoop stress across the bonded joint.',
+          'Tap "Go to Results →" (tab 3) and click "Solve" if results are not yet shown. First inspect Case "1. Cold Bolt Preload + Bore Pressure" to verify how the 16 kN bolt preload compresses the upper CuCrZr flange down onto the SS316L base while resisting the 8.5 MPa bore pressure. Next, switch the Case selector to "2. Hot Bi-Metallic Thermal Mismatch", toggle between "Temperature" and "Stress", switch the Colourmap (`[data-testid="results-colormap"]`) to "Flame" or "Coolwarm", toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to inspect internal interface stress iso-shells, and use the Transient Evolution & Video Recap bar (`[data-testid="results-transient-bar"]`) to step through the 4 milestone recap cards or click "🎬 Render Video" (`[data-testid="results-render-video"]`) to record a real-time `.webm` movie.',
         expected:
-          'Both load cases solve on the multi-material P2 tetrahedral mesh, reporting the combined CuCrZr + SS316L assembly mass, cold clamping stress/deflection, and hot bi-metallic thermal stress.',
+          'Both load cases solve on the multi-material P2 tetrahedral mesh, reporting the combined CuCrZr + SS316L assembly mass, cold clamping stress/deflection, hot bi-metallic thermal stress, 3D volume iso-shells, and `.webm` video playback.',
       },
     ],
     theoryChapter: {
@@ -1075,9 +1075,9 @@ solve size=3.5 tref=20
         title: '3. Solving Two-Pass Multi-Zone Mechanics & Inspecting 2D Slices in Results (3) & Make (5)',
         lens: 'results',
         instruction:
-          'Tap "Go to Results →" (tab 3) to run the two-pass homogenised FEA solve: Pass 1 solves the solid AlSi10Mg bracket under both the 650 N tip load and the 185 °C → 35 °C thermal gradient to map the driving von Mises envelope; Pass 2 builds the 3D grade field, evaluates each element’s local cell size a(c_e) and blended Primitive→Diamond constitutive stiffness, and re-solves every load case. Then switch to Make (5) to verify that direct 2D slicing produces clean, closed printer contours across the entire multi-zone transition.',
+          'Tap "Go to Results →" (tab 3) to run the two-pass homogenised FEA solve: Pass 1 solves the solid AlSi10Mg bracket under both the 650 N tip load and the 185 °C → 35 °C thermal gradient to map the driving von Mises envelope; Pass 2 builds the 3D grade field, evaluates each element’s local cell size a(c_e) and blended Primitive→Diamond constitutive stiffness, and re-solves every load case. Switch Colourmap (`[data-testid="results-colormap"]`) to "Turbo" or "Flame", toggle "3D Volume" (`[data-testid="results-volume-toggle"]`), and use the Transient Evolution & Video Recap bar (`[data-testid="results-transient-bar"]`) to render a `.webm` load/thermal ramp movie (`[data-testid="results-render-video"]`). Then switch to Make (5) to verify that direct 2D slicing produces clean, closed printer contours across the entire multi-zone transition.',
         expected:
-          'Results (3) reports the lightweighted mass, graded deflection, and thermal conduction across the multi-zone core, and Make (5) slices the variable-cell morphed field with zero open contours.',
+          'Results (3) reports the lightweighted mass, graded deflection, thermal conduction, 3D volume iso-shells, and `.webm` video playback across the multi-zone core, and Make (5) slices the variable-cell morphed field with zero open contours.',
       },
     ],
     theoryChapter: {
@@ -1176,9 +1176,9 @@ solve size=3.5
         title: '3. Fixed-Grid Ersatz-Void FEA in Results (3) & Direct Slicing in Make (5)',
         lens: 'results',
         instruction:
-          'Tap "Go to Results →" (tab 3) to run the two-pass solve across both load cases ("1. Peak Actuator Shear" and "2. Lateral Gust + Shear"). In Pass 2, elements whose centroids lie outside the evolved outer boundary `d_outer(p) > 0` transition to `CLASS_VOID` (`φ = 0`, carried on the fixed background mesh by the ersatz stiffness floor `E_void = 10⁻⁶ E_s`), while interior elements use the blended Gyroid→Diamond homogenised law. Then switch to Make (5) to verify watertight 2D slice contours across the evolved outer boundary and internal lattice.',
+          'Tap "Go to Results →" (tab 3) to run the two-pass solve across both load cases ("1. Peak Actuator Shear" and "2. Lateral Gust + Shear"). In Pass 2, elements whose centroids lie outside the evolved outer boundary `d_outer(p) > 0` transition to `CLASS_VOID` (`φ = 0`, carried on the fixed background mesh by the ersatz stiffness floor `E_void = 10⁻⁶ E_s`), while interior elements use the blended Gyroid→Diamond homogenised law. Toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) with Colourmap = "Turbo" to inspect internal load-path iso-shells, and use the Transient Evolution & Video Recap bar (`[data-testid="results-transient-bar"]`) to step through the 4 load-ramp milestones or click "🎬 Render Video" (`[data-testid="results-render-video"]`). Then switch to Make (5) to verify watertight 2D slice contours across the evolved outer boundary and internal lattice.',
         expected:
-          'Results (3) reports the additional mass savings from outer boundary evolution alongside graded deflection and stress across both cases, and Make (5) slices the evolved geometry cleanly.',
+          'Results (3) reports the additional mass savings from outer boundary evolution alongside graded deflection, 3D volume iso-shells, and `.webm` video playback across both cases, and Make (5) slices the evolved geometry cleanly.',
       },
     ],
     theoryChapter: {
@@ -1517,6 +1517,8 @@ function SwirlAtomiserNoxPredictor() {
   });
 
   const applyNozzleLet = (updates: Record<string, number>, nextPBar = fuelPressureBar, nextPhi = equivRatio) => {
+    swirlShared.overlay.fuelPressureBar = nextPBar;
+    swirlShared.overlay.equivRatio = nextPhi;
     const nextOrifice = updates.orifice_r ?? orificeR;
     const nextSlot = updates.swirl_slot_r ?? swirlSlotR;
     const nextOffset = updates.swirl_offset ?? swirlOffset;

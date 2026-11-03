@@ -4,7 +4,7 @@
 import { Fragment } from 'preact';
 import { useState } from 'preact/hooks';
 import { ui, useApp, RESULTS_SCALE_DEFAULT } from './ui';
-import type { ResultMode, ResultColormap } from './ui';
+import type { ResultMode, ResultColormap, ResultInterp } from './ui';
 import { store } from '../doc/store';
 import { Seg, NumberInput } from './fields';
 import { viewOverlays, statusItems } from './App';
@@ -211,7 +211,8 @@ function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
 }
 
 function legendLabels(lvl: LevelResult, mode: ResultMode, ci: number, max: number, yieldMpa: number): { min: string; max: string; caption: string } {
-  if (mode === 'stress') return { min: '0', max: `${fmt(max)} MPa`, caption: 'von Mises stress, element centroids' };
+  const p2Tag = ui.resultsInterp === 'p0' ? 'P0 element centroids' : 'P2 smooth nodal recovery (from element centroids)';
+  if (mode === 'stress') return { min: '0', max: `${fmt(max)} MPa`, caption: `von Mises stress, ${p2Tag}` };
   if (mode === 'safety') return { min: `≥ ${fmt(max)}`, max: '0', caption: `safety factor = yield ÷ stress (yield ${fmt(yieldMpa)} MPa); red shades below 1.0, blue above` };
   if (mode === 'peel') {
     const b = lvl.meta.build_angles ?? [0, 0];
@@ -265,14 +266,43 @@ function disposeDeep(o: THREE.Object3D) {
   o.traverse((n) => {
     const m = n as THREE.Mesh & { material?: THREE.Material | THREE.Material[] };
     m.geometry?.dispose();
-    if (Array.isArray(m.material)) m.material.forEach((x) => x.dispose());
-    else m.material?.dispose();
+    const disposeMat = (mat: THREE.Material) => {
+      const withMap = mat as THREE.MeshBasicMaterial;
+      if (withMap.map) withMap.map.dispose();
+      mat.dispose();
+    };
+    if (Array.isArray(m.material)) m.material.forEach(disposeMat);
+    else if (m.material) disposeMat(m.material);
   });
+}
+
+function buildColormapTexture(ramp: [number, number, number][]): THREE.DataTexture {
+  const width = 256;
+  const data = new Uint8Array(width * 4);
+  const c: [number, number, number] = [0, 0, 0];
+  for (let i = 0; i < width; i++) {
+    rampColor(i / (width - 1), c, ramp);
+    data[4 * i] = Math.round(Math.max(0, Math.min(1, c[0])) * 255);
+    data[4 * i + 1] = Math.round(Math.max(0, Math.min(1, c[1])) * 255);
+    data[4 * i + 2] = Math.round(Math.max(0, Math.min(1, c[2])) * 255);
+    data[4 * i + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(data, width, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 const resultGroup = new THREE.Group();
 let resultHost: Viewport | null = null;
 let resultMesh: THREE.Mesh | null = null;
+let resultSubTrisPerFacet = 1;
+let lastFacetPositions: Float32Array | null = null;
+let lastFacetColors: Float32Array | null = null;
 let resultSig = '';
 
 function modelDiag(lvl: LevelResult): number {
@@ -378,6 +408,7 @@ function rebuild(lvl: LevelResult) {
   const mode: ResultMode = shown.animating ? 'deflection' : ui.resultsMode;
   const scale = ui.resultsScale;
   const nFacets = lvl.surfaceRegion.length;
+  const nNodes = Math.floor(lvl.nodes.length / 3);
   const u = shown.u;
   const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
   const peelArr = ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope;
@@ -392,21 +423,41 @@ function rebuild(lvl: LevelResult) {
   const positions = new Float32Array(nFacets * 9);
   const colors = new Float32Array(nFacets * 9);
   const facetScalars = new Float32Array(nFacets);
+  const rawFacetVal = new Float64Array(nFacets);
   const col: [number, number, number] = [0, 0, 0];
   const ramp = activeRamp(mode);
+  const loadRamp = shown.animating ? 1.0 : Math.max(0, Math.min(1, ui.resultsRamp));
+  const effScale = scale * loadRamp;
+  const tField = mode === 'temperature' ? tempField(lvl, ci) : null;
+  const hasScalarField = mode !== 'vectors' && (mode !== 'temperature' || !!tField);
+
+  // Deformed positions for all P2 nodes (corners + mid-edge nodes)
+  const defNodes = new Float32Array(nNodes * 3);
+  for (let n = 0; n < nNodes; n++) {
+    const i3 = 3 * n;
+    defNodes[i3] = lvl.nodes[i3] + effScale * u[i3];
+    defNodes[i3 + 1] = lvl.nodes[i3 + 1] + effScale * u[i3 + 1];
+    defNodes[i3 + 2] = lvl.nodes[i3 + 2] + effScale * u[i3 + 2];
+  }
+
+  // Facet-level baseline (P0) + e2e snapshot arrays (positions / colors of the 3 corners per facet)
   for (let f = 0; f < nFacets; f++) {
     const owner = lvl.surfaceOwner[f];
     let normVal = 0;
     if (mode === 'stress') {
-      normVal = (vmArr[owner] - rngLo) / denom;
+      const v = vmArr[owner] * loadRamp;
+      rawFacetVal[f] = v;
+      normVal = (v - rngLo) / denom;
       rampColor(normVal, col, ramp);
     } else if (mode === 'peel') {
-      normVal = ((peelArr?.[owner] ?? 0) - rngLo) / denom;
+      const v = (peelArr?.[owner] ?? 0) * loadRamp;
+      rawFacetVal[f] = v;
+      normVal = (v - rngLo) / denom;
       rampColor(normVal, col, ramp);
     } else if (mode === 'safety') {
-      // Diverging about the critical SF: 1 → the map's centre, ≥ cap → blue, → 0 → full
-      // red. A vanishing vm means infinite SF, so it clamps onto the blue end.
-      const sf = vmArr[owner] > 0 ? yieldMpa / vmArr[owner] : Infinity;
+      const vmScaled = vmArr[owner] * loadRamp;
+      rawFacetVal[f] = vmScaled;
+      const sf = vmScaled > 0 ? yieldMpa / vmScaled : Infinity;
       const t = sf <= 1
         ? 0.5 + 0.5 * Math.max(0, 1 - sf)
         : 0.5 - 0.5 * Math.min(1, (sf - 1) / Math.max(1, vmax - 1));
@@ -418,16 +469,15 @@ function rebuild(lvl: LevelResult) {
         const n = lvl.surfaceFacets[6 * f + j];
         m += Math.hypot(u[3 * n], u[3 * n + 1], u[3 * n + 2]);
       }
-      normVal = (m / 3 - rngLo) / denom;
+      rawFacetVal[f] = (m / 3) * loadRamp;
+      normVal = (rawFacetVal[f] - rngLo) / denom;
       rampColor(normVal, col, ramp);
     } else if (mode === 'temperature') {
-      // Nodal data averaged over the facet's corners, like the deflection magnitude; a
-      // run without temperature statements stays grey.
-      const t = tempField(lvl, ci);
-      if (t) {
+      if (tField) {
         let m = 0;
-        for (let j = 0; j < 3; j++) m += t[lvl.surfaceFacets[6 * f + j]];
-        normVal = (m / 3 - rngLo) / denom;
+        for (let j = 0; j < 3; j++) m += tField[lvl.surfaceFacets[6 * f + j]];
+        rawFacetVal[f] = m / 3;
+        normVal = (((m / 3) - rngLo) * loadRamp) / denom;
         rampColor(normVal, col, ramp);
       } else {
         col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
@@ -439,20 +489,249 @@ function rebuild(lvl: LevelResult) {
     for (let j = 0; j < 3; j++) {
       const n = lvl.surfaceFacets[6 * f + j];
       const o = 9 * f + 3 * j;
-      positions[o] = lvl.nodes[3 * n] + scale * u[3 * n];
-      positions[o + 1] = lvl.nodes[3 * n + 1] + scale * u[3 * n + 1];
-      positions[o + 2] = lvl.nodes[3 * n + 2] + scale * u[3 * n + 2];
+      positions[o] = defNodes[3 * n];
+      positions[o + 1] = defNodes[3 * n + 1];
+      positions[o + 2] = defNodes[3 * n + 2];
       colors[o] = col[0];
       colors[o + 1] = col[1];
       colors[o + 2] = col[2];
     }
   }
+  lastFacetPositions = positions;
+  lastFacetColors = colors;
+
+  // Continuous P2 nodal scalar recovery (for P2 Smooth and P2 + Wire modes)
+  const useP2 = ui.resultsInterp !== 'p0' && lvl.surfaceFacets.length >= nFacets * 6;
+  const nodeNorm = new Float32Array(nNodes);
+  if (useP2 && hasScalarField) {
+    if (mode === 'deflection') {
+      for (let n = 0; n < nNodes; n++) {
+        const dMag = Math.hypot(u[3 * n], u[3 * n + 1], u[3 * n + 2]) * loadRamp;
+        nodeNorm[n] = Math.max(0, Math.min(1, (dMag - rngLo) / denom));
+      }
+    } else if (mode === 'temperature' && tField) {
+      for (let n = 0; n < nNodes; n++) {
+        nodeNorm[n] = Math.max(0, Math.min(1, ((tField[n] - rngLo) * loadRamp) / denom));
+      }
+    } else {
+      // Element-based fields (stress, peel, safety): area-weighted boundary patch recovery
+      // across all 6 P2 facet nodes + mid-side edge continuity blending + peak-preserving contrast.
+      const nodeSum = new Float64Array(nNodes);
+      const nodeW = new Float64Array(nNodes);
+      let rawMin = Infinity;
+      let rawMax = -Infinity;
+      for (let f = 0; f < nFacets; f++) {
+        const v = rawFacetVal[f];
+        if (v < rawMin) rawMin = v;
+        if (v > rawMax) rawMax = v;
+        const n0 = lvl.surfaceFacets[6 * f];
+        const n1 = lvl.surfaceFacets[6 * f + 1];
+        const n2 = lvl.surfaceFacets[6 * f + 2];
+        const ax = lvl.nodes[3 * n1] - lvl.nodes[3 * n0];
+        const ay = lvl.nodes[3 * n1 + 1] - lvl.nodes[3 * n0 + 1];
+        const az = lvl.nodes[3 * n1 + 2] - lvl.nodes[3 * n0 + 2];
+        const bx = lvl.nodes[3 * n2] - lvl.nodes[3 * n0];
+        const by = lvl.nodes[3 * n2 + 1] - lvl.nodes[3 * n0 + 1];
+        const bz = lvl.nodes[3 * n2 + 2] - lvl.nodes[3 * n0 + 2];
+        const w = Math.max(
+          1e-12,
+          Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx),
+        );
+        for (let j = 0; j < 6; j++) {
+          const nj = lvl.surfaceFacets[6 * f + j];
+          nodeSum[nj] += w * v;
+          nodeW[nj] += w;
+        }
+      }
+      const nodeVal = new Float64Array(nNodes);
+      for (let n = 0; n < nNodes; n++) {
+        if (nodeW[n] > 0) nodeVal[n] = nodeSum[n] / nodeW[n];
+      }
+      // Blend quadratic mid-edge nodes (n01, n12, n20) with their corner endpoints for C⁰ smoothness
+      for (let f = 0; f < nFacets; f++) {
+        const n0 = lvl.surfaceFacets[6 * f];
+        const n1 = lvl.surfaceFacets[6 * f + 1];
+        const n2 = lvl.surfaceFacets[6 * f + 2];
+        const n01 = lvl.surfaceFacets[6 * f + 3];
+        const n12 = lvl.surfaceFacets[6 * f + 4];
+        const n20 = lvl.surfaceFacets[6 * f + 5];
+        nodeVal[n01] = 0.45 * nodeVal[n01] + 0.275 * (nodeVal[n0] + nodeVal[n1]);
+        nodeVal[n12] = 0.45 * nodeVal[n12] + 0.275 * (nodeVal[n1] + nodeVal[n2]);
+        nodeVal[n20] = 0.45 * nodeVal[n20] + 0.275 * (nodeVal[n2] + nodeVal[n0]);
+      }
+      // Restore peak surface extrema so patch averaging never washes out stress hot-spots
+      let recMin = Infinity;
+      let recMax = -Infinity;
+      for (let n = 0; n < nNodes; n++) {
+        if (nodeW[n] <= 0) continue;
+        if (nodeVal[n] < recMin) recMin = nodeVal[n];
+        if (nodeVal[n] > recMax) recMax = nodeVal[n];
+      }
+      const recSpan = recMax - recMin;
+      const rawSpan = rawMax - rawMin;
+      for (let n = 0; n < nNodes; n++) {
+        if (nodeW[n] <= 0) continue;
+        const vRestored =
+          recSpan > 1e-12 && rawSpan > 1e-12
+            ? rawMin + ((nodeVal[n] - recMin) / recSpan) * rawSpan
+            : nodeVal[n];
+        if (mode === 'safety') {
+          const sf = vRestored > 0 ? yieldMpa / vRestored : Infinity;
+          const t = sf <= 1
+            ? 0.5 + 0.5 * Math.max(0, 1 - sf)
+            : 0.5 - 0.5 * Math.min(1, (sf - 1) / Math.max(1, vmax - 1));
+          nodeNorm[n] = Math.max(0, Math.min(1, t));
+        } else {
+          nodeNorm[n] = Math.max(0, Math.min(1, (vRestored - rngLo) / denom));
+        }
+      }
+    }
+  }
+
+  // Compute deformed facet normals and crease-aware smooth node normals for 3D relief shading
+  const facetNormals = new Float32Array(nFacets * 3);
+  const smoothNodeNormals = new Float32Array(nNodes * 3);
+  for (let f = 0; f < nFacets; f++) {
+    const n0 = lvl.surfaceFacets[6 * f];
+    const n1 = lvl.surfaceFacets[6 * f + 1];
+    const n2 = lvl.surfaceFacets[6 * f + 2];
+    const ax = defNodes[3 * n1] - defNodes[3 * n0];
+    const ay = defNodes[3 * n1 + 1] - defNodes[3 * n0 + 1];
+    const az = defNodes[3 * n1 + 2] - defNodes[3 * n0 + 2];
+    const bx = defNodes[3 * n2] - defNodes[3 * n0];
+    const by = defNodes[3 * n2 + 1] - defNodes[3 * n0 + 1];
+    const bz = defNodes[3 * n2 + 2] - defNodes[3 * n0 + 2];
+    let nx = ay * bz - az * by;
+    let ny = az * bx - ax * bz;
+    let nz = ax * by - ay * bx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len > 1e-12) {
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    } else {
+      nz = 1;
+    }
+    facetNormals[3 * f] = nx;
+    facetNormals[3 * f + 1] = ny;
+    facetNormals[3 * f + 2] = nz;
+    for (let j = 0; j < 6; j++) {
+      const nj = lvl.surfaceFacets[6 * f + j];
+      smoothNodeNormals[3 * nj] += nx * len;
+      smoothNodeNormals[3 * nj + 1] += ny * len;
+      smoothNodeNormals[3 * nj + 2] += nz * len;
+    }
+  }
+  for (let n = 0; n < nNodes; n++) {
+    const i3 = 3 * n;
+    const len = Math.hypot(smoothNodeNormals[i3], smoothNodeNormals[i3 + 1], smoothNodeNormals[i3 + 2]);
+    if (len > 1e-12) {
+      smoothNodeNormals[i3] /= len;
+      smoothNodeNormals[i3 + 1] /= len;
+      smoothNodeNormals[i3 + 2] /= len;
+    } else {
+      smoothNodeNormals[i3 + 2] = 1;
+    }
+  }
+
+  // Helper: ParaView-style studio directional relief shading from crease-aware normal
+  const reliefShade = (f: number, n: number): number => {
+    if (ui.resultsVolumeOn) return 1.0;
+    const fnx = facetNormals[3 * f];
+    const fny = facetNormals[3 * f + 1];
+    const fnz = facetNormals[3 * f + 2];
+    let nx = smoothNodeNormals[3 * n];
+    let ny = smoothNodeNormals[3 * n + 1];
+    let nz = smoothNodeNormals[3 * n + 2];
+    // Crease threshold (~47 deg): keep 90° box edges sharp while smoothing cylinders/fillets/bends
+    if (!useP2 || nx * fnx + ny * fny + nz * fnz < 0.68) {
+      nx = fnx;
+      ny = fny;
+      nz = fnz;
+    }
+    const d1 = Math.max(0, nx * 0.42 - ny * 0.58 + nz * 0.70);
+    const d2 = Math.max(0, -nx * 0.55 + ny * 0.48 + nz * 0.68);
+    const spec = Math.pow(d1, 14) * 0.08;
+    return Math.min(1.04, 0.76 + 0.20 * d1 + 0.09 * d2 + spec);
+  };
+
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  if (useP2) {
+    // 4 sub-triangles per 6-node quadratic P2 facet:
+    // (n0, n01, n20), (n01, n1, n12), (n20, n12, n2), (n01, n12, n20)
+    resultSubTrisPerFacet = 4;
+    const p2Pos = new Float32Array(nFacets * 36);
+    const p2Col = new Float32Array(nFacets * 36);
+    const p2Uv = new Float32Array(nFacets * 24);
+    const subTriLocal = [
+      0, 3, 5,
+      3, 1, 4,
+      5, 4, 2,
+      3, 4, 5,
+    ];
+    for (let f = 0; f < nFacets; f++) {
+      const fBase = 6 * f;
+      for (let k = 0; k < 12; k++) {
+        const n = lvl.surfaceFacets[fBase + subTriLocal[k]];
+        const vIdx = 12 * f + k;
+        const o3 = 3 * vIdx;
+        const o2 = 2 * vIdx;
+        p2Pos[o3] = defNodes[3 * n];
+        p2Pos[o3 + 1] = defNodes[3 * n + 1];
+        p2Pos[o3 + 2] = defNodes[3 * n + 2];
+        const s = hasScalarField ? nodeNorm[n] : 0;
+        p2Uv[o2] = s;
+        p2Uv[o2 + 1] = 0.5;
+        const shade = reliefShade(f, n);
+        if (hasScalarField) {
+          // When 1D LUT texture is bound, vColor carries the achromatic 3D relief shading multiplier
+          p2Col[o3] = shade;
+          p2Col[o3 + 1] = shade;
+          p2Col[o3 + 2] = shade;
+        } else {
+          p2Col[o3] = 0.55 * shade;
+          p2Col[o3 + 1] = 0.55 * shade;
+          p2Col[o3 + 2] = 0.55 * shade;
+        }
+      }
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(p2Pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(p2Col, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(p2Uv, 2));
+  } else {
+    resultSubTrisPerFacet = 1;
+    const p0Col = new Float32Array(nFacets * 9);
+    const p0Uv = new Float32Array(nFacets * 6);
+    for (let f = 0; f < nFacets; f++) {
+      const s = facetScalars[f];
+      for (let j = 0; j < 3; j++) {
+        const n = lvl.surfaceFacets[6 * f + j];
+        const vIdx = 3 * f + j;
+        const shade = reliefShade(f, n);
+        p0Uv[2 * vIdx] = s;
+        p0Uv[2 * vIdx + 1] = 0.5;
+        if (hasScalarField) {
+          p0Col[3 * vIdx] = shade;
+          p0Col[3 * vIdx + 1] = shade;
+          p0Col[3 * vIdx + 2] = shade;
+        } else {
+          p0Col[3 * vIdx] = 0.55 * shade;
+          p0Col[3 * vIdx + 1] = 0.55 * shade;
+          p0Col[3 * vIdx + 2] = 0.55 * shade;
+        }
+      }
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(p0Col, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(p0Uv, 2));
+  }
+
+  const lutRamp = mode === 'safety' ? RAMP_SAFETY : ramp;
+  const lutTex = hasScalarField ? buildColormapTexture(lutRamp) : null;
   const mesh = new THREE.Mesh(
     geo,
     new THREE.MeshBasicMaterial({
+      map: lutTex,
       vertexColors: true,
       side: THREE.DoubleSide,
       transparent: ui.resultsVolumeOn,
@@ -464,40 +743,86 @@ function rebuild(lvl: LevelResult) {
   resultGroup.add(mesh);
   resultMesh = mesh;
 
-  // ParaView / VTK-style Volumetric Ray-Marched Iso-Shells & Glowing Scalar Cloud:
-  // When `ui.resultsVolumeOn` is enabled, synthesise 5 nested additive volumetric shells
-  // weighted by scalar intensity t^1.8 so hot spots / stress concentrations glow volumetrically.
-  if (ui.resultsVolumeOn && nFacets > 0) {
-    let cx = 0, cy = 0, cz = 0;
-    const nVerts = positions.length / 3;
-    for (let i = 0; i < positions.length; i += 3) {
-      cx += positions[i];
-      cy += positions[i + 1];
-      cz += positions[i + 2];
+  // Optional P2 curved element wireframe overlay ('p2_wire')
+  if (ui.resultsInterp === 'p2_wire' && nFacets > 0) {
+    const wirePos = new Float32Array(nFacets * 36);
+    const edgeLoop = [0, 3, 3, 1, 1, 4, 4, 2, 2, 5, 5, 0];
+    for (let f = 0; f < nFacets; f++) {
+      const fBase = 6 * f;
+      for (let e = 0; e < 12; e++) {
+        const n = lvl.surfaceFacets[fBase + edgeLoop[e]];
+        const o = 36 * f + 3 * e;
+        wirePos[o] = defNodes[3 * n];
+        wirePos[o + 1] = defNodes[3 * n + 1];
+        wirePos[o + 2] = defNodes[3 * n + 2];
+      }
     }
-    cx /= Math.max(1, nVerts);
-    cy /= Math.max(1, nVerts);
-    cz /= Math.max(1, nVerts);
+    const wGeo = new THREE.BufferGeometry();
+    wGeo.setAttribute('position', new THREE.BufferAttribute(wirePos, 3));
+    const wLines = new THREE.LineSegments(
+      wGeo,
+      new THREE.LineBasicMaterial({
+        color: 0x0f172a,
+        transparent: true,
+        opacity: 0.26,
+        depthWrite: false,
+      }),
+    );
+    wLines.renderOrder = 2;
+    resultGroup.add(wLines);
+  }
 
-    const thresholds = [0.25, 0.45, 0.62, 0.78, 0.90];
+  // ParaView / VTK-style Smooth P2 Volumetric Ray-Marched Iso-Shells & Glowing Scalar Cloud:
+  // Uses the 4-subtriangle P2 geometry with per-vertex Hermite-feathered additive emission
+  // so iso-contours fade smoothly to zero inside sub-triangles with zero jagged facet steps.
+  if (ui.resultsVolumeOn && nFacets > 0 && hasScalarField) {
+    let cx = 0, cy = 0, cz = 0;
+    for (let n = 0; n < nNodes; n++) {
+      cx += defNodes[3 * n];
+      cy += defNodes[3 * n + 1];
+      cz += defNodes[3 * n + 2];
+    }
+    cx /= Math.max(1, nNodes);
+    cy /= Math.max(1, nNodes);
+    cz /= Math.max(1, nNodes);
+
+    const thresholds = [0.20, 0.38, 0.56, 0.72, 0.86];
     const shellScales = [0.97, 0.93, 0.88, 0.82, 0.75];
+    const subTriLocal = [
+      0, 3, 5,
+      3, 1, 4,
+      5, 4, 2,
+      3, 4, 5,
+    ];
     for (let sIdx = 0; sIdx < thresholds.length; sIdx++) {
       const thr = thresholds[sIdx];
       const shScale = shellScales[sIdx];
       const hotPos: number[] = [];
       const hotCol: number[] = [];
       for (let f = 0; f < nFacets; f++) {
-        const sv = facetScalars[f];
-        if (sv < thr) continue;
-        const boost = Math.min(1, (sv - thr) / Math.max(0.08, 1 - thr));
-        rampColor(Math.min(1, sv * 0.92 + 0.08), col, ramp);
-        for (let j = 0; j < 3; j++) {
-          const o = 9 * f + 3 * j;
-          const px = cx + (positions[o] - cx) * shScale;
-          const py = cy + (positions[o + 1] - cy) * shScale;
-          const pz = cz + (positions[o + 2] - cz) * shScale;
-          hotPos.push(px, py, pz);
-          hotCol.push(col[0] * (0.65 + 0.35 * boost), col[1] * (0.65 + 0.35 * boost), col[2] * (0.65 + 0.35 * boost));
+        const fBase = 6 * f;
+        for (let st = 0; st < 4; st++) {
+          const na = lvl.surfaceFacets[fBase + subTriLocal[3 * st]];
+          const nb = lvl.surfaceFacets[fBase + subTriLocal[3 * st + 1]];
+          const nc = lvl.surfaceFacets[fBase + subTriLocal[3 * st + 2]];
+          const sa = useP2 ? nodeNorm[na] : facetScalars[f];
+          const sb = useP2 ? nodeNorm[nb] : facetScalars[f];
+          const sc = useP2 ? nodeNorm[nc] : facetScalars[f];
+          if (sa < thr && sb < thr && sc < thr) continue;
+          const triNodes = [na, nb, nc];
+          const triScalars = [sa, sb, sc];
+          for (let j = 0; j < 3; j++) {
+            const nj = triNodes[j];
+            const sv = triScalars[j];
+            const w = Math.max(0, Math.min(1, (sv - thr) / Math.max(0.08, 1 - thr)));
+            const feather = w * w * (3 - 2 * w);
+            rampColor(Math.min(1, Math.max(thr, sv) * 0.92 + 0.08), col, lutRamp);
+            const px = cx + (defNodes[3 * nj] - cx) * shScale;
+            const py = cy + (defNodes[3 * nj + 1] - cy) * shScale;
+            const pz = cz + (defNodes[3 * nj + 2] - cz) * shScale;
+            hotPos.push(px, py, pz);
+            hotCol.push(col[0] * feather, col[1] * feather, col[2] * feather);
+          }
         }
       }
       if (hotPos.length > 0) {
@@ -510,12 +835,12 @@ function rebuild(lvl: LevelResult) {
             vertexColors: true,
             side: THREE.DoubleSide,
             transparent: true,
-            opacity: 0.16 + 0.05 * sIdx,
+            opacity: 0.18 + 0.05 * sIdx,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
           }),
         );
-        sMesh.renderOrder = 2 + sIdx;
+        sMesh.renderOrder = 3 + sIdx;
         resultGroup.add(sMesh);
       }
     }
@@ -557,16 +882,15 @@ function rebuild(lvl: LevelResult) {
 /** One full mode cycle in ms (2π per CYCLE_MS); a cycle per ~1.2 s reads the deformation
  * without strobing at coarse frame rates. */
 const CYCLE_MS = 1200;
+const RAMP_CYCLE_MS = 2200;
 let playRaf = 0;
 let playLast = 0;
 
 function playTick(t: number) {
-  // The pause runs inside a rAF-scheduled sync that shares this animation frame, so a
-  // tick registered before it fires once more here: drop the late arrival instead of
-  // advancing past the pause. Re-verify the full ownership condition, not just the
-  // toggle — a state-change pause (run replaced, another lens) keeps resultsModePlay on.
   const owner = analysis.latest;
-  if (store.lens !== 'results' || !ui.resultsModePlay || !owner || animatingShape(owner) === null) {
+  const modeAnim = ui.resultsModePlay && owner && animatingShape(owner) !== null;
+  const rampAnim = ui.resultsRampPlay && owner && animatingShape(owner) === null;
+  if (store.lens !== 'results' || (!modeAnim && !rampAnim)) {
     playRaf = 0;
     playLast = 0;
     return;
@@ -574,16 +898,19 @@ function playTick(t: number) {
   const dt = playLast ? t - playLast : 0;
   playLast = t;
   playRaf = requestAnimationFrame(playTick);
-  // ui.set no-ops an unchanged phase (the dt=0 first tick) and the emit is what re-runs
-  // syncResults — the rebuild there is the frame's work.
-  ui.set('resultsModePhase', (ui.resultsModePhase + (dt / CYCLE_MS) * 2 * Math.PI) % (2 * Math.PI));
+  if (modeAnim) {
+    ui.set('resultsModePhase', (ui.resultsModePhase + (dt / CYCLE_MS) * 2 * Math.PI) % (2 * Math.PI));
+  } else if (rampAnim) {
+    const nextRamp = ui.resultsRamp + dt / RAMP_CYCLE_MS;
+    ui.set('resultsRamp', nextRamp > 1.02 ? 0 : Math.min(1, Math.round(nextRamp * 1000) / 1000));
+  }
 }
 
-/** Start or stop the play ticker as the lens state asks. Runs each syncResults pass, so
- * the play toggle and every pause-by-state-change (shape off, run replaced, another lens)
- * are covered by the same check — no separate stop call site. */
+/** Start or stop the play ticker as the lens state asks. */
 function ensureTicker(lvl: LevelResult | null) {
-  const want = store.lens === 'results' && lvl && ui.resultsModePlay && animatingShape(lvl) !== null;
+  const modeWant = store.lens === 'results' && lvl && ui.resultsModePlay && animatingShape(lvl) !== null;
+  const rampWant = store.lens === 'results' && lvl && ui.resultsRampPlay && animatingShape(lvl) === null;
+  const want = modeWant || rampWant;
   if (want && !playRaf) {
     playLast = 0;
     playRaf = requestAnimationFrame(playTick);
@@ -604,8 +931,8 @@ function syncResults(vp: Viewport) {
   const w = window as unknown as { fieldsmith?: { results?: { positions(): Float32Array | null; colors(): Float32Array | null } } };
   if (w.fieldsmith && !w.fieldsmith.results) {
     w.fieldsmith.results = {
-      positions: () => (resultMesh ? (resultMesh.geometry.getAttribute('position')?.array as Float32Array | undefined) ?? null : null),
-      colors: () => (resultMesh ? (resultMesh.geometry.getAttribute('color')?.array as Float32Array | undefined) ?? null : null),
+      positions: () => (resultMesh ? lastFacetPositions : null),
+      colors: () => (resultMesh ? lastFacetColors : null),
     };
   }
   const nextShow = store.lens !== 'results';
@@ -625,9 +952,9 @@ function syncResults(vp: Viewport) {
   ensureTicker(lvl);
   const on = store.lens === 'results' && !!lvl;
   const sig = on
-    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsColormap}|${ui.resultsVolumeOn ? 'vol' : 'surf'}|${ui.resultsCase}|${ui.resultsScale}|${
+    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsColormap}|${ui.resultsInterp}|${ui.resultsVolumeOn ? 'vol' : 'surf'}|${ui.resultsCase}|${ui.resultsScale}|${ui.resultsRamp}|${
         ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
-      }|${ui.resultsModeShape}|${ui.resultsModePhase}|${ui.resultsModePlay ? 'p' : 's'}`
+      }|${ui.resultsModeShape}|${ui.resultsModePhase}|${ui.resultsModePlay ? 'p' : 's'}|${ui.resultsRampPlay ? 'rp' : 'rs'}`
     : 'off';
   if (sig !== resultSig) {
     resultSig = sig;
@@ -636,6 +963,8 @@ function syncResults(vp: Viewport) {
       disposeDeep(c);
     }
     resultMesh = null;
+    lastFacetPositions = null;
+    lastFacetColors = null;
     if (on && lvl) {
       try {
         rebuild(lvl);
@@ -687,7 +1016,8 @@ function onClickResults(_hit: unknown, e: PointerEvent): boolean {
     if (ui.probe) ui.set('probe', null);
     return true;
   }
-  const f = hits[0].faceIndex ?? -1;
+  const rawFace = hits[0].faceIndex ?? -1;
+  const f = resultSubTrisPerFacet > 1 ? Math.floor(rawFace / resultSubTrisPerFacet) : rawFace;
   if (f < 0 || f >= lvl.surfaceRegion.length) return false;
   const shown = shownDisp(lvl);
   const { value, unit } = facetValue(lvl, shown.animating ? 'deflection' : ui.resultsMode, effCase(lvl), f, shown.u);
@@ -1042,6 +1372,351 @@ function SweepSection() {
   );
 }
 
+// ---- Universal Results Transient Evolution, Milestone Recap & Real-Time .webm Video ----
+
+async function renderResultsTransientVideoWebm(
+  lvl: LevelResult,
+  onProgress: (pct: number) => void,
+): Promise<string> {
+  if (!resultHost) throw new Error('3D viewport not ready');
+  const vp = resultHost;
+  vp.camera.up.set(0, 0, 1);
+
+  const width = 560;
+  const topBannerH = 52;
+  const sceneH = 600;
+  const bottomBannerH = 52;
+  const height = topBannerH + sceneH + bottomBannerH; // 704 (multiple of 16)
+  const dstAspect = width / sceneH;
+
+  const compCanvas = document.createElement('canvas');
+  compCanvas.width = width;
+  compCanvas.height = height;
+  const ctx = compCanvas.getContext('2d');
+  if (!ctx) throw new Error('Could not create 2D composite canvas context');
+
+  const mimeCandidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  const mimeType =
+    mimeCandidates.find((m) => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
+
+  const stream = compCanvas.captureStream(30);
+  const recorder = mimeType ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_500_000 }) : new MediaRecorder(stream);
+  const chunks: BlobPart[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+
+  const stopped = new Promise<string>((resolve, reject) => {
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      resolve(URL.createObjectURL(blob));
+    };
+    recorder.onerror = (e) => reject(e);
+  });
+
+  const isModeAnim = ui.resultsModeShape >= 0 && animatingShape(lvl) !== null;
+  const modeFreqHz = isModeAnim ? (lvl.meta.modes?.frequencies[ui.resultsModeShape] ?? 0) : 0;
+  const ci = effCase(lvl);
+  const peakVm = Math.max(1e-9, ...(ci >= 0 ? [lvl.meta.cases[ci].max_vm_elem] : lvl.meta.cases.map((c) => c.max_vm_elem)));
+  const peakDefl = Math.max(1e-9, ...(ci >= 0 ? [lvl.meta.cases[ci].max_displacement] : lvl.meta.cases.map((c) => c.max_displacement)));
+  const yieldMpa = lvl.meta.yield_strength || 230;
+  const tField = tempField(lvl, ci);
+  let tMin = 20;
+  let tMax = 20;
+  if (tField && tField.length > 0) {
+    tMin = Infinity;
+    tMax = -Infinity;
+    for (const v of tField) {
+      if (v < tMin) tMin = v;
+      if (v > tMax) tMax = v;
+    }
+  }
+  const docTitle = (store.doc.name || '3D Solid & Thermal FEA').slice(0, 44);
+  const nFrames = 36;
+
+  recorder.start();
+
+  for (let k = 0; k < nFrames; k++) {
+    const frac = k / Math.max(1, nFrames - 1);
+    if (isModeAnim) {
+      ui.set('resultsModePhase', frac * 2 * Math.PI);
+    } else {
+      ui.set('resultsRamp', Math.round(frac * 1000) / 1000);
+    }
+    syncResults(vp);
+    const srcCanvas = vp.captureCanvas();
+
+    ctx.fillStyle = '#090d16';
+    ctx.fillRect(0, 0, width, height);
+    if (srcCanvas && srcCanvas.width > 0 && srcCanvas.height > 0) {
+      try {
+        const srcW = srcCanvas.width;
+        const srcH = srcCanvas.height;
+        const srcAspect = srcW / srcH;
+        let sx = 0;
+        let sy = 0;
+        let sw = srcW;
+        let sh = srcH;
+        if (srcAspect > dstAspect) {
+          sh = srcH;
+          sw = Math.round(srcH * dstAspect);
+          sx = Math.round((srcW - sw) * 0.5);
+        } else {
+          sw = srcW;
+          sh = Math.round(srcW / dstAspect);
+          sy = Math.round((srcH - sh) * 0.5);
+        }
+        ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, topBannerH, width, sceneH);
+      } catch {
+        // ignore draw error
+      }
+    }
+
+    // Top HUD Banner
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, 0, width, topBannerH);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      `FIELDSMITH FEA — ${docTitle.toUpperCase()}`,
+      12,
+      20,
+    );
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 11px JetBrains Mono, monospace';
+    const subLine = isModeAnim
+      ? `Mode ${ui.resultsModeShape + 1} (${modeFreqHz.toFixed(1)} Hz) | Phase = ${(frac * 360).toFixed(0)}° (cos=${Math.cos(frac * 2 * Math.PI).toFixed(2)})`
+      : `Field: ${ui.resultsMode.toUpperCase()} (${ui.resultsColormap.toUpperCase()}${ui.resultsVolumeOn ? ' + 3D VOL' : ''}) | Load Ramp = ${(frac * 100).toFixed(0)}%`;
+    ctx.fillText(subLine, 12, 39);
+
+    // Bottom Telemetry Banner
+    const curVm = peakVm * (isModeAnim ? Math.abs(Math.cos(frac * 2 * Math.PI)) : frac);
+    const curDefl = peakDefl * (isModeAnim ? Math.abs(Math.cos(frac * 2 * Math.PI)) : frac);
+    const curSf = curVm > 0.05 ? Math.min(99.9, yieldMpa / curVm) : 99.9;
+    const curTemp = tMin + (tMax - tMin) * frac;
+
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, height - bottomBannerH, width, bottomBannerH);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '10.5px JetBrains Mono, monospace';
+    ctx.fillText(
+      `σ_vM: ${curVm.toFixed(1)} MPa | u_max: ${curDefl.toFixed(3)} mm | SF: ${curSf.toFixed(2)}×${tField ? ` | T: ${curTemp.toFixed(0)} °C` : ''}`,
+      12,
+      height - 34,
+    );
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(
+      `Mesh: ${lvl.label} (${lvl.meta.provenance.elements} P${lvl.meta.provenance.order} tet · ${lvl.meta.provenance.dofs} DOFs) | Deform ×${ui.resultsScale}`,
+      12,
+      height - 18,
+    );
+
+    const pct = (k + 1) / nFrames;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(12, height - 8, width - 24, 4);
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(12, height - 8, (width - 24) * pct, 4);
+
+    onProgress(Math.round(pct * 100));
+    await new Promise((r) => window.setTimeout(r, 42));
+  }
+
+  recorder.stop();
+  return stopped;
+}
+
+function ResultsTransientRecapBar({ lvl }: { lvl: LevelResult }) {
+  useApp();
+  const [renderingVideo, setRenderingVideo] = useState(false);
+  const [videoPct, setVideoPct] = useState(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
+  const isModeAnim = ui.resultsModeShape >= 0 && animatingShape(lvl) !== null;
+  const ci = effCase(lvl);
+  const peakVm = Math.max(1e-9, ...(ci >= 0 ? [lvl.meta.cases[ci].max_vm_elem] : lvl.meta.cases.map((c) => c.max_vm_elem)));
+  const peakDefl = Math.max(1e-9, ...(ci >= 0 ? [lvl.meta.cases[ci].max_displacement] : lvl.meta.cases.map((c) => c.max_displacement)));
+  const ramp = ui.resultsRamp;
+  const playing = isModeAnim ? ui.resultsModePlay : ui.resultsRampPlay;
+
+  const milestones = isModeAnim
+    ? [
+        { label: '1. +Peak (0°)', val: 0, title: 'Positive displacement crest (cos = +1.0)' },
+        { label: '2. Node (90°)', val: Math.PI * 0.5, title: 'Zero-crossing nodal equilibrium (cos = 0.0)' },
+        { label: '3. −Peak (180°)', val: Math.PI, title: 'Negative displacement trough (cos = −1.0)' },
+        { label: '4. Full Cycle (360°)', val: 0, title: 'Complete harmonic oscillation cycle' },
+      ]
+    : [
+        { label: '1. Unloaded (0%)', val: 0.0, title: 'Unloaded reference geometry & ambient temperature' },
+        { label: '2. Onset (35%)', val: 0.35, title: `Elastic & thermal onset (${fmt(peakVm * 0.35, 1)} MPa)` },
+        { label: '3. Knee (70%)', val: 0.70, title: `70% design load (${fmt(peakVm * 0.70, 1)} MPa)` },
+        { label: '4. Full Load (100%)', val: 1.0, title: `100% steady-state design load (${fmt(peakVm, 1)} MPa · ${fmt(peakDefl, 2)} mm)` },
+      ];
+
+  const handleRenderVideo = async () => {
+    if (renderingVideo) return;
+    ui.set('resultsModePlay', false);
+    ui.set('resultsRampPlay', false);
+    setRenderingVideo(true);
+    setVideoPct(0);
+    const prevRamp = ui.resultsRamp;
+    const prevPhase = ui.resultsModePhase;
+    try {
+      const url = await renderResultsTransientVideoWebm(lvl, (pct) => setVideoPct(pct));
+      setVideoUrl(url);
+      ui.notify('Rendered real-time 30 fps .webm video of 3D FEA Results');
+    } catch (e) {
+      ui.notify(`Video render error: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      ui.set('resultsRamp', prevRamp);
+      ui.set('resultsModePhase', prevPhase);
+      setRenderingVideo(false);
+    }
+  };
+
+  return (
+    <div
+      data-testid="results-transient-bar"
+      style={{
+        margin: '6px 0',
+        padding: '6px 8px',
+        background: 'rgba(15, 23, 42, 0.55)',
+        border: '1px solid var(--line)',
+        borderRadius: '5px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '5px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="results-transient-play"
+            onClick={() => {
+              if (isModeAnim) {
+                ui.set('resultsModePlay', !ui.resultsModePlay);
+              } else {
+                if (!ui.resultsRampPlay && ui.resultsRamp >= 0.99) ui.set('resultsRamp', 0);
+                ui.set('resultsRampPlay', !ui.resultsRampPlay);
+              }
+            }}
+          >
+            {playing ? '⏸ Pause' : '▶ Play Ramp'}
+          </button>
+          <span class="num" style={{ fontSize: '11px', fontWeight: 600, color: '#fbbf24' }}>
+            {isModeAnim
+              ? `Phase ${Math.round((ui.resultsModePhase * 180) / Math.PI)}°`
+              : `Load ${(ramp * 100).toFixed(0)}% · ${fmt(peakVm * ramp, 1)} MPa`}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="mini-btn"
+          data-testid="results-render-video"
+          disabled={renderingVideo}
+          onClick={handleRenderVideo}
+          style={{ background: '#ea580c', color: '#fff', borderColor: '#f97316', fontWeight: 600 }}
+          title="Synthesise a real-time 30 fps upright .webm video with ParaView colourmap, 3D volume & telemetry HUD"
+        >
+          {renderingVideo ? `Rendering ${videoPct}%…` : '🎬 Render Video'}
+        </button>
+      </div>
+
+      <input
+        type="range"
+        min={0}
+        max={isModeAnim ? 360 : 100}
+        step={1}
+        value={isModeAnim ? Math.round((ui.resultsModePhase * 180) / Math.PI) : Math.round(ramp * 100)}
+        data-testid="results-transient-slider"
+        onInput={(e) => {
+          const v = parseFloat((e.target as HTMLInputElement).value) || 0;
+          if (isModeAnim) {
+            ui.set('resultsModePlay', false);
+            ui.set('resultsModePhase', (v * Math.PI) / 180);
+          } else {
+            ui.set('resultsRampPlay', false);
+            ui.set('resultsRamp', Math.max(0, Math.min(1, v / 100)));
+          }
+        }}
+      />
+
+      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+        {milestones.map((m, idx) => {
+          const active = isModeAnim
+            ? Math.abs(ui.resultsModePhase - m.val) < 0.25
+            : Math.abs(ramp - m.val) < 0.06;
+          return (
+            <button
+              key={idx}
+              type="button"
+              class="mini-btn"
+              data-testid={`results-recap-${idx}`}
+              title={m.title}
+              onClick={() => {
+                if (isModeAnim) {
+                  ui.set('resultsModePlay', false);
+                  ui.set('resultsModePhase', m.val);
+                } else {
+                  ui.set('resultsRampPlay', false);
+                  ui.set('resultsRamp', m.val);
+                }
+              }}
+              style={
+                active
+                  ? { borderColor: '#f59e0b', color: '#fbbf24', fontWeight: 600, fontSize: '10px' }
+                  : { fontSize: '10px' }
+              }
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {videoUrl && (
+        <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            loop
+            muted
+            data-testid="results-video-player"
+            style={{
+              width: '210px',
+              height: '264px',
+              aspectRatio: '560 / 704',
+              objectFit: 'contain',
+              alignSelf: 'center',
+              borderRadius: '4px',
+              border: '1px solid var(--line)',
+              background: '#090d16',
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10.5px' }}>
+            <span class="num" style={{ color: 'var(--ok)' }}>✓ 30 fps WebM ready (560×704)</span>
+            <a
+              href={videoUrl}
+              download="fieldsmith-fea-results.webm"
+              class="mini-btn"
+              data-testid="results-download-video"
+              style={{ textDecoration: 'none' }}
+            >
+              ⬇ Download .webm
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- panel ---------------------------------------------------------------------------
 
 function ResultsPanel() {
@@ -1139,6 +1814,19 @@ function ResultsPanel() {
                 onChange={(v) => ui.set('resultsColormap', v)}
                 testId="results-colormap"
               />
+            </div>
+            <span class="plain">Mesh plot</span>
+            <div class="scale-row" style={{ gap: '4px', flexWrap: 'wrap' }}>
+              <Seg<ResultInterp>
+                value={ui.resultsInterp}
+                options={[
+                  { value: 'p2', label: 'P2 Smooth' },
+                  { value: 'p2_wire', label: 'P2 + Wire' },
+                  { value: 'p0', label: 'P0 Facet' },
+                ]}
+                onChange={(v) => ui.set('resultsInterp', v)}
+                testId="results-interp"
+              />
               <button
                 type="button"
                 class={`mini-btn${ui.resultsVolumeOn ? ' active' : ''}`}
@@ -1196,6 +1884,7 @@ function ResultsPanel() {
               </div>
             </div>
           )}
+          <ResultsTransientRecapBar lvl={lvl} />
           <div class="field-grid" data-testid="results-summary">
             <span class="plain">Peak von Mises</span>
             <span class="num">{fmt(Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem)))} MPa</span>

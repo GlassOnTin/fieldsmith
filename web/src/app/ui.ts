@@ -7,6 +7,7 @@ type Listener = () => void;
 export type GizmoMode = 'translate' | 'rotate';
 export type ResultMode = 'stress' | 'safety' | 'peel' | 'deflection' | 'vectors' | 'temperature';
 export type ResultColormap = 'viridis' | 'flame' | 'turbo' | 'coolwarm';
+export type ResultInterp = 'p2' | 'p2_wire' | 'p0';
 
 /** Deformed-shape exaggeration the panel starts at (the ×5 reset target). */
 export const RESULTS_SCALE_DEFAULT = 5;
@@ -45,6 +46,8 @@ class Ui {
   resultsMode: ResultMode = 'stress';
   /** ParaView / VTK scalar transfer function colourmap. */
   resultsColormap: ResultColormap = 'viridis';
+  /** Surface interpolation order & wireframe overlay mode ('p2' = smooth P2 + 1D LUT, 'p2_wire' = P2 + edges, 'p0' = raw element facets). */
+  resultsInterp: ResultInterp = 'p2';
   /** Render translucent 3D volumetric iso-shells / glowing scalar cloud in Results. */
   resultsVolumeOn = false;
   /** Case index, −1 = envelope. */
@@ -66,6 +69,10 @@ class Ui {
   resultsModePhase = 0;
   /** Play the phase forward (a rAF ticker in results.tsx advances it per frame). */
   resultsModePlay = false;
+  /** Transient load / thermal / deformation evolution factor (0..1, default 1.0 = full steady-state). */
+  resultsRamp = 1;
+  /** Play the transient load/thermal ramp forward in Results (3). */
+  resultsRampPlay = false;
   // Make lens display state (not undoable).
   /** Export mesh spacing (mm). */
   makeH = 0.25;

@@ -1208,6 +1208,363 @@ function isSolarCandleDocument(): boolean {
   return n.includes('Candle') || n.includes('Solar-Focused');
 }
 
+function isSwirlCombustorDocument(): boolean {
+  const n = store.doc.name || '';
+  return n.includes('Swirl Atomiser') || (store.doc.lets ?? []).some((l) => l.name === 'orifice_r');
+}
+
+export type SwirlVolumeMode = 'radiant_flame' | 'temp_gas' | 'nox_ppm' | 'droplet_smd' | 'swirl_vel';
+
+const SWIRL_VOLUME_TABS: { id: SwirlVolumeMode; label: string; shortLabel: string; unit: string }[] = [
+  { id: 'radiant_flame', label: 'Volumetric Swirl Flame & Spray Cone', shortLabel: 'Radiant Flame', unit: 'W/m²' },
+  { id: 'temp_gas', label: 'Combustor Gas Temperature T_gas', shortLabel: 'Temp T_gas', unit: 'K' },
+  { id: 'nox_ppm', label: 'Zeldovich Thermal NOx Formation Rate', shortLabel: 'Thermal NOx', unit: 'ppm' },
+  { id: 'droplet_smd', label: 'Liquid Spray Droplet SMD D₃₂', shortLabel: 'Droplet D₃₂', unit: 'μm' },
+  { id: 'swirl_vel', label: 'Azimuthal & Axial Swirl Velocity', shortLabel: 'Swirl Vel', unit: 'm/s' },
+];
+
+interface SwirlViewportOverlayConfig {
+  enabled: boolean;
+  volumeMode: SwirlVolumeMode;
+  showSprayCone: boolean;
+  showFlameCore: boolean;
+  showDilutionJets: boolean;
+  showSwirlVortex: boolean;
+  frameIdx: number;
+  fuelPressureBar: number;
+  equivRatio: number;
+}
+
+export const swirlShared: { overlay: SwirlViewportOverlayConfig } = {
+  overlay: {
+    enabled: true,
+    volumeMode: 'radiant_flame',
+    showSprayCone: true,
+    showFlameCore: true,
+    showDilutionJets: true,
+    showSwirlVortex: true,
+    frameIdx: 39,
+    fuelPressureBar: 12.0,
+    equivRatio: 0.88,
+  },
+};
+
+export function computeSwirlMetricsFromDoc() {
+  const getLet = (name: string, fallback: number): number => {
+    const found = (store.doc.lets ?? []).find((l) => l.name === name);
+    return found && Number.isFinite(found.value) ? found.value : fallback;
+  };
+  const orificeR = getLet('orifice_r', 3.2);
+  const swirlSlotR = getLet('swirl_slot_r', 2.4);
+  const swirlOffset = getLet('swirl_offset', 5.5);
+  const chamberR = getLet('chamber_r', 22.0);
+  const linerWall = getLet('liner_wall', 5.0);
+  const coolantTemp = getLet('coolant_temp', 60.0);
+  const fuelPressureBar = swirlShared.overlay.fuelPressureBar;
+  const equivRatio = swirlShared.overlay.equivRatio;
+
+  const swirlNumber = (swirlOffset * orificeR) / Math.max(0.5, 2.0 * swirlSlotR * swirlSlotR);
+  const sprayHalfAngleDeg = Math.min(72.0, Math.max(22.0, 18.0 + 23.5 * Math.pow(swirlNumber, 0.56)));
+  const filmThicknessUm =
+    295.0 *
+    Math.pow(orificeR / 2.6, 0.62) *
+    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.28) *
+    Math.pow(1.65 / Math.max(0.35, swirlNumber), 0.42);
+  const smdUm =
+    46.5 *
+    Math.pow(filmThicknessUm / 255.0, 0.38) *
+    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.32) *
+    Math.pow(orificeR / 2.6, 0.28) *
+    Math.pow(Math.cos((sprayHalfAngleDeg * Math.PI) / 360.0), 0.25);
+  const evapTimeMs = (smdUm * smdUm * 1e-3) / 0.9;
+  const unmixedness = Math.min(0.38, 0.02 + 0.085 * Math.pow(evapTimeMs, 0.95));
+  const tAdiabaticK = 1280.0 + 1020.0 * equivRatio - 260.0 * Math.pow(Math.max(0, equivRatio - 1.02), 2);
+  const diffWeight = Math.min(0.75, 1.95 * unmixedness);
+  const hxCoolingDropK = 22.0 * Math.pow(5.0 / Math.max(2.0, linerWall), 0.35) * ((180.0 - coolantTemp) / 120.0);
+  const tFlameEffK = (1.0 - diffWeight) * tAdiabaticK + diffWeight * 2350.0 - hxCoolingDropK;
+  const linerHotWallC = Math.round(
+    coolantTemp + (tFlameEffK - 273.15 - coolantTemp) / (1.0 + 1.85 * Math.pow(5.0 / Math.max(2.0, linerWall), 0.42)),
+  );
+  const promptNoxPpm = 3.6 * Math.pow(equivRatio, 1.3);
+  const o2RadicalFactor = Math.sqrt(Math.max(0.015, 1.08 - equivRatio));
+  const residenceMs = 3.2;
+  const thermalNoxPpm =
+    6.8e11 * (residenceMs * 1e-3) * o2RadicalFactor * Math.exp(-38200.0 / Math.max(1200.0, tFlameEffK));
+  const totalNoxPpm = promptNoxPpm + thermalNoxPpm;
+  const hxPowerKw = 14.5 + 0.052 * (linerHotWallC - coolantTemp) * Math.pow(5.0 / Math.max(2.0, linerWall), 0.3);
+
+  return {
+    orificeR,
+    swirlSlotR,
+    swirlOffset,
+    chamberR,
+    linerWall,
+    coolantTemp,
+    swirlNumber,
+    sprayHalfAngleDeg,
+    filmThicknessUm,
+    smdUm,
+    evapTimeMs,
+    tFlameEffK,
+    linerHotWallC,
+    totalNoxPpm,
+    hxPowerKw,
+  };
+}
+
+function populateSwirlCombustor3DGroup(group: THREE.Group, cfg: SwirlViewportOverlayConfig) {
+  clearThreeGroup(group);
+  const m = computeSwirlMetricsFromDoc();
+  const fIdx = Math.max(0, Math.min(39, Math.round(cfg.frameIdx)));
+  const tFrac = fIdx / 39; // 0..1 over 4.00 s startup
+  const sprayProgress = Math.min(1, tFrac / 0.22);
+  const ignited = fIdx >= 5;
+  const flameGrowth = ignited ? Math.min(1, (tFrac - 0.12) / 0.45) : 0;
+  const quenchActive = fIdx >= 20;
+
+  const zOrifice = 24.0;
+  const halfAngRad = (m.sprayHalfAngleDeg * Math.PI) / 180;
+  const evapLenMm = Math.min(24.0, Math.max(7.5, 6.0 + 4.8 * m.evapTimeMs)) * sprayProgress;
+
+  // 1. 3D Hollow-Cone Liquid Fuel Spray Sheet & Atomising Ligament Rays
+  if (cfg.showSprayCone && sprayProgress > 0.02) {
+    const rTop = Math.min(m.chamberR - 1.5, m.orificeR + evapLenMm * Math.tan(halfAngRad * 0.55));
+    const sprayCone = new THREE.Mesh(
+      new THREE.CylinderGeometry(rTop, m.orificeR * 0.92, evapLenMm, 36, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: m.smdUm <= 35 ? 0x38bdf8 : 0xfbbf24,
+        transparent: true,
+        opacity: 0.28,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    sprayCone.rotation.x = Math.PI / 2;
+    sprayCone.position.set(0, 0, zOrifice + 0.5 * evapLenMm);
+    sprayCone.renderOrder = 18;
+    group.add(sprayCone);
+
+    const rayPos: number[] = [];
+    const rayCol: number[] = [];
+    const nDrops = 28;
+    for (let k = 0; k < nDrops; k++) {
+      const ang0 = (k / nDrops) * Math.PI * 2 + fIdx * 0.18;
+      const ang1 = ang0 + 0.35 * m.swirlNumber;
+      const x0 = m.orificeR * 0.85 * Math.cos(ang0);
+      const y0 = m.orificeR * 0.85 * Math.sin(ang0);
+      const x1 = rTop * Math.cos(ang1);
+      const y1 = rTop * Math.sin(ang1);
+      rayPos.push(x0, y0, zOrifice, x1, y1, zOrifice + evapLenMm);
+      rayCol.push(0.22, 0.78, 0.98, 0.95, 0.85, 0.35);
+    }
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.Float32BufferAttribute(rayPos, 3));
+    rg.setAttribute('color', new THREE.Float32BufferAttribute(rayCol, 3));
+    const sprayLines = new THREE.LineSegments(
+      rg,
+      new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    sprayLines.renderOrder = 19;
+    group.add(sprayLines);
+  }
+
+  // 2. 6 Nested ParaView Volumetric Turbulent Swirl-Flame Iso-Shells inside Chamber Bore (z = 26..68 mm)
+  if (cfg.showFlameCore && ignited) {
+    const nz = 24;
+    const nTheta = 32;
+    const shellScales = [0.28, 0.45, 0.62, 0.78, 0.92, 1.04];
+    const shellAlphas = [0.42, 0.35, 0.28, 0.22, 0.16, 0.11];
+    const zStart = 25.0;
+    const zSpan = 41.0 * (0.35 + 0.65 * flameGrowth);
+
+    for (let sIdx = 0; sIdx < shellScales.length; sIdx++) {
+      const shScale = shellScales[sIdx];
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+
+      for (let i = 0; i < nz; i++) {
+        const xi = i / (nz - 1);
+        const zWorld = zStart + xi * zSpan;
+        // Swirl recirculation zone expands to chamber_r * 0.86 around z = 40 mm, then necks down at dilution jets (z = 48 mm)
+        const env = Math.sin(Math.pow(xi, 0.68) * Math.PI);
+        const quenchPinch = quenchActive && zWorld > 45 ? 1.0 - 0.26 * Math.exp(-Math.pow((zWorld - 48) / 5.5, 2)) : 1.0;
+        const rFlame = Math.min(
+          m.chamberR * 0.88,
+          (m.orificeR + (m.chamberR * 0.78 - m.orificeR) * env) * shScale * quenchPinch,
+        );
+        const swirlTwist = 0.9 * Math.sin(fIdx * 0.35 - xi * 4.5 * m.swirlNumber);
+        const cx = 0.8 * (1 - shScale) * Math.cos(swirlTwist);
+        const cy = 0.8 * (1 - shScale) * Math.sin(swirlTwist);
+
+        let cr = 1.0;
+        let cg = 0.55;
+        let cb = 0.15;
+        const fineLeanFrac = Math.max(0, Math.min(1, (48.0 - m.smdUm) / 22.0));
+        if (cfg.volumeMode === 'radiant_flame') {
+          if (xi < 0.28) {
+            // Primary swirl stabilization root: intense blue-violet OH*/CH* premixed sheet when SMD is fine
+            const blueW = (1.0 - xi / 0.28) * (0.45 + 0.55 * fineLeanFrac);
+            const [br, bg, bb] = blackbodyRgb01(0.78 - 0.22 * fineLeanFrac);
+            cr = br * (1 - blueW) + 0.18 * blueW;
+            cg = bg * (1 - blueW) + 0.58 * blueW;
+            cb = bb * (1 - blueW) + 0.98 * blueW;
+          } else {
+            const tempNorm = Math.max(
+              0.15,
+              Math.min(1.0, ((m.tFlameEffK - 1450) / 720) * (1.0 - 0.35 * Math.max(0, xi - 0.6))),
+            );
+            [cr, cg, cb] = blackbodyRgb01(tempNorm * (1.05 - 0.22 * shScale));
+          }
+        } else if (cfg.volumeMode === 'temp_gas') {
+          const tLocal = (m.tFlameEffK - 220 * Math.abs(xi - 0.42)) * (0.85 + 0.15 * (1 - shScale));
+          [cr, cg, cb] = blackbodyRgb01((tLocal - 1100) / 1100);
+        } else if (cfg.volumeMode === 'nox_ppm') {
+          const noxNorm = Math.min(1, (m.totalNoxPpm / 55.0) * Math.sin(xi * Math.PI));
+          const [tr, tg, tb] = turboRamp(noxNorm);
+          cr = tr / 255;
+          cg = tg / 255;
+          cb = tb / 255;
+        } else if (cfg.volumeMode === 'droplet_smd') {
+          const dNorm = Math.max(0, Math.min(1, (m.smdUm / 60.0) * Math.exp(-2.2 * xi)));
+          const [tr, tg, tb] = turboRamp(dNorm);
+          cr = tr / 255;
+          cg = tg / 255;
+          cb = tb / 255;
+        } else {
+          const uNorm = Math.min(1, (m.swirlNumber / 3.4) * (1.0 - 0.45 * xi));
+          const [tr, tg, tb] = turboRamp(uNorm);
+          cr = tr / 255;
+          cg = tg / 255;
+          cb = tb / 255;
+        }
+
+        for (let t = 0; t <= nTheta; t++) {
+          const ang = (t / nTheta) * Math.PI * 2;
+          pos.push(cx + rFlame * Math.cos(ang), cy + rFlame * Math.sin(ang), zWorld);
+          col.push(cr, cg, cb);
+        }
+      }
+
+      const ring = nTheta + 1;
+      for (let i = 0; i < nz - 1; i++) {
+        for (let t = 0; t < nTheta; t++) {
+          const a = i * ring + t;
+          const b = (i + 1) * ring + t;
+          const c = (i + 1) * ring + (t + 1);
+          const d = i * ring + (t + 1);
+          idx.push(a, b, c, a, c, d);
+        }
+      }
+
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      const mesh = new THREE.Mesh(
+        g,
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: shellAlphas[sIdx] * flameGrowth,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+        }),
+      );
+      mesh.renderOrder = 20 + sIdx;
+      group.add(mesh);
+    }
+  }
+
+  // 3. 4 Radial Dilution-Jet Quenching Streams at z = 48 mm
+  if (cfg.showDilutionJets) {
+    const jetDirs: [number, number][] = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (const [dx, dy] of jetDirs) {
+      const jetCone = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.1, 3.1, 18, 20, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: quenchActive ? 0.42 : 0.18,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+        }),
+      );
+      jetCone.renderOrder = 27;
+      if (dx !== 0) {
+        jetCone.rotation.z = dx > 0 ? Math.PI / 2 : -Math.PI / 2;
+        jetCone.position.set(dx * 13.5, 0, 48);
+      } else {
+        jetCone.rotation.x = dy > 0 ? -Math.PI / 2 : Math.PI / 2;
+        jetCone.position.set(0, dy * 13.5, 48);
+      }
+      group.add(jetCone);
+    }
+  }
+
+  // 4. Helical Swirl Recirculation Streamlines
+  if (cfg.showSwirlVortex) {
+    const nHelix = 8;
+    const hPos: number[] = [];
+    const hCol: number[] = [];
+    for (let h = 0; h < nHelix; h++) {
+      const baseAng = (h / nHelix) * Math.PI * 2;
+      for (let s = 0; s < 22; s++) {
+        const u0 = s / 22;
+        const u1 = (s + 1) / 22;
+        const z0 = 24 + u0 * 44;
+        const z1 = 24 + u1 * 44;
+        const r0 = m.orificeR + (m.chamberR * 0.72 - m.orificeR) * Math.sin(u0 * Math.PI * 0.85);
+        const r1 = m.orificeR + (m.chamberR * 0.72 - m.orificeR) * Math.sin(u1 * Math.PI * 0.85);
+        const a0 = baseAng + u0 * 2.4 * m.swirlNumber - fIdx * 0.15;
+        const a1 = baseAng + u1 * 2.4 * m.swirlNumber - fIdx * 0.15;
+        const [cr, cg, cb] = turboRamp(1.0 - 0.65 * u0);
+        hPos.push(
+          r0 * Math.cos(a0),
+          r0 * Math.sin(a0),
+          z0,
+          r1 * Math.cos(a1),
+          r1 * Math.sin(a1),
+          z1,
+        );
+        hCol.push(cr / 255, cg / 255, cb / 255, cr / 255, cg / 255, cb / 255);
+      }
+    }
+    const hg = new THREE.BufferGeometry();
+    hg.setAttribute('position', new THREE.Float32BufferAttribute(hPos, 3));
+    hg.setAttribute('color', new THREE.Float32BufferAttribute(hCol, 3));
+    const helixLines = new THREE.LineSegments(
+      hg,
+      new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.62,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    helixLines.renderOrder = 28;
+    group.add(helixLines);
+  }
+}
+
 export type CandleVolumeMode =
   | 'radiant_flame'
   | 'temperature'
@@ -1896,6 +2253,19 @@ function syncCoupledViewportOverlay(vp: Viewport) {
     coupledVpHost = vp;
     vp.overlays.add(coupledVpGroup);
   }
+  if (isSwirlCombustorDocument()) {
+    if (!swirlShared.overlay.enabled) {
+      if (coupledVpGroup.children.length > 0) {
+        clearThreeGroup(coupledVpGroup);
+        vp.invalidate();
+      }
+      return;
+    }
+    populateSwirlCombustor3DGroup(coupledVpGroup, swirlShared.overlay);
+    vp.invalidate();
+    return;
+  }
+
   if (isSolarCandleDocument()) {
     if (!candleShared.overlay.enabled) {
       if (coupledVpGroup.children.length > 0) {
@@ -2024,6 +2394,10 @@ function CoupledViewportHud() {
   }, []);
 
   if (ui.systemsOpen) return null;
+
+  if (isSwirlCombustorDocument()) {
+    return <SwirlCombustorViewportHud bump={bump} />;
+  }
 
   if (isSolarCandleDocument()) {
     ensureCandleSolved();
@@ -2229,6 +2603,415 @@ function CoupledViewportHud() {
             >
               Sync Solid .fsm
             </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Swirl Atomiser Combustor & Heat Exchanger 3D Viewport HUD & Real-Time Video (T9) ----
+
+async function renderSwirlCombustorVideoWebm(
+  renderFrameToCanvas: (frameIdx: number) => HTMLCanvasElement | null,
+  onProgress: (pct: number) => void,
+): Promise<string> {
+  const width = 560;
+  const topBannerH = 52;
+  const sceneH = 600;
+  const bottomBannerH = 52;
+  const height = topBannerH + sceneH + bottomBannerH;
+  const dstAspect = width / sceneH;
+
+  const compCanvas = document.createElement('canvas');
+  compCanvas.width = width;
+  compCanvas.height = height;
+  const ctx = compCanvas.getContext('2d');
+  if (!ctx) throw new Error('Could not create 2D composite canvas context');
+
+  const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mimeType =
+    mimeCandidates.find((m) => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
+
+  const stream = compCanvas.captureStream(30);
+  const recorder = mimeType ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_500_000 }) : new MediaRecorder(stream);
+  const chunks: BlobPart[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+
+  const stopped = new Promise<string>((resolve, reject) => {
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      resolve(URL.createObjectURL(blob));
+    };
+    recorder.onerror = (e) => reject(e);
+  });
+
+  const m = computeSwirlMetricsFromDoc();
+  const nFrames = 40;
+  recorder.start();
+
+  for (let k = 0; k < nFrames; k++) {
+    const timeS = (k / (nFrames - 1)) * 4.0;
+    const phaseName =
+      k < 5
+        ? '1. Swirl Fuel Spin-Up & Hollow-Cone Breakup'
+        : k < 14
+          ? '2. Spark Kernel & Primary Zone Light-Around'
+          : k < 25
+            ? '3. Vortex Recirculation & D² Evaporation'
+            : k < 35
+              ? '4. Dilution Quenching & Thermal NOx Control'
+              : '5. Conjugate HX Steady-State Operation';
+
+    const srcCanvas = renderFrameToCanvas(k);
+
+    ctx.fillStyle = '#090d16';
+    ctx.fillRect(0, 0, width, height);
+    if (srcCanvas && srcCanvas.width > 0 && srcCanvas.height > 0) {
+      try {
+        const srcW = srcCanvas.width;
+        const srcH = srcCanvas.height;
+        const srcAspect = srcW / srcH;
+        let sx = 0;
+        let sy = 0;
+        let sw = srcW;
+        let sh = srcH;
+        if (srcAspect > dstAspect) {
+          sh = srcH;
+          sw = Math.round(srcH * dstAspect);
+          sx = Math.round((srcW - sw) * 0.5);
+        } else {
+          sw = srcW;
+          sh = Math.round(srcW / dstAspect);
+          sy = Math.round((srcH - sh) * 0.5);
+        }
+        ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, topBannerH, width, sceneH);
+      } catch {
+        // ignore
+      }
+    }
+
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, 0, width, topBannerH);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+    ctx.fillText('FIELDSMITH T9 — SWIRL ATOMISER SPRAY, COMBUSTOR & NOx KINETICS', 12, 20);
+    ctx.fillStyle = k >= 5 ? '#fbbf24' : '#38bdf8';
+    ctx.font = 'bold 11px JetBrains Mono, monospace';
+    ctx.fillText(`t = ${timeS.toFixed(2)} s | ${phaseName}`, 12, 39);
+
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+    ctx.fillRect(0, height - bottomBannerH, width, bottomBannerH);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '10.5px JetBrains Mono, monospace';
+    ctx.fillText(
+      `S_g: ${m.swirlNumber.toFixed(2)} (${m.sprayHalfAngleDeg.toFixed(0)}° cone) | SMD D₃₂: ${m.smdUm.toFixed(1)} μm | τ_evap: ${m.evapTimeMs.toFixed(2)} ms`,
+      12,
+      height - 34,
+    );
+    ctx.fillStyle = m.totalNoxPpm <= 25 ? '#4ade80' : '#f87171';
+    ctx.fillText(
+      `T_flame: ${m.tFlameEffK.toFixed(0)} K | NOx: ${m.totalNoxPpm.toFixed(1)} ppm (${m.totalNoxPpm <= 25 ? 'PASS' : 'HIGH'}) | Liner: ${m.linerHotWallC} °C (${m.hxPowerKw.toFixed(1)} kW HX)`,
+      12,
+      height - 18,
+    );
+
+    const pct = (k + 1) / nFrames;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(12, height - 8, width - 24, 4);
+    ctx.fillStyle = k >= 5 ? '#f97316' : '#38bdf8';
+    ctx.fillRect(12, height - 8, (width - 24) * pct, 4);
+
+    onProgress(Math.round(pct * 100));
+    await new Promise((r) => window.setTimeout(r, 42));
+  }
+
+  recorder.stop();
+  return stopped;
+}
+
+function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
+  const [playing, setPlaying] = useState(false);
+  const [renderingVideo, setRenderingVideo] = useState(false);
+  const [videoPct, setVideoPct] = useState(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
+  const ov = swirlShared.overlay;
+  const fIdx = Math.max(0, Math.min(39, Math.round(ov.frameIdx)));
+  const timeS = (fIdx / 39) * 4.0;
+  const m = computeSwirlMetricsFromDoc();
+
+  useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      swirlShared.overlay.frameIdx = (swirlShared.overlay.frameIdx + 1) % 40;
+      bump();
+    }, 85);
+    return () => window.clearInterval(timer);
+  }, [playing]);
+
+  const milestones = [
+    { label: '1. Spray Cone (0.0s)', frame: 2, title: `Hollow-cone sheet breakup (D₃₂ = ${m.smdUm.toFixed(1)} μm)` },
+    { label: '2. Spark Kernel (0.5s)', frame: 6, title: 'Spark kernel ignition & primary zone light-around' },
+    { label: '3. Vortex Flame (1.4s)', frame: 15, title: `Recirculation vortex flame (${m.tFlameEffK.toFixed(0)} K)` },
+    { label: '4. Dilution Quench (2.6s)', frame: 26, title: 'Radial dilution-jet cooling & NOx suppression' },
+    { label: '5. Steady HX (4.0s)', frame: 39, title: `Steady combustor & HX balance (NOx = ${m.totalNoxPpm.toFixed(1)} ppm)` },
+  ];
+
+  const handleRenderVideo = async () => {
+    if (renderingVideo) return;
+    setPlaying(false);
+    setRenderingVideo(true);
+    setVideoPct(0);
+    const prevIdx = swirlShared.overlay.frameIdx;
+    if (liveViewport) {
+      liveViewport.camera.up.set(0, 0, 1);
+      viewApi.fit(false);
+    }
+    try {
+      const url = await renderSwirlCombustorVideoWebm(
+        (k) => {
+          swirlShared.overlay.frameIdx = k;
+          if (liveViewport) {
+            syncCoupledViewportOverlay(liveViewport);
+            return liveViewport.captureCanvas();
+          }
+          return null;
+        },
+        (pct) => setVideoPct(pct),
+      );
+      setVideoUrl(url);
+      ui.notify('Rendered real-time 30 fps .webm video of Swirl Combustor Spray & Flame');
+    } catch (e) {
+      ui.notify(`Video render error: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      swirlShared.overlay.frameIdx = prevIdx;
+      setRenderingVideo(false);
+      bump();
+    }
+  };
+
+  return (
+    <div
+      class="sys-vp-hud"
+      data-testid="coupled-viewport-hud"
+      style={{
+        maxWidth: '465px',
+        top: 'auto',
+        right: 'auto',
+        bottom: '44px',
+        left: store.lens === 'results' ? '348px' : '10px',
+        zIndex: 25,
+      }}
+    >
+      <div class="sys-vp-hud-head">
+        <span>3D Volumetric Swirl Spray, Turbulent Flame &amp; NOx Plume (T9)</span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={ov.enabled}
+            data-testid="toggle-vp-coupled-overlay"
+            onChange={(e) => {
+              ov.enabled = (e.target as HTMLInputElement).checked;
+              bump();
+            }}
+          />
+          Show in 3D
+        </label>
+      </div>
+
+      {ov.enabled && (
+        <>
+          <div class="seg" style={{ width: '100%', display: 'flex' }}>
+            {SWIRL_VOLUME_TABS.map((t) => (
+              <button
+                key={t.id}
+                style={{ flex: 1, fontSize: '10px', padding: '0 3px' }}
+                class={ov.volumeMode === t.id ? 'on' : ''}
+                data-testid={`vp-swirl-mode-${t.id}`}
+                onClick={() => {
+                  ov.volumeMode = t.id;
+                  bump();
+                }}
+              >
+                {t.shortLabel}
+              </button>
+            ))}
+          </div>
+
+          <div class="sys-vp-hud-row" style={{ flexWrap: 'wrap', gap: '6px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showSprayCone}
+                onChange={(e) => {
+                  ov.showSprayCone = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Hollow Spray Cone
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showFlameCore}
+                onChange={(e) => {
+                  ov.showFlameCore = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Volumetric Flame
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showDilutionJets}
+                onChange={(e) => {
+                  ov.showDilutionJets = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Dilution Jets
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showSwirlVortex}
+                onChange={(e) => {
+                  ov.showSwirlVortex = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Swirl Vortex
+            </label>
+          </div>
+
+          <div
+            style={{
+              background: 'rgba(15, 23, 42, 0.72)',
+              border: '1px solid var(--line)',
+              borderRadius: '5px',
+              padding: '6px 8px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '5px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <button
+                  type="button"
+                  class="mini-btn"
+                  data-testid="transient-play-btn"
+                  onClick={() => setPlaying(!playing)}
+                >
+                  {playing ? '⏸ Pause' : '▶ Play'}
+                </button>
+                <span class="num" style={{ fontSize: '11px', color: fIdx >= 5 ? '#fbbf24' : '#38bdf8', fontWeight: 600 }}>
+                  t = {timeS.toFixed(2)} s · S_g = {m.swirlNumber.toFixed(2)} · D₃₂ = {m.smdUm.toFixed(1)} μm
+                </span>
+              </div>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid="render-transient-video"
+                disabled={renderingVideo}
+                onClick={handleRenderVideo}
+                style={{ background: '#ea580c', color: '#fff', borderColor: '#f97316', fontWeight: 600 }}
+              >
+                {renderingVideo ? `Rendering ${videoPct}%…` : '🎬 Render Video'}
+              </button>
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={39}
+              step={1}
+              value={fIdx}
+              data-testid="transient-time-slider"
+              onInput={(e) => {
+                setPlaying(false);
+                swirlShared.overlay.frameIdx = parseInt((e.target as HTMLInputElement).value, 10) || 0;
+                bump();
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              {milestones.map((ms, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  class="mini-btn"
+                  data-testid={`recap-event-${idx}`}
+                  title={ms.title}
+                  onClick={() => {
+                    setPlaying(false);
+                    swirlShared.overlay.frameIdx = ms.frame;
+                    bump();
+                  }}
+                  style={
+                    Math.abs(fIdx - ms.frame) <= 2
+                      ? { borderColor: '#f59e0b', color: '#fbbf24', fontWeight: 600, fontSize: '10px' }
+                      : { fontSize: '10px' }
+                  }
+                >
+                  {ms.label}
+                </button>
+              ))}
+            </div>
+
+            {videoUrl && (
+              <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <video
+                  src={videoUrl}
+                  controls
+                  autoPlay
+                  loop
+                  muted
+                  data-testid="transient-video-player"
+                  style={{
+                    width: '210px',
+                    height: '264px',
+                    aspectRatio: '560 / 704',
+                    objectFit: 'contain',
+                    alignSelf: 'center',
+                    borderRadius: '4px',
+                    border: '1px solid var(--line)',
+                    background: '#090d16',
+                  }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10.5px' }}>
+                  <span class="num" style={{ color: 'var(--ok)' }}>✓ Real-time rendered video ready (30 fps WebM)</span>
+                  <a
+                    href={videoUrl}
+                    download="swirl-combustor-spray-flame.webm"
+                    class="mini-btn"
+                    data-testid="download-transient-video"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    ⬇ Download .webm
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div class="sys-vp-hud-row num" style={{ borderTop: '1px solid var(--line)', paddingTop: '5px', flexWrap: 'wrap', gap: '6px' }}>
+            <span>
+              D₃₂: <strong>{m.smdUm.toFixed(1)} μm</strong>
+            </span>
+            <span>
+              T_flame: <strong>{m.tFlameEffK.toFixed(0)} K</strong>
+            </span>
+            <span>
+              NOx: <strong style={{ color: m.totalNoxPpm <= 25 ? 'var(--ok)' : 'var(--danger)' }}>{m.totalNoxPpm.toFixed(1)} ppm</strong>
+            </span>
+            <span>
+              Liner/HX: <strong>{m.linerHotWallC} °C</strong> ({m.hxPowerKw.toFixed(1)} kW)
+            </span>
           </div>
         </>
       )}
@@ -2727,7 +3510,14 @@ function SolarCandleViewportHud({
     <div
       class="sys-vp-hud"
       data-testid="coupled-viewport-hud"
-      style={{ maxWidth: '465px', top: 'auto', right: 'auto', bottom: '44px', left: '10px', zIndex: 25 }}
+      style={{
+        maxWidth: '465px',
+        top: 'auto',
+        right: 'auto',
+        bottom: '44px',
+        left: store.lens === 'results' ? '348px' : '10px',
+        zIndex: 25,
+      }}
     >
       <div class="sys-vp-hud-head">
         <span>3D Volumetric Solar Candle Flame &amp; Plume (144-DOF + 40-Frame Transient)</span>
