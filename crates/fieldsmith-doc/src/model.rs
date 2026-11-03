@@ -532,6 +532,13 @@ pub struct Fill {
     /// `skin` (at `rho_min`) to `skin_max` (at `rho_max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin_max: Option<f64>,
+    /// Optional inward level-set boundary evolution depth (mm) in low-stress (`rho_min`)
+    /// regions (`erode >= 0`). When set with `erode > 0`, the outer boundary evolves
+    /// inward by `erode * (1 - t)` where `t ∈ [0, 1]` is the local normalized grade,
+    /// while preserving full outer envelope along peak load paths (`t = 1`) and inside
+    /// `protect` regions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub erode: Option<f64>,
     /// Relative density bounds of the lattice region (0..1).
     pub rho_min: f64,
     pub rho_max: f64,
@@ -563,6 +570,7 @@ impl Default for Fill {
             morph: None,
             skin: 1.2,
             skin_max: None,
+            erode: None,
             rho_min: 0.2,
             rho_max: 0.8,
             curve: 1.0,
@@ -1199,6 +1207,11 @@ impl Document {
             if let Some(sm) = f.skin_max {
                 if !sm.is_finite() || sm < f.skin {
                     errs.push("Fill skin_max must be at least skin".into());
+                }
+            }
+            if let Some(er) = f.erode {
+                if !er.is_finite() || er < 0.0 {
+                    errs.push("Fill erode must be non-negative".into());
                 }
             }
             if !(0.0 < f.rho_min && f.rho_min <= f.rho_max && f.rho_max <= 1.0) {

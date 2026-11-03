@@ -597,6 +597,7 @@ fn glsl_viewport_union_slots_cover_fill_references() {
         body: e.clone(),
         skin: 1.0,
         skin_max: 1.0,
+        erode: 0.0,
         param_range: [0.0, 1.0],
         family: fieldsmith_doc::Family::Gyroid,
         morph: None,

@@ -304,6 +304,7 @@ pub struct FillExpr {
     pub body: Expr,
     pub skin: f64,
     pub skin_max: f64,
+    pub erode: f64,
     pub param_range: [f64; 2],
     pub family: Family,
     pub morph: Option<Family>,
@@ -339,6 +340,46 @@ impl FillExpr {
         }
         let t = self.grade_at_param(param_val);
         self.skin + (self.skin_max - self.skin) * t
+    }
+
+    /// Local inward level-set boundary evolution shift (mm) at `param_val`:
+    /// `erode * (1 - t)` where `t = grade_at_param(param_val) ∈ [0, 1]`.
+    #[inline]
+    pub fn erode_at_param(&self, param_val: f64) -> f64 {
+        if self.erode <= 0.0 {
+            return 0.0;
+        }
+        let t = self.grade_at_param(param_val);
+        self.erode * (1.0 - t)
+    }
+
+    /// Evolved outer body signed distance `d_outer(p)` given body sample `d`, parameter
+    /// `pv`, and optional protected-zone sample `k_opt`. When `erode > 0`, shifts the
+    /// outer boundary inward by `erode * (1 - t)` outside `keep`, while clamping to `d`
+    /// inside `keep` (`dmin(d + delta, dmax(d, k))`).
+    #[inline]
+    pub fn outer_from(&self, d: D, pv: f64, k_opt: Option<D>) -> D {
+        let delta = self.erode_at_param(pv);
+        if delta <= 0.0 {
+            return d;
+        }
+        let d_eroded = D::new(d.v + delta, d.g);
+        match k_opt {
+            Some(k) => dmin(d_eroded, dmax(d, k)),
+            None => d_eroded,
+        }
+    }
+
+    /// Evaluate the evolved outer boundary signed distance at world point `p`.
+    #[inline]
+    pub fn outer_body(&self, p: V3) -> D {
+        let d0 = eval(&self.body, p);
+        if self.erode <= 0.0 {
+            return d0;
+        }
+        let pv = self.param.sample(p);
+        let k_opt = (!matches!(self.keep, Expr::Empty)).then(|| eval(&self.keep, p));
+        self.outer_from(d0, pv, k_opt)
     }
 
     /// Local unit-cell edge length (mm) at lattice parameter `param_val` (interpolated
@@ -411,42 +452,48 @@ impl FillExpr {
     }
 
     pub fn eval(&self, p: V3) -> D {
-        let d = eval(&self.body, p);
+        let d0 = eval(&self.body, p);
         let pv = self.param.sample(p);
+        let k_opt = (!matches!(self.keep, Expr::Empty)).then(|| eval(&self.keep, p));
+        let d = self.outer_from(d0, pv, k_opt);
         let sk = self.skin_at_param(pv);
         let core = D::new(-(d.v + sk), scale(d.g, -1.0));
         let lat = self.eval_lattice(pv, p);
         let mut inner = dmin(core, lat);
-        if !matches!(self.keep, Expr::Empty) {
-            inner = dmin(inner, eval(&self.keep, p));
+        if let Some(k) = k_opt {
+            inner = dmin(inner, k);
         }
         dmax(d, inner)
     }
 
     /// Classify a point inside the body: 0 = skin or protected (solid), 1 = lattice core.
     pub fn in_core(&self, p: V3) -> bool {
-        let d = eval(&self.body, p).v;
-        let sk = self.skin_at_param(self.param.sample(p));
-        if d >= -sk {
-            return false;
+        let d0 = eval(&self.body, p);
+        let pv = self.param.sample(p);
+        let k_opt = (!matches!(self.keep, Expr::Empty)).then(|| eval(&self.keep, p));
+        if let Some(k) = k_opt {
+            if k.v < 0.0 {
+                return false;
+            }
         }
-        if !matches!(self.keep, Expr::Empty) && eval(&self.keep, p).v < 0.0 {
-            return false;
-        }
-        true
+        let d = self.outer_from(d0, pv, k_opt);
+        let sk = self.skin_at_param(pv);
+        d.v < -sk
     }
 
     /// The fill with the outer skin removed — the viewport's interior pass (`fs_core` in
     /// [`crate::glsl`], same argument order everywhere): lattice struts and protected
     /// zones, nothing within one `skin` of the body surface. Negative = see-through-solid.
     pub fn removed_skin(&self, p: V3) -> D {
-        let d = eval(&self.body, p);
+        let d0 = eval(&self.body, p);
         let pv = self.param.sample(p);
+        let k_opt = (!matches!(self.keep, Expr::Empty)).then(|| eval(&self.keep, p));
+        let d = self.outer_from(d0, pv, k_opt);
         let sk = self.skin_at_param(pv);
         let lat = self.eval_lattice(pv, p);
         let mut inner = lat;
-        if !matches!(self.keep, Expr::Empty) {
-            inner = dmin(inner, eval(&self.keep, p));
+        if let Some(k) = k_opt {
+            inner = dmin(inner, k);
         }
         dmax(D::new(d.v + sk, d.g), inner)
     }
@@ -523,6 +570,7 @@ mod tests {
                 }),
                 skin: 1.2,
                 skin_max: 1.2,
+                erode: 0.0,
                 param_range: [0.0, 1.0],
                 family: Family::Gyroid,
                 morph: None,
@@ -573,6 +621,7 @@ mod tests {
             }),
             skin: 1.2,
             skin_max: 1.2,
+            erode: 0.0,
             param_range: [0.0, 1.0],
             family: Family::Gyroid,
             morph: None,

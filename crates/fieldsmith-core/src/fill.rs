@@ -470,6 +470,11 @@ fn check_spec(spec: &Fill) -> Result<(), SetupError> {
             return Err(SetupError("fill skin_max must be at least skin".into()));
         }
     }
+    if let Some(er) = spec.erode {
+        if !er.is_finite() || er < 0.0 {
+            return Err(SetupError("fill erode must be non-negative".into()));
+        }
+    }
     if spec.curve <= 0.0 {
         return Err(SetupError("fill curve must be positive".into()));
     }
@@ -537,10 +542,12 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
     };
     let cell_min = spec.cell_min.unwrap_or(spec.cell);
     let min_cell = cell_min.min(spec.cell);
+    let erode = spec.erode.unwrap_or(0.0).max(0.0);
     let spacing = (min_cell / 2.0).max(1e-3);
     let mut param = grid_over(&b, spacing, spec.cell)?;
-    let vary_preview =
-        (cell_min - spec.cell).abs() > 1e-9 || spec.morph.is_some_and(|m| m != spec.family);
+    let vary_preview = (cell_min - spec.cell).abs() > 1e-9
+        || spec.morph.is_some_and(|m| m != spec.family)
+        || erode > 1e-9;
     if param.dims.iter().any(|&d| d < 2) {
         param = Grid3::constant(p0 as f32);
     } else if vary_preview {
@@ -579,6 +586,7 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
         body,
         skin: spec.skin,
         skin_max: spec.skin_max.unwrap_or(spec.skin),
+        erode,
         param_range,
         family: spec.family,
         morph: spec.morph,
@@ -646,6 +654,7 @@ pub fn graded_of(
         body: body.clone(),
         skin: spec.skin,
         skin_max: spec.skin,
+        erode: 0.0,
         param_range: [0.0, 0.0],
         family: spec.family,
         morph: spec.morph,
@@ -728,7 +737,8 @@ pub fn graded_of(
     // the outer skin band interpolate local boundary stress smoothly without clamping to ρmin.
     let r = ((spec.cell / spacing) / 2.0).round().max(1.0) as usize;
     let skin_max = spec.skin_max.unwrap_or(spec.skin);
-    let rho = if skin_max > spec.skin {
+    let erode = spec.erode.unwrap_or(0.0).max(0.0);
+    let rho = if skin_max > spec.skin || erode > 0.0 {
         blur_populated(&rho, &vsum, &core, r)
     } else {
         masked_blur(&rho, &core, r)
@@ -766,6 +776,7 @@ pub fn graded_of(
         body: body.clone(),
         skin: spec.skin,
         skin_max,
+        erode,
         param_range: [p_lo, p_hi],
         family: spec.family,
         morph: spec.morph,

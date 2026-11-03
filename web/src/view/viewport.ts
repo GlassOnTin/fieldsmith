@@ -643,7 +643,8 @@ export class Viewport {
       u_overhangSin: this.overhangSinU,
       u_buildDir: this.buildDirU,
     };
-    if (core && spec.grid && spec.source.includes('u_param')) {
+    const bodyUsesParam = !ghost && spec.source.includes('vec4 fs_outer(vec3 p)');
+    if ((core || bodyUsesParam) && spec.grid && spec.source.includes('u_param')) {
       const g = spec.grid;
       const tex = new THREE.Data3DTexture(g.data, g.dims[0], g.dims[1], g.dims[2]);
       tex.format = THREE.RedFormat;

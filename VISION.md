@@ -159,8 +159,10 @@ For what Fieldsmith already does and verifies today, see [`README.md`](README.md
 2. **Spatially varying cell-size and multi-zone lattice fields (`V54`, `T11` — done)** — smooth
    transitions between lattice cell sizes (`cell_min=<mm>`) and TPMS families (`morph=<family>`)
    driven by the 3D field grade with exact CPU/GLSL parity and two-pass homogenised FEA.
-3. **Topology optimization / level-set field evolution** — stress- and compliance-driven outer
-   boundary evolution directly on the implicit field grid.
+3. **Topology optimization / level-set field evolution (`V55`, `T12` — done)** — stress- and
+   compliance-driven outer boundary evolution (`erode=<mm>`) directly on the implicit field grid,
+   preserving protected interfaces (`protect`) and wrapping the evolved boundary in a conformal
+   skin (`skin` → `skin_max`) and graded TPMS infill.
 
 ---
 

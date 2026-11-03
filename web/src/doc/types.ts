@@ -110,6 +110,7 @@ export interface Fill {
   cell_min?: number | null;
   skin: number;
   skin_max?: number | null;
+  erode?: number | null;
   rho_min: number;
   rho_max: number;
   curve: number;

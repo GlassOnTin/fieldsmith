@@ -535,6 +535,7 @@ fill diamond network cell=6 skin=1.2 rho=(0.25, 0.25) curve=1 wall=0.8 margin=1\
         body: body.clone(),
         skin: 1.5,
         skin_max: 1.5,
+        erode: 0.0,
         param_range: [0.0, 1.0],
         family: Family::Gyroid,
         morph: None,

@@ -1067,7 +1067,7 @@ solve size=3.5 tref=20
         title: '2. Experimenting Live with "Morph to" & "Min cell" in the Fill Card',
         lens: 'fill',
         instruction:
-          'Try clicking "Gyroid" or "Same" in the "Morph to" row (`[data-testid="fill-morph"]`), or adjusting "Min cell" (`[data-testid="fill-cell-min"]`) between 3.5 mm and 8 mm in the Fill card. Notice how the WebGL shader updates the 3D cutaway in real time using a single 3D parameter texture: as local grade t(p) rises from 0 to 1, cell size interpolates linearly a(p) = cell + (cell_min − cell)·t(p), sheet wall thickness scales proportionally w(p) = max(param(p)·a(p)/cell, min_wall), and the TPMS surface blends smoothly via mix(s_family, s_morph, t(p)). Press Undo (Ctrl Z) to restore Morph to = Diamond and Min cell = 4 mm.',
+          'Try clicking "Gyroid" or "Same" in the "Morph to" row (`[data-testid="fill-morph"]`), or adjusting "Min cell" (`[data-testid="fill-cell-min"]`) between 3.5 mm and 8 mm in the Fill card (and notice "Erode = 0 mm" right below Max skin, which we will use in Lesson T12 to evolve the outer boundary level-set). Notice how the WebGL shader updates the 3D cutaway in real time using a single 3D parameter texture: as local grade t(p) rises from 0 to 1, cell size interpolates linearly a(p) = cell + (cell_min − cell)·t(p), sheet wall thickness scales proportionally w(p) = max(param(p)·a(p)/cell, min_wall), and the TPMS surface blends smoothly via mix(s_family, s_morph, t(p)). Press Undo (Ctrl Z) to restore Morph to = Diamond and Min cell = 4 mm.',
         expected:
           'Toggling Morph to and Min cell updates the 3D lattice preview live, and Undo cleanly restores the 8 mm → 4 mm Primitive → Diamond specification.',
       },
@@ -1119,6 +1119,108 @@ solve size=3.5 tref=20
         title: 'Run Two-Pass Multi-Zone Graded FEA Solve via API',
         description:
           'Solve the solid driving stress and re-solve the graded Primitive → Diamond cold-plate bracket.',
+        tool: 'solve_study',
+        arguments: {
+          include_fine: false,
+        },
+      },
+    ],
+  },
+  {
+    id: 'T12',
+    code: 'T12',
+    title: 'Topology Optimization & Level-Set Boundary Evolution — V55',
+    subtitle:
+      'Evolve the outer boundary level-set inward in low-stress zones (erode=3 mm) while preserving protected bosses, primary load ribs, conformal skin, and multi-zone TPMS infill.',
+    level: 'Flagship Multi-Physics',
+    verificationBadge: 'V55 · Level-Set Topology Evolution & Conformal Infill',
+    starterFsmName: 'T12-levelset-topology-bracket.fsm',
+    starterFsm: `fieldsmith 1
+name "T12 — Level-Set Topology-Evolved Actuator Bracket"
+material ti64
+
+box design_envelope size=(64, 22, 20) round=2 at=(32, 0, 0)
+cylinder mount_boss r=8 h=20 at=(8, 0, 0) blend=2
+cylinder mount_bore r=3.5 h=26 at=(8, 0, 0) subtract
+cylinder tip_clevis r=8 h=20 at=(56, 0, 0) blend=2
+cylinder tip_pin_bore r=3.5 h=26 at=(56, 0, 0) subtract
+
+region mount_wall = mount_bore.side
+region clevis_pin = tip_pin_bore.side
+
+support clamp_mount mount_wall fixed=xyz
+load actuator_shear clevis_pin force=(200, 0, -1400) case="1. Peak Actuator Shear"
+load side_gust clevis_pin force=(0, 550, -600) case="2. Lateral Gust + Shear"
+
+fill gyroid sheet cell=8 cell_min=4 morph=diamond skin=1.2 skin_max=2.0 erode=3.0 rho=(0.20, 0.65) curve=1 wall=0.6 protect=(mount_boss, tip_clevis, mount_bore, tip_pin_bore) margin=2.0
+solve size=3.5
+`,
+    userSteps: [
+      {
+        title: '1. Inspecting Level-Set Outer Boundary Evolution in Fill (4)',
+        lens: 'fill',
+        instruction:
+          'Classical lattice infill hollows the inside of a part while keeping the outer CAD box untouched; classical SIMP topology optimization carves the outer shape into jagged voxels without a conformal skin or internal lattice. Fieldsmith unifies both on one implicit field grid via "Erode" (`erode=<mm>`). Tap "Go to Fill →" (tab 4): notice that in low-stress zones (`t → 0`), the outer boundary level-set shifts inward by up to `Erode = 3 mm`, while inside the protected mounting bosses (`mount_boss`, `tip_clevis`) and along peak load paths (`t → 1`), erosion is suppressed to zero so the bosses stand proud at full height with a conformal outer skin (`1.2 → 2.0 mm`) and graded Gyroid → Diamond core.',
+        expected:
+          'In Fill (4), Erode (`[data-testid="fill-erode"]`) is set to 3 mm, Morph to is "Diamond", Cell is 8 mm, Min cell is 4 mm, and both mounting bosses remain un-eroded.',
+      },
+      {
+        title: '2. Experimenting Live with "Erode" (0 mm ↔ 3.5 mm) & Undo',
+        lens: 'fill',
+        instruction:
+          'In the Fill card, try setting "Erode" (`[data-testid="fill-erode"]`) to `0` mm (full un-eroded box envelope) and then to `3.5` mm (deeper inward level-set carving in low-stress zones). Watch how both the outer surface shader (`fs_outer`) and the interior lattice pass (`fs_core`) update together in real time without mesh boolean failures, because the conformal skin `-(d_outer(p) + skin(p))` is evaluated directly on the evolved signed distance field `d_outer(p) = min(d_body + erode·(1 − t), max(d_body, d_keep))`. Press Undo (Ctrl Z) to restore `Erode = 3 mm`.',
+        expected:
+          'Adjusting Erode between 0 mm and 3.5 mm smoothly carves or restores the outer envelope around the protected bosses, and Undo restores Erode = 3 mm.',
+      },
+      {
+        title: '3. Fixed-Grid Ersatz-Void FEA in Results (3) & Direct Slicing in Make (5)',
+        lens: 'results',
+        instruction:
+          'Tap "Go to Results →" (tab 3) to run the two-pass solve across both load cases ("1. Peak Actuator Shear" and "2. Lateral Gust + Shear"). In Pass 2, elements whose centroids lie outside the evolved outer boundary `d_outer(p) > 0` transition to `CLASS_VOID` (`φ = 0`, carried on the fixed background mesh by the ersatz stiffness floor `E_void = 10⁻⁶ E_s`), while interior elements use the blended Gyroid→Diamond homogenised law. Then switch to Make (5) to verify watertight 2D slice contours across the evolved outer boundary and internal lattice.',
+        expected:
+          'Results (3) reports the additional mass savings from outer boundary evolution alongside graded deflection and stress across both cases, and Make (5) slices the evolved geometry cleanly.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle: 'Chapter 12 — Level-Set Outer Boundary Evolution & Fixed-Grid Topology Optimization (V55)',
+      summary:
+        'How Fieldsmith evolves the outer boundary level-set directly on the implicit field grid while preserving protected functional interfaces, conformal skin, and graded TPMS infill.',
+      sections: [
+        {
+          heading: '12.1 Stress-Driven Level-Set Shift & Protected Interface Clamping',
+          equations: 'δ(p) = erode · (1 − t(p)),   t(p) = clamp((param(p) − p_lo) / (p_hi − p_lo), 0, 1)\nd_outer(p) = min(d_body(p) + δ(p),  max(d_body(p), d_keep(p)))',
+          body: 'Let d_body(p) be the signed distance field of the authored design envelope and d_keep(p) be the union of protected shapes offset outward by margin. Shifting d_body(p) by δ(p) = erode · (1 − t(p)) ≥ 0 moves the zero level-set inward by erode mm in low-stress zones (t = 0) and leaves peak load paths (t = 1) at the original envelope. Intersecting the protection clamp max(d_body, d_keep) via min(...) guarantees that inside any protected boss or bore (d_keep < 0) the outer surface is identically d_body(p) = 0, with a C⁰-continuous ramp across the protection margin.',
+        },
+        {
+          heading: '12.2 Conformal Skin Composition & Fixed-Mesh Ersatz-Material FEA',
+          equations: 'd_filled(p) = max(d_outer(p),  min(−(d_outer(p) + skin(p)),  d_lattice(p),  d_keep(p)))\nE_e = E_s · max(10⁻⁶,  E*_blend(φ_e, h / a(c_e)))',
+          body: 'Because the inward shell offset −(d_outer(p) + skin(p)) is evaluated on the evolved outer distance field d_outer(p) rather than the un-eroded box d_body(p), the solid outer skin automatically wraps the newly evolved topology boundary at full thickness skin(p) ∈ [skin, skin_max]. During Pass 2 FEA, jittered Dirichlet quadrature samples d_filled(pt) < 0 over each P2 tetrahedron on the fixed background mesh: eroded exterior elements yield φ_e = 0 (CLASS_VOID, weighted by the ersatz floor 10⁻⁶ E_s), avoiding remeshing failures while capturing the true structural compliance of the evolved geometry.',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: 'Configure Level-Set Outer Boundary Evolution (erode=3.0 mm) via API',
+        description:
+          'Set family=gyroid, morph=diamond, cell=8.0, cell_min=4.0, skin=1.2, skin_max=2.0, erode=3.0 via set_fill.',
+        tool: 'set_fill',
+        arguments: {
+          family: 'gyroid',
+          morph: 'diamond',
+          mode: 'sheet',
+          cell: 8.0,
+          cell_min: 4.0,
+          skin: 1.2,
+          skin_max: 2.0,
+          erode: 3.0,
+          rho_min: 0.2,
+          rho_max: 0.65,
+        },
+      },
+      {
+        title: 'Run Two-Pass Level-Set Topology + Lattice FEA Solve via API',
+        description:
+          'Solve Pass 1 driving stress envelope and Pass 2 level-set evolved + multi-zone lattice mechanics.',
         tool: 'solve_study',
         arguments: {
           include_fine: false,
@@ -1891,7 +1993,7 @@ curl -s -X POST ${origin}/api/mcp \\
 • add_temperature(id, region, celsius)    — Apply fixed temperature (°C) boundary condition
 • add_convection(id, region, h, t_inf)    — Apply heat-exchanger convective cooling h·(T − T_inf)
 • add_heatflux(id, region, q)             — Apply surface heat flux (W/mm²)
-• set_fill(family, morph?, cell, cell_min?, ...) — Configure stress-graded / multi-zone TPMS lattice infill
+• set_fill(family, morph?, cell, cell_min?, erode?, ...) — Configure level-set boundary evolution & multi-zone TPMS infill
 • solve_study(include_fine)               — Run 3D P2 tetrahedral FEA + thermal conduction + modal solver
 • list_coupled_systems()                  — List registered multi-physics PDE + Adjoint packs
 • optimise_coupled_system(system_id, ...) — Step coupled PDE design levers along exact Adjoint gradients`}</pre>
@@ -1927,7 +2029,7 @@ function TutorialsStatusItem() {
         style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
         onClick={toggleTutorialsDrawer}
       >
-        Tutorials (T1–T11)
+        Tutorials (T1–T12)
       </button>
       <span class="sep">|</span>
       <button
@@ -1952,7 +2054,7 @@ extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T11)',
+    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T12)',
     run: () => toggleTutorialsDrawer(),
   },
   {

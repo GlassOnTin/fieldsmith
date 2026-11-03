@@ -210,6 +210,20 @@ function FillPanel() {
               testId="fill-skin-max"
               title="Peak outer skin thickness at high-stress regions (grades from Skin at ρmin to Max skin at ρmax)"
             />
+            <NumRow
+              label="Erode"
+              unit="mm"
+              min={0}
+              step={0.5}
+              get={(d) => d.fill?.erode ?? 0}
+              set={(d, v) => {
+                if (!d.fill) return;
+                d.fill.erode = v <= 0 ? null : Math.max(0, v);
+              }}
+              undoLabel="Set level-set boundary erode"
+              testId="fill-erode"
+              title="Inward level-set outer boundary evolution depth in low-stress zones (0 = preserve full outer envelope; protected regions and peak load paths stay un-eroded)"
+            />
             <VecRow
               label="Rotate"
               unit="°"

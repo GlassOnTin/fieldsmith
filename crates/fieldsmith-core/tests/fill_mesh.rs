@@ -150,6 +150,7 @@ fn mesh_bar_doc() -> Document {
         morph: None,
         skin: 1.0,
         skin_max: None,
+        erode: None,
         rho_min: 0.2,
         rho_max: 0.4,
         curve: 1.0,

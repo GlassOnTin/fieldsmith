@@ -478,6 +478,19 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
         let param_expr = self.param_term(&fx.param);
         let lattice = lattice_term(fx, &param_expr);
         let skin_expr = skin_term(fx, &param_expr);
+        if let Some(er) = erode_term(fx, &param_expr) {
+            let mut b = if let Some(k) = &keep {
+                format!(
+                    "  vec4 d0 = {body}(p);\n  vec4 k0 = {k}(p);\n  vec4 d = fs_min(vec4(d0.x + {er}, d0.yzw), fs_max(d0, k0));\n  vec4 core = vec4(-(d.x + {skin_expr}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n  inner = fs_min(inner, k0);\n"
+                )
+            } else {
+                format!(
+                    "  vec4 d0 = {body}(p);\n  vec4 d = vec4(d0.x + {er}, d0.yzw);\n  vec4 core = vec4(-(d.x + {skin_expr}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n"
+                )
+            };
+            b.push_str("  return fs_max(d, inner);\n");
+            return self.func(b);
+        }
         let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {skin_expr}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n");
         if let Some(k) = keep {
             let _ = writeln!(b, "  inner = fs_min(inner, {k}(p));");
@@ -501,6 +514,22 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             Some(self.expr(&fx.keep))
         };
         let param_expr = self.param_term(&fx.param);
+        let d_call = if let Some(er) = erode_term(fx, &param_expr) {
+            if let Some(k) = &keep {
+                let _ = writeln!(
+                    self.out,
+                    "vec4 fs_outer(vec3 p) {{\n  vec4 d0 = {body_fn}(p);\n  vec4 k0 = {k}(p);\n  return fs_min(vec4(d0.x + {er}, d0.yzw), fs_max(d0, k0));\n}}"
+                );
+            } else {
+                let _ = writeln!(
+                    self.out,
+                    "vec4 fs_outer(vec3 p) {{\n  vec4 d0 = {body_fn}(p);\n  return vec4(d0.x + {er}, d0.yzw);\n}}"
+                );
+            }
+            "fs_outer".to_string()
+        } else {
+            body_fn.to_string()
+        };
         let lattice = lattice_term(fx, &param_expr);
         let skin_expr = skin_term(fx, &param_expr);
         let inner = match keep {
@@ -508,7 +537,7 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             None => "  vec4 inner = lat;\n".to_string(),
         };
         let b = format!(
-            "  vec4 d = {body_fn}(p);\n{lattice}{inner}  return fs_max(vec4(d.x + {skin_expr}, d.yzw), inner);\n",
+            "  vec4 d = {d_call}(p);\n{lattice}{inner}  return fs_max(vec4(d.x + {skin_expr}, d.yzw), inner);\n",
         );
         let _ = writeln!(self.out, "vec4 fs_core(vec3 p) {{\n{b}}}");
         "fs_core".into()
@@ -522,17 +551,38 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
         if grid.data.len() == 1 {
             return lit(grid.data[0] as f64);
         }
-        self.grid = Some(grid.clone());
-        let _ = writeln!(
-            self.out,
-            "uniform highp sampler3D u_param;\nfloat fs_grid(vec3 p) {{\n  vec3 n = vec3({}, {}, {});\n  vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  ivec3 i0 = ivec3(min(floor(u), n - 2.0));\n  vec3 f = u - vec3(i0);\n  float c000 = texelFetch(u_param, i0, 0).r; float c100 = texelFetch(u_param, i0 + ivec3(1, 0, 0), 0).r;\n  float c010 = texelFetch(u_param, i0 + ivec3(0, 1, 0), 0).r; float c110 = texelFetch(u_param, i0 + ivec3(1, 1, 0), 0).r;\n  float c001 = texelFetch(u_param, i0 + ivec3(0, 0, 1), 0).r; float c101 = texelFetch(u_param, i0 + ivec3(1, 0, 1), 0).r;\n  float c011 = texelFetch(u_param, i0 + ivec3(0, 1, 1), 0).r; float c111 = texelFetch(u_param, i0 + ivec3(1, 1, 1), 0).r;\n  float c00 = c000 * (1.0 - f.x) + c100 * f.x; float c10 = c010 * (1.0 - f.x) + c110 * f.x;\n  float c01 = c001 * (1.0 - f.x) + c101 * f.x; float c11 = c011 * (1.0 - f.x) + c111 * f.x;\n  float c0 = c00 * (1.0 - f.y) + c10 * f.y; float c1 = c01 * (1.0 - f.y) + c11 * f.y;\n  return c0 * (1.0 - f.z) + c1 * f.z;\n}}",
-            lit(grid.dims[0].max(2) as f64),
-            lit(grid.dims[1].max(2) as f64),
-            lit(grid.dims[2].max(2) as f64),
-            v3(grid.origin),
-            lit(grid.spacing)
-        );
+        if self.grid.is_none() {
+            self.grid = Some(grid.clone());
+            let _ = writeln!(
+                self.out,
+                "uniform highp sampler3D u_param;\nfloat fs_grid(vec3 p) {{\n  vec3 n = vec3({}, {}, {});\n  vec3 u = clamp((p - {}) / {}, vec3(0.0), n - 1.0);\n  ivec3 i0 = ivec3(min(floor(u), n - 2.0));\n  vec3 f = u - vec3(i0);\n  float c000 = texelFetch(u_param, i0, 0).r; float c100 = texelFetch(u_param, i0 + ivec3(1, 0, 0), 0).r;\n  float c010 = texelFetch(u_param, i0 + ivec3(0, 1, 0), 0).r; float c110 = texelFetch(u_param, i0 + ivec3(1, 1, 0), 0).r;\n  float c001 = texelFetch(u_param, i0 + ivec3(0, 0, 1), 0).r; float c101 = texelFetch(u_param, i0 + ivec3(1, 0, 1), 0).r;\n  float c011 = texelFetch(u_param, i0 + ivec3(0, 1, 1), 0).r; float c111 = texelFetch(u_param, i0 + ivec3(1, 1, 1), 0).r;\n  float c00 = c000 * (1.0 - f.x) + c100 * f.x; float c10 = c010 * (1.0 - f.x) + c110 * f.x;\n  float c01 = c001 * (1.0 - f.x) + c101 * f.x; float c11 = c011 * (1.0 - f.x) + c111 * f.x;\n  float c0 = c00 * (1.0 - f.y) + c10 * f.y; float c1 = c01 * (1.0 - f.y) + c11 * f.y;\n  return c0 * (1.0 - f.z) + c1 * f.z;\n}}",
+                lit(grid.dims[0].max(2) as f64),
+                lit(grid.dims[1].max(2) as f64),
+                lit(grid.dims[2].max(2) as f64),
+                v3(grid.origin),
+                lit(grid.spacing)
+            );
+        }
         "fs_grid(p)".into()
+    }
+}
+
+/// Local inward level-set boundary shift expression in GLSL: `None` when `fx.erode <= 0`,
+/// or `erode * (1.0 - t)` driven by `param_expr`.
+fn erode_term(fx: &FillExpr, param_expr: &str) -> Option<String> {
+    if fx.erode <= 0.0 {
+        return None;
+    }
+    let span = fx.param_range[1] - fx.param_range[0];
+    if span <= 1e-9 {
+        Some(lit(fx.erode))
+    } else {
+        Some(format!(
+            "({} * (1.0 - clamp(({param_expr} - {}) / {}, 0.0, 1.0)))",
+            lit(fx.erode),
+            lit(fx.param_range[0]),
+            lit(span),
+        ))
     }
 }
 
@@ -716,7 +766,11 @@ pub fn generate_viewport(body: &Expr, fill: Option<&FillExpr>) -> Generated {
     }
     let mut source = String::from(PRELUDE);
     source.push_str(&g.out);
-    let _ = writeln!(source, "vec4 fs_field(vec3 p) {{ return {root}(p); }}");
+    if fill.is_some_and(|fx| fx.erode > 0.0) {
+        let _ = writeln!(source, "vec4 fs_field(vec3 p) {{ return fs_outer(p); }}");
+    } else {
+        let _ = writeln!(source, "vec4 fs_field(vec3 p) {{ return {root}(p); }}");
+    }
     let meshes = g
         .meshes
         .iter()
@@ -1003,6 +1057,7 @@ mod tests {
             body: body.clone(),
             skin: 1.2,
             skin_max: 1.2,
+            erode: 0.0,
             param_range: [0.0, 1.0],
             family: Family::Gyroid,
             morph: None,

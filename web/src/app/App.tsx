@@ -37,7 +37,7 @@ function ViewTools() {
       <button
         class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
         data-testid="open-tutorials-drawer"
-        title="Tutorials & Theory Manual (T1–T11)"
+        title="Tutorials & Theory Manual (T1–T12)"
         onClick={() => runCommand('tutorials.open')}
       >
         <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -92,7 +92,7 @@ function EmptyState() {
             onClick={() => runCommand('tutorials.open')}
             data-testid="empty-open-tutorials"
           >
-            Tutorials &amp; Theory Manual (T1–T11)…
+            Tutorials &amp; Theory Manual (T1–T12)…
           </button>
         </div>
       </div>

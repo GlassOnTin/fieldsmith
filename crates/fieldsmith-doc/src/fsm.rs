@@ -1156,6 +1156,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     morph,
                     skin: a.num_or("skin", d.skin)?,
                     skin_max: a.num("skin_max")?,
+                    erode: a.num("erode")?.filter(|&er| er != 0.0),
                     rho_min,
                     rho_max,
                     curve: a.num_or("curve", d.curve)?,
@@ -1568,6 +1569,9 @@ pub fn print(doc: &Document) -> String {
         }
         if let Some(m) = f.morph {
             line += &format!(" morph={}", m.name());
+        }
+        if let Some(er) = f.erode.filter(|&er| er > 0.0) {
+            line += &format!(" erode={}", n(er));
         }
         let _ = writeln!(o, "{line}");
     }

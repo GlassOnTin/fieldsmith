@@ -591,6 +591,18 @@ impl Server {
                 return Err("set_fill: skin_max must be a number or null".into());
             }
         }
+        if let Some(er) = args.get("erode") {
+            if er.is_null() {
+                f.erode = None;
+            } else if let Some(v) = er.as_f64() {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(format!("set_fill: erode must be non-negative (got {v})"));
+                }
+                f.erode = if v <= 1e-9 { None } else { Some(v) };
+            } else {
+                return Err("set_fill: erode must be a number or null".into());
+            }
+        }
         if let Some(v) = args
             .get("rho_min")
             .or_else(|| args.get("density_min"))
@@ -1394,7 +1406,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"add_temperature","description":"Apply a fixed boundary temperature on a region for a thermal case.","inputSchema":{"type":"object","required":["region","celsius"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"celsius":{"type":"number"},"case":{"type":"string"}}}},
  {"name":"set_material","description":"Assign a material label to a node.","inputSchema":{"type":"object","required":["node","material"],"properties":{"node":{"type":"string"},"material":{"type":"string"}}}},
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
- {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `skin_max` and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
+ {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
  {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)` and optional target element `size`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},

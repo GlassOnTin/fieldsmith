@@ -103,6 +103,7 @@ solve size=3.5
         body: body.clone(),
         skin: 1.0,
         skin_max: 3.0,
+        erode: 0.0,
         param_range: [0.4, 1.6],
         family: Family::Gyroid,
         morph: None,
