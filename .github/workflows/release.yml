@@ -124,7 +124,7 @@ jobs:
           mkdir -p "dist/${stage}"
           cp "target/${{ matrix.target }}/release/fieldsmith" "dist/${stage}/"
           cp "target/${{ matrix.target }}/release/fieldsmith-mcp" "dist/${stage}/"
-          cp LICENSE README.md VISION.md GOAL.md "dist/${stage}/"
+          cp LICENSE README.md VISION.md "dist/${stage}/"
           cp -r examples data "dist/${stage}/"
           tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
       - name: Upload CLI archive (${{ matrix.target }})

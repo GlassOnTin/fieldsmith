@@ -124,7 +124,7 @@ By what you want to do:
 | see the language and the flow | this README, `examples/*.fsm`, then the app itself |
 | check one measured claim | [docs/verification/](docs/verification/): one report per case, numbered from V1 in gate order, each with Method and Limits sections |
 | know the performance | [budgets.md](docs/verification/budgets.md) and the machine variants beside it; per-run wall times in [data/costs/costs.csv](data/costs/costs.csv) |
-| know where the project is going | [VISION.md](VISION.md) (the roadmap, §7 for the current rungs) and [GOAL.md](GOAL.md) |
+| know where the project is going | [VISION.md](VISION.md) (architecture, invariants, and roadmap) |
 | automate or distribute | each verb's help text (`fieldsmith --help`, and the `fieldsmith-mcp` binary's own help) |
 | build it | the next section |
 
