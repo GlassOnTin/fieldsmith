@@ -500,8 +500,160 @@ function rebuild(lvl: LevelResult) {
   lastFacetPositions = positions;
   lastFacetColors = colors;
 
-  // Continuous P2 nodal scalar recovery (for P2 Smooth and P2 + Wire modes)
+  // Continuous P2 nodal scalar recovery + Ridge-Aligned Bevel Fairing (for P2 Smooth and P2 + Wire modes)
   const useP2 = ui.resultsInterp !== 'p0' && lvl.surfaceFacets.length >= nFacets * 6;
+
+  // Build unique surface corner edges (na, nb, nMid) and corner neighbour adjacency for smoothing
+  const edgeA: number[] = [];
+  const edgeB: number[] = [];
+  const edgeMid: number[] = [];
+  const cornerAdj: number[][] = Array.from({ length: nNodes }, () => []);
+  if (useP2 && nFacets > 0) {
+    const seenEdge = new Map<number, number>();
+    const cornerPairs: [number, number, number][] = [
+      [0, 1, 3],
+      [1, 2, 4],
+      [2, 0, 5],
+    ];
+    for (let f = 0; f < nFacets; f++) {
+      const fBase = 6 * f;
+      for (let e = 0; e < 3; e++) {
+        const na = lvl.surfaceFacets[fBase + cornerPairs[e][0]];
+        const nb = lvl.surfaceFacets[fBase + cornerPairs[e][1]];
+        const nm = lvl.surfaceFacets[fBase + cornerPairs[e][2]];
+        const lo = na < nb ? na : nb;
+        const hi = na < nb ? nb : na;
+        const key = lo * nNodes + hi;
+        if (!seenEdge.has(key)) {
+          seenEdge.set(key, edgeA.length);
+          edgeA.push(lo);
+          edgeB.push(hi);
+          edgeMid.push(nm);
+          cornerAdj[lo].push(hi);
+          cornerAdj[hi].push(lo);
+        }
+      }
+    }
+  }
+
+  // Compute initial deformed facet normals & per-node normal spread (to distinguish flat planes from curved bevels/fillets)
+  const initFacetNormals = new Float32Array(nFacets * 3);
+  const nodeMeanNorm = new Float32Array(nNodes * 3);
+  for (let f = 0; f < nFacets; f++) {
+    const n0 = lvl.surfaceFacets[6 * f];
+    const n1 = lvl.surfaceFacets[6 * f + 1];
+    const n2 = lvl.surfaceFacets[6 * f + 2];
+    const ax = defNodes[3 * n1] - defNodes[3 * n0];
+    const ay = defNodes[3 * n1 + 1] - defNodes[3 * n0 + 1];
+    const az = defNodes[3 * n1 + 2] - defNodes[3 * n0 + 2];
+    const bx = defNodes[3 * n2] - defNodes[3 * n0];
+    const by = defNodes[3 * n2 + 1] - defNodes[3 * n0 + 1];
+    const bz = defNodes[3 * n2 + 2] - defNodes[3 * n0 + 2];
+    let nx = ay * bz - az * by;
+    let ny = az * bx - ax * bz;
+    let nz = ax * by - ay * bx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len > 1e-12) {
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    } else {
+      nz = 1;
+    }
+    initFacetNormals[3 * f] = nx;
+    initFacetNormals[3 * f + 1] = ny;
+    initFacetNormals[3 * f + 2] = nz;
+    for (let j = 0; j < 6; j++) {
+      const nj = lvl.surfaceFacets[6 * f + j];
+      nodeMeanNorm[3 * nj] += nx * len;
+      nodeMeanNorm[3 * nj + 1] += ny * len;
+      nodeMeanNorm[3 * nj + 2] += nz * len;
+    }
+  }
+  for (let n = 0; n < nNodes; n++) {
+    const i3 = 3 * n;
+    const len = Math.hypot(nodeMeanNorm[i3], nodeMeanNorm[i3 + 1], nodeMeanNorm[i3 + 2]);
+    if (len > 1e-12) {
+      nodeMeanNorm[i3] /= len;
+      nodeMeanNorm[i3 + 1] /= len;
+      nodeMeanNorm[i3 + 2] /= len;
+    }
+  }
+  const nodeMinDot = new Float32Array(nNodes);
+  nodeMinDot.fill(1.0);
+  for (let f = 0; f < nFacets; f++) {
+    const fnx = initFacetNormals[3 * f];
+    const fny = initFacetNormals[3 * f + 1];
+    const fnz = initFacetNormals[3 * f + 2];
+    for (let j = 0; j < 6; j++) {
+      const nj = lvl.surfaceFacets[6 * f + j];
+      const dot =
+        fnx * nodeMeanNorm[3 * nj] +
+        fny * nodeMeanNorm[3 * nj + 1] +
+        fnz * nodeMeanNorm[3 * nj + 2];
+      if (dot < nodeMinDot[nj]) nodeMinDot[nj] = dot;
+    }
+  }
+
+  // Ridge-Aligned Bevel/Fillet Surface Fairing:
+  // On coarse BCC meshes where `round` fillet radius < grid spacing h (e.g. T12 round=2),
+  // BCC corner and centre planes alternate along curved edges, creating a sawtooth zig-zag.
+  // Fair curved/bevel corner nodes (nodeMinDot < 0.992) along the bevel ridge while keeping
+  // flat planar interiors (nodeMinDot >= 0.992) untouched.
+  const visNodes = new Float32Array(defNodes);
+  if (useP2 && edgeA.length > 0) {
+    const tmpNodes = new Float32Array(visNodes.length);
+    for (let pass = 0; pass < 4; pass++) {
+      tmpNodes.set(visNodes);
+      for (let n = 0; n < nNodes; n++) {
+        // Only fair corner nodes on curved/bevel features (leave flat faces exact)
+        if (nodeMinDot[n] >= 0.992) continue;
+        const nbrs = cornerAdj[n];
+        if (nbrs.length < 2) continue;
+        let sx = 0, sy = 0, sz = 0, sw = 0;
+        const nx = nodeMeanNorm[3 * n];
+        const ny = nodeMeanNorm[3 * n + 1];
+        const nz = nodeMeanNorm[3 * n + 2];
+        for (let k = 0; k < nbrs.length; k++) {
+          const nb = nbrs[k];
+          // Prefer fellow ridge/bevel neighbours with similar normal orientation
+          const isCurvedNb = nodeMinDot[nb] < 0.992;
+          const nDot = Math.max(
+            0,
+            nx * nodeMeanNorm[3 * nb] +
+              ny * nodeMeanNorm[3 * nb + 1] +
+              nz * nodeMeanNorm[3 * nb + 2],
+          );
+          const w = isCurvedNb ? 1.5 + 2.5 * nDot : 0.25;
+          sx += w * tmpNodes[3 * nb];
+          sy += w * tmpNodes[3 * nb + 1];
+          sz += w * tmpNodes[3 * nb + 2];
+          sw += w;
+        }
+        if (sw > 1e-12) {
+          const alpha = 0.48;
+          visNodes[3 * n] = (1 - alpha) * tmpNodes[3 * n] + alpha * (sx / sw);
+          visNodes[3 * n + 1] = (1 - alpha) * tmpNodes[3 * n + 1] + alpha * (sy / sw);
+          visNodes[3 * n + 2] = (1 - alpha) * tmpNodes[3 * n + 2] + alpha * (sz / sw);
+        }
+      }
+    }
+    // Update quadratic mid-side nodes to sit smoothly along the faired edges
+    for (let e = 0; e < edgeA.length; e++) {
+      const na = edgeA[e];
+      const nb = edgeB[e];
+      const nm = edgeMid[e];
+      for (let c = 0; c < 3; c++) {
+        const origMid = defNodes[3 * nm + c];
+        const origLin = 0.5 * (defNodes[3 * na + c] + defNodes[3 * nb + c]);
+        const newLin = 0.5 * (visNodes[3 * na + c] + visNodes[3 * nb + c]);
+        // Keep genuine quadratic arch on smooth bores while damping sawtooth linear jumps
+        const arch = origMid - origLin;
+        visNodes[3 * nm + c] = newLin + 0.35 * arch;
+      }
+    }
+  }
+
   const nodeNorm = new Float32Array(nNodes);
   if (useP2 && hasScalarField) {
     if (mode === 'deflection') {
@@ -514,13 +666,28 @@ function rebuild(lvl: LevelResult) {
         nodeNorm[n] = Math.max(0, Math.min(1, ((tField[n] - rngLo) * loadRamp) / denom));
       }
     } else {
-      // Element-based fields (stress, peel, safety): area-weighted boundary patch recovery
-      // across all 6 P2 facet nodes + mid-side edge continuity blending + peak-preserving contrast.
+      // Element-based fields (stress, peel, safety):
+      // Exclude CLASS_VOID (lvl.class[owner] === 2) ersatz-void background elements (E = 1e-6 E_s)
+      // so level-set evolved models (like T12 erode=3.0) never checkerboard between 0 MPa void tets
+      // and adjacent structural skin/lattice tets.
+      const clsArr = lvl.class;
+      let hasNonVoidSurf = false;
+      if (clsArr) {
+        for (let f = 0; f < nFacets; f++) {
+          if (clsArr[lvl.surfaceOwner[f]] !== 2) {
+            hasNonVoidSurf = true;
+            break;
+          }
+        }
+      }
       const nodeSum = new Float64Array(nNodes);
       const nodeW = new Float64Array(nNodes);
       let rawMin = Infinity;
       let rawMax = -Infinity;
       for (let f = 0; f < nFacets; f++) {
+        const owner = lvl.surfaceOwner[f];
+        const isVoid = hasNonVoidSurf && clsArr !== null && clsArr[owner] === 2;
+        if (isVoid) continue;
         const v = rawFacetVal[f];
         if (v < rawMin) rawMin = v;
         if (v > rawMax) rawMax = v;
@@ -543,9 +710,56 @@ function rebuild(lvl: LevelResult) {
           nodeW[nj] += w;
         }
       }
+      if (!Number.isFinite(rawMin)) rawMin = 0;
+      if (!Number.isFinite(rawMax)) rawMax = vmax;
+
       const nodeVal = new Float64Array(nNodes);
+      const populated = new Uint8Array(nNodes);
       for (let n = 0; n < nNodes; n++) {
-        if (nodeW[n] > 0) nodeVal[n] = nodeSum[n] / nodeW[n];
+        if (nodeW[n] > 0) {
+          nodeVal[n] = nodeSum[n] / nodeW[n];
+          populated[n] = 1;
+        }
+      }
+      // Harmonic infill across surface corner edges for any nodes whose surface facets were all CLASS_VOID
+      for (let pass = 0; pass < 8; pass++) {
+        let changed = false;
+        for (let n = 0; n < nNodes; n++) {
+          if (populated[n]) continue;
+          const nbrs = cornerAdj[n];
+          let s = 0, c = 0;
+          for (let k = 0; k < nbrs.length; k++) {
+            const nb = nbrs[k];
+            if (populated[nb]) {
+              s += nodeVal[nb];
+              c++;
+            }
+          }
+          if (c > 0) {
+            nodeVal[n] = s / c;
+            populated[n] = 2;
+            changed = true;
+          }
+        }
+        if (changed) {
+          for (let n = 0; n < nNodes; n++) {
+            if (populated[n] === 2) populated[n] = 1;
+          }
+        } else {
+          break;
+        }
+      }
+      // 2 passes of gentle Laplacian scalar fairing across surface corner edges to eliminate BCC grid striping
+      const tmpVal = new Float64Array(nNodes);
+      for (let pass = 0; pass < 2; pass++) {
+        tmpVal.set(nodeVal);
+        for (let n = 0; n < nNodes; n++) {
+          const nbrs = cornerAdj[n];
+          if (nbrs.length === 0) continue;
+          let s = 0;
+          for (let k = 0; k < nbrs.length; k++) s += tmpVal[nbrs[k]];
+          nodeVal[n] = 0.65 * tmpVal[n] + 0.35 * (s / nbrs.length);
+        }
       }
       // Blend quadratic mid-edge nodes (n01, n12, n20) with their corner endpoints for C⁰ smoothness
       for (let f = 0; f < nFacets; f++) {
@@ -555,22 +769,27 @@ function rebuild(lvl: LevelResult) {
         const n01 = lvl.surfaceFacets[6 * f + 3];
         const n12 = lvl.surfaceFacets[6 * f + 4];
         const n20 = lvl.surfaceFacets[6 * f + 5];
-        nodeVal[n01] = 0.45 * nodeVal[n01] + 0.275 * (nodeVal[n0] + nodeVal[n1]);
-        nodeVal[n12] = 0.45 * nodeVal[n12] + 0.275 * (nodeVal[n1] + nodeVal[n2]);
-        nodeVal[n20] = 0.45 * nodeVal[n20] + 0.275 * (nodeVal[n2] + nodeVal[n0]);
+        nodeVal[n01] = populated[n01]
+          ? 0.35 * nodeVal[n01] + 0.325 * (nodeVal[n0] + nodeVal[n1])
+          : 0.5 * (nodeVal[n0] + nodeVal[n1]);
+        nodeVal[n12] = populated[n12]
+          ? 0.35 * nodeVal[n12] + 0.325 * (nodeVal[n1] + nodeVal[n2])
+          : 0.5 * (nodeVal[n1] + nodeVal[n2]);
+        nodeVal[n20] = populated[n20]
+          ? 0.35 * nodeVal[n20] + 0.325 * (nodeVal[n2] + nodeVal[n0])
+          : 0.5 * (nodeVal[n2] + nodeVal[n0]);
       }
       // Restore peak surface extrema so patch averaging never washes out stress hot-spots
       let recMin = Infinity;
       let recMax = -Infinity;
       for (let n = 0; n < nNodes; n++) {
-        if (nodeW[n] <= 0) continue;
+        if (!populated[n] && nodeW[n] <= 0) continue;
         if (nodeVal[n] < recMin) recMin = nodeVal[n];
         if (nodeVal[n] > recMax) recMax = nodeVal[n];
       }
       const recSpan = recMax - recMin;
       const rawSpan = rawMax - rawMin;
       for (let n = 0; n < nNodes; n++) {
-        if (nodeW[n] <= 0) continue;
         const vRestored =
           recSpan > 1e-12 && rawSpan > 1e-12
             ? rawMin + ((nodeVal[n] - recMin) / recSpan) * rawSpan
@@ -588,19 +807,19 @@ function rebuild(lvl: LevelResult) {
     }
   }
 
-  // Compute deformed facet normals and crease-aware smooth node normals for 3D relief shading
+  // Compute faired facet normals and smooth node normals for 3D relief shading
   const facetNormals = new Float32Array(nFacets * 3);
   const smoothNodeNormals = new Float32Array(nNodes * 3);
   for (let f = 0; f < nFacets; f++) {
     const n0 = lvl.surfaceFacets[6 * f];
     const n1 = lvl.surfaceFacets[6 * f + 1];
     const n2 = lvl.surfaceFacets[6 * f + 2];
-    const ax = defNodes[3 * n1] - defNodes[3 * n0];
-    const ay = defNodes[3 * n1 + 1] - defNodes[3 * n0 + 1];
-    const az = defNodes[3 * n1 + 2] - defNodes[3 * n0 + 2];
-    const bx = defNodes[3 * n2] - defNodes[3 * n0];
-    const by = defNodes[3 * n2 + 1] - defNodes[3 * n0 + 1];
-    const bz = defNodes[3 * n2 + 2] - defNodes[3 * n0 + 2];
+    const ax = visNodes[3 * n1] - visNodes[3 * n0];
+    const ay = visNodes[3 * n1 + 1] - visNodes[3 * n0 + 1];
+    const az = visNodes[3 * n1 + 2] - visNodes[3 * n0 + 2];
+    const bx = visNodes[3 * n2] - visNodes[3 * n0];
+    const by = visNodes[3 * n2 + 1] - visNodes[3 * n0 + 1];
+    const bz = visNodes[3 * n2 + 2] - visNodes[3 * n0 + 2];
     let nx = ay * bz - az * by;
     let ny = az * bx - ax * bz;
     let nz = ax * by - ay * bx;
@@ -633,8 +852,49 @@ function rebuild(lvl: LevelResult) {
       smoothNodeNormals[i3 + 2] = 1;
     }
   }
+  // Smooth node normals along curved/bevel edges so BCC diagonals never cause alternating shade stripes
+  if (useP2 && edgeA.length > 0) {
+    const tmpNorm = new Float32Array(smoothNodeNormals.length);
+    for (let pass = 0; pass < 2; pass++) {
+      tmpNorm.set(smoothNodeNormals);
+      for (let n = 0; n < nNodes; n++) {
+        if (nodeMinDot[n] >= 0.992) continue;
+        const nbrs = cornerAdj[n];
+        if (nbrs.length === 0) continue;
+        let sx = tmpNorm[3 * n] * 1.5;
+        let sy = tmpNorm[3 * n + 1] * 1.5;
+        let sz = tmpNorm[3 * n + 2] * 1.5;
+        for (let k = 0; k < nbrs.length; k++) {
+          const nb = nbrs[k];
+          sx += tmpNorm[3 * nb];
+          sy += tmpNorm[3 * nb + 1];
+          sz += tmpNorm[3 * nb + 2];
+        }
+        const len = Math.hypot(sx, sy, sz);
+        if (len > 1e-12) {
+          smoothNodeNormals[3 * n] = sx / len;
+          smoothNodeNormals[3 * n + 1] = sy / len;
+          smoothNodeNormals[3 * n + 2] = sz / len;
+        }
+      }
+    }
+    for (let e = 0; e < edgeA.length; e++) {
+      const na = edgeA[e];
+      const nb = edgeB[e];
+      const nm = edgeMid[e];
+      const sx = smoothNodeNormals[3 * na] + smoothNodeNormals[3 * nb];
+      const sy = smoothNodeNormals[3 * na + 1] + smoothNodeNormals[3 * nb + 1];
+      const sz = smoothNodeNormals[3 * na + 2] + smoothNodeNormals[3 * nb + 2];
+      const len = Math.hypot(sx, sy, sz);
+      if (len > 1e-12) {
+        smoothNodeNormals[3 * nm] = sx / len;
+        smoothNodeNormals[3 * nm + 1] = sy / len;
+        smoothNodeNormals[3 * nm + 2] = sz / len;
+      }
+    }
+  }
 
-  // Helper: ParaView-style studio directional relief shading from crease-aware normal
+  // Helper: ParaView-style studio directional relief shading from smooth node normal
   const reliefShade = (f: number, n: number): number => {
     if (ui.resultsVolumeOn) return 1.0;
     const fnx = facetNormals[3 * f];
@@ -643,16 +903,16 @@ function rebuild(lvl: LevelResult) {
     let nx = smoothNodeNormals[3 * n];
     let ny = smoothNodeNormals[3 * n + 1];
     let nz = smoothNodeNormals[3 * n + 2];
-    // Crease threshold (~47 deg): keep 90° box edges sharp while smoothing cylinders/fillets/bends
-    if (!useP2 || nx * fnx + ny * fny + nz * fnz < 0.68) {
+    // Only fall back to flat facet normal in P0 mode or across sharp >75° un-filleted corners
+    if (!useP2 || nx * fnx + ny * fny + nz * fnz < 0.25) {
       nx = fnx;
       ny = fny;
       nz = fnz;
     }
     const d1 = Math.max(0, nx * 0.42 - ny * 0.58 + nz * 0.70);
     const d2 = Math.max(0, -nx * 0.55 + ny * 0.48 + nz * 0.68);
-    const spec = Math.pow(d1, 14) * 0.08;
-    return Math.min(1.04, 0.76 + 0.20 * d1 + 0.09 * d2 + spec);
+    const spec = Math.pow(d1, 14) * 0.06;
+    return Math.min(1.04, 0.78 + 0.18 * d1 + 0.09 * d2 + spec);
   };
 
   const geo = new THREE.BufferGeometry();
@@ -676,9 +936,9 @@ function rebuild(lvl: LevelResult) {
         const vIdx = 12 * f + k;
         const o3 = 3 * vIdx;
         const o2 = 2 * vIdx;
-        p2Pos[o3] = defNodes[3 * n];
-        p2Pos[o3 + 1] = defNodes[3 * n + 1];
-        p2Pos[o3 + 2] = defNodes[3 * n + 2];
+        p2Pos[o3] = visNodes[3 * n];
+        p2Pos[o3 + 1] = visNodes[3 * n + 1];
+        p2Pos[o3 + 2] = visNodes[3 * n + 2];
         const s = hasScalarField ? nodeNorm[n] : 0;
         p2Uv[o2] = s;
         p2Uv[o2 + 1] = 0.5;
@@ -752,9 +1012,9 @@ function rebuild(lvl: LevelResult) {
       for (let e = 0; e < 12; e++) {
         const n = lvl.surfaceFacets[fBase + edgeLoop[e]];
         const o = 36 * f + 3 * e;
-        wirePos[o] = defNodes[3 * n];
-        wirePos[o + 1] = defNodes[3 * n + 1];
-        wirePos[o + 2] = defNodes[3 * n + 2];
+        wirePos[o] = visNodes[3 * n];
+        wirePos[o + 1] = visNodes[3 * n + 1];
+        wirePos[o + 2] = visNodes[3 * n + 2];
       }
     }
     const wGeo = new THREE.BufferGeometry();
@@ -778,9 +1038,9 @@ function rebuild(lvl: LevelResult) {
   if (ui.resultsVolumeOn && nFacets > 0 && hasScalarField) {
     let cx = 0, cy = 0, cz = 0;
     for (let n = 0; n < nNodes; n++) {
-      cx += defNodes[3 * n];
-      cy += defNodes[3 * n + 1];
-      cz += defNodes[3 * n + 2];
+      cx += visNodes[3 * n];
+      cy += visNodes[3 * n + 1];
+      cz += visNodes[3 * n + 2];
     }
     cx /= Math.max(1, nNodes);
     cy /= Math.max(1, nNodes);
@@ -817,9 +1077,9 @@ function rebuild(lvl: LevelResult) {
             const w = Math.max(0, Math.min(1, (sv - thr) / Math.max(0.08, 1 - thr)));
             const feather = w * w * (3 - 2 * w);
             rampColor(Math.min(1, Math.max(thr, sv) * 0.92 + 0.08), col, lutRamp);
-            const px = cx + (defNodes[3 * nj] - cx) * shScale;
-            const py = cy + (defNodes[3 * nj + 1] - cy) * shScale;
-            const pz = cz + (defNodes[3 * nj + 2] - cz) * shScale;
+            const px = cx + (visNodes[3 * nj] - cx) * shScale;
+            const py = cy + (visNodes[3 * nj + 1] - cy) * shScale;
+            const pz = cz + (visNodes[3 * nj + 2] - cz) * shScale;
             hotPos.push(px, py, pz);
             hotCol.push(col[0] * feather, col[1] * feather, col[2] * feather);
           }

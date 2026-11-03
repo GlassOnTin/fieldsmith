@@ -1052,7 +1052,7 @@ temperature power_input hot_face temp=185 case="2. Cold-Plate Thermal Conduction
 temperature coolant_sink cool_face temp=35 case="2. Cold-Plate Thermal Conduction"
 
 fill primitive sheet cell=8 cell_min=4 morph=diamond skin=1.2 skin_max=2.2 rho=(0.22, 0.65) curve=1 wall=0.6 protect=(mount_hole_lo, load_hole_hi) margin=2.2
-solve size=3.5 tref=20
+solve tref=20
 `,
     userSteps: [
       {
@@ -1153,7 +1153,7 @@ load actuator_shear clevis_pin force=(200, 0, -1400) case="1. Peak Actuator Shea
 load side_gust clevis_pin force=(0, 550, -600) case="2. Lateral Gust + Shear"
 
 fill gyroid sheet cell=8 cell_min=4 morph=diamond skin=1.2 skin_max=2.0 erode=3.0 rho=(0.20, 0.65) curve=1 wall=0.6 protect=(mount_boss, tip_clevis, mount_bore, tip_pin_bore) margin=2.0
-solve size=3.5
+solve
 `,
     userSteps: [
       {
