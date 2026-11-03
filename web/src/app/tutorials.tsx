@@ -6,8 +6,13 @@
 import { useState } from 'preact/hooks';
 import { applyAddrs, parseAddr } from '../doc/param';
 import { store, type Lens } from '../doc/store';
-import { printFsm } from '../doc/wasm';
-import { extraCommands, openText, viewApi } from './commands';
+import {
+  collectVolumeContinuumNodes,
+  evaluateDocumentFieldEquations,
+  getContinuumMaterialSpec,
+} from '../doc/continuum';
+import { parseFsm, printFsm } from '../doc/wasm';
+import { EXAMPLES, extraCommands, newDocument, openFile, openText, viewApi } from './commands';
 import { viewOverlays, statusItems } from './App';
 import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { ui, useApp } from './ui';
@@ -1773,6 +1778,723 @@ function SwirlAtomiserNoxPredictor() {
 
 type ColumnTab = 'user' | 'theory' | 'mcp';
 
+export type TutorialTrackId =
+  | 'foundations'
+  | 'structural_thermal'
+  | 'lattice_topology'
+  | 'multiphysics'
+  | 'examples';
+
+export interface TutorialTrackMeta {
+  id: TutorialTrackId;
+  number: string;
+  title: string;
+  subtitle: string;
+  accent: string;
+}
+
+export const TUTORIAL_TRACKS: TutorialTrackMeta[] = [
+  {
+    id: 'foundations',
+    number: 'Track I',
+    title: 'Foundations, CSG Geometry & Parametric Sweeps',
+    subtitle: 'Signed distance primitives, boolean fillets, region supports/loads, P2 stress, and let-variable trade-off sweeps.',
+    accent: '#3b82f6',
+  },
+  {
+    id: 'structural_thermal',
+    number: 'Track II',
+    title: 'Thermal Conduction, Modal Vibration, Additive Peel & Bolted Assemblies',
+    subtitle: 'Steady-state Fourier conduction, Duhamel–Neumann thermal strain, Lanczos natural frequencies, Tsai–Wu layer peel, and multi-material bolt preload.',
+    accent: '#f59e0b',
+  },
+  {
+    id: 'lattice_topology',
+    number: 'Track III',
+    title: 'Implicit TPMS Minimal Surfaces, Multi-Zone Morphing & Level-Set Topology',
+    subtitle: 'Two-pass homogenised Gyroid/Primitive/Diamond lattices, spatially varying unit-cell wavelength, and outer boundary level-set evolution.',
+    accent: '#10b981',
+  },
+  {
+    id: 'multiphysics',
+    number: 'Track IV',
+    title: 'Coupled Multi-Physics: Liquid-Metal MHD, VFT Glass, Swirl Combustion & Solar Optics',
+    subtitle: 'Coupled fluid–thermal–chemical–optical PDEs, sparse Adjoint design sensitivities, transient recaps, and real-time .webm video synthesis.',
+    accent: '#f97316',
+  },
+  {
+    id: 'examples',
+    number: 'Track V',
+    title: 'Standalone Reference .fsm Starter Models',
+    subtitle: 'Compact, self-contained .fsm scripts ready to open, modify, or use as templates for new simulations.',
+    accent: '#a855f7',
+  },
+];
+
+function getTrackForSheet(sheetId: string): TutorialTrackId {
+  switch (sheetId) {
+    case 'T1':
+    case 'T2':
+      return 'foundations';
+    case 'T3':
+    case 'T4':
+    case 'T5':
+    case 'T10':
+      return 'structural_thermal';
+    case 'T6':
+    case 'T7':
+    case 'T11':
+    case 'T12':
+      return 'lattice_topology';
+    case 'T8':
+    case 'T9':
+    case 'T13':
+    default:
+      return 'multiphysics';
+  }
+}
+
+interface IntrospectedFsmSummary {
+  shapeCount: number;
+  regionCount: number;
+  bcCount: number;
+  letCount: number;
+  materials: { id: string; name: string; phaseLabel: string; color: string }[];
+  activeEquations: { id: string; shortName: string }[];
+  fillSummary: string | null;
+}
+
+const fsmIntrospectionCache = new Map<string, IntrospectedFsmSummary>();
+
+/** Automatically parse any .fsm script and extract its continuum materials, phases,
+ * active governing field equations, and geometry/BC counts so the Contents page updates
+ * automatically whenever new tutorials or examples are added. */
+function inspectFsmCatalogEntry(key: string, fsmText: string): IntrospectedFsmSummary {
+  const cached = fsmIntrospectionCache.get(key);
+  if (cached) return cached;
+
+  try {
+    const parsed = parseFsm(fsmText);
+    if ('ok' in parsed) {
+      const doc = parsed.ok;
+      const vols = collectVolumeContinuumNodes(doc);
+      const eqs = evaluateDocumentFieldEquations(doc).filter((e) => e.active);
+      const matMap = new Map<string, { id: string; name: string; phaseLabel: string; color: string }>();
+      const baseSpec = getContinuumMaterialSpec(doc, doc.material);
+      matMap.set(doc.material, {
+        id: doc.material,
+        name: baseSpec.name,
+        phaseLabel: baseSpec.phaseLabel,
+        color: baseSpec.badgeColor,
+      });
+      for (const v of vols) {
+        if (!matMap.has(v.matId)) {
+          matMap.set(v.matId, {
+            id: v.matId,
+            name: v.spec.name,
+            phaseLabel: v.spec.phaseLabel,
+            color: v.spec.badgeColor,
+          });
+        }
+      }
+      const fillSummary = doc.fill
+        ? `${doc.fill.family}${doc.fill.morph ? ` → ${doc.fill.morph}` : ''} (${doc.fill.cell}${doc.fill.cell_min ? `→${doc.fill.cell_min}` : ''} mm${doc.fill.erode ? `, erode ${doc.fill.erode} mm` : ''})`
+        : null;
+      const summary: IntrospectedFsmSummary = {
+        shapeCount: vols.length,
+        regionCount: doc.regions.length,
+        bcCount:
+          doc.supports.length +
+          doc.loads.length +
+          doc.temperatures.length +
+          doc.convections.length +
+          doc.heat_fluxes.length,
+        letCount: doc.lets?.length ?? 0,
+        materials: Array.from(matMap.values()),
+        activeEquations: eqs.map((e) => ({ id: e.id, shortName: e.shortName })),
+        fillSummary,
+      };
+      fsmIntrospectionCache.set(key, summary);
+      return summary;
+    }
+  } catch {
+    // ignore before wasm ready
+  }
+  return {
+    shapeCount: 0,
+    regionCount: 0,
+    bcCount: 0,
+    letCount: 0,
+    materials: [],
+    activeEquations: [],
+    fillSummary: null,
+  };
+}
+
+function TutorialsContentsPage({
+  onSelectSheet,
+  onLoadSheetModelOnly,
+  onOpenSheetTheory,
+}: {
+  onSelectSheet: (sheetId: string) => void;
+  onLoadSheetModelOnly: (sheetId: string) => void;
+  onOpenSheetTheory: (sheetId: string) => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [trackFilter, setTrackFilter] = useState<'all' | TutorialTrackId>('all');
+
+  const q = searchQuery.trim().toLowerCase();
+
+  const matchesSheet = (s: TutorialSheet, info: IntrospectedFsmSummary): boolean => {
+    const track = getTrackForSheet(s.id);
+    if (trackFilter !== 'all' && trackFilter !== track) return false;
+    if (!q) return true;
+    const haystack = [
+      s.code,
+      s.title,
+      s.subtitle,
+      s.level,
+      s.verificationBadge,
+      s.starterFsmName,
+      s.theoryChapter.chapterTitle,
+      ...info.materials.map((m) => `${m.id} ${m.name} ${m.phaseLabel}`),
+      ...info.activeEquations.map((e) => e.shortName),
+      info.fillSummary ?? '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  };
+
+  const matchesExample = (ex: (typeof EXAMPLES)[number], info: IntrospectedFsmSummary): boolean => {
+    if (trackFilter !== 'all' && trackFilter !== 'examples') return false;
+    if (!q) return true;
+    const haystack = [
+      ex.id,
+      ex.label,
+      ...info.materials.map((m) => `${m.id} ${m.name}`),
+      ...info.activeEquations.map((e) => e.shortName),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  };
+
+  const totalCount = TUTORIAL_SHEETS.length + EXAMPLES.length;
+
+  return (
+    <div
+      data-testid="tutorials-contents-page"
+      style={{
+        padding: '14px 16px 28px',
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '16px',
+        flex: 1,
+      }}
+    >
+      {/* Top Directory Banner + Search & Track Filter Bar */}
+      <div
+        data-testid="tutorial-contents-filter-bar"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          padding: '12px 14px',
+          borderRadius: '8px',
+          background: 'rgba(15, 23, 42, 0.72)',
+          border: '1px solid rgba(56, 189, 248, 0.25)',
+        }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text)' }}>
+              Tutorials, Multi-Physics Case Studies &amp; Starter Examples Directory ({totalCount} Total)
+            </div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-3)', marginTop: '2px' }}>
+              Every card below is automatically indexed from its <code>.fsm</code> script — showing its Continuum Materials, Auto-Activated PDEs, Theory Manual Chapter, and 1-click actions.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <input
+              type="search"
+              class="text-input"
+              placeholder="Search tutorials, materials (molten_tin, ti64), or PDEs (VFT, Gyroid, NOx)…"
+              value={searchQuery}
+              data-testid="tutorial-contents-search"
+              onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+              style={{ width: 'min(340px, 75vw)', fontSize: '12px', padding: '5px 10px' }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                class="btn ghost small"
+                onClick={() => setSearchQuery('')}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Track Filter Pills */}
+        <div
+          data-testid="tutorial-track-filter"
+          style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}
+        >
+          <button
+            type="button"
+            class={`btn small ${trackFilter === 'all' ? 'primary' : ''}`}
+            data-testid="tutorial-track-all"
+            onClick={() => setTrackFilter('all')}
+          >
+            All Tracks ({totalCount})
+          </button>
+          {TUTORIAL_TRACKS.map((tr) => {
+            const count =
+              tr.id === 'examples'
+                ? EXAMPLES.length
+                : TUTORIAL_SHEETS.filter((s) => getTrackForSheet(s.id) === tr.id).length;
+            return (
+              <button
+                key={tr.id}
+                type="button"
+                class={`btn small ${trackFilter === tr.id ? 'primary' : ''}`}
+                data-testid={`tutorial-track-${tr.id}`}
+                onClick={() => setTrackFilter(tr.id)}
+              >
+                {tr.number}: {tr.title.split(',')[0]} ({count})
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Curriculum Track Sections (Tracks I–IV) */}
+      {TUTORIAL_TRACKS.filter((tr) => tr.id !== 'examples').map((track) => {
+        const trackSheets = TUTORIAL_SHEETS.map((s) => ({
+          sheet: s,
+          info: inspectFsmCatalogEntry(s.id, s.starterFsm),
+        })).filter(
+          ({ sheet, info }) => getTrackForSheet(sheet.id) === track.id && matchesSheet(sheet, info),
+        );
+
+        if (trackSheets.length === 0) return null;
+
+        return (
+          <div key={track.id} data-testid={`contents-section-${track.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                 justifyContent: 'space-between',
+                gap: '8px',
+                borderBottom: `1px solid ${track.accent}44`,
+                paddingBottom: '4px',
+              }}
+            >
+              <div>
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    padding: '2px 7px',
+                    borderRadius: '4px',
+                    background: `${track.accent}22`,
+                    color: track.accent,
+                    marginRight: '8px',
+                    fontFamily: 'var(--mono)',
+                  }}
+                >
+                  {track.number.toUpperCase()}
+                </span>
+                <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{track.title}</strong>
+              </div>
+              <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>{track.subtitle}</span>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+                gap: '10px',
+              }}
+            >
+              {trackSheets.map(({ sheet: s, info }) => {
+                const isActive = ui.tutorialSheetId === s.id;
+                return (
+                  <div
+                    key={s.id}
+                    data-testid={`contents-card-${s.id}`}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      padding: '11px 13px',
+                      borderRadius: '8px',
+                      background: isActive ? 'rgba(30, 41, 59, 0.92)' : 'rgba(15, 23, 42, 0.65)',
+                      border: isActive
+                        ? `1.5px solid ${track.accent}`
+                        : '1px solid rgba(148, 163, 184, 0.2)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      {/* Card Top Badges */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span
+                            style={{
+                              fontSize: '11.5px',
+                              fontWeight: 800,
+                              padding: '2px 7px',
+                              borderRadius: '4px',
+                              background: track.accent,
+                              color: '#fff',
+                              fontFamily: 'var(--mono)',
+                            }}
+                          >
+                            {s.code}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: '999px',
+                              background: 'rgba(148, 163, 184, 0.15)',
+                              color: 'var(--text-2)',
+                            }}
+                          >
+                            {s.level}
+                          </span>
+                        </div>
+                        <code style={{ fontSize: '10px', color: 'var(--text-3)' }}>{s.starterFsmName}</code>
+                      </div>
+
+                      {/* Title & Subtitle */}
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>
+                        {s.title}
+                      </div>
+                      <div style={{ fontSize: '11.5px', color: 'var(--text-2)', lineHeight: 1.4 }}>
+                        {s.subtitle}
+                      </div>
+
+                      {/* Auto-Detected Continuum Materials */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                        {info.materials.map((m) => (
+                          <span
+                            key={m.id}
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              background: `${m.color}1f`,
+                              color: m.color,
+                              border: `1px solid ${m.color}44`,
+                            }}
+                            title={`Continuum Phase: ${m.phaseLabel}`}
+                          >
+                            ◆ {m.name}
+                          </span>
+                        ))}
+                        {info.fillSummary && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              background: 'rgba(16, 185, 129, 0.16)',
+                              color: '#34d399',
+                              border: '1px solid rgba(16, 185, 129, 0.35)',
+                            }}
+                          >
+                            ❖ TPMS: {info.fillSummary}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Auto-Detected Active Field Equations */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        {info.activeEquations.map((eq) => (
+                          <span
+                            key={eq.id}
+                            style={{
+                              fontSize: '9.5px',
+                              fontFamily: 'var(--mono)',
+                              padding: '1px 5px',
+                              borderRadius: '3px',
+                              background: 'rgba(2, 6, 23, 0.65)',
+                              color: '#94a3b8',
+                              border: '1px solid rgba(148, 163, 184, 0.16)',
+                            }}
+                          >
+                            ● {eq.shortName}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Metadata + Action Buttons Footer */}
+                    <div
+                      style={{
+                        borderTop: '1px solid rgba(148, 163, 184, 0.14)',
+                        paddingTop: '7px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                      }}
+                    >
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                        <span>
+                          {info.shapeCount} shapes · {info.regionCount} regions · {s.userSteps.length} steps · {s.mcpSteps.length} API tools
+                        </span>
+                        <span>{s.theoryChapter.chapterTitle.split('—')[0]}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          class="btn small primary"
+                          data-testid={`contents-open-${s.id}`}
+                          onClick={() => onSelectSheet(s.id)}
+                          style={{ flex: 1 }}
+                        >
+                          Open Lesson ({s.code}) →
+                        </button>
+                        <button
+                          type="button"
+                          class="btn small"
+                          data-testid={`contents-load-only-${s.id}`}
+                          title="Load this .fsm model directly into the 3D viewport and close the tutorials drawer"
+                          onClick={() => onLoadSheetModelOnly(s.id)}
+                        >
+                          Load 3D Model
+                        </button>
+                        <button
+                          type="button"
+                          class="btn small"
+                          data-testid={`contents-theory-${s.id}`}
+                          title="Load this model and inspect its live governing equations in Theory (6)"
+                          onClick={() => onOpenSheetTheory(s.id)}
+                        >
+                          Theory (6)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Track V: Standalone Reference .fsm Starter Examples */}
+      {(() => {
+        const exampleRows = EXAMPLES.map((ex) => ({
+          ex,
+          info: inspectFsmCatalogEntry(`example-${ex.id}`, ex.text),
+        })).filter(({ ex, info }) => matchesExample(ex, info));
+
+        if (exampleRows.length === 0) return null;
+        const tr = TUTORIAL_TRACKS.find((t) => t.id === 'examples')!;
+
+        return (
+          <div data-testid="contents-section-examples" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                gap: '8px',
+                borderBottom: `1px solid ${tr.accent}44`,
+                paddingBottom: '4px',
+              }}
+            >
+              <div>
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    padding: '2px 7px',
+                    borderRadius: '4px',
+                    background: `${tr.accent}22`,
+                    color: tr.accent,
+                    marginRight: '8px',
+                    fontFamily: 'var(--mono)',
+                  }}
+                >
+                  {tr.number.toUpperCase()}
+                </span>
+                <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{tr.title}</strong>
+              </div>
+              <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>{tr.subtitle}</span>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                gap: '10px',
+              }}
+            >
+              {exampleRows.map(({ ex, info }) => (
+                <div
+                  key={ex.id}
+                  data-testid={`contents-card-example-${ex.id}`}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.55)',
+                    border: '1px solid rgba(168, 85, 247, 0.25)',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          background: 'rgba(168, 85, 247, 0.2)',
+                          color: '#c084fc',
+                          fontFamily: 'var(--mono)',
+                        }}
+                      >
+                        EXAMPLE .FSM
+                      </span>
+                      <code style={{ fontSize: '10.5px', color: 'var(--text-3)' }}>examples/{ex.id}.fsm</code>
+                    </div>
+                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text)' }}>{ex.label}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                      {info.materials.map((m) => (
+                        <span
+                          key={m.id}
+                          style={{
+                            fontSize: '10px',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            background: `${m.color}1f`,
+                            color: m.color,
+                            border: `1px solid ${m.color}44`,
+                          }}
+                        >
+                          ◆ {m.name}
+                        </span>
+                      ))}
+                      {info.activeEquations.map((eq) => (
+                        <span
+                          key={eq.id}
+                          style={{
+                            fontSize: '9.5px',
+                            fontFamily: 'var(--mono)',
+                            padding: '1px 5px',
+                            borderRadius: '3px',
+                            background: 'rgba(2, 6, 23, 0.65)',
+                            color: '#94a3b8',
+                          }}
+                        >
+                          ● {eq.shortName}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '5px', paddingTop: '4px' }}>
+                    <button
+                      type="button"
+                      class="btn small primary"
+                      data-testid={`contents-load-example-${ex.id}`}
+                      onClick={() => {
+                        openText(ex.text, `${ex.id}.fsm`);
+                        viewApi.fit(false);
+                        ui.set('tutorialsOpen', false);
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      Open {ex.id}.fsm in 3D →
+                    </button>
+                    <button
+                      type="button"
+                      class="btn small"
+                      data-testid={`contents-theory-example-${ex.id}`}
+                      onClick={() => {
+                        openText(ex.text, `${ex.id}.fsm`);
+                        viewApi.fit(false);
+                        ui.set('tutorialsOpen', false);
+                        store.setLens('theory');
+                      }}
+                    >
+                      Theory (6)
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Extensibility & Custom .fsm Loader Card */}
+      <div
+        data-testid="contents-extensibility-card"
+        style={{
+          padding: '12px 14px',
+          borderRadius: '8px',
+          background: 'rgba(15, 23, 42, 0.48)',
+          border: '1px dashed rgba(148, 163, 184, 0.3)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '10px',
+        }}
+      >
+        <div>
+          <strong style={{ fontSize: '12.5px', color: 'var(--text)' }}>
+            Extending the Catalog or Authoring Your Own Multi-Physics Simulation
+          </strong>
+          <div style={{ fontSize: '11px', color: 'var(--text-3)', marginTop: '2px' }}>
+            New entries added to <code>TUTORIAL_SHEETS</code> or <code>examples/*.fsm</code> are automatically introspected for continuum materials, active PDEs, and boundary conditions. Or start a blank model and assign continuum phases directly in <strong>Shape (1)</strong> and <strong>Setup (2)</strong>.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="contents-open-custom-file"
+            onClick={() => {
+              ui.set('tutorialsOpen', false);
+              openFile();
+            }}
+          >
+            Open Custom .fsm File…
+          </button>
+          <button
+            type="button"
+            class="btn small primary"
+            data-testid="contents-new-blank-model"
+            onClick={() => {
+              newDocument();
+              ui.set('tutorialsOpen', false);
+              store.setLens('shape');
+            }}
+          >
+            + New Blank Model
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TutorialsDrawer() {
   useApp();
   const [activeTab, setActiveTab] = useState<ColumnTab>('user');
@@ -1941,20 +2663,44 @@ function TutorialsDrawer() {
     </div>
   );
 
+  const isContentsOpen = ui.tutorialContentsOpen;
+
   return (
     <aside
-      class={`tut-drawer${threeColMode ? ' wide-3col' : ''}${splitMobile ? ' split-mobile' : ''}`}
+      class={`tut-drawer${threeColMode || isContentsOpen ? ' wide-3col' : ''}${splitMobile ? ' split-mobile' : ''}`}
       data-testid="tutorials-drawer"
     >
       <div class="tut-header">
         <div class="tut-header-top">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span class="sys-badge">TUTORIALS &amp; THEORY</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span class="sys-badge">TUTORIALS &amp; EXAMPLES</span>
+            {!isContentsOpen && (
+              <button
+                type="button"
+                class="btn small"
+                data-testid="tutorial-back-to-contents"
+                onClick={() => ui.set('tutorialContentsOpen', true)}
+                style={{ fontSize: '11px', padding: '2px 8px' }}
+              >
+                ← All Tutorials &amp; Examples ({TUTORIAL_SHEETS.length + EXAMPLES.length})
+              </button>
+            )}
             <span class="num" style={{ fontSize: '11px', color: 'var(--text-3)' }}>
-              {sheet.verificationBadge}
+              {isContentsOpen
+                ? `${TUTORIAL_SHEETS.length} Guided Lessons + ${EXAMPLES.length} Starter .fsm Models`
+                : sheet.verificationBadge}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              class={`btn small ${isContentsOpen ? 'primary' : ''}`}
+              data-testid="tutorial-contents-toggle"
+              title="Open the searchable Tutorials & Examples Directory"
+              onClick={() => ui.set('tutorialContentsOpen', !isContentsOpen)}
+            >
+              {isContentsOpen ? `Resume ${sheet.code} →` : `📚 Contents (${TUTORIAL_SHEETS.length + EXAMPLES.length})`}
+            </button>
             <button
               type="button"
               class="btn small"
@@ -1964,15 +2710,17 @@ function TutorialsDrawer() {
             >
               {splitMobile ? 'Full ▴' : 'Split 3D ▾'}
             </button>
-            <button
-              type="button"
-              class="btn small"
-              data-testid="tutorial-3col-toggle"
-              title="Toggle between Compact Companion Drawer and Full 3-Column Textbook View"
-              onClick={() => setThreeColMode(!threeColMode)}
-            >
-              {threeColMode ? 'Compact' : '3-Col ⊞'}
-            </button>
+            {!isContentsOpen && (
+              <button
+                type="button"
+                class="btn small"
+                data-testid="tutorial-3col-toggle"
+                title="Toggle between Compact Companion Drawer and Full 3-Column Textbook View"
+                onClick={() => setThreeColMode(!threeColMode)}
+              >
+                {threeColMode ? 'Compact' : '3-Col ⊞'}
+              </button>
+            )}
             <button
               type="button"
               class="btn small"
@@ -1984,17 +2732,28 @@ function TutorialsDrawer() {
           </div>
         </div>
 
-        {/* Sheet selector strip (T1..T8) */}
+        {/* Sheet selector strip (Contents + T1..T13) */}
         <div class="tut-sheet-strip" role="tablist" aria-label="Tutorial Sheets">
+          <button
+            type="button"
+            data-testid="tutorial-sheet-contents"
+            class={`tut-sheet-pill${isContentsOpen ? ' active' : ''}`}
+            title="View full Tutorials & Examples Contents Page"
+            onClick={() => ui.set('tutorialContentsOpen', true)}
+          >
+            <strong>📚 Index</strong>
+            <span>All ({TUTORIAL_SHEETS.length + EXAMPLES.length})</span>
+          </button>
           {TUTORIAL_SHEETS.map((s) => (
             <button
               key={s.id}
               type="button"
               data-testid={`tutorial-sheet-${s.id}`}
-              class={`tut-sheet-pill${s.id === sheet.id ? ' active' : ''}`}
+              class={`tut-sheet-pill${!isContentsOpen && s.id === sheet.id ? ' active' : ''}`}
               title={`${s.code}: ${s.title} (${s.level})`}
               onClick={() => {
                 ui.set('tutorialSheetId', s.id);
+                ui.set('tutorialContentsOpen', false);
                 loadTutorialSheetModel(s.id, false);
               }}
             >
@@ -2004,56 +2763,94 @@ function TutorialsDrawer() {
           ))}
         </div>
 
-        {/* Active Sheet Banner + 1-Click Starter Model Loader */}
-        <div class="tut-banner">
-          <div>
-            <div class="tut-title">
-              {sheet.code}: {sheet.title}
+        {!isContentsOpen && (
+          <>
+            {/* Active Sheet Banner + 1-Click Starter Model Loader */}
+            <div class="tut-banner">
+              <div>
+                <div class="tut-title">
+                  {sheet.code}: {sheet.title}
+                </div>
+                <div class="tut-subtitle">{sheet.subtitle}</div>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="tutorial-open-theory-lens"
+                  title="Inspect the live governing equations for this model in Theory (6)"
+                  onClick={() => {
+                    loadScenarioModel();
+                    ui.set('tutorialsOpen', false);
+                    store.setLens('theory');
+                  }}
+                >
+                  Theory (6)
+                </button>
+                <button
+                  type="button"
+                  class="btn small primary"
+                  data-testid="tutorial-load-model"
+                  onClick={loadScenarioModel}
+                >
+                  Load Starting Model
+                </button>
+              </div>
             </div>
-            <div class="tut-subtitle">{sheet.subtitle}</div>
-          </div>
-          <button
-            type="button"
-            class="btn small primary"
-            data-testid="tutorial-load-model"
-            onClick={loadScenarioModel}
-          >
-            Load Starting Model
-          </button>
-        </div>
 
-        {/* In compact companion mode, show the 3-tab switcher */}
-        {!threeColMode && (
-          <div class="tut-tabs" role="tablist">
-            <button
-              type="button"
-              class={activeTab === 'user' ? 'on' : ''}
-              data-testid="tutorial-tab-user"
-              onClick={() => setActiveTab('user')}
-            >
-              1. User Tutorial
-            </button>
-            <button
-              type="button"
-              class={activeTab === 'theory' ? 'on' : ''}
-              data-testid="tutorial-tab-theory"
-              onClick={() => setActiveTab('theory')}
-            >
-              2. Theory Manual
-            </button>
-            <button
-              type="button"
-              class={activeTab === 'mcp' ? 'on' : ''}
-              data-testid="tutorial-tab-mcp"
-              onClick={() => setActiveTab('mcp')}
-            >
-              3. AI &amp; API
-            </button>
-          </div>
+            {/* In compact companion mode, show the 3-tab switcher */}
+            {!threeColMode && (
+              <div class="tut-tabs" role="tablist">
+                <button
+                  type="button"
+                  class={activeTab === 'user' ? 'on' : ''}
+                  data-testid="tutorial-tab-user"
+                  onClick={() => setActiveTab('user')}
+                >
+                  1. User Tutorial
+                </button>
+                <button
+                  type="button"
+                  class={activeTab === 'theory' ? 'on' : ''}
+                  data-testid="tutorial-tab-theory"
+                  onClick={() => setActiveTab('theory')}
+                >
+                  2. Theory Manual
+                </button>
+                <button
+                  type="button"
+                  class={activeTab === 'mcp' ? 'on' : ''}
+                  data-testid="tutorial-tab-mcp"
+                  onClick={() => setActiveTab('mcp')}
+                >
+                  3. AI &amp; API
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {threeColMode ? (
+      {isContentsOpen ? (
+        <TutorialsContentsPage
+          onSelectSheet={(id) => {
+            ui.set('tutorialSheetId', id);
+            ui.set('tutorialContentsOpen', false);
+            loadTutorialSheetModel(id, false);
+          }}
+          onLoadSheetModelOnly={(id) => {
+            ui.set('tutorialSheetId', id);
+            loadTutorialSheetModel(id, false);
+            ui.set('tutorialsOpen', false);
+          }}
+          onOpenSheetTheory={(id) => {
+            ui.set('tutorialSheetId', id);
+            loadTutorialSheetModel(id, false);
+            ui.set('tutorialsOpen', false);
+            store.setLens('theory');
+          }}
+        />
+      ) : threeColMode ? (
         <div class="tut-3col-grid">
           {renderUserColumn()}
           {renderTheoryColumn()}
