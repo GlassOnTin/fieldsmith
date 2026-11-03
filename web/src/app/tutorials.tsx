@@ -660,25 +660,42 @@ solve size=3.5 build=(90, 0)
       'In real industrial machines — like a molten-tin float-glass bath or a liquid-hydrogen rocket nozzle — fluid flow, heat transfer, and structural bending all affect one another simultaneously.',
     verificationBadge: 'Lesson 8 · Advanced · Coupled Multi-Physics',
     starterFsmName: 't8-uk5-float-bath-twin.fsm',
-    opensSystemsWorkbench: true,
+    opensSystemsWorkbench: false,
     starterFsm: `fieldsmith 1
 name "T8 — Multi-Physics Float-Bath & Coater Twin"
 material ss316l
+custommaterial sic_refractory name="Alumino-Silicate / SiC Refractory" e=95000 nu=0.20 yield=140 density=2.65 wall=1.5 a=0.0000046 source="Fused-cast float-bath refractory"
+custommaterial molten_tin name="Molten Tin Bath Sn(l)" e=1200 nu=0.45 yield=18 density=6.50 wall=0.8 a=0.0000909 source="Pilkington tin2fe liquid metal (Ron Smith JFM 1990)"
+custommaterial soda_lime_glass name="Soda-Lime Float Glass (VFT Melt)" e=72000 nu=0.22 yield=65 density=2.50 wall=0.8 a=0.000009 source="Pilkington float2fe VFT melt log10 eta = -2.65 + 4210/(T-264)"
+custommaterial h2_n2_gas name="Reducing H2/N2 Bath Atmosphere" e=100 nu=0.30 yield=5 density=0.15 wall=0.8 a=0.000015 source="Forming-gas headspace + SnO/H2 Navier-slip cushion"
 
 let bath_len = 216
 let bath_w = 52
 let sill_step = 8
 let beam_x = 6
+let h_sill = 65
+let u_pull = 0.16
+let i_motor = 260
+let p_h2 = 4.2
+let q_beam = 34
 
 box support_pedestal size=(180, 40, 12) at=(0, 0, 6)
 color "#475569" on support_pedestal
 box refractory_casing size=(bath_len, bath_w, 16) at=(0, 0, 14)
 box tin_pool_cavity size=(200, 42, 10) at=(0, 0, 18) subtract
+material sic_refractory on refractory_casing
+color "#6b665e" on refractory_casing
+box tin_bath_pool size=(198, 40, 4.5) at=(0, 0, 15.2)
+material molten_tin on tin_bath_pool
+color "#64748b" on tin_bath_pool
 box transition_sill size=(36, 42, sill_step) at=(10, 0, 19)
+material sic_refractory on transition_sill
 color "#8c6239" on transition_sill
 box ribbon_hot_spread size=(78, 38, 6) at=(-58, 0, 17)
+material soda_lime_glass on ribbon_hot_spread
 color "#f59e0b" on ribbon_hot_spread
 box glass_ribbon size=(142, 26, 5) at=(28, 0, 16.5)
+material soda_lime_glass on glass_ribbon
 color "#38bdf8" on glass_ribbon
 box cvd_coater_beam size=(14, bath_w + 8, 9) at=(beam_x, 0, 24.5)
 color "#e05a47" on cvd_coater_beam
@@ -694,28 +711,28 @@ solve tref=20
 `,
     userSteps: [
       {
-        title: '1. What Is a "Coupled Multi-Physics" Problem?',
-        lens: 'systems',
+        title: '1. Assigning Molten Tin & VFT Viscous Glass Continuum Materials in Shape (1)',
+        lens: 'shape',
         instruction:
-          'In Lessons 1–7, we studied a single solid part where forces or temperatures were already known. In a full industrial process — such as floating a 55-metre ribbon of molten glass on a pool of liquid tin, or cooling a rocket engine throat with supercritical hydrogen — multiple laws of physics (governed by Partial Differential Equations, or PDEs) feed back into each other: moving the glass ribbon stirs the liquid tin; tin currents carry heat upstream; temperature changes glass viscosity; and radiant heat bends the overhead coating beam. Tap "Go to Coupled Systems →" to open the interactive Multi-Physics Workbench.',
+          'Click "tin_bath_pool" or "glass_ribbon" in the left Shape (1) tree and inspect the right-hand Inspector: notice the Material dropdown (`[data-testid="node-material"]`) and the "Continuum Phase" card (`[data-testid="node-continuum-card"]`). "tin_bath_pool" is assigned "Molten Tin Bath Sn(l)" (Liquid Metal · VMS + MHD, ρ₀ = 6500 kg/m³, β_Sn = 9.09×10⁻⁵ K⁻¹), "glass_ribbon" is assigned "Soda-Lime Float Glass (VFT Melt)" (log₁₀ η(T) = −2.65 + 4210/(T − 264 °C)), and "refractory_casing" is assigned "Alumino-Silicate / SiC Refractory".',
         expected:
-          'The Coupled Systems Workbench opens with design sliders on the left, a 3D multi-physics digital twin in the centre, and live pass/fail performance cards with p10/p50/p90 uncertainty bands on the right.',
+          'Selecting any shape node in Shape (1) shows its Continuum Phase badge, constitutive law, and physical constants in the Inspector.',
       },
       {
-        title: '2. How "Adjoint Sensitivities" Tell You Which Design Dial to Turn',
-        lens: 'systems',
+        title: '2. Boundary Conditions & Automatic Field Equation Activation in Setup (2) & Theory (6)',
+        lens: 'setup',
         instruction:
-          'When a complex system has 7 different design dials (sill depth, coater position, hydrogen atmosphere %, linear motor current, etc.), how do you know which dial fixes a defect without running hundreds of trial-and-error simulations? At the bottom of the workbench is the Adjoint Sensitivity Table: using a mathematical technique called the Adjoint Method, Fieldsmith works backward from each defect to calculate the exact influence of every design dial in a single pass. Click "Adjoint Step (−dΦ/dp)" in the top bar to automatically nudge all design dials in the direction that eliminates defects.',
+          'Tap "Go to Setup →" (tab 2). Scroll to the "Multiphysics BCs & Couplings" section (`[data-testid="setup-multiphysics-section"]`): because the assembly contains Molten Tin and VFT Viscous Glass alongside thermal/mechanical boundary conditions (`spout_hot`, `coater_water`, `h_sill = 65`, `u_pull = 0.16`, `i_motor = 260`), the "Auto-Activated PDEs" card (`[data-testid="setup-active-equations"]`) shows that 3D P2 Linear Elasticity, Fourier Conduction, VFT Viscous Glass Sheet, and Turbulent Tin VMS + Lorentz MHD are all active! Click "Theory (6) →" (`[data-testid="setup-open-theory"]`) to inspect the live Applied Mathematics specification and export a `.md` or `.html` report.',
         expected:
-          'Clicking "Adjoint Step" updates the design levers using exact gradients and turns red failing objectives green in under 50 milliseconds.',
+          'Setup (2) displays the active multiphysics boundary parameters and auto-activated PDEs, and Theory (6) documents the complete strong and weak variational equations.',
       },
       {
-        title: '3. Switch Domains to a Liquid-Hydrogen Rocket Nozzle & Run 3D Solid FEA',
-        lens: 'results',
+        title: '3. Adjoint Sensitivities & Multi-Domain Solve in Results (3) & Coupled Systems',
+        lens: 'systems',
         instruction:
-          'Use the top dropdown in the Coupled Systems Workbench to switch from the Float-Glass Bath to the "[Aerospace & Thermal Propulsion] Supercritical-H₂ Regeneratively Cooled Rocket Chamber". Then click "Load 3D Nozzle into Viewport" (top-right of the workbench) and switch to Results (3) to run a full 3D solid thermal-stress analysis on the copper-alloy chamber and cooling jacket.',
+          'Tap "Go to Coupled Systems →" to open the interactive Multi-Physics Workbench (or switch to Results (3) to inspect the 3D multi-material FEA mesh and transient video recorder). Click "Adjoint Step (−dΦ/dp)" in the top bar to nudge the 7 design dials using exact sparse Adjoint gradients.',
         expected:
-          'The 3D rocket chamber loads into the main CAD viewport and solves 3D thermal conduction and hoop stress.',
+          'Clicking "Adjoint Step" updates the design levers using exact gradients and syncs the updated 3D `.fsm` geometry.',
       },
     ],
     theoryChapter: {
@@ -1241,19 +1258,27 @@ solve
     starterFsm: `fieldsmith 1
 name "T13 — Solar-Focused Optical Lens Candle Ignition & Buoyant Flame"
 material alsi10mg
+custommaterial nbk7_glass name="N-BK7 Optical Crown Glass (n=1.517)" e=82000 nu=0.206 yield=70 density=2.51 wall=0.8 a=0.0000071 source="Schott N-BK7 optical borosilicate crown glass (n_d=1.5168, V_d=64.17)"
+custommaterial paraffin_wax name="Paraffin Candle Wax C25H52" e=450 nu=0.38 yield=12 density=0.90 wall=0.8 a=0.00011 source="Paraffin wax C25H52 (T_melt=58 C, L_f=210 kJ/kg, LHV=42 MJ/kg)"
+custommaterial cotton_wick name="Braided Cotton Capillary Wick" e=900 nu=0.32 yield=25 density=0.55 wall=0.6 a=0.000025 source="Porous cellulose capillary wick (K_w=4.5e-11 m2, r_p=18 um)"
 
 let lens_r = 32.5
 let lens_z = 111.5
 let wick_len = 7.5
+let i_solar = 1000
+let f_lens = 60
+let d_lens = 65
 
 cylinder brass_base r=24 h=6 at=(0, 0, 3)
 color "#d4a84f" on brass_base
 
 cylinder candle_column r=16 h=34 at=(0, 0, 20)
+material paraffin_wax on candle_column
 color "#f5efe2" on candle_column
 sphere molten_wax_cup r=13 at=(0, 0, 39) subtract
 
 cylinder candle_wick r=2.2 h=18 at=(0, 0, 35)
+material cotton_wick on candle_wick
 color "#3a2e28" on candle_wick
 
 box mast_bracket size=(8, 44, 6) at=(0, -21, 3) round=1.0
@@ -1270,6 +1295,7 @@ color "#7b889a" on lens_gimbal_outer
 cylinder lens_gimbal_bore r=lens_r h=8 at=(0, 0, lens_z) subtract
 
 cylinder optical_glass_lens r=lens_r h=6 at=(0, 0, lens_z)
+material nbk7_glass on optical_glass_lens
 color "#88c8ff" on optical_glass_lens
 
 material cucrzr on brass_base
@@ -1285,7 +1311,7 @@ temperature wick_ignition wick_hot_zone temp=397
 convection ambient_plume candle_wall h=18 tinf=22
 heatflux solar_lens_heating lens_top_face q=0.015
 
-solve size=3.5 tref=22
+solve tref=22
 `,
     userSteps: [
       {

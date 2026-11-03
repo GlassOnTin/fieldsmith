@@ -15,6 +15,7 @@ import './app/make';
 import './app/view-opacity';
 import './app/view-clip';
 import './app/systems';
+import './app/theory';
 import './app/tutorials';
 
 async function main() {

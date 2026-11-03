@@ -129,6 +129,7 @@ export interface Material {
   yield_strength: number;
   density: number;
   min_wall: number;
+  alpha?: number | null;
   yield_z?: number | null;
   shear_z?: number | null;
   source: string;

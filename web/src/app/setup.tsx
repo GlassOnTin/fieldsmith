@@ -15,7 +15,11 @@ import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
 import { inspectors, NameField } from './Inspector';
 import { RenameInput, treeSections } from './Tree';
-import { NumRow, VecRow, Seg } from './fields';
+import { NumberInput, NumRow, VecRow, Seg } from './fields';
+import {
+  evaluateDocumentFieldEquations,
+  upsertLetParam,
+} from '../doc/continuum';
 import { ui, useApp } from './ui';
 import { Icon } from './icons';
 import { analysis } from './analysis';
@@ -724,10 +728,195 @@ function SetupTree() {
       {doc.heat_fluxes.map((f) => (
         <AnalysisRow key={f.id} kind="heatflux" id={f.id} meta={`q ${f.q} · ${f.case}`} />
       ))}
+      <SetupMultiphysicsSection doc={doc} />
     </>
   );
 }
 treeSections.push(SetupTree);
+
+function addMultiphysicsPresetBc(
+  preset: 'vft_pull' | 'em_lorentz' | 'optical_beam' | 'combustor_spray',
+) {
+  store.transact(`Add ${preset} multiphysics BC`, (d) => {
+    const rid = selectedRegion(d) ?? d.regions[0]?.id;
+    if (preset === 'vft_pull') {
+      upsertLetParam(d, 'h_sill', 65);
+      upsertLetParam(d, 'u_pull', 0.16);
+      upsertLetParam(d, 'top_roll_cant', 0);
+      if (rid && !d.temperatures.some((t) => t.id === 'spout_hot')) {
+        d.temperatures.push({
+          id: freshId(d, 'spout_hot'),
+          region: rid,
+          celsius: 1050,
+          case: 'Float Bath Thermal',
+        });
+      }
+    } else if (preset === 'em_lorentz') {
+      upsertLetParam(d, 'i_motor', 260);
+      upsertLetParam(d, 'p_h2', 4.2);
+      upsertLetParam(d, 'q_beam', 34);
+    } else if (preset === 'optical_beam') {
+      upsertLetParam(d, 'i_solar', 1000);
+      upsertLetParam(d, 'f_lens', 60);
+      upsertLetParam(d, 'd_lens', 44);
+      if (rid && !d.heat_fluxes.some((f) => f.id.includes('solar'))) {
+        d.heat_fluxes.push({
+          id: freshId(d, 'solar_caustic_flux'),
+          region: rid,
+          q: 0.285,
+          case: '1. Solar Focal Heating & Buoyant Plume',
+        });
+      }
+    } else if (preset === 'combustor_spray') {
+      upsertLetParam(d, 'swirl_number', 0.72);
+      upsertLetParam(d, 'm_dot_fuel', 1.85);
+      if (rid && !d.temperatures.some((t) => t.id.includes('flame'))) {
+        d.temperatures.push({
+          id: freshId(d, 'flame_liner_hot'),
+          region: rid,
+          celsius: 820,
+          case: '1. Combustor Thermal & Pressure',
+        });
+      }
+    }
+  });
+}
+
+function SetupMultiphysicsSection({ doc }: { doc: Document }) {
+  const eqs = evaluateDocumentFieldEquations(doc);
+  const activeEqs = eqs.filter((e) => e.active);
+  return (
+    <div data-testid="setup-multiphysics-section" style={{ marginTop: '10px', padding: '0 6px 8px' }}>
+      <div class="section-label" style={{ paddingLeft: '2px' }}>
+        <span>Multiphysics BCs &amp; Couplings</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginBottom: '8px' }}>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="add-mp-vft-pull"
+          title="Add Viscous Ribbon Pull Speed & Sill Depth BCs (activates VFT Glass Sheet + Tin Bath PDEs)"
+          onClick={() => addMultiphysicsPresetBc('vft_pull')}
+          style={{ fontSize: '10px', padding: '4px 6px' }}
+        >
+          + VFT Pull / Sill
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="add-mp-em-lorentz"
+          title="Add Linear Induction Motor Lorentz Current & H₂ Redox Cushion BCs"
+          onClick={() => addMultiphysicsPresetBc('em_lorentz')}
+          style={{ fontSize: '10px', padding: '4px 6px' }}
+        >
+          + EM Lorentz / H₂
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="add-mp-optical-beam"
+          title="Add Collimated Solar Beam Irradiance & Refractive Lens Caustic BC"
+          onClick={() => addMultiphysicsPresetBc('optical_beam')}
+          style={{ fontSize: '10px', padding: '4px 6px' }}
+        >
+          + Optical Ray Beam
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="add-mp-combustor-spray"
+          title="Add Swirl Spray / Arrhenius Combustion Source BC"
+          onClick={() => addMultiphysicsPresetBc('combustor_spray')}
+          style={{ fontSize: '10px', padding: '4px 6px' }}
+        >
+          + Swirl / Flame BC
+        </button>
+      </div>
+      {(doc.lets?.length ?? 0) > 0 && (
+        <div
+          class="card"
+          data-testid="setup-mp-params"
+          style={{
+            padding: '6px 8px',
+            marginBottom: '8px',
+            background: 'rgba(15, 23, 42, 0.45)',
+            border: '1px solid rgba(148, 163, 184, 0.2)',
+            borderRadius: '6px',
+          }}
+        >
+          <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '4px' }}>
+            Active Boundary &amp; Coupling Parameters
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: '4px 6px', alignItems: 'center', fontSize: '11px' }}>
+            {doc.lets?.map((l) => (
+              <Fragment key={l.name}>
+                <span class="num" style={{ color: '#cbd5e1' }} title={`let ${l.name} = ${l.expr}`}>
+                  {l.name}
+                </span>
+                <NumberInput
+                  value={l.value}
+                  step={l.name === 'u_pull' || l.name === 'swirl_number' ? 0.05 : 5}
+                  testId={`setup-let-${l.name}`}
+                  onChange={(v) =>
+                    store.transact(`Set ${l.name}`, (d) => {
+                      upsertLetParam(d, l.name, v);
+                    })
+                  }
+                />
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+      <div
+        class="card"
+        data-testid="setup-active-equations"
+        style={{
+          padding: '7px 8px',
+          background: 'rgba(15, 23, 42, 0.6)',
+          border: '1px solid rgba(56, 189, 248, 0.3)',
+          borderRadius: '6px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+          <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#38bdf8' }}>
+            Auto-Activated PDEs ({activeEqs.length}/{eqs.length})
+          </span>
+          <button
+            type="button"
+            class="btn small primary"
+            data-testid="setup-open-theory"
+            onClick={() => store.setLens('theory')}
+            style={{ fontSize: '10px', padding: '2px 6px' }}
+          >
+            Theory (6) →
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {eqs.map((eq) => (
+            <div
+              key={eq.id}
+              style={{
+                fontSize: '10px',
+                color: eq.active ? '#e2e8f0' : 'var(--text-3)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                opacity: eq.active ? 1 : 0.6,
+              }}
+              title={eq.triggerSummary}
+            >
+              <span style={{ color: eq.active ? '#22c55e' : '#64748b', fontWeight: 700 }}>
+                {eq.active ? '●' : '○'}
+              </span>
+              <span>{eq.shortName}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ---- shared rows ----------------------------------------------------------------------
 
@@ -929,6 +1118,47 @@ function RegionInspector({ id }: { id: string }) {
         ))}
       </div>
       <AddFaceRow regionId={id} />
+      <div class="section-label" style={{ marginTop: '10px' }}>
+        <span>Attach Boundary Condition to {r.id}</span>
+      </div>
+      <div
+        data-testid="region-add-bc-bar"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px', marginBottom: '6px' }}
+      >
+        <button type="button" class="btn small" onClick={() => addAnalysis('support')} data-testid="region-add-support">
+          + Support
+        </button>
+        <button type="button" class="btn small" onClick={() => addAnalysis('load')} data-testid="region-add-load">
+          + Force / Pressure
+        </button>
+        <button type="button" class="btn small" onClick={() => addAnalysis('temperature')} data-testid="region-add-temperature">
+          + Temperature
+        </button>
+        <button type="button" class="btn small" onClick={() => addAnalysis('convection')} data-testid="region-add-convection">
+          + Convection
+        </button>
+        <button type="button" class="btn small" onClick={() => addAnalysis('heatflux')} data-testid="region-add-heatflux">
+          + Heat Flux
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          onClick={() => addMultiphysicsPresetBc('optical_beam')}
+          data-testid="region-add-optical"
+          title="Attach Collimated Optical Ray / Solar Beam BC on this region"
+        >
+          + Optical Ray Beam
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          onClick={() => addMultiphysicsPresetBc('vft_pull')}
+          data-testid="region-add-vft"
+          title="Attach Viscous Melt Pull / Sill BC on this region"
+        >
+          + VFT Melt Pull
+        </button>
+      </div>
       <div class="hint">
         {r.selectors.length === 1
           ? 'Click surfaces to add faces, or click the highlighted surface again (or Delete above) to remove this region.'

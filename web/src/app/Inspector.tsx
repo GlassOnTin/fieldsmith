@@ -8,6 +8,14 @@ import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import { MODIFIER_LABEL, defaultModifier, inheritedColor, renameId } from '../doc/ops';
 import { applyAddr, drivenExpr, parseAddr } from '../doc/param';
 import { PART_COLORS } from '../doc/types';
+import {
+  CONTINUUM_PHASE_META,
+  MULTIPHYSICS_CONTINUUM_MATERIALS,
+  ensureContinuumMaterialInDoc,
+  evaluateDocumentFieldEquations,
+  getContinuumMaterialSpec,
+  type ContinuumPhaseId,
+} from '../doc/continuum';
 import { Fragment } from 'preact';
 import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
 import { Icon } from './icons';
@@ -20,7 +28,163 @@ export function materials() {
   return library;
 }
 
-/** Address a node in a draft by id (throws if missing — callers only run for live selections). */
+function ContinuumSelectOptions({ doc }: { doc: Document }) {
+  const solidLib = materials();
+  const mpIds = new Set(MULTIPHYSICS_CONTINUUM_MATERIALS.map((m) => m.id));
+  const extraCustom = (doc.custom_materials ?? []).filter(
+    (m) => !mpIds.has(m.id) && !solidLib.some((s) => s.id === m.id),
+  );
+  const byPhase = (phase: ContinuumPhaseId) =>
+    MULTIPHYSICS_CONTINUUM_MATERIALS.filter((m) => m.phase === phase);
+
+  return (
+    <>
+      <optgroup label="Solid Structural & Thermal (Hooke + Fourier)">
+        {solidLib.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+        {byPhase('solid_elastic').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Viscous Melts & Glasses (VFT Extensional Sheet)">
+        {byPhase('viscous_melt').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Liquid Metals & MHD Fluids (Navier–Stokes VMS)">
+        {byPhase('liquid_metal').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Phase-Change & Pyrolyzing Fuels (Stefan + Darcy)">
+        {byPhase('phase_change_fuel').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Optical Refractive Media (Snell / Fresnel)">
+        {byPhase('optical_medium').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Buoyant Plumes, Sprays & Reactive Gases">
+        {byPhase('reactive_gas').map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </optgroup>
+      {extraCustom.length > 0 && (
+        <optgroup label="Custom Document Materials">
+          {extraCustom.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </>
+  );
+}
+
+function ContinuumConstitutiveCard({
+  doc,
+  matId,
+  testId,
+}: {
+  doc: Document;
+  matId: string;
+  testId: string;
+}) {
+  const spec = getContinuumMaterialSpec(doc, matId);
+  const phaseMeta = CONTINUUM_PHASE_META[spec.phase];
+  return (
+    <div
+      class="card"
+      data-testid={testId}
+      style={{
+        marginTop: '8px',
+        padding: '8px 10px',
+        border: `1px solid ${spec.badgeColor}44`,
+        background: 'rgba(15, 23, 42, 0.45)',
+        borderRadius: '6px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-2)' }}>Continuum Phase</span>
+        <span
+          data-testid={`${testId}-phase`}
+          style={{
+            fontSize: '10px',
+            fontWeight: 700,
+            padding: '2px 7px',
+            borderRadius: '999px',
+            background: `${spec.badgeColor}22`,
+            color: spec.badgeColor,
+            border: `1px solid ${spec.badgeColor}55`,
+          }}
+        >
+          {spec.phaseLabel}
+        </span>
+      </div>
+      <div style={{ fontSize: '10.5px', color: 'var(--text-3)', marginBottom: '6px', lineHeight: 1.35 }}>
+        {phaseMeta.summary}
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--mono)',
+          fontSize: '10.5px',
+          padding: '5px 7px',
+          background: 'rgba(2, 6, 23, 0.65)',
+          borderRadius: '4px',
+          color: '#e2e8f0',
+          marginBottom: '6px',
+          overflowX: 'auto',
+          whiteSpace: 'nowrap',
+        }}
+        title="Active constitutive relation for this volume"
+      >
+        {spec.constitutiveEquation}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '3px 8px', fontSize: '11px' }}>
+        {spec.parameters.map((p) => (
+          <Fragment key={p.symbol}>
+            <span class="num" style={{ color: spec.badgeColor, fontWeight: 600 }}>
+              {p.symbol}
+            </span>
+            <span style={{ color: 'var(--text-3)' }}>{p.label}</span>
+            <span class="num" style={{ textAlign: 'right' }}>
+              {p.value} {p.unit !== '—' ? p.unit : ''}
+            </span>
+          </Fragment>
+        ))}
+      </div>
+      <div style={{ marginTop: '7px', display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          class="btn ghost small"
+          data-testid={`${testId}-open-theory`}
+          onClick={() => store.setLens('theory')}
+          style={{ fontSize: '10.5px', padding: '2px 8px' }}
+        >
+          Applied Math in Theory (6) →
+        </button>
+      </div>
+    </div>
+  );
+}
 function nodeIn(d: Document, id: string): Node {
   const n = findNode(d, id);
   if (!n) throw new Error(`missing node ${id}`);
@@ -414,21 +578,21 @@ function NodeInspector({ node }: { node: Node }) {
           class="select"
           value={node.material ?? ''}
           data-testid="node-material"
-          title="Per-volume material for multi-body assemblies (E, CTE, density, yield) and 3MF export"
+          title="Per-volume continuum material & constitutive model (Solid Elastic, VFT Viscous Melt, Liquid Metal MHD, Phase-Change Fuel, Optical Dielectric, or Reactive Gas)"
           onChange={(e) =>
             store.transact(`Label ${id}`, (d) => {
               const v = (e.target as HTMLSelectElement).value;
-              if (v === '') delete nodeIn(d, id).material;
-              else nodeIn(d, id).material = v;
+              if (v === '') {
+                delete nodeIn(d, id).material;
+              } else {
+                ensureContinuumMaterialInDoc(d, v);
+                nodeIn(d, id).material = v;
+              }
             })
           }
         >
-          <option value="">Document default</option>
-          {[...materials(), ...store.doc.custom_materials].map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
+          <option value="">Document default ({store.doc.material})</option>
+          <ContinuumSelectOptions doc={store.doc} />
         </select>
         <span />
         <label class="plain">Colour</label>
@@ -485,6 +649,11 @@ function NodeInspector({ node }: { node: Node }) {
           <span>Leave out of the model</span>
         </label>
       </div>
+      <ContinuumConstitutiveCard
+        doc={store.doc}
+        matId={node.material || store.doc.material}
+        testId="node-continuum-card"
+      />
     </div>
   );
 }
@@ -499,8 +668,13 @@ export function addModifier(target: string, type: Modifier['type']) {
 function DocumentInspector() {
   const doc = store.doc;
   const { errors: problems, warnings } = validateWithWarnings(doc);
-  const mats = [...materials(), ...doc.custom_materials];
+  const mats = [
+    ...materials(),
+    ...doc.custom_materials,
+    ...MULTIPHYSICS_CONTINUUM_MATERIALS.map((m) => m.fsmMaterial),
+  ];
   const mat = mats.find((m) => m.id === doc.material);
+  const activeEqs = evaluateDocumentFieldEquations(doc).filter((e) => e.active);
   const addNewLet = () => {
     store.transact('Add parameter', (d) => {
       const lets = d.lets ?? (d.lets = []);
@@ -520,14 +694,22 @@ function DocumentInspector() {
       </div>
       <div class="field-grid">
         <label class="plain">Material</label>
-        <select class="select" value={doc.material} data-testid="material" onChange={(e) => store.transact('Set material', (d) => (d.material = (e.target as HTMLSelectElement).value))}>
-          {mats.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
+        <select
+          class="select"
+          value={doc.material}
+          data-testid="material"
+          onChange={(e) =>
+            store.transact('Set material', (d) => {
+              const v = (e.target as HTMLSelectElement).value;
+              ensureContinuumMaterialInDoc(d, v);
+              d.material = v;
+            })
+          }
+        >
+          <ContinuumSelectOptions doc={doc} />
         </select>
       </div>
+      <ContinuumConstitutiveCard doc={doc} matId={doc.material} testId="doc-continuum-card" />
       {mat && (
         <>
           <div class="field-grid" style={{ fontSize: '12px' }}>
@@ -665,6 +847,50 @@ function DocumentInspector() {
       ) : (
         <div class="hint">No parameters defined yet. Click <code>+ let</code> to add a design variable.</div>
       )}
+      <div
+        class="card"
+        data-testid="doc-active-equations"
+        style={{
+          marginTop: '10px',
+          padding: '8px 10px',
+          border: '1px solid rgba(56, 189, 248, 0.28)',
+          background: 'rgba(15, 23, 42, 0.5)',
+          borderRadius: '6px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: '#38bdf8' }}>
+            Activated Field Equations ({activeEqs.length})
+          </span>
+          <button
+            type="button"
+            class="btn small primary"
+            data-testid="doc-open-theory"
+            onClick={() => store.setLens('theory')}
+            style={{ fontSize: '10px', padding: '2px 7px' }}
+          >
+            Theory (6) →
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+          {activeEqs.map((eq) => (
+            <div
+              key={eq.id}
+              style={{
+                fontSize: '10.5px',
+                color: 'var(--text-2)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+              title={eq.triggerSummary}
+            >
+              <span style={{ color: '#22c55e', fontWeight: 700 }}>●</span>
+              <span>{eq.shortName}</span>
+            </div>
+          ))}
+        </div>
+      </div>
       <div class="hint" style={{ marginTop: '8px' }}>
         Select a shape in the tree or the viewport to edit it.
       </div>

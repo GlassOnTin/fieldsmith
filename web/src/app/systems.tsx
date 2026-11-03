@@ -17,6 +17,7 @@ import {
   type SimulationRecapEvent,
 } from '../doc/wasm';
 import { store } from '../doc/store';
+import { detectCoupledPhysicsRegime } from '../doc/continuum';
 import { viewOverlays } from './App';
 import { extraCommands, openText, viewApi } from './commands';
 import { ui, useApp } from './ui';
@@ -161,11 +162,21 @@ function buildFloatBathFsm(designP: number[]): string {
 #   H_sill = ${hSillMm.toFixed(1)} mm | x_beam = ${xBeamM.toFixed(1)} m | Q_beam = ${qBeamKw.toFixed(0)} kW | H2 = ${pH2Pct.toFixed(2)}% | I_motor = ${iMotorA.toFixed(0)} A
 name "UK5 Float-Bath & CVD Coater (H_sill=${hSillMm.toFixed(0)}mm, x_beam=${xBeamM.toFixed(1)}m)"
 material ss316l
+custommaterial sic_refractory name="Alumino-Silicate / SiC Refractory" e=95000 nu=0.20 yield=140 density=2.65 wall=1.5 a=0.0000046 source="Fused-cast float-bath refractory"
+custommaterial molten_tin name="Molten Tin Bath Sn(l)" e=1200 nu=0.45 yield=18 density=6.50 wall=0.8 a=0.0000909 source="Pilkington tin2fe liquid metal (Ron Smith JFM 1990)"
+custommaterial soda_lime_glass name="Soda-Lime Float Glass (VFT Melt)" e=72000 nu=0.22 yield=65 density=2.50 wall=0.8 a=0.000009 source="Pilkington float2fe VFT melt log10 eta = -2.65 + 4210/(T-264)"
+custommaterial h2_n2_gas name="Reducing H2/N2 Bath Atmosphere" e=100 nu=0.30 yield=5 density=0.15 wall=0.8 a=0.000015 source="Forming-gas headspace + SnO/H2 Navier-slip cushion"
 
 let bath_len = ${bathLenMm}
 let bath_w = ${bathWidthMm}
 let sill_step = ${sillStepMm}
 let beam_x = ${beamX}
+let h_sill = ${hSillMm}
+let u_pull = 0.16
+let i_motor = ${iMotorA}
+let p_h2 = ${pH2Pct}
+let q_beam = ${qBeamKw}
+let top_roll_cant = ${topRollCantDeg}
 
 # Central structural support pedestal (isolates fixed base from hot spout thermal expansion)
 box support_pedestal size=(76, 36, 6) at=(0, 0, 3)
@@ -174,16 +185,25 @@ color "#52525b" on support_pedestal
 # Refractory casing floor, molten-tin continuum & side walls
 box refractory_casing size=(bath_len + 16, bath_w + 12, 20) at=(0, 0, 14)
 box tin_cavity size=(bath_len - 12, bath_w - 8, 9) at=(0, 0, 21) subtract
+material sic_refractory on refractory_casing
 color "#6b665e" on refractory_casing
+
+# Active Molten-Tin Pool Continuum (ρ = 6500 kg/m³, VMS circulation + Lorentz MHD)
+box tin_bath_pool size=(bath_len - 14, bath_w - 10, 4.5) at=(0, 0, 14.5)
+material molten_tin on tin_bath_pool
+color "#64748b" on tin_bath_pool
 
 # Downstream Refractory Sill Step (controls bath depth H(x) = ${hSillMm.toFixed(1)} mm)
 box refractory_sill size=(116, bath_w - 4, sill_step) at=(32, 0, ${sillZMm})
+material sic_refractory on refractory_sill
 color "#c87d3b" on refractory_sill
 
-# Upstream Hot-Spread Glass Zone & Downstream Stretched Glass Ribbon (W(x) narrowing)
+# Upstream Hot-Spread Glass Zone & Downstream Stretched Glass Ribbon (VFT Viscous Melt)
 box ribbon_hot_spread size=(78, ${hotSpreadWMm}, 6) at=(-58, 0, 17)
+material soda_lime_glass on ribbon_hot_spread
 color "#f59e0b" on ribbon_hot_spread
 box glass_ribbon size=(142, ${ribbonWMm}, 5) at=(28, 0, 16.5)
+material soda_lime_glass on glass_ribbon
 color "#38bdf8" on glass_ribbon
 
 # Top-Roll Attenuator Shafts engaging ribbon edges in the stretching zone
@@ -1200,17 +1220,15 @@ const coupledVpGroup = new THREE.Group();
 let coupledVpHost: Viewport | null = null;
 
 function isFloatBathDocument(): boolean {
-  return (store.doc.name || '').includes('Float-Bath');
+  return detectCoupledPhysicsRegime(store.doc) === 'pilkington_uk5_float_bath';
 }
 
 function isSolarCandleDocument(): boolean {
-  const n = store.doc.name || '';
-  return n.includes('Candle') || n.includes('Solar-Focused');
+  return detectCoupledPhysicsRegime(store.doc) === 'solar_candle_ignition';
 }
 
 function isSwirlCombustorDocument(): boolean {
-  const n = store.doc.name || '';
-  return n.includes('Swirl Atomiser') || (store.doc.lets ?? []).some((l) => l.name === 'orifice_r');
+  return detectCoupledPhysicsRegime(store.doc) === 'annular_swirl_spray_combustor';
 }
 
 export type SwirlVolumeMode = 'radiant_flame' | 'temp_gas' | 'nox_ppm' | 'droplet_smd' | 'swirl_vel';
@@ -2393,7 +2411,7 @@ function CoupledViewportHud() {
     };
   }, []);
 
-  if (ui.systemsOpen) return null;
+  if (ui.systemsOpen || store.lens === 'theory') return null;
 
   if (isSwirlCombustorDocument()) {
     return <SwirlCombustorViewportHud bump={bump} />;

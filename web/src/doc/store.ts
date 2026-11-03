@@ -2,13 +2,14 @@
 import type { Document } from './types';
 import { emptyDocument, withLetTables } from './types';
 
-export type Lens = 'shape' | 'setup' | 'results' | 'fill' | 'make';
+export type Lens = 'shape' | 'setup' | 'results' | 'fill' | 'make' | 'theory';
 export const LENSES: { id: Lens; label: string; key: string }[] = [
   { id: 'shape', label: 'Shape', key: '1' },
   { id: 'setup', label: 'Setup', key: '2' },
   { id: 'results', label: 'Results', key: '3' },
   { id: 'fill', label: 'Fill', key: '4' },
   { id: 'make', label: 'Make', key: '5' },
+  { id: 'theory', label: 'Theory', key: '6' },
 ];
 
 /** What is selected: a model node, or an analysis item (region / support / load /
