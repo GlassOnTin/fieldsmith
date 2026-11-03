@@ -1505,6 +1505,7 @@ pub fn export_slice_stack_3mf(
 /// objective/constraint descriptors `Φ`, and preset scenarios.
 #[wasm_bindgen(js_name = listCoupledSystems)]
 pub fn list_coupled_systems() -> Result<String, JsValue> {
+    use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
     use fieldsmith_solve::coupled_system::{
         CoupledEngineeringSystem, NamedScenario, RegenerativeCooledNozzleSystem,
     };
@@ -1513,6 +1514,7 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     let case = CffCase::uk5_reference().map_err(js_err)?;
     let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
     let nozzle_sys = RegenerativeCooledNozzleSystem::default();
+    let candle_sys = SolarCandleIgnitionSystem::default();
 
     let bath_scenarios = vec![
         NamedScenario {
@@ -1555,6 +1557,8 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
         },
     ];
 
+    let candle_scenarios = candle_sys.named_scenarios();
+
     to_json(&serde_json::json!([
         {
             "system_id": bath_sys.system_id(),
@@ -1577,6 +1581,17 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
             "epistemic_parameters": nozzle_sys.epistemic_parameters(),
             "objectives": nozzle_sys.objective_descriptors(),
             "scenarios": nozzle_scenarios,
+        },
+        {
+            "system_id": candle_sys.system_id(),
+            "system_title": candle_sys.system_title(),
+            "industry_sector": candle_sys.industry_sector(),
+            "num_dofs": candle_sys.num_dofs(),
+            "fields": candle_sys.field_descriptors(),
+            "design_parameters": candle_sys.design_parameters(),
+            "epistemic_parameters": candle_sys.epistemic_parameters(),
+            "objectives": candle_sys.objective_descriptors(),
+            "scenarios": candle_scenarios,
         }
     ]))
 }
@@ -1591,6 +1606,7 @@ pub fn solve_coupled_system(
     design_p_json: &str,
     epistemic_theta_json: &str,
 ) -> Result<String, JsValue> {
+    use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
     use fieldsmith_solve::coupled_system::{
         CoupledEngineeringSystem, EngineConfig, MonolithicSystemEngine,
         RegenerativeCooledNozzleSystem,
@@ -1637,6 +1653,7 @@ pub fn solve_coupled_system(
             "constraints_pass_p50": pass_p50,
             "constraints_pass_robust_p90": pass_p90,
             "float_bath_visual": visual,
+            "candle_flame_visual": serde_json::Value::Null,
             "fsm_3d": fsm_3d,
             "wall_ms": wall_ms,
         }))
@@ -1666,6 +1683,38 @@ pub fn solve_coupled_system(
             "constraints_pass_p50": pass_p50,
             "constraints_pass_robust_p90": pass_p90,
             "float_bath_visual": serde_json::Value::Null,
+            "candle_flame_visual": serde_json::Value::Null,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
+    } else if system_id == "solar_candle_ignition_v1" {
+        let sys = SolarCandleIgnitionSystem::default();
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig::default();
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": serde_json::Value::Null,
+            "candle_flame_visual": visual,
             "fsm_3d": fsm_3d,
             "wall_ms": wall_ms,
         }))

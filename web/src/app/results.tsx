@@ -4,7 +4,7 @@
 import { Fragment } from 'preact';
 import { useState } from 'preact/hooks';
 import { ui, useApp, RESULTS_SCALE_DEFAULT } from './ui';
-import type { ResultMode } from './ui';
+import type { ResultMode, ResultColormap } from './ui';
 import { store } from '../doc/store';
 import { Seg, NumberInput } from './fields';
 import { viewOverlays, statusItems } from './App';
@@ -51,6 +51,48 @@ const RAMP_SAFETY: [number, number, number][] = [
   [0.705882, 0.0156863, 0.14902], // 1.000  #b40426
 ];
 
+/** ParaView / VTK Blackbody Radiant Flame transfer function (9 stops):
+ * charcoal soot → deep ember red → orange-amber → incandescent yellow → white-hot core. */
+const RAMP_FLAME: [number, number, number][] = [
+  [0.06, 0.04, 0.07], // 0.000  #0f0a12
+  [0.26, 0.05, 0.12], // 0.125  #420d1f
+  [0.55, 0.08, 0.09], // 0.250  #8c1417
+  [0.82, 0.19, 0.05], // 0.375  #d1300d
+  [0.95, 0.38, 0.04], // 0.500  #f2610a
+  [0.99, 0.60, 0.08], // 0.625  #fc9914
+  [1.00, 0.80, 0.22], // 0.750  #ffcc38
+  [1.00, 0.93, 0.58], // 0.875  #ffed94
+  [1.00, 0.99, 0.92], // 1.000  #fffce8
+];
+
+/** ParaView / VTK Turbo high-contrast rainbow ramp (9 stops). */
+const RAMP_TURBO: [number, number, number][] = [
+  [0.18995, 0.07176, 0.23217],
+  [0.25107, 0.35237, 0.86833],
+  [0.15463, 0.67511, 0.89907],
+  [0.19659, 0.88425, 0.60616],
+  [0.55927, 0.97468, 0.25295],
+  [0.88321, 0.86554, 0.14172],
+  [0.99314, 0.58925, 0.11572],
+  [0.88889, 0.26991, 0.04237],
+  [0.47960, 0.01583, 0.01055],
+];
+
+function activeRamp(mode: ResultMode): [number, number, number][] {
+  if (mode === 'safety') return RAMP_SAFETY;
+  switch (ui.resultsColormap) {
+    case 'flame':
+      return RAMP_FLAME;
+    case 'turbo':
+      return RAMP_TURBO;
+    case 'coolwarm':
+      return RAMP_SAFETY;
+    case 'viridis':
+    default:
+      return RAMP;
+  }
+}
+
 export function rampColor(t: number, out: [number, number, number], ramp: [number, number, number][] = RAMP) {
   const x = Math.min(1, Math.max(0, t));
   const n = ramp.length - 1;
@@ -60,7 +102,7 @@ export function rampColor(t: number, out: [number, number, number], ramp: [numbe
 }
 
 function gradientCss(mode: ResultMode): string {
-  const ramp = mode === 'safety' ? RAMP_SAFETY : RAMP;
+  const ramp = activeRamp(mode);
   const parts = ramp.map((c, i) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)}) ${(i / (ramp.length - 1)) * 100}%`);
   return `linear-gradient(90deg, ${parts.join(', ')})`;
 }
@@ -349,27 +391,35 @@ function rebuild(lvl: LevelResult) {
 
   const positions = new Float32Array(nFacets * 9);
   const colors = new Float32Array(nFacets * 9);
+  const facetScalars = new Float32Array(nFacets);
   const col: [number, number, number] = [0, 0, 0];
+  const ramp = activeRamp(mode);
   for (let f = 0; f < nFacets; f++) {
     const owner = lvl.surfaceOwner[f];
-    if (mode === 'stress') rampColor((vmArr[owner] - rngLo) / denom, col);
-    else if (mode === 'peel') rampColor((((peelArr?.[owner] ?? 0) - rngLo) / denom), col);
-    else if (mode === 'safety') {
+    let normVal = 0;
+    if (mode === 'stress') {
+      normVal = (vmArr[owner] - rngLo) / denom;
+      rampColor(normVal, col, ramp);
+    } else if (mode === 'peel') {
+      normVal = ((peelArr?.[owner] ?? 0) - rngLo) / denom;
+      rampColor(normVal, col, ramp);
+    } else if (mode === 'safety') {
       // Diverging about the critical SF: 1 → the map's centre, ≥ cap → blue, → 0 → full
       // red. A vanishing vm means infinite SF, so it clamps onto the blue end.
       const sf = vmArr[owner] > 0 ? yieldMpa / vmArr[owner] : Infinity;
       const t = sf <= 1
         ? 0.5 + 0.5 * Math.max(0, 1 - sf)
         : 0.5 - 0.5 * Math.min(1, (sf - 1) / Math.max(1, vmax - 1));
+      normVal = t;
       rampColor(t, col, RAMP_SAFETY);
-    }
-    else if (mode === 'deflection') {
+    } else if (mode === 'deflection') {
       let m = 0;
       for (let j = 0; j < 3; j++) {
         const n = lvl.surfaceFacets[6 * f + j];
         m += Math.hypot(u[3 * n], u[3 * n + 1], u[3 * n + 2]);
       }
-      rampColor((m / 3 - rngLo) / denom, col);
+      normVal = (m / 3 - rngLo) / denom;
+      rampColor(normVal, col, ramp);
     } else if (mode === 'temperature') {
       // Nodal data averaged over the facet's corners, like the deflection magnitude; a
       // run without temperature statements stays grey.
@@ -377,13 +427,15 @@ function rebuild(lvl: LevelResult) {
       if (t) {
         let m = 0;
         for (let j = 0; j < 3; j++) m += t[lvl.surfaceFacets[6 * f + j]];
-        rampColor((m / 3 - rngLo) / denom, col);
+        normVal = (m / 3 - rngLo) / denom;
+        rampColor(normVal, col, ramp);
       } else {
         col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
       }
     } else {
       col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
     }
+    facetScalars[f] = Math.max(0, Math.min(1, normVal));
     for (let j = 0; j < 3; j++) {
       const n = lvl.surfaceFacets[6 * f + j];
       const o = 9 * f + 3 * j;
@@ -398,10 +450,76 @@ function rebuild(lvl: LevelResult) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: ui.resultsVolumeOn,
+      opacity: ui.resultsVolumeOn ? 0.34 : 1.0,
+      depthWrite: !ui.resultsVolumeOn,
+    }),
+  );
   mesh.renderOrder = 1;
   resultGroup.add(mesh);
   resultMesh = mesh;
+
+  // ParaView / VTK-style Volumetric Ray-Marched Iso-Shells & Glowing Scalar Cloud:
+  // When `ui.resultsVolumeOn` is enabled, synthesise 5 nested additive volumetric shells
+  // weighted by scalar intensity t^1.8 so hot spots / stress concentrations glow volumetrically.
+  if (ui.resultsVolumeOn && nFacets > 0) {
+    let cx = 0, cy = 0, cz = 0;
+    const nVerts = positions.length / 3;
+    for (let i = 0; i < positions.length; i += 3) {
+      cx += positions[i];
+      cy += positions[i + 1];
+      cz += positions[i + 2];
+    }
+    cx /= Math.max(1, nVerts);
+    cy /= Math.max(1, nVerts);
+    cz /= Math.max(1, nVerts);
+
+    const thresholds = [0.25, 0.45, 0.62, 0.78, 0.90];
+    const shellScales = [0.97, 0.93, 0.88, 0.82, 0.75];
+    for (let sIdx = 0; sIdx < thresholds.length; sIdx++) {
+      const thr = thresholds[sIdx];
+      const shScale = shellScales[sIdx];
+      const hotPos: number[] = [];
+      const hotCol: number[] = [];
+      for (let f = 0; f < nFacets; f++) {
+        const sv = facetScalars[f];
+        if (sv < thr) continue;
+        const boost = Math.min(1, (sv - thr) / Math.max(0.08, 1 - thr));
+        rampColor(Math.min(1, sv * 0.92 + 0.08), col, ramp);
+        for (let j = 0; j < 3; j++) {
+          const o = 9 * f + 3 * j;
+          const px = cx + (positions[o] - cx) * shScale;
+          const py = cy + (positions[o + 1] - cy) * shScale;
+          const pz = cz + (positions[o + 2] - cz) * shScale;
+          hotPos.push(px, py, pz);
+          hotCol.push(col[0] * (0.65 + 0.35 * boost), col[1] * (0.65 + 0.35 * boost), col[2] * (0.65 + 0.35 * boost));
+        }
+      }
+      if (hotPos.length > 0) {
+        const sGeo = new THREE.BufferGeometry();
+        sGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(hotPos), 3));
+        sGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(hotCol), 3));
+        const sMesh = new THREE.Mesh(
+          sGeo,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.16 + 0.05 * sIdx,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          }),
+        );
+        sMesh.renderOrder = 2 + sIdx;
+        resultGroup.add(sMesh);
+      }
+    }
+  }
 
   if (mode === 'vectors') {
     const diag = modelDiag(lvl) || 40;
@@ -507,7 +625,7 @@ function syncResults(vp: Viewport) {
   ensureTicker(lvl);
   const on = store.lens === 'results' && !!lvl;
   const sig = on
-    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsCase}|${ui.resultsScale}|${
+    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsColormap}|${ui.resultsVolumeOn ? 'vol' : 'surf'}|${ui.resultsCase}|${ui.resultsScale}|${
         ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
       }|${ui.resultsModeShape}|${ui.resultsModePhase}|${ui.resultsModePlay ? 'p' : 's'}`
     : 'off';
@@ -1007,6 +1125,34 @@ function ResultsPanel() {
                 testId="results-scale"
               />
               <button type="button" class="mini-btn" data-testid="scale-reset" title="Reset to the default ×5" onClick={() => ui.set('resultsScale', RESULTS_SCALE_DEFAULT)}>Reset</button>
+            </div>
+            <span class="plain">Colourmap</span>
+            <div class="scale-row" style={{ gap: '4px', flexWrap: 'wrap' }}>
+              <Seg<ResultColormap>
+                value={ui.resultsColormap}
+                options={[
+                  { value: 'viridis', label: 'Viridis' },
+                  { value: 'flame', label: 'Flame' },
+                  { value: 'turbo', label: 'Turbo' },
+                  { value: 'coolwarm', label: 'Coolwarm' },
+                ]}
+                onChange={(v) => ui.set('resultsColormap', v)}
+                testId="results-colormap"
+              />
+              <button
+                type="button"
+                class={`mini-btn${ui.resultsVolumeOn ? ' active' : ''}`}
+                data-testid="results-volume-toggle"
+                title="ParaView / VTK 3D translucent volumetric iso-shells & additive scalar glow"
+                onClick={() => ui.set('resultsVolumeOn', !ui.resultsVolumeOn)}
+                style={
+                  ui.resultsVolumeOn
+                    ? { background: '#ea580c', color: '#fff', borderColor: '#f97316', fontWeight: 600 }
+                    : undefined
+                }
+              >
+                {ui.resultsVolumeOn ? '3D Volume: ON' : '3D Volume'}
+              </button>
             </div>
           </div>
           {legend && legend.caption && (

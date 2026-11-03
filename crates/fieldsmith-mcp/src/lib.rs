@@ -24,6 +24,7 @@ use fieldsmith_doc::{
     canonical_color, fsm, param, Convection, Document, Family, FillMode, HeatFlux, Let, Load,
     LoadKind, Node, NodeKind, Op, Region, Selector, Support, Temperature, Transform,
 };
+use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
 use fieldsmith_solve::coupled_system::{
     CoupledEngineeringSystem, DesignParameter, EngineConfig, MonolithicSystemEngine, NamedScenario,
     ObjectiveDescriptor, ObjectiveKind, RegenerativeCooledNozzleSystem, SystemAnalysisResult,
@@ -984,6 +985,7 @@ impl Server {
         let case = CffCase::uk5_reference()?;
         let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
         let nozzle_sys = RegenerativeCooledNozzleSystem::default();
+        let candle_sys = SolarCandleIgnitionSystem::default();
 
         let bath_scenarios = vec![
             NamedScenario {
@@ -1021,6 +1023,8 @@ impl Server {
             },
         ];
 
+        let candle_scenarios = candle_sys.named_scenarios();
+
         Ok(json!({
             "systems": [
                 {
@@ -1044,6 +1048,17 @@ impl Server {
                     "epistemic_parameters": nozzle_sys.epistemic_parameters(),
                     "objectives": nozzle_sys.objective_descriptors(),
                     "scenarios": nozzle_scenarios,
+                },
+                {
+                    "system_id": candle_sys.system_id(),
+                    "system_title": candle_sys.system_title(),
+                    "industry_sector": candle_sys.industry_sector(),
+                    "num_dofs": candle_sys.num_dofs(),
+                    "fields": candle_sys.field_descriptors(),
+                    "design_parameters": candle_sys.design_parameters(),
+                    "epistemic_parameters": candle_sys.epistemic_parameters(),
+                    "objectives": candle_sys.objective_descriptors(),
+                    "scenarios": candle_scenarios,
                 }
             ]
         }))
@@ -1137,6 +1152,38 @@ impl Server {
                 "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
                 "fsm_3d": fsm_3d,
             }))
+        } else if system_id == "solar_candle_ignition_v1" {
+            let sys = SolarCandleIgnitionSystem::default();
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig::default();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let candle_flame_visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
+            let fsm_3d = sys.build_3d_fsm(&p);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "candle_flame_visual": candle_flame_visual,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
         } else {
             Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
         }
@@ -1180,6 +1227,10 @@ impl Server {
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else if system_id == "regen_nozzle_h2_v1" {
             let sys = RegenerativeCooledNozzleSystem::default();
+            let cfg = EngineConfig::default();
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else if system_id == "solar_candle_ignition_v1" {
+            let sys = SolarCandleIgnitionSystem::default();
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {
@@ -1412,6 +1463,6 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
 ]"#;

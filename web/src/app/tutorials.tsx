@@ -1228,6 +1228,136 @@ solve size=3.5
       },
     ],
   },
+  {
+    id: 'T13',
+    code: 'T13',
+    title: 'Solar-Focused Optical Lens Candle Ignition, Buoyant Flame, Smoke Plume & Real-Time Video',
+    subtitle:
+      'ParaView-Style 3D Volumetric Ray-Marched Radiant Flame, BK7 Solar Caustic Refraction, C₂₅H₅₂ Pyrolysis, Soot/Smoke Plume, Transient Recap & .webm Video Synthesis',
+    level: 'Flagship Multi-Physics',
+    verificationBadge: 'V56 Verified (144-DOF Monolithic Newton · 40 Transient Frames · 5 Recap Milestones)',
+    starterFsmName: 't13-solar-candle-ignition.fsm',
+    opensSystemsWorkbench: false,
+    starterFsm: `fieldsmith 1
+name "T13 — Solar-Focused Optical Lens Candle Ignition & Buoyant Flame"
+material alsi10mg
+
+let lens_r = 32.5
+let lens_z = 111.5
+let wick_len = 7.5
+
+cylinder brass_base r=24 h=6 at=(0, 0, 3)
+color "#d4a84f" on brass_base
+
+cylinder candle_column r=16 h=34 at=(0, 0, 20)
+color "#f5efe2" on candle_column
+sphere molten_wax_cup r=13 at=(0, 0, 39) subtract
+
+cylinder candle_wick r=2.2 h=18 at=(0, 0, 35)
+color "#3a2e28" on candle_wick
+
+box mast_bracket size=(8, 44, 6) at=(0, -21, 3) round=1.0
+color "#6d7888" on mast_bracket
+
+box support_mast size=(6, 8, lens_z) at=(0, -42, 0.5 * lens_z) round=1.5
+color "#6d7888" on support_mast
+
+box lens_arm size=(6, 42, 5) at=(0, -21, lens_z) round=1.0
+color "#6d7888" on lens_arm
+
+cylinder lens_gimbal_outer r=37.0 h=5 at=(0, 0, lens_z)
+color "#7b889a" on lens_gimbal_outer
+cylinder lens_gimbal_bore r=lens_r h=8 at=(0, 0, lens_z) subtract
+
+cylinder optical_glass_lens r=lens_r h=6 at=(0, 0, lens_z)
+color "#88c8ff" on optical_glass_lens
+
+material cucrzr on brass_base
+
+region base_pad = brass_base.bottom
+region wick_hot_zone = candle_wick.side
+region candle_wall = candle_column.side
+region lens_top_face = optical_glass_lens.top
+
+support clamp_base base_pad fixed=xyz
+load lens_gravity lens_top_face force=(0, 0, -12) case="1. Solar Caustic Ignition & Thermal Plume"
+temperature wick_ignition wick_hot_zone temp=397
+convection ambient_plume candle_wall h=18 tinf=22
+heatflux solar_lens_heating lens_top_face q=0.015
+
+solve size=3.5 tref=22
+`,
+    userSteps: [
+      {
+        title: '1. ParaView-Style 3D Volumetric Radiant Flame, Solar Caustic Cone & Smoke Plume in the Main Viewport',
+        lens: 'shape',
+        instruction:
+          'Loading T13 places the 9-body 3D Solar-Focused Candle Assembly (brass base, paraffin column, concave molten wax cup, braided cotton wick, and overhead Ø 65 mm biconvex BK7 optical glass lens) in the main 3D viewport alongside the live "3D Volumetric Solar Candle Flame & Plume" HUD (`[data-testid="coupled-viewport-hud"]`). Switch the Volumetric Transfer Function tabs (`Radiant Flame`, `Temp T_gas`, `Soot / Smoke f_v`, `Blue OH*`, `Updraft u_z`) to inspect the blue OH*/CH* chemiluminescence base sheet, the incandescent Planckian soot core (`~2100 K`), the Beer–Lambert absorbing grey smoke plume aloft, the golden converging solar caustic ray cone (`C ≈ 2355×`), and the buoyant convective entrainment streamlines.',
+        expected:
+          'The 3D viewport renders the volumetric radiant flame, blue OH* base, smoke plume, solar caustic cone, and buoyant airflow directly over the 3D candle and lens.',
+      },
+      {
+        title: '2. Scrubbing Time-Dependent Results, Milestone Recap Cards & Real-Time .webm Video Generation',
+        lens: 'systems',
+        instruction:
+          'Either directly in the 3D Viewport HUD or by tapping "Go to Systems →" (`[data-testid="systems-domain-select"]` → `solar_candle_ignition_v1`), use the Transient Timeline Scrubber (`[data-testid="transient-time-slider"]`, 40 frames from t = 0.00 s to 5.50 s) and click the 5 Milestone Recap Cards (`[data-testid="recap-event-0"]` .. `4`: 1. Solar Caustic Focus → 2. Wax Pool Melting at 331 K → 3. Pyrolysis Vapor Plume at 620 K → 4. Flash Auto-Ignition at 670 K → 5. Steady Buoyant Diffusion Flame & Smoke Plume). Then click "🎬 Render Real-Time Video (.webm)" (`[data-testid="render-transient-video"]`) to record a real-time 30 fps WebM video with embedded scientific telemetry HUD.',
+        expected:
+          'Clicking any milestone recap card jumps the 3D volumetric scene to that physical regime, and "Render Real-Time Video" produces an inline playable `.webm` video (`[data-testid="transient-video-player"]`) + download link.',
+      },
+      {
+        title: '3. ParaView Colourmap Transfer Functions & 3D Volumetric Iso-Shells in Results (3)',
+        lens: 'results',
+        instruction:
+          'Tap "Go to Results →" (tab 3) to solve the 3D thermo-mechanical FEA study on the candle, wick, and optical lens assembly. Switch to "Temperature" or "Stress", select the new ParaView "Flame" (Blackbody) or "Turbo" colourmap (`[data-testid="results-colormap"]`), and toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to render 5 nested additive volumetric iso-shells highlighting the thermal plume and stress gradients inside the 3D mesh.',
+        expected:
+          'In Results (3), the Flame/Turbo colourmaps and 3D Volume iso-shells render translucent glowing scalar contours across the 3D FEA mesh.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle:
+        'Chapter 13 — Solar Caustic Optics, Paraffin Diffusion Flame Chemistry, Buoyant Plume & Volumetric Rendering (V56)',
+      summary:
+        'Coupled thick-lens solar refraction, C₂₅H₅₂ phase change and capillary pyrolysis, Burke–Schumann mixture-fraction combustion, OH* chemiluminescence, Moss–Brookes soot/smoke kinetics, and ParaView emission-absorption volume rendering.',
+      sections: [
+        {
+          heading: '13.1 Thick-Lens BK7 Solar Caustic & Wick Auto-Ignition Delay',
+          equations:
+            '1 / f = (n_BK7 − 1) · [ 2 / R_lens − (n_BK7 − 1) · t_c / (n_BK7 · R_lens²) ]\nw(Δz) = √( (f · θ_sun)² + σ_sph² + (D_lens · |z_lens − f| / (2 f))² ),   C_opt = τ_opt · (D_lens / (2 w(Δz)))²',
+          body: 'Sunlight subtends a half-angle θ_sun = 4.65 mrad (0.266°). Refracted through a biconvex BK7 borosilicate crown glass lens (n = 1.5168), the beam converges to a caustic waist w(0) limited by the solar disk image and spherical aberration σ_sph, achieving optical concentrations C_opt > 2000× and peak focal fluxes > 4000 kW/m². Axial defocus Δz = z_lens − f expands the spot radius conically, reducing absorbed power on the braided cotton wick and lengthening the time to cross T_melt = 331 K, T_vap = 620 K, and T_ign = 670 K.',
+        },
+        {
+          heading: '13.2 Burke–Schumann Mixture Fraction, Blue OH* Base & Soot/Smoke Plume',
+          equations:
+            'C₂₅H₅₂ + 38 O₂ → 25 CO₂ + 26 H₂O   (Z_st = 0.0637 in air)\nu_z(z) = √( u_0² + 2 g β ∫ (T_cl(ζ) − T_∞) dζ ),   d(r_f² u_z)/dz = 2 α_ent r_f u_z',
+          body: 'Once ignited, radiant feedback melts a concave liquid paraffin pool that feeds the wick by Darcy–Lucas–Washburn capillary suction. Vaporized C₂₅H₅₂ mixes with radially entrained air (α_ent ≈ 0.115); along the stoichiometric reaction sheet Z(r, z) = Z_st, excited OH*/CH* radicals emit royal-blue chemiluminescence (431 nm / 308 nm) near the oxygen-rich base. Higher in the fuel-rich interior (0.08 < Z < 0.25, T > 1300 K), polycyclic aromatic hydrocarbons nucleate carbonaceous soot (f_v ~ 1–4 ppm) whose Planckian T⁴ incandescence produces the warm yellow-white candle glow. Unoxidized soot escaping the tip cools into the dark Beer–Lambert absorbing smoke plume.',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: '1. Solve Defocused Solar Candle Scenario (Slow Ignition & Heavy Smoke) via MCP',
+        description:
+          'Evaluate Scenario B (D_lens = 55 mm, z_lens = 92 mm defocused, L_wick = 12 mm long wick) and sync its 3D .fsm CAD twin.',
+        tool: 'solve_coupled_system',
+        arguments: {
+          system_id: 'solar_candle_ignition_v1',
+          design_p: [55.0, 68.0, 92.0, 780.0, 12.0, 0.21],
+          sync_cad: true,
+        },
+      },
+      {
+        title: '2. Run 3 Sparse Adjoint (−dΦ/dp) Optimisation Steps to Refocus Lens & Suppress Smoke',
+        description:
+          'Use exact sparse Adjoint gradients dΦ/dp across all 144 DOFs to refocus the optical lens, enlarge collection aperture, and trim wick smoke.',
+        tool: 'optimise_coupled_system',
+        arguments: {
+          system_id: 'solar_candle_ignition_v1',
+          steps: 3,
+          sync_cad: true,
+        },
+      },
+    ],
+  },
 ];
 
 export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = false) {
@@ -2029,7 +2159,7 @@ function TutorialsStatusItem() {
         style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
         onClick={toggleTutorialsDrawer}
       >
-        Tutorials (T1–T12)
+        Tutorials (T1–T13)
       </button>
       <span class="sep">|</span>
       <button
@@ -2054,7 +2184,7 @@ extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T12)',
+    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T13)',
     run: () => toggleTutorialsDrawer(),
   },
   {

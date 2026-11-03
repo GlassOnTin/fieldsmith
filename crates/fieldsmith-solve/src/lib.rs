@@ -18,6 +18,7 @@
 pub mod assemble;
 pub mod bounds;
 pub mod bsr;
+pub mod candle_flame;
 pub mod coupled_system;
 pub mod dual;
 pub mod float_bath;

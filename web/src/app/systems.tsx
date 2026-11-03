@@ -8,10 +8,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   listCoupledSystems,
   solveCoupledSystem,
+  type CandleFlameVisual,
+  type CandleTransientFrame,
   type CoupledDistortionPoint,
   type CoupledSolveBundle,
   type CoupledSystemSummary,
   type FloatBathVisualFields,
+  type SimulationRecapEvent,
 } from '../doc/wasm';
 import { store } from '../doc/store';
 import { viewOverlays } from './App';
@@ -1200,11 +1203,597 @@ function isFloatBathDocument(): boolean {
   return (store.doc.name || '').includes('Float-Bath');
 }
 
+function isSolarCandleDocument(): boolean {
+  const n = store.doc.name || '';
+  return n.includes('Candle') || n.includes('Solar-Focused');
+}
+
+export type CandleVolumeMode =
+  | 'radiant_flame'
+  | 'temperature'
+  | 'soot_smoke'
+  | 'oh_chemilum'
+  | 'buoyant_vel';
+
+const CANDLE_VOLUME_TABS: { id: CandleVolumeMode; label: string; shortLabel: string; unit: string }[] = [
+  { id: 'radiant_flame', label: 'Planckian Radiant Flame + OH* + Smoke', shortLabel: 'Radiant Flame', unit: 'W/m²' },
+  { id: 'temperature', label: 'Gas Temperature T_gas (Blackbody)', shortLabel: 'Temp T_gas', unit: 'K' },
+  { id: 'soot_smoke', label: 'Soot & Smoke Volume Fraction f_v', shortLabel: 'Soot / Smoke f_v', unit: 'ppm' },
+  { id: 'oh_chemilum', label: 'Excited OH*/CH* Chemiluminescence', shortLabel: 'Blue OH*', unit: 'ppm' },
+  { id: 'buoyant_vel', label: 'Buoyant Updraft Velocity u_z', shortLabel: 'Updraft u_z', unit: 'm/s' },
+];
+
+interface CandleViewportOverlayConfig {
+  enabled: boolean;
+  volumeMode: CandleVolumeMode;
+  showSolarRays: boolean;
+  showSmokePlume: boolean;
+  showEntrainment: boolean;
+  frameIdx: number;
+}
+
+const candleShared: {
+  designP: number[];
+  epistemicTheta: number[];
+  bundle: CoupledSolveBundle | null;
+  summary: CoupledSystemSummary | null;
+  overlay: CandleViewportOverlayConfig;
+} = {
+  designP: [65.0, 68.0, 68.0, 950.0, 7.5, 0.21],
+  epistemicTheta: [1.0, 1.0, 0.115, 0.86],
+  bundle: null,
+  summary: null,
+  overlay: {
+    enabled: true,
+    volumeMode: 'radiant_flame',
+    showSolarRays: true,
+    showSmokePlume: true,
+    showEntrainment: true,
+    frameIdx: 35,
+  },
+};
+
+function ensureCandleSolved() {
+  if (candleShared.bundle && candleShared.bundle.candle_flame_visual) return;
+  try {
+    const cat = listCoupledSystems();
+    const sys = cat.find((s) => s.system_id === 'solar_candle_ignition_v1');
+    if (sys) {
+      candleShared.summary = sys;
+      candleShared.designP = sys.design_parameters.map((p) => p.nominal);
+      candleShared.epistemicTheta = sys.epistemic_parameters.map((t) => t.nominal);
+      candleShared.bundle = solveCoupledSystem(
+        sys.system_id,
+        candleShared.designP,
+        candleShared.epistemicTheta,
+      );
+    }
+  } catch {
+    // ignore before wasm init
+  }
+}
+
+/** Blackbody / Planckian colour ramp: s in [0, 1] -> [r, g, b] in 0..1 */
+function blackbodyRgb01(s: number): [number, number, number] {
+  const x = Math.max(0, Math.min(1, s));
+  if (x < 0.25) {
+    const u = x / 0.25;
+    return [0.18 + 0.62 * u, 0.04 + 0.08 * u, 0.06 + 0.04 * u];
+  }
+  if (x < 0.55) {
+    const u = (x - 0.25) / 0.30;
+    return [0.80 + 0.18 * u, 0.12 + 0.44 * u, 0.10 * (1 - u)];
+  }
+  if (x < 0.82) {
+    const u = (x - 0.55) / 0.27;
+    return [0.98 + 0.02 * u, 0.56 + 0.34 * u, 0.05 + 0.38 * u];
+  }
+  const u = (x - 0.82) / 0.18;
+  return [1.0, 0.90 + 0.10 * u, 0.43 + 0.52 * u];
+}
+
+/**
+ * Populate a Three.js Group with the ParaView-style 3D Volumetric Solar-Focused Candle Flame,
+ * Blue OH* Base Sheet, Beer–Lambert Smoke Plume, Refractive Solar Caustic Cone, and Buoyant
+ * Convective Entrainment Streamlines.
+ */
+function populateSolarCandle3DGroup(
+  group: THREE.Group,
+  vis: CandleFlameVisual,
+  designP: number[],
+  cfg: CandleViewportOverlayConfig,
+  coordSpace: 'workbench' | 'fsm_viewport',
+) {
+  clearThreeGroup(group);
+  const frames = vis.frames ?? [];
+  if (frames.length === 0 || vis.nz < 2) return;
+
+  const fIdx = Math.max(0, Math.min(frames.length - 1, Math.round(cfg.frameIdx)));
+  const frame: CandleTransientFrame = frames[fIdx];
+
+  const dLens = designP[0] ?? vis.lens_diameter_mm ?? 65.0;
+  const rLens = Math.max(17.5, Math.min(55.0, 0.5 * dLens));
+  const zLensAboveWick = designP[2] ?? vis.lens_height_mm ?? 68.0;
+  const lWick = designP[4] ?? 7.5;
+
+  const candleH = 36.0;
+  const wickBaseZ = candleH;
+  const wickTopZ = wickBaseZ + lWick;
+  const lensZ = wickTopZ + zLensAboveWick;
+
+  // In 'workbench' mode, render the 3D brass holder, paraffin candle, dynamic molten wax pool, wick & BK7 lens
+  if (coordSpace === 'workbench') {
+    const brassBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(24, 26, 6, 40),
+      new THREE.MeshStandardMaterial({ color: 0xd4a84f, roughness: 0.32, metalness: 0.72 }),
+    );
+    brassBase.rotation.x = Math.PI / 2;
+    brassBase.position.set(0, 0, 3);
+    group.add(brassBase);
+
+    const candleCol = new THREE.Mesh(
+      new THREE.CylinderGeometry(16, 16, 33, 40),
+      new THREE.MeshStandardMaterial({ color: 0xf5efe2, roughness: 0.55, metalness: 0.04 }),
+    );
+    candleCol.rotation.x = Math.PI / 2;
+    candleCol.position.set(0, 0, 19.5);
+    group.add(candleCol);
+
+    // Dynamic molten liquid paraffin pool at the top of the candle cup (z = 36.1 mm)
+    if (frame.wax_pool_radius_mm > 0.25) {
+      const poolR = Math.min(15.2, frame.wax_pool_radius_mm * 1.35);
+      const waxPool = new THREE.Mesh(
+        new THREE.CylinderGeometry(poolR, poolR * 0.85, 1.2, 36),
+        new THREE.MeshStandardMaterial({
+          color: 0xfbbf24,
+          emissive: frame.ignited ? 0xd97706 : 0x78350f,
+          emissiveIntensity: frame.ignited ? 0.45 : 0.2,
+          roughness: 0.15,
+          metalness: 0.1,
+          transparent: true,
+          opacity: 0.82,
+        }),
+      );
+      waxPool.rotation.x = Math.PI / 2;
+      waxPool.position.set(0, 0, 35.8);
+      group.add(waxPool);
+    }
+
+    // Braided cotton wick + glowing hot tip
+    const wickGlow = Math.max(0, Math.min(1, (frame.wick_temp_k - 320) / 420));
+    const wickMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.25, 1.4, lWick, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0x2c221e,
+        emissive: new THREE.Color(wickGlow * 0.95, wickGlow * 0.32, 0.02),
+        roughness: 0.8,
+      }),
+    );
+    wickMesh.rotation.x = Math.PI / 2;
+    wickMesh.position.set(0, 0, wickBaseZ + 0.5 * lWick);
+    group.add(wickMesh);
+
+    // Overhead Biconvex BK7 Optical Glass Lens & Gimbal Ring
+    const gimbalRing = new THREE.Mesh(
+      new THREE.TorusGeometry(rLens + 2.2, 2.2, 16, 48),
+      new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.35, metalness: 0.75 }),
+    );
+    gimbalRing.position.set(0, 0, lensZ);
+    group.add(gimbalRing);
+
+    const glassLens = new THREE.Mesh(
+      new THREE.SphereGeometry(rLens, 40, 24),
+      new THREE.MeshPhysicalMaterial({
+        color: 0x93c5fd,
+        transparent: true,
+        opacity: 0.42,
+        roughness: 0.08,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+      }),
+    );
+    glassLens.scale.set(1, 1, Math.max(0.14, Math.min(0.28, 7.5 / rLens)));
+    glassLens.position.set(0, 0, lensZ);
+    group.add(glassLens);
+  }
+
+  // 1. Solar Optical Caustic Ray Cone & Focal Spot Glow
+  if (cfg.showSolarRays) {
+    const spotR = Math.max(0.6, vis.spot_radius_mm);
+    // Translucent golden caustic cone from lens down to wick tip
+    const coneH = Math.max(10, lensZ - wickTopZ);
+    const causticCone = new THREE.Mesh(
+      new THREE.CylinderGeometry(rLens * 0.92, spotR, coneH, 36, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xfde047,
+        transparent: true,
+        opacity: 0.14,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    causticCone.rotation.x = Math.PI / 2;
+    causticCone.position.set(0, 0, wickTopZ + 0.5 * coneH);
+    group.add(causticCone);
+
+    // 24 individual collimated incoming solar rays + refracted converging caustic rays
+    const rayPos: number[] = [];
+    const rayCol: number[] = [];
+    const nRays = 24;
+    for (let k = 0; k < nRays; k++) {
+      const ang = (k / nRays) * Math.PI * 2;
+      const ringFrac = k % 2 === 0 ? 0.88 : 0.52;
+      const rxLens = rLens * ringFrac * Math.cos(ang);
+      const ryLens = rLens * ringFrac * Math.sin(ang);
+      const rxSpot = spotR * ringFrac * Math.cos(ang);
+      const rySpot = spotR * ringFrac * Math.sin(ang);
+
+      // Collimated sunlight above lens
+      rayPos.push(rxLens, ryLens, lensZ + 22, rxLens, ryLens, lensZ);
+      rayCol.push(1.0, 0.92, 0.35, 1.0, 0.85, 0.25);
+      // Refracted ray converging to focal spot on wick
+      rayPos.push(rxLens, ryLens, lensZ, rxSpot, rySpot, wickTopZ);
+      rayCol.push(1.0, 0.85, 0.25, 1.0, 0.98, 0.78);
+    }
+    const rayGeom = new THREE.BufferGeometry();
+    rayGeom.setAttribute('position', new THREE.Float32BufferAttribute(rayPos, 3));
+    rayGeom.setAttribute('color', new THREE.Float32BufferAttribute(rayCol, 3));
+    group.add(
+      new THREE.LineSegments(
+        rayGeom,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.58,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      ),
+    );
+
+    // Glowing solar focal spot halo at the wick tip
+    const spotHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(1.8, spotR * 1.45), 24, 18),
+      new THREE.MeshBasicMaterial({
+        color: frame.ignited ? 0xfef08a : 0xfbbf24,
+        transparent: true,
+        opacity: 0.65,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    spotHalo.position.set(0, 0, wickTopZ);
+    group.add(spotHalo);
+  }
+
+  // 2. ParaView-Style Volumetric Ray-Marched Radiant Flame (Nested Additive Iso-Shells)
+  const nz = vis.nz;
+  const nTheta = 36;
+  const zOrigin = wickBaseZ + 0.35 * lWick;
+
+  if (frame.ignited) {
+    // 2a. Blue OH*/CH* Chemiluminescence Base Sheet (cupping the wick base, z_local in 0..14 mm)
+    if (cfg.volumeMode === 'radiant_flame' || cfg.volumeMode === 'oh_chemilum') {
+      const ohShells = [0.86, 0.98, 1.10];
+      for (let sIdx = 0; sIdx < ohShells.length; sIdx++) {
+        const rScale = ohShells[sIdx];
+        const pos: number[] = [];
+        const col: number[] = [];
+        const idx: number[] = [];
+        const nBaseStations = Math.min(nz, 9);
+        for (let i = 0; i < nBaseStations; i++) {
+          const zLoc = vis.z_mm[i] ?? 0;
+          const zWorld = zOrigin + zLoc * 0.72;
+          const rBase = Math.max(1.4, (frame.r_flame_mm[i] ?? 2.0) * rScale);
+          const ohVal = frame.y_oh_ppm[i] ?? 0;
+          const ohNorm = Math.max(0, Math.min(1, ohVal / 280.0));
+          for (let t = 0; t <= nTheta; t++) {
+            const ang = (t / nTheta) * Math.PI * 2;
+            pos.push(rBase * Math.cos(ang), rBase * Math.sin(ang), zWorld);
+            col.push(0.12 * ohNorm, 0.48 * ohNorm, 0.98 * Math.pow(ohNorm, 0.65));
+          }
+        }
+        const ring = nTheta + 1;
+        for (let i = 0; i < nBaseStations - 1; i++) {
+          for (let t = 0; t < nTheta; t++) {
+            const a = i * ring + t;
+            const b = (i + 1) * ring + t;
+            const c = (i + 1) * ring + (t + 1);
+            const d = i * ring + (t + 1);
+            idx.push(a, b, c, a, c, d);
+          }
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        g.setIndex(idx);
+        const m = new THREE.Mesh(
+          g,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.32 - sIdx * 0.06,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          }),
+        );
+        m.renderOrder = 10 + sIdx;
+        group.add(m);
+      }
+    }
+
+    // 2b. 6 Nested Volumetric Luminous Flame Iso-Shells (from inner white-hot core to outer orange-red mantle)
+    const shellScales = [0.26, 0.42, 0.58, 0.74, 0.89, 1.04];
+    const shellOpacities = [0.46, 0.38, 0.32, 0.25, 0.19, 0.13];
+
+    for (let sIdx = 0; sIdx < shellScales.length; sIdx++) {
+      const shScale = shellScales[sIdx];
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+
+      for (let i = 0; i < nz; i++) {
+        const zLoc = vis.z_mm[i] ?? 0;
+        const zWorld = zOrigin + zLoc;
+        const hFlame = Math.max(8.0, frame.flame_height_mm);
+        const xi = zLoc / hFlame;
+        // Pinch the luminous flame shells smoothly to a pointed tip at z = 1.08 * hFlame
+        const tipPinch = xi <= 1.08 ? Math.pow(Math.max(0, 1 - Math.pow(xi / 1.08, 1.6)), 0.55) : 0.02;
+        const rShell = Math.max(0.15, (frame.r_flame_mm[i] ?? 2.0) * shScale * (0.25 + 0.85 * tipPinch));
+
+        // Slight helical buoyancy flicker sway
+        const swayAmp = Math.min(2.2, 0.035 * zLoc) * (xi <= 1.2 ? 1.0 : 0.4);
+        const cx = swayAmp * Math.sin(frame.flicker_phase_rad - 0.11 * zLoc);
+        const cy = 0.45 * swayAmp * Math.cos(frame.flicker_phase_rad - 0.09 * zLoc);
+
+        const tSheet = frame.t_sheet_k[i] ?? 300;
+        const fvSoot = frame.fv_soot_ppm[i] ?? 0;
+        const yOh = frame.y_oh_ppm[i] ?? 0;
+        const uz = frame.u_z_m_s[i] ?? 0;
+
+        let cr = 1.0;
+        let cg = 0.6;
+        let cb = 0.15;
+        if (cfg.volumeMode === 'radiant_flame') {
+          // Inner shells glow hotter (incandescent yellow-white soot core), outer shells glow warm orange-red
+          const coreBoost = 1.0 - 0.32 * Math.abs(shScale - 0.52);
+          const tempNorm = Math.max(0, Math.min(1, ((tSheet - 850) / 1250) * coreBoost)) * (xi <= 1.12 ? 1.0 : 0.08);
+          [cr, cg, cb] = blackbodyRgb01(tempNorm);
+        } else if (cfg.volumeMode === 'temperature') {
+          const tempNorm = Math.max(0, Math.min(1, (tSheet - 300) / 1850));
+          [cr, cg, cb] = blackbodyRgb01(tempNorm);
+        } else if (cfg.volumeMode === 'soot_smoke') {
+          const sootNorm = Math.max(0, Math.min(1, fvSoot / 3.8));
+          [cr, cg, cb] = blackbodyRgb01(sootNorm * 0.82);
+        } else if (cfg.volumeMode === 'oh_chemilum') {
+          const ohNorm = Math.max(0, Math.min(1, yOh / 280));
+          cr = 0.15 * ohNorm;
+          cg = 0.55 * ohNorm;
+          cb = 1.0 * Math.pow(ohNorm, 0.6);
+        } else {
+          const [tr, tg, tb] = turboRamp(Math.max(0, Math.min(1, uz / 0.95)));
+          cr = tr / 255;
+          cg = tg / 255;
+          cb = tb / 255;
+        }
+
+        // Fade out luminous emission above the flame tip (where soot cools into dark smoke)
+        const lumFade = xi <= 1.05 ? 1.0 : Math.exp(-3.5 * (xi - 1.05));
+
+        for (let t = 0; t <= nTheta; t++) {
+          const ang = (t / nTheta) * Math.PI * 2;
+          pos.push(cx + rShell * Math.cos(ang), cy + rShell * Math.sin(ang), zWorld);
+          col.push(cr * lumFade, cg * lumFade, cb * lumFade);
+        }
+      }
+
+      const ring = nTheta + 1;
+      for (let i = 0; i < nz - 1; i++) {
+        for (let t = 0; t < nTheta; t++) {
+          const a = i * ring + t;
+          const b = (i + 1) * ring + t;
+          const c = (i + 1) * ring + (t + 1);
+          const d = i * ring + (t + 1);
+          idx.push(a, b, c, a, c, d);
+        }
+      }
+
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(
+        g,
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: shellOpacities[sIdx],
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      m.renderOrder = 20 + sIdx;
+      group.add(m);
+    }
+  } else if (frame.pyrolysis_rate_mg_s > 0.01) {
+    // Pre-ignition paraffin pyrolysis vapor mist plume rising from the solar-heated wick
+    const mistShells = [0.55, 0.95];
+    for (let sIdx = 0; sIdx < mistShells.length; sIdx++) {
+      const shScale = mistShells[sIdx];
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+      const nVapor = Math.min(nz, 14);
+      for (let i = 0; i < nVapor; i++) {
+        const zLoc = vis.z_mm[i] ?? 0;
+        const zWorld = zOrigin + zLoc * 0.55;
+        const rMist = (1.2 + 0.11 * zLoc) * shScale;
+        const fade = Math.exp(-zLoc / 28.0);
+        for (let t = 0; t <= nTheta; t++) {
+          const ang = (t / nTheta) * Math.PI * 2;
+          pos.push(rMist * Math.cos(ang), rMist * Math.sin(ang), zWorld);
+          col.push(0.82 * fade, 0.86 * fade, 0.94 * fade);
+        }
+      }
+      const ring = nTheta + 1;
+      for (let i = 0; i < nVapor - 1; i++) {
+        for (let t = 0; t < nTheta; t++) {
+          const a = i * ring + t;
+          const b = (i + 1) * ring + t;
+          const c = (i + 1) * ring + (t + 1);
+          const d = i * ring + (t + 1);
+          idx.push(a, b, c, a, c, d);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(
+        g,
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.28 - sIdx * 0.08,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      m.renderOrder = 18 + sIdx;
+      group.add(m);
+    }
+  }
+
+  // 3. Beer–Lambert Absorbing Carbonaceous Smoke Plume above the Flame Tip
+  if (cfg.showSmokePlume && (frame.ignited || frame.smoke_emission_ug_s > 0.3)) {
+    const smokeIntensity = Math.max(0.18, Math.min(1.0, frame.smoke_emission_ug_s / 24.0));
+    const smokeShells = [0.48, 0.82, 1.15];
+    for (let sIdx = 0; sIdx < smokeShells.length; sIdx++) {
+      const shScale = smokeShells[sIdx];
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+      const startI = frame.ignited ? Math.max(4, Math.floor(nz * 0.28)) : 1;
+
+      for (let i = startI; i < nz; i++) {
+        const zLoc = vis.z_mm[i] ?? 0;
+        const zWorld = zOrigin + zLoc;
+        const hFlame = Math.max(10.0, frame.flame_height_mm || 18.0);
+        const aboveTip = Math.max(0, (zLoc - 0.72 * hFlame) / 45.0);
+        const rSmoke = (1.1 + 4.8 * Math.pow(aboveTip, 0.72)) * shScale;
+        const swayX = 2.4 * aboveTip * Math.sin(frame.flicker_phase_rad - 0.13 * zLoc);
+        const swayY = 1.4 * aboveTip * Math.cos(frame.flicker_phase_rad - 0.10 * zLoc);
+        const shade = 0.22 + 0.14 * sIdx;
+
+        for (let t = 0; t <= 28; t++) {
+          const ang = (t / 28) * Math.PI * 2;
+          pos.push(swayX + rSmoke * Math.cos(ang), swayY + rSmoke * Math.sin(ang), zWorld);
+          col.push(shade, shade, shade + 0.03);
+        }
+      }
+
+      const ring = 29;
+      const nRows = nz - startI;
+      for (let i = 0; i < nRows - 1; i++) {
+        for (let t = 0; t < 28; t++) {
+          const a = i * ring + t;
+          const b = (i + 1) * ring + t;
+          const c = (i + 1) * ring + (t + 1);
+          const d = i * ring + (t + 1);
+          idx.push(a, b, c, a, c, d);
+        }
+      }
+      if (idx.length > 0) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        g.setIndex(idx);
+        const m = new THREE.Mesh(
+          g,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: (0.26 - sIdx * 0.06) * smokeIntensity,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          }),
+        );
+        m.renderOrder = 30 + sIdx;
+        group.add(m);
+      }
+    }
+  }
+
+  // 4. Buoyant Convective Air Entrainment & Plume Streamlines
+  if (cfg.showEntrainment) {
+    const nStreams = 12;
+    const streamPos: number[] = [];
+    const streamCol: number[] = [];
+    for (let s = 0; s < nStreams; s++) {
+      const ang = (s / nStreams) * Math.PI * 2;
+      for (let i = 0; i < nz - 1; i++) {
+        const z0 = zOrigin + (vis.z_mm[i] ?? 0);
+        const z1 = zOrigin + (vis.z_mm[i + 1] ?? 0);
+        const frac0 = i / (nz - 1);
+        const frac1 = (i + 1) / (nz - 1);
+        // Radial air entrainment draws streamlines inward near the base, then buoyant plume expands gently aloft
+        const r0 = 22.0 * Math.exp(-3.2 * frac0) + 6.5 + 4.5 * frac0;
+        const r1 = 22.0 * Math.exp(-3.2 * frac1) + 6.5 + 4.5 * frac1;
+        const uz0 = frame.u_z_m_s[i] ?? 0.1;
+        const [cr0, cg0, cb0] = turboRamp(Math.min(1, uz0 / 0.9));
+        streamPos.push(
+          r0 * Math.cos(ang),
+          r0 * Math.sin(ang),
+          z0,
+          r1 * Math.cos(ang),
+          r1 * Math.sin(ang),
+          z1,
+        );
+        streamCol.push(cr0 / 255, cg0 / 255, cb0 / 255, cr0 / 255, cg0 / 255, cb0 / 255);
+      }
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.Float32BufferAttribute(streamPos, 3));
+    sg.setAttribute('color', new THREE.Float32BufferAttribute(streamCol, 3));
+    group.add(
+      new THREE.LineSegments(
+        sg,
+        new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.65 }),
+      ),
+    );
+  }
+}
+
 function syncCoupledViewportOverlay(vp: Viewport) {
   if (!coupledVpHost) {
     coupledVpHost = vp;
     vp.overlays.add(coupledVpGroup);
   }
+  if (isSolarCandleDocument()) {
+    if (!candleShared.overlay.enabled) {
+      if (coupledVpGroup.children.length > 0) {
+        clearThreeGroup(coupledVpGroup);
+        vp.invalidate();
+      }
+      return;
+    }
+    ensureCandleSolved();
+    const vis = candleShared.bundle?.candle_flame_visual;
+    if (!vis) return;
+    populateSolarCandle3DGroup(
+      coupledVpGroup,
+      vis,
+      candleShared.designP,
+      candleShared.overlay,
+      'fsm_viewport',
+    );
+    vp.invalidate();
+    return;
+  }
+
   if (!isFloatBathDocument() || !coupledShared.overlay.enabled) {
     if (coupledVpGroup.children.length > 0) {
       clearThreeGroup(coupledVpGroup);
@@ -1272,6 +1861,23 @@ function CoupledViewportHud() {
               } catch {
                 // ignore
               }
+            } else if (
+              ws.coupled_system_id === 'solar_candle_ignition_v1' &&
+              Array.isArray(ws.design_p)
+            ) {
+              candleShared.designP = ws.design_p;
+              if (Array.isArray(ws.epistemic_theta)) {
+                candleShared.epistemicTheta = ws.epistemic_theta;
+              }
+              try {
+                candleShared.bundle = solveCoupledSystem(
+                  'solar_candle_ignition_v1',
+                  candleShared.designP,
+                  candleShared.epistemicTheta,
+                );
+              } catch {
+                // ignore
+              }
             }
             if (typeof ws.doc_fsm === 'string' && ws.doc_fsm.trim().length > 0) {
               openText(ws.doc_fsm, 'mcp-shared-workspace.fsm');
@@ -1293,7 +1899,17 @@ function CoupledViewportHud() {
     };
   }, []);
 
-  if (ui.systemsOpen || !isFloatBathDocument()) return null;
+  if (ui.systemsOpen) return null;
+
+  if (isSolarCandleDocument()) {
+    ensureCandleSolved();
+    const bundle = candleShared.bundle;
+    const vis = bundle?.candle_flame_visual;
+    if (!bundle || !vis) return null;
+    return <SolarCandleViewportHud bundle={bundle} vis={vis} bump={bump} />;
+  }
+
+  if (!isFloatBathDocument()) return null;
   ensureCoupledSolved();
   const bundle = coupledShared.bundle;
   const vis = bundle?.float_bath_visual;
@@ -1764,6 +2380,863 @@ function RocketNozzle3DTwin({
   );
 }
 
+// ---- ParaView-Style 3D Volumetric Solar-Focused Candle Flame, Transient Scrubber, Recap & Real-Time Video Renderer (Pack #3 / V56) ----
+
+/**
+ * Record a real-time 30 fps `.webm` video of the 40-frame transient simulation by stepping
+ * through `0..frames.length-1`, synchronously rendering the 3D scene via `renderFrameAt(k)`,
+ * and compositing a ParaView-style scientific telemetry HUD banner onto an offscreen canvas.
+ */
+async function renderCandleTransientVideoWebm(
+  vis: CandleFlameVisual,
+  renderFrameToCanvas: (frameIdx: number) => HTMLCanvasElement | null,
+  onProgress: (pct: number, frameIdx: number) => void,
+): Promise<string> {
+  const frames = vis.frames ?? [];
+  if (frames.length === 0) throw new Error('No transient frames to render');
+
+  const width = 640;
+  const height = 380;
+  const compCanvas = document.createElement('canvas');
+  compCanvas.width = width;
+  compCanvas.height = height;
+  const ctx = compCanvas.getContext('2d');
+  if (!ctx) throw new Error('Could not create 2D composite canvas context');
+
+  const mimeCandidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  const mimeType =
+    mimeCandidates.find((m) => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
+
+  const stream = compCanvas.captureStream(30);
+  const recorder = mimeType ? new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_500_000 }) : new MediaRecorder(stream);
+  const chunks: BlobPart[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+
+  const stopped = new Promise<string>((resolve, reject) => {
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      resolve(URL.createObjectURL(blob));
+    };
+    recorder.onerror = (e) => reject(e);
+  });
+
+  recorder.start();
+
+  for (let k = 0; k < frames.length; k++) {
+    const f: CandleTransientFrame = frames[k];
+    const srcCanvas = renderFrameToCanvas(k);
+
+    ctx.fillStyle = '#090d16';
+    ctx.fillRect(0, 0, width, height);
+    if (srcCanvas) {
+      try {
+        ctx.drawImage(srcCanvas, 0, 0, width, height);
+      } catch {
+        // ignore cross-context draw error if any
+      }
+    }
+
+    // Top HUD Telemetry Banner
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
+    ctx.fillRect(0, 0, width, 46);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      `FIELDSMITH V56 — SOLAR-FOCUSED CANDLE IGNITION & BUOYANT FLAME`,
+      12,
+      18,
+    );
+    ctx.fillStyle = f.ignited ? '#fbbf24' : '#38bdf8';
+    ctx.font = 'bold 11px JetBrains Mono, monospace';
+    ctx.fillText(
+      `t = ${f.time_s.toFixed(2)} s | ${f.phase_name}`,
+      12,
+      36,
+    );
+
+    // Bottom Telemetry Bar + Timeline Progress
+    ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
+    ctx.fillRect(0, height - 44, width, 44);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '11px JetBrains Mono, monospace';
+    ctx.fillText(
+      `T_wick: ${f.wick_temp_k.toFixed(0)} K | T_flame: ${f.peak_flame_temp_k.toFixed(0)} K | H_f: ${f.flame_height_mm.toFixed(1)} mm | P_rad: ${f.radiant_power_w.toFixed(1)} W | Smoke: ${f.smoke_emission_ug_s.toFixed(1)} μg/s | u_z: ${f.peak_updraft_m_s.toFixed(2)} m/s`,
+      12,
+      height - 22,
+    );
+
+    // Progress bar along bottom edge
+    const pct = (k + 1) / frames.length;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(12, height - 10, width - 24, 4);
+    ctx.fillStyle = f.ignited ? '#f97316' : '#38bdf8';
+    ctx.fillRect(12, height - 10, (width - 24) * pct, 4);
+
+    onProgress(Math.round(pct * 100), k);
+    await new Promise((r) => window.setTimeout(r, 42));
+  }
+
+  recorder.stop();
+  return stopped;
+}
+
+function SolarCandleViewportHud({
+  bundle,
+  vis,
+  bump,
+}: {
+  bundle: CoupledSolveBundle;
+  vis: CandleFlameVisual;
+  bump: () => void;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<number>(1);
+  const [renderingVideo, setRenderingVideo] = useState(false);
+  const [videoPct, setVideoPct] = useState(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
+  const ov = candleShared.overlay;
+  const frames = vis.frames ?? [];
+  const fIdx = Math.max(0, Math.min(frames.length - 1, Math.round(ov.frameIdx)));
+  const curFrame = frames[fIdx] ?? frames[frames.length - 1];
+  const p = candleShared.designP;
+
+  useEffect(() => {
+    if (!playing || frames.length === 0) return;
+    const intervalMs = Math.max(30, Math.round(90 / speed));
+    const timer = window.setInterval(() => {
+      candleShared.overlay.frameIdx = (candleShared.overlay.frameIdx + 1) % frames.length;
+      bump();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [playing, speed, frames.length]);
+
+  const updateCandleParam = (idx: number, val: number) => {
+    const nextP = [...candleShared.designP];
+    nextP[idx] = val;
+    candleShared.designP = nextP;
+    try {
+      candleShared.bundle = solveCoupledSystem(
+        'solar_candle_ignition_v1',
+        nextP,
+        candleShared.epistemicTheta,
+      );
+    } catch {
+      // ignore
+    }
+    bump();
+  };
+
+  const handleRenderVideo = async () => {
+    if (renderingVideo) return;
+    setPlaying(false);
+    setRenderingVideo(true);
+    setVideoPct(0);
+    const prevIdx = candleShared.overlay.frameIdx;
+    try {
+      const url = await renderCandleTransientVideoWebm(
+        vis,
+        (k) => {
+          candleShared.overlay.frameIdx = k;
+          if (liveViewport) {
+            syncCoupledViewportOverlay(liveViewport);
+            return liveViewport.captureCanvas();
+          }
+          return null;
+        },
+        (pct) => setVideoPct(pct),
+      );
+      setVideoUrl(url);
+      ui.notify('Rendered real-time .webm video of Solar Candle Ignition & Buoyant Flame');
+    } catch (e) {
+      ui.notify(`Video render error: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      candleShared.overlay.frameIdx = prevIdx;
+      setRenderingVideo(false);
+      bump();
+    }
+  };
+
+  return (
+    <div
+      class="sys-vp-hud"
+      data-testid="coupled-viewport-hud"
+      style={{ maxWidth: '465px', top: 'auto', right: 'auto', bottom: '44px', left: '10px', zIndex: 25 }}
+    >
+      <div class="sys-vp-hud-head">
+        <span>3D Volumetric Solar Candle Flame &amp; Plume (144-DOF + 40-Frame Transient)</span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={ov.enabled}
+            data-testid="toggle-vp-coupled-overlay"
+            onChange={(e) => {
+              ov.enabled = (e.target as HTMLInputElement).checked;
+              bump();
+            }}
+          />
+          Show in 3D
+        </label>
+      </div>
+
+      {ov.enabled && curFrame && (
+        <>
+          <div class="seg" style={{ width: '100%', display: 'flex' }}>
+            {CANDLE_VOLUME_TABS.map((t) => (
+              <button
+                key={t.id}
+                style={{ flex: 1, fontSize: '10px', padding: '0 3px' }}
+                class={ov.volumeMode === t.id ? 'on' : ''}
+                data-testid={`vp-candle-mode-${t.id}`}
+                onClick={() => {
+                  ov.volumeMode = t.id;
+                  bump();
+                }}
+              >
+                {t.shortLabel}
+              </button>
+            ))}
+          </div>
+
+          <div class="sys-vp-hud-row">
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showSolarRays}
+                onChange={(e) => {
+                  ov.showSolarRays = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Solar Caustic Rays
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showSmokePlume}
+                onChange={(e) => {
+                  ov.showSmokePlume = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Smoke Plume
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={ov.showEntrainment}
+                onChange={(e) => {
+                  ov.showEntrainment = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Buoyant Airflow
+            </label>
+          </div>
+
+          {/* Time-Dependent Transient Scrubber & Real-Time Video Recorder */}
+          <div
+            style={{
+              background: 'rgba(15, 23, 42, 0.72)',
+              border: '1px solid var(--line)',
+              borderRadius: '5px',
+              padding: '6px 8px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '5px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <button
+                  type="button"
+                  class="mini-btn"
+                  data-testid="transient-play-btn"
+                  onClick={() => setPlaying(!playing)}
+                >
+                  {playing ? '⏸ Pause' : '▶ Play'}
+                </button>
+                <button
+                  type="button"
+                  class="mini-btn"
+                  onClick={() => setSpeed(speed === 1 ? 2 : speed === 2 ? 0.5 : 1)}
+                  title="Cycle playback speed (0.5× / 1× / 2×)"
+                >
+                  {speed}×
+                </button>
+                <span class="num" style={{ fontSize: '11px', color: curFrame.ignited ? '#fbbf24' : '#38bdf8', fontWeight: 600 }}>
+                  t = {curFrame.time_s.toFixed(2)} s · {curFrame.phase_name}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid="render-transient-video"
+                disabled={renderingVideo}
+                onClick={handleRenderVideo}
+                style={{ background: '#ea580c', color: '#fff', borderColor: '#f97316', fontWeight: 600 }}
+                title="Render a real-time 30 fps .webm video from the 40-frame transient simulation"
+              >
+                {renderingVideo ? `Rendering ${videoPct}%…` : '🎬 Render Video'}
+              </button>
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, frames.length - 1)}
+              step={1}
+              value={fIdx}
+              data-testid="transient-time-slider"
+              onInput={(e) => {
+                setPlaying(false);
+                candleShared.overlay.frameIdx = parseInt((e.target as HTMLInputElement).value, 10) || 0;
+                bump();
+              }}
+            />
+
+            {/* Milestone Recap Quick-Jump Pills */}
+            {vis.recap_events && vis.recap_events.length > 0 && (
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                {vis.recap_events.map((ev: SimulationRecapEvent, idx: number) => (
+                  <button
+                    key={ev.event_id}
+                    type="button"
+                    class="mini-btn"
+                    data-testid={`recap-event-${idx}`}
+                    title={`${ev.title} (${ev.time_s.toFixed(2)} s): ${ev.summary}`}
+                    onClick={() => {
+                      setPlaying(false);
+                      candleShared.overlay.frameIdx = ev.frame_index;
+                      bump();
+                    }}
+                    style={
+                      Math.abs(fIdx - ev.frame_index) <= 1
+                        ? { borderColor: '#f59e0b', color: '#fbbf24', fontWeight: 600, fontSize: '10px' }
+                        : { fontSize: '10px' }
+                    }
+                  >
+                    {idx + 1}. {ev.regime_badge} ({ev.time_s.toFixed(1)}s)
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {videoUrl && (
+              <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <video
+                  src={videoUrl}
+                  controls
+                  autoPlay
+                  loop
+                  muted
+                  data-testid="transient-video-player"
+                  style={{ width: '100%', maxHeight: '165px', borderRadius: '4px', border: '1px solid var(--line)', background: '#000' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10.5px' }}>
+                  <span class="num" style={{ color: 'var(--ok)' }}>✓ Real-time rendered video ready (30 fps WebM)</span>
+                  <a
+                    href={videoUrl}
+                    download="solar-candle-ignition-transient.webm"
+                    class="mini-btn"
+                    data-testid="download-transient-video"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    ⬇ Download .webm
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div class="sys-vp-hud-sliders">
+            <div class="sys-vp-mini-slider">
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Lens Aperture D_lens</span>
+                <strong class="num">{(p[0] ?? 65).toFixed(0)} mm</strong>
+              </div>
+              <input
+                type="range"
+                min={35}
+                max={110}
+                step={1}
+                value={p[0] ?? 65}
+                onInput={(e) => updateCandleParam(0, parseFloat((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div class="sys-vp-mini-slider">
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Lens Height z_lens (f={vis.focal_length_mm.toFixed(0)}mm)</span>
+                <strong class="num">{(p[2] ?? 68).toFixed(0)} mm</strong>
+              </div>
+              <input
+                type="range"
+                min={45}
+                max={125}
+                step={1}
+                value={p[2] ?? 68}
+                onInput={(e) => updateCandleParam(2, parseFloat((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div class="sys-vp-mini-slider">
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Wick Length L_wick</span>
+                <strong class="num">{(p[4] ?? 7.5).toFixed(1)} mm</strong>
+              </div>
+              <input
+                type="range"
+                min={3.5}
+                max={14.0}
+                step={0.5}
+                value={p[4] ?? 7.5}
+                onInput={(e) => updateCandleParam(4, parseFloat((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div class="sys-vp-mini-slider">
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Ambient O₂ Fraction</span>
+                <strong class="num">{((p[5] ?? 0.21) * 100).toFixed(1)} %</strong>
+              </div>
+              <input
+                type="range"
+                min={0.15}
+                max={0.30}
+                step={0.005}
+                value={p[5] ?? 0.21}
+                onInput={(e) => updateCandleParam(5, parseFloat((e.target as HTMLInputElement).value))}
+              />
+            </div>
+          </div>
+
+          <div class="sys-vp-hud-row num" style={{ borderTop: '1px solid var(--line)', paddingTop: '5px' }}>
+            <span title="Solar Auto-Ignition Delay">
+              t_ign: <strong style={{ color: vis.ignition_delay_s <= 3.5 ? 'var(--ok)' : 'var(--danger)' }}>{vis.ignition_delay_s.toFixed(2)} s</strong>
+            </span>
+            <span title="Instantaneous Wick / Flame Temperature">
+              T_max: <strong>{curFrame.peak_flame_temp_k.toFixed(0)} K</strong>
+            </span>
+            <span title="Luminous Radiant Power">
+              P_rad: <strong>{curFrame.radiant_power_w.toFixed(1)} W</strong>
+            </span>
+            <span title="Escaping Carbonaceous Smoke Emission">
+              Smoke: <strong style={{ color: curFrame.smoke_emission_ug_s <= 18.0 ? 'var(--ok)' : 'var(--danger)' }}>{curFrame.smoke_emission_ug_s.toFixed(1)} μg/s</strong>
+            </span>
+            <button
+              class="btn small"
+              title="Rebuild 3D .fsm CSG & Thermo-Mechanical FEA mesh to match current optical lens & wick parameters"
+              onClick={() => {
+                if (bundle.fsm_3d) {
+                  openText(bundle.fsm_3d, 'solar-candle-ignition.fsm');
+                  ui.set('resultsCase', 0);
+                }
+              }}
+            >
+              Sync Solid .fsm
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SolarCandle3DTwin({
+  vis,
+  designP,
+}: {
+  vis: CandleFlameVisual;
+  designP: number[];
+}) {
+  const [volumeMode, setVolumeMode] = useState<CandleVolumeMode>(candleShared.overlay.volumeMode);
+  const [showSolarRays, setShowSolarRays] = useState(true);
+  const [showSmokePlume, setShowSmokePlume] = useState(true);
+  const [showEntrainment, setShowEntrainment] = useState(true);
+  const [frameIdx, setFrameIdx] = useState<number>(candleShared.overlay.frameIdx);
+  const [playing, setPlaying] = useState<boolean>(false);
+  const [speed, setSpeed] = useState<number>(1);
+  const [renderingVideo, setRenderingVideo] = useState<boolean>(false);
+  const [videoPct, setVideoPct] = useState<number>(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
+  const mountRef = useRef<HTMLDivElement>(null);
+  const sceneRef = useRef<{
+    scene: THREE.Scene;
+    root: THREE.Group;
+    camera: THREE.PerspectiveCamera;
+    controls: OrbitControls;
+    renderer: THREE.WebGLRenderer;
+  } | null>(null);
+
+  const frames = vis.frames ?? [];
+  const safeIdx = Math.max(0, Math.min(frames.length - 1, Math.round(frameIdx)));
+  const curFrame = frames[safeIdx] ?? frames[frames.length - 1];
+
+  useEffect(() => {
+    const host = mountRef.current;
+    if (!host) return;
+    const width = Math.max(host.clientWidth, 420);
+    const height = Math.max(host.clientHeight, 285);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(width, height);
+    renderer.setClearColor(0x080c14, 1);
+    host.innerHTML = '';
+    host.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, width / height, 1, 2000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(0, -165, 76);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0, 62);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.update();
+
+    scene.add(new THREE.HemisphereLight(0xe2e8f0, 0x1e293b, 0.9));
+    const dirLight = new THREE.DirectionalLight(0xfffbeb, 1.0);
+    dirLight.position.set(60, -110, 180);
+    scene.add(dirLight);
+
+    const root = new THREE.Group();
+    scene.add(root);
+    sceneRef.current = { scene, root, camera, controls, renderer };
+
+    let raf = 0;
+    const animate = () => {
+      raf = requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    const ro = new ResizeObserver(() => {
+      if (!host) return;
+      const w = Math.max(host.clientWidth, 320);
+      const h = Math.max(host.clientHeight, 240);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    });
+    ro.observe(host);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      clearThreeGroup(root);
+      renderer.dispose();
+      sceneRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const ctx = sceneRef.current;
+    if (!ctx) return;
+    candleShared.overlay.volumeMode = volumeMode;
+    candleShared.overlay.showSolarRays = showSolarRays;
+    candleShared.overlay.showSmokePlume = showSmokePlume;
+    candleShared.overlay.showEntrainment = showEntrainment;
+    candleShared.overlay.frameIdx = safeIdx;
+
+    populateSolarCandle3DGroup(
+      ctx.root,
+      vis,
+      designP,
+      {
+        enabled: true,
+        volumeMode,
+        showSolarRays,
+        showSmokePlume,
+        showEntrainment,
+        frameIdx: safeIdx,
+      },
+      'workbench',
+    );
+    ctx.renderer.render(ctx.scene, ctx.camera);
+  }, [vis, designP, volumeMode, showSolarRays, showSmokePlume, showEntrainment, safeIdx]);
+
+  useEffect(() => {
+    if (!playing || frames.length === 0) return;
+    const intervalMs = Math.max(30, Math.round(90 / speed));
+    const timer = window.setInterval(() => {
+      setFrameIdx((prev) => (prev + 1) % frames.length);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [playing, speed, frames.length]);
+
+  const handleRenderVideo = async () => {
+    const ctx = sceneRef.current;
+    if (!ctx || renderingVideo) return;
+    setPlaying(false);
+    setRenderingVideo(true);
+    setVideoPct(0);
+    const prevIdx = safeIdx;
+    try {
+      const url = await renderCandleTransientVideoWebm(
+        vis,
+        (k) => {
+          setFrameIdx(k);
+          populateSolarCandle3DGroup(
+            ctx.root,
+            vis,
+            designP,
+            {
+              enabled: true,
+              volumeMode,
+              showSolarRays,
+              showSmokePlume,
+              showEntrainment,
+              frameIdx: k,
+            },
+            'workbench',
+          );
+          ctx.renderer.render(ctx.scene, ctx.camera);
+          return ctx.renderer.domElement;
+        },
+        (pct) => setVideoPct(pct),
+      );
+      setVideoUrl(url);
+      ui.notify('Rendered real-time 30 fps .webm video of Solar Candle Ignition & Buoyant Flame');
+    } catch (e) {
+      ui.notify(`Video render failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      setFrameIdx(prevIdx);
+      setRenderingVideo(false);
+    }
+  };
+
+  return (
+    <div class="sys-heatmap-wrap" data-testid="solar-candle-3d-twin">
+      <div class="sys-card-bar" style={{ flexWrap: 'wrap', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <span class="sys-card-title">ParaView 3D Volumetric Flame, Solar Caustic &amp; Smoke Plume</span>
+          <div class="seg" role="tablist">
+            {CANDLE_VOLUME_TABS.map((t) => (
+              <button
+                key={t.id}
+                class={volumeMode === t.id ? 'on active' : ''}
+                data-testid={`candle-mode-${t.id}`}
+                onClick={() => setVolumeMode(t.id)}
+                title={`${t.label} (${t.unit})`}
+              >
+                {t.shortLabel}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showSolarRays}
+              data-testid="toggle-solar-rays"
+              onChange={(e) => setShowSolarRays((e.target as HTMLInputElement).checked)}
+            />
+            Solar Caustic Cone (C={vis.optical_concentration.toFixed(0)}×)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showSmokePlume}
+              data-testid="toggle-smoke-plume"
+              onChange={(e) => setShowSmokePlume((e.target as HTMLInputElement).checked)}
+            />
+            Smoke Plume
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showEntrainment}
+              data-testid="toggle-buoyant-streamlines"
+              onChange={(e) => setShowEntrainment((e.target as HTMLInputElement).checked)}
+            />
+            Buoyant Streamlines
+          </label>
+        </div>
+      </div>
+
+      <div
+        ref={mountRef}
+        style={{ width: '100%', height: '285px', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}
+      />
+
+      {/* Time-Dependent Transient Playback Scrubber, Milestone Recap Cards & Real-Time Video Synthesis */}
+      {curFrame && (
+        <div
+          data-testid="transient-recap-panel"
+          style={{
+            marginTop: '8px',
+            padding: '8px 10px',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            borderRadius: '6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                type="button"
+                class="btn small primary"
+                data-testid="transient-play-btn"
+                onClick={() => setPlaying(!playing)}
+              >
+                {playing ? '⏸ Pause Transient' : '▶ Play Transient'}
+              </button>
+              <button
+                type="button"
+                class="btn small"
+                data-testid="transient-speed-btn"
+                onClick={() => setSpeed(speed === 1 ? 2 : speed === 2 ? 0.5 : 1)}
+                title="Cycle transient playback speed (0.5× / 1× / 2×)"
+              >
+                Speed: {speed}×
+              </button>
+              <span class="num" style={{ fontSize: '11.5px', fontWeight: 600, color: curFrame.ignited ? '#fbbf24' : '#38bdf8' }}>
+                Frame {safeIdx + 1}/{frames.length} · t = {curFrame.time_s.toFixed(2)} s · {curFrame.phase_name}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span class="num" style={{ fontSize: '11px', color: 'var(--text-2)' }}>
+                T_wick: <strong>{curFrame.wick_temp_k.toFixed(0)} K</strong> · Pool: <strong>{curFrame.wax_pool_radius_mm.toFixed(1)} mm</strong> · H_f: <strong>{curFrame.flame_height_mm.toFixed(1)} mm</strong> · P_rad: <strong>{curFrame.radiant_power_w.toFixed(1)} W</strong>
+              </span>
+              <button
+                type="button"
+                class="btn small"
+                data-testid="render-transient-video"
+                disabled={renderingVideo}
+                onClick={handleRenderVideo}
+                style={{ background: '#ea580c', color: '#fff', borderColor: '#f97316', fontWeight: 600 }}
+                title="Synthesise a real-time 30 fps .webm video from the slow/transient multiphysics simulation"
+              >
+                {renderingVideo ? `🎬 Rendering Video (${videoPct}%)…` : '🎬 Render Real-Time Video (.webm)'}
+              </button>
+            </div>
+          </div>
+
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, frames.length - 1)}
+            step={1}
+            value={safeIdx}
+            data-testid="transient-time-slider"
+            onInput={(e) => {
+              setPlaying(false);
+              setFrameIdx(parseInt((e.target as HTMLInputElement).value, 10) || 0);
+            }}
+          />
+
+          {/* 5 Clickable Simulation Milestone Recap Cards */}
+          {vis.recap_events && vis.recap_events.length > 0 && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+                gap: '6px',
+              }}
+            >
+              {vis.recap_events.map((ev: SimulationRecapEvent, idx: number) => {
+                const isSelected = Math.abs(safeIdx - ev.frame_index) <= 1;
+                return (
+                  <div
+                    key={ev.event_id}
+                    data-testid={`recap-event-${idx}`}
+                    onClick={() => {
+                      setPlaying(false);
+                      setFrameIdx(ev.frame_index);
+                    }}
+                    style={{
+                      padding: '6px 7px',
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      background: isSelected ? 'rgba(245, 158, 11, 0.16)' : 'var(--bg-3)',
+                      border: isSelected ? '1px solid #f59e0b' : '1px solid var(--line)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '2px',
+                    }}
+                    title={ev.summary}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px' }}>
+                      <span style={{ fontWeight: 700, color: isSelected ? '#fbbf24' : 'var(--text-2)' }}>
+                        {idx + 1}. {ev.regime_badge}
+                      </span>
+                      <span class="num" style={{ color: 'var(--text-3)' }}>
+                        t={ev.time_s.toFixed(2)}s
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {ev.title}
+                    </div>
+                    <div class="num" style={{ fontSize: '10px', color: '#38bdf8' }}>
+                      {ev.key_metric_label}: <strong>{ev.key_metric_value}</strong>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Inline Real-Time Rendered Video Player */}
+          {videoUrl && (
+            <div
+              data-testid="transient-video-container"
+              style={{
+                marginTop: '4px',
+                padding: '8px',
+                background: 'rgba(9, 13, 22, 0.9)',
+                borderRadius: '6px',
+                border: '1px solid #f97316',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+              }}
+            >
+              <video
+                src={videoUrl}
+                controls
+                autoPlay
+                loop
+                muted
+                data-testid="transient-video-player"
+                style={{ width: '320px', height: '190px', borderRadius: '4px', background: '#000', border: '1px solid var(--line)' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11.5px' }}>
+                <strong style={{ color: '#fbbf24' }}>Real-Time Rendered Multiphysics Video (30 fps .webm)</strong>
+                <span style={{ color: 'var(--text-2)' }}>
+                  Synthesised from all {frames.length} transient keyframes (`t = 0.00 s → {frames[frames.length - 1]?.time_s.toFixed(2)} s`), combining 3D ParaView volumetric flame &amp; smoke rendering with synchronized telemetry HUD.
+                </span>
+                <div>
+                  <a
+                    href={videoUrl}
+                    download="solar-candle-ignition-transient.webm"
+                    class="btn small primary"
+                    data-testid="download-transient-video"
+                    style={{ textDecoration: 'none', display: 'inline-block' }}
+                  >
+                    ⬇ Download Real-Time Video (.webm)
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Live Shared Workspace Synchronisation (MCP + REST + Browser Co-Pilot) ----
 
 interface WorkspaceSnapshot {
@@ -1919,6 +3392,11 @@ export function SystemsWorkbench() {
         coupledShared.epistemicTheta = nextTheta;
         coupledShared.bundle = res;
         if (liveViewport) syncCoupledViewportOverlay(liveViewport);
+      } else if (sysId === 'solar_candle_ignition_v1') {
+        candleShared.designP = nextP;
+        candleShared.epistemicTheta = nextTheta;
+        candleShared.bundle = res;
+        if (liveViewport) syncCoupledViewportOverlay(liveViewport);
       }
       void pushWorkspaceState({
         last_tool: 'solveCoupledSystem',
@@ -1996,13 +3474,20 @@ export function SystemsWorkbench() {
     const filename =
       activeId === 'regen_nozzle_h2_v1'
         ? 'supercritical-h2-rocket-nozzle.fsm'
-        : 'uk5-float-bath-coater.fsm';
+        : activeId === 'solar_candle_ignition_v1'
+          ? 'solar-candle-ignition.fsm'
+          : 'uk5-float-bath-coater.fsm';
     if (activeId === 'pilkington_float_bath_cvd_coater_v1' && bundle.float_bath_visual) {
       coupledShared.designP = [...designP];
       coupledShared.epistemicTheta = [...epistemicTheta];
       coupledShared.bundle = bundle;
       coupledShared.overlay.enabled = true;
       coupledShared.overlay.mode = bathField;
+    } else if (activeId === 'solar_candle_ignition_v1' && bundle.candle_flame_visual) {
+      candleShared.designP = [...designP];
+      candleShared.epistemicTheta = [...epistemicTheta];
+      candleShared.bundle = bundle;
+      candleShared.overlay.enabled = true;
     } else {
       coupledShared.overlay.enabled = false;
     }
@@ -2085,7 +3570,9 @@ export function SystemsWorkbench() {
               >
                 {activeId === 'regen_nozzle_h2_v1'
                   ? 'Load 3D Nozzle into Viewport'
-                  : 'Load 3D Bath into Viewport'}
+                  : activeId === 'solar_candle_ignition_v1'
+                    ? 'Load 3D Solar Candle & Flame into Viewport'
+                    : 'Load 3D Bath into Viewport'}
               </button>
             )}
             <button class="btn small" data-testid="close-systems-workbench" onClick={() => ui.set('systemsOpen', false)}>
@@ -2221,6 +3708,10 @@ export function SystemsWorkbench() {
 
               {activeId === 'regen_nozzle_h2_v1' && (
                 <RocketNozzle3DTwin state={bundle.analysis.state} designP={designP} />
+              )}
+
+              {activeId === 'solar_candle_ignition_v1' && bundle.candle_flame_visual && (
+                <SolarCandle3DTwin vis={bundle.candle_flame_visual} designP={designP} />
               )}
 
               {track && (

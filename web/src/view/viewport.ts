@@ -1102,4 +1102,10 @@ export class Viewport {
     const r = this.canvas.getBoundingClientRect();
     return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height, visible: v.z < 1 };
   }
+
+  /** Synchronously render the current frame and return the underlying WebGL canvas for video/snapshot capture. */
+  captureCanvas(): HTMLCanvasElement {
+    this.render();
+    return this.canvas;
+  }
 }

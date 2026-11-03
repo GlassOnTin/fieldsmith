@@ -6,6 +6,7 @@ type Listener = () => void;
 
 export type GizmoMode = 'translate' | 'rotate';
 export type ResultMode = 'stress' | 'safety' | 'peel' | 'deflection' | 'vectors' | 'temperature';
+export type ResultColormap = 'viridis' | 'flame' | 'turbo' | 'coolwarm';
 
 /** Deformed-shape exaggeration the panel starts at (the ×5 reset target). */
 export const RESULTS_SCALE_DEFAULT = 5;
@@ -42,6 +43,10 @@ class Ui {
   hover: { shape: string | null; face: string | null; point: [number, number, number] } | null = null;
   // Results lens display state (not undoable).
   resultsMode: ResultMode = 'stress';
+  /** ParaView / VTK scalar transfer function colourmap. */
+  resultsColormap: ResultColormap = 'viridis';
+  /** Render translucent 3D volumetric iso-shells / glowing scalar cloud in Results. */
+  resultsVolumeOn = false;
   /** Case index, −1 = envelope. */
   resultsCase = -1;
   /** Deformed-shape exaggeration factor. */

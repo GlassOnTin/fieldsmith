@@ -942,11 +942,74 @@ export interface CoupledSystemSummary {
   scenarios: CoupledScenarioPreset[];
 }
 
+export interface CandleTransientFrame {
+  step_index: number;
+  time_s: number;
+  phase_name: string;
+  ignited: boolean;
+  wick_temp_k: number;
+  wax_pool_radius_mm: number;
+  pyrolysis_rate_mg_s: number;
+  flame_height_mm: number;
+  peak_flame_temp_k: number;
+  radiant_power_w: number;
+  smoke_emission_ug_s: number;
+  peak_updraft_m_s: number;
+  flicker_phase_rad: number;
+  r_flame_mm: number[];
+  t_sheet_k: number[];
+  y_oh_ppm: number[];
+  fv_soot_ppm: number[];
+  u_z_m_s: number[];
+  z_mix: number[];
+}
+
+export interface SimulationRecapEvent {
+  event_id: string;
+  time_s: number;
+  frame_index: number;
+  title: string;
+  regime_badge: string;
+  summary: string;
+  key_metric_label: string;
+  key_metric_value: string;
+}
+
+export interface CandleFlameVisual {
+  nz: number;
+  z_mm: number[];
+  focal_length_mm: number;
+  lens_height_mm: number;
+  lens_diameter_mm: number;
+  defocus_mm: number;
+  spot_radius_mm: number;
+  optical_concentration: number;
+  peak_solar_flux_kw_m2: number;
+  absorbed_solar_power_w: number;
+  ignition_delay_s: number;
+  steady_pyrolysis_mg_s: number;
+  flame_height_mm: number;
+  flicker_freq_hz: number;
+  stoichiometric_z: number;
+  u_z_m_s: number[];
+  u_r_entrain_m_s: number[];
+  z_mix: number[];
+  t_gas_k: number[];
+  y_oh_ppm: number[];
+  fv_soot_ppm: number[];
+  q_rad_kw_m2: number[];
+  r_flame_mm: number[];
+  solar_beam_r_mm: number[];
+  frames: CandleTransientFrame[];
+  recap_events: SimulationRecapEvent[];
+}
+
 export interface CoupledSolveBundle {
   analysis: CoupledSystemAnalysis;
   constraints_pass_p50: boolean;
   constraints_pass_robust_p90: boolean;
   float_bath_visual: FloatBathVisualFields | null;
+  candle_flame_visual?: CandleFlameVisual | null;
   fsm_3d?: string | null;
   wall_ms: number;
 }

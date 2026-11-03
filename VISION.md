@@ -163,6 +163,11 @@ For what Fieldsmith already does and verifies today, see [`README.md`](README.md
    compliance-driven outer boundary evolution (`erode=<mm>`) directly on the implicit field grid,
    preserving protected interfaces (`protect`) and wrapping the evolved boundary in a conformal
    skin (`skin` → `skin_max`) and graded TPMS infill.
+4. **Volumetric results visualisation, transient simulation recap, and real-time video synthesis (`V56`, `T13` — done)** —
+   ParaView-style transfer functions (`Flame` blackbody, `Turbo`, `Coolwarm`, `Viridis`), 3D
+   translucent volumetric iso-shells, coupled optical caustic + combustion chemistry + buoyant
+   smoke plume simulation (`solar_candle_ignition_v1`), automated milestone recap cards for
+   long-running transient runs, and 30 fps `.webm` video synthesis with embedded telemetry.
 
 ---
 
