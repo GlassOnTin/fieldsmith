@@ -1298,11 +1298,11 @@ solve size=3.5 tref=22
       },
       {
         title: '2. Scrubbing Time-Dependent Results, Milestone Recap Cards & Real-Time .webm Video Generation',
-        lens: 'systems',
+        lens: 'shape',
         instruction:
-          'Either directly in the 3D Viewport HUD or by tapping "Go to Systems →" (`[data-testid="systems-domain-select"]` → `solar_candle_ignition_v1`), use the Transient Timeline Scrubber (`[data-testid="transient-time-slider"]`, 40 frames from t = 0.00 s to 5.50 s) and click the 5 Milestone Recap Cards (`[data-testid="recap-event-0"]` .. `4`: 1. Solar Caustic Focus → 2. Wax Pool Melting at 331 K → 3. Pyrolysis Vapor Plume at 620 K → 4. Flash Auto-Ignition at 670 K → 5. Steady Buoyant Diffusion Flame & Smoke Plume). Then click "🎬 Render Real-Time Video (.webm)" (`[data-testid="render-transient-video"]`) to record a real-time 30 fps WebM video with embedded scientific telemetry HUD.',
+          'Directly in the bottom-left 3D Viewport HUD (`[data-testid="coupled-viewport-hud"]`), use the Transient Timeline Scrubber (`[data-testid="transient-time-slider"]`, 40 frames from t = 0.00 s to 5.50 s) and click the 5 Milestone Recap Cards (`[data-testid="recap-event-0"]` .. `4`: 1. Solar Caustic Focus → 2. Wax Pool Melting at 331 K → 3. Pyrolysis Vapor Plume at 620 K → 4. Flash Auto-Ignition at 670 K → 5. Steady Buoyant Diffusion Flame & Smoke Plume). Then click "🎬 Render Video" (`[data-testid="render-transient-video"]`) to record a real-time 30 fps WebM video with embedded scientific telemetry HUD.',
         expected:
-          'Clicking any milestone recap card jumps the 3D volumetric scene to that physical regime, and "Render Real-Time Video" produces an inline playable `.webm` video (`[data-testid="transient-video-player"]`) + download link.',
+          'Clicking any milestone recap card jumps the 3D volumetric scene to that physical regime, and "Render Video" produces an inline playable `.webm` video (`[data-testid="transient-video-player"]`) + download link.',
       },
       {
         title: '3. ParaView Colourmap Transfer Functions & 3D Volumetric Iso-Shells in Results (3)',
@@ -1311,6 +1311,14 @@ solve size=3.5 tref=22
           'Tap "Go to Results →" (tab 3) to solve the 3D thermo-mechanical FEA study on the candle, wick, and optical lens assembly. Switch to "Temperature" or "Stress", select the new ParaView "Flame" (Blackbody) or "Turbo" colourmap (`[data-testid="results-colormap"]`), and toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to render 5 nested additive volumetric iso-shells highlighting the thermal plume and stress gradients inside the 3D mesh.',
         expected:
           'In Results (3), the Flame/Turbo colourmaps and 3D Volume iso-shells render translucent glowing scalar contours across the 3D FEA mesh.',
+      },
+      {
+        title: '4. Full 144-DOF Adjoint Sensitivity Matrix & Epistemic UQ in Coupled Systems',
+        lens: 'systems',
+        instruction:
+          'Tap "Go to Coupled Systems →" to open the full 3-column Coupled Systems Workbench directly on `solar_candle_ignition_v1`. Inspect the p10 / p50 / p90 epistemic uncertainty bands, the axial flame & smoke attribution profiles, and the sparse Adjoint sensitivity matrix dΦ/dp, or click "Step 1 Adjoint Iteration (−dΦ/dp)" to optimize lens focus and suppress smoke.',
+        expected:
+          'The Coupled Systems Workbench opens directly on the Solar-Focused Optical Lens Candle Ignition & Buoyant Flame pack (`solar_candle_ignition_v1`).',
       },
     ],
     theoryChapter: {
@@ -1749,6 +1757,14 @@ function TutorialsDrawer() {
 
   const jumpToLens = (target?: Lens | 'systems') => {
     if (!target) return;
+    const curName = store.doc.name || '';
+    const belongsToCurrentSheet =
+      curName.startsWith(sheet.code) ||
+      (sheet.id === 'T13' && (curName.toLowerCase().includes('candle') || curName.toLowerCase().includes('solar'))) ||
+      (sheet.id === 'T8' && curName.includes('Float-Bath'));
+    if (store.doc.root.length === 0 || !belongsToCurrentSheet) {
+      loadTutorialSheetModel(sheet.id, false);
+    }
     if (target === 'systems') {
       ui.set('systemsOpen', true);
     } else {

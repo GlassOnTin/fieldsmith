@@ -3286,13 +3286,28 @@ async function pushWorkspaceState(payload: {
 
 // ---- Main 3-Column Coupled Systems Workbench Modal ----
 
+function preferredCoupledSystemId(): string {
+  const sheetId = ui.tutorialSheetId;
+  const docName = (store.doc.name || '').toLowerCase();
+  if (sheetId === 'T13' || isSolarCandleDocument()) {
+    return 'solar_candle_ignition_v1';
+  }
+  if (sheetId === 'T8' || isFloatBathDocument()) {
+    return 'pilkington_float_bath_cvd_coater_v1';
+  }
+  if (docName.includes('nozzle') || docName.includes('rocket')) {
+    return 'regen_nozzle_h2_v1';
+  }
+  return 'solar_candle_ignition_v1';
+}
+
 export function SystemsWorkbench() {
   useApp();
   const [systems, setSystems] = useState<CoupledSystemSummary[]>([]);
-  const [activeId, setActiveId] = useState<string>('pilkington_float_bath_cvd_coater_v1');
-  const [designP, setDesignP] = useState<number[]>(coupledShared.designP);
-  const [epistemicTheta, setEpistemicTheta] = useState<number[]>(coupledShared.epistemicTheta);
-  const [bundle, setBundle] = useState<CoupledSolveBundle | null>(coupledShared.bundle);
+  const [activeId, setActiveId] = useState<string>(() => preferredCoupledSystemId());
+  const [designP, setDesignP] = useState<number[]>(candleShared.designP);
+  const [epistemicTheta, setEpistemicTheta] = useState<number[]>(candleShared.epistemicTheta);
+  const [bundle, setBundle] = useState<CoupledSolveBundle | null>(candleShared.bundle);
   const [bathField, setBathField] = useState<BathFieldMode>('glass_temp');
   const [wsRev, setWsRev] = useState<number>(lastSeenWorkspaceRevision);
   const [wsActor, setWsActor] = useState<string>('ready');
@@ -3328,6 +3343,11 @@ export function SystemsWorkbench() {
                   coupledShared.epistemicTheta = th;
                   coupledShared.bundle = res;
                   if (liveViewport) syncCoupledViewportOverlay(liveViewport);
+                } else if (ws.coupled_system_id === 'solar_candle_ignition_v1') {
+                  candleShared.designP = ws.design_p;
+                  candleShared.epistemicTheta = th;
+                  candleShared.bundle = res;
+                  if (liveViewport) syncCoupledViewportOverlay(liveViewport);
                 }
               } catch {
                 // ignore
@@ -3357,11 +3377,18 @@ export function SystemsWorkbench() {
     try {
       const cat = listCoupledSystems();
       setSystems(cat);
-      const sys = cat.find((s) => s.system_id === activeId) ?? cat[0];
+      const targetId = preferredCoupledSystemId();
+      const sys = cat.find((s) => s.system_id === targetId) ?? cat.find((s) => s.system_id === activeId) ?? cat[0];
       if (sys) {
         setActiveId(sys.system_id);
-        const p0 = sys.design_parameters.map((p) => p.nominal);
-        const th0 = sys.epistemic_parameters.map((t) => t.nominal);
+        const p0 =
+          sys.system_id === 'solar_candle_ignition_v1' && candleShared.designP.length === sys.design_parameters.length
+            ? [...candleShared.designP]
+            : sys.design_parameters.map((p) => p.nominal);
+        const th0 =
+          sys.system_id === 'solar_candle_ignition_v1' && candleShared.epistemicTheta.length === sys.epistemic_parameters.length
+            ? [...candleShared.epistemicTheta]
+            : sys.epistemic_parameters.map((t) => t.nominal);
         setDesignP(p0);
         setEpistemicTheta(th0);
         const res = solveCoupledSystem(sys.system_id, p0, th0);
@@ -3371,6 +3398,11 @@ export function SystemsWorkbench() {
           coupledShared.designP = p0;
           coupledShared.epistemicTheta = th0;
           coupledShared.bundle = res;
+        } else if (sys.system_id === 'solar_candle_ignition_v1') {
+          candleShared.summary = sys;
+          candleShared.designP = p0;
+          candleShared.epistemicTheta = th0;
+          candleShared.bundle = res;
         }
         setError(null);
       }
