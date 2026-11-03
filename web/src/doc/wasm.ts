@@ -956,6 +956,10 @@ export interface CandleTransientFrame {
   smoke_emission_ug_s: number;
   peak_updraft_m_s: number;
   flicker_phase_rad: number;
+  lens_soot_thickness_nm?: number;
+  lens_soot_mass_ug_cm2?: number;
+  lens_transmittance_pct?: number;
+  lens_soot_radius_mm?: number;
   r_flame_mm: number[];
   t_sheet_k: number[];
   y_oh_ppm: number[];
@@ -991,6 +995,10 @@ export interface CandleFlameVisual {
   flame_height_mm: number;
   flicker_freq_hz: number;
   stoichiometric_z: number;
+  final_lens_soot_nm?: number;
+  final_lens_transmittance_pct?: number;
+  lens_soot_radial_r_mm?: number[];
+  lens_soot_radial_nm?: number[];
   u_z_m_s: number[];
   u_r_entrain_m_s: number[];
   z_mix: number[];

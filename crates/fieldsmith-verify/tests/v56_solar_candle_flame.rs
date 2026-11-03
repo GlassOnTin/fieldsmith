@@ -168,6 +168,7 @@ fn v56_solar_candle_flame() {
     let res_long_wick =
         MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p_long_wick, &theta_nom).unwrap();
 
+    let vis_long_wick = sys.extract_visual_fields(&res_long_wick.state, &p_long_wick, &theta_nom);
     let smoke_nom = analysis.objectives[3];
     let smoke_long = res_long_wick.objectives[3];
     let rad_nom = analysis.objectives[2];
@@ -180,6 +181,24 @@ fn v56_solar_candle_flame() {
             && rad_long > rad_nom * 1.10
             && analysis.objectives[1] > 1800.0
             && analysis.objectives[4] > 0.45
+        {
+            1.0
+        } else {
+            0.0
+        },
+        "flag",
+        0.0,
+    ));
+
+    r.check(Check::absolute(
+        "Thermophoretic soot deposition on overhead lens (`δ_soot > 15 nm`) grows with wick smoke & dims `τ_lens`",
+        1.0,
+        if vis_nom.final_lens_soot_nm > 15.0
+            && vis_long_wick.final_lens_soot_nm > vis_nom.final_lens_soot_nm * 1.15
+            && vis_long_wick.final_lens_transmittance_pct < vis_nom.final_lens_transmittance_pct
+            && vis_nom.final_lens_transmittance_pct < 90.0
+            && vis_nom.lens_soot_radial_nm.first().copied().unwrap_or(0.0)
+                > vis_nom.lens_soot_radial_nm.last().copied().unwrap_or(1e9)
         {
             1.0
         } else {

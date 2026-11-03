@@ -1228,6 +1228,7 @@ interface CandleViewportOverlayConfig {
   volumeMode: CandleVolumeMode;
   showSolarRays: boolean;
   showSmokePlume: boolean;
+  showLensSoot: boolean;
   showEntrainment: boolean;
   frameIdx: number;
 }
@@ -1248,6 +1249,7 @@ const candleShared: {
     volumeMode: 'radiant_flame',
     showSolarRays: true,
     showSmokePlume: true,
+    showLensSoot: true,
     showEntrainment: true,
     frameIdx: 35,
   },
@@ -1294,8 +1296,8 @@ function blackbodyRgb01(s: number): [number, number, number] {
 
 /**
  * Populate a Three.js Group with the ParaView-style 3D Volumetric Solar-Focused Candle Flame,
- * Blue OH* Base Sheet, Beer–Lambert Smoke Plume, Refractive Solar Caustic Cone, and Buoyant
- * Convective Entrainment Streamlines.
+ * Blue OH* Base Sheet, Beer–Lambert Smoke Plume, Thermophoretic Lens Soot Deposit, Refractive
+ * Solar Caustic Cone, and Buoyant Convective Entrainment Streamlines.
  */
 function populateSolarCandle3DGroup(
   group: THREE.Group,
@@ -1312,14 +1314,31 @@ function populateSolarCandle3DGroup(
   const frame: CandleTransientFrame = frames[fIdx];
 
   const dLens = designP[0] ?? vis.lens_diameter_mm ?? 65.0;
-  const rLens = Math.max(17.5, Math.min(55.0, 0.5 * dLens));
+  let rLens = Math.max(17.5, Math.min(55.0, 0.5 * dLens));
   const zLensAboveWick = designP[2] ?? vis.lens_height_mm ?? 68.0;
-  const lWick = designP[4] ?? 7.5;
+  let lWick = designP[4] ?? 7.5;
 
   const candleH = 36.0;
   const wickBaseZ = candleH;
-  const wickTopZ = wickBaseZ + lWick;
-  const lensZ = wickTopZ + zLensAboveWick;
+  let wickTopZ = wickBaseZ + lWick;
+  let lensZ = wickTopZ + zLensAboveWick;
+
+  if (coordSpace === 'fsm_viewport') {
+    const lets = store.doc.lets ?? [];
+    const docLensR = lets.find((l) => l.name === 'lens_r')?.value;
+    const docLensZ = lets.find((l) => l.name === 'lens_z')?.value;
+    const docWickLen = lets.find((l) => l.name === 'wick_len')?.value;
+    if (typeof docLensR === 'number' && Number.isFinite(docLensR)) rLens = docLensR;
+    if (typeof docWickLen === 'number' && Number.isFinite(docWickLen)) {
+      lWick = docWickLen;
+      wickTopZ = wickBaseZ + lWick;
+    }
+    if (typeof docLensZ === 'number' && Number.isFinite(docLensZ)) lensZ = docLensZ;
+  }
+
+  const sootCenterNm = frame.lens_soot_thickness_nm ?? 0;
+  const sootRadiusMm = Math.max(4.5, frame.lens_soot_radius_mm ?? 0.38 * rLens);
+  const lensTransmittanceFrac = Math.max(0.15, Math.min(1.0, (frame.lens_transmittance_pct ?? 91.8) / 91.8));
 
   // In 'workbench' mode, render the 3D brass holder, paraffin candle, dynamic molten wax pool, wick & BK7 lens
   if (coordSpace === 'workbench') {
@@ -1667,10 +1686,11 @@ function populateSolarCandle3DGroup(
     }
   }
 
-  // 3. Beer–Lambert Absorbing Carbonaceous Smoke Plume above the Flame Tip
+  // 3. Beer–Lambert Absorbing Carbonaceous Smoke Plume above the Flame Tip (with Stagnation Deflection under Lens)
   if (cfg.showSmokePlume && (frame.ignited || frame.smoke_emission_ug_s > 0.3)) {
     const smokeIntensity = Math.max(0.18, Math.min(1.0, frame.smoke_emission_ug_s / 24.0));
     const smokeShells = [0.48, 0.82, 1.15];
+    const lensBottomZ = lensZ - 3.25;
     for (let sIdx = 0; sIdx < smokeShells.length; sIdx++) {
       const shScale = smokeShells[sIdx];
       const pos: number[] = [];
@@ -1680,18 +1700,22 @@ function populateSolarCandle3DGroup(
 
       for (let i = startI; i < nz; i++) {
         const zLoc = vis.z_mm[i] ?? 0;
-        const zWorld = zOrigin + zLoc;
+        const rawZ = zOrigin + zLoc;
+        // Clamp smoke below the lens underside and flare radially outward as a stagnation plume
+        const zWorld = Math.min(lensBottomZ - 0.15 * sIdx, rawZ);
+        const impingeProximity = Math.max(0, 1.0 - Math.max(0, lensBottomZ - rawZ) / 18.0);
         const hFlame = Math.max(10.0, frame.flame_height_mm || 18.0);
         const aboveTip = Math.max(0, (zLoc - 0.72 * hFlame) / 45.0);
-        const rSmoke = (1.1 + 4.8 * Math.pow(aboveTip, 0.72)) * shScale;
-        const swayX = 2.4 * aboveTip * Math.sin(frame.flicker_phase_rad - 0.13 * zLoc);
-        const swayY = 1.4 * aboveTip * Math.cos(frame.flicker_phase_rad - 0.10 * zLoc);
-        const shade = 0.22 + 0.14 * sIdx;
+        const radialFlare = impingeProximity > 0 ? 1.0 + 1.85 * Math.pow(impingeProximity, 1.5) : 1.0;
+        const rSmoke = Math.min(rLens * 0.92, (1.1 + 4.8 * Math.pow(aboveTip, 0.72)) * shScale * radialFlare);
+        const swayX = (1.0 - 0.65 * impingeProximity) * 2.4 * aboveTip * Math.sin(frame.flicker_phase_rad - 0.13 * zLoc);
+        const swayY = (1.0 - 0.65 * impingeProximity) * 1.4 * aboveTip * Math.cos(frame.flicker_phase_rad - 0.10 * zLoc);
+        const shade = (0.16 + 0.12 * sIdx) * (1.0 - 0.35 * impingeProximity);
 
         for (let t = 0; t <= 28; t++) {
           const ang = (t / 28) * Math.PI * 2;
           pos.push(swayX + rSmoke * Math.cos(ang), swayY + rSmoke * Math.sin(ang), zWorld);
-          col.push(shade, shade, shade + 0.03);
+          col.push(shade, shade, shade + 0.02);
         }
       }
 
@@ -1716,7 +1740,7 @@ function populateSolarCandle3DGroup(
           new THREE.MeshBasicMaterial({
             vertexColors: true,
             transparent: true,
-            opacity: (0.26 - sIdx * 0.06) * smokeIntensity,
+            opacity: (0.28 - sIdx * 0.06) * smokeIntensity,
             side: THREE.DoubleSide,
             depthWrite: false,
           }),
@@ -1724,6 +1748,106 @@ function populateSolarCandle3DGroup(
         m.renderOrder = 30 + sIdx;
         group.add(m);
       }
+    }
+  }
+
+  // 3b. Thermophoretic Carbonaceous Soot Deposition on the Overhead Optical Glass Lens Underside & Top Silhouette
+  if (cfg.showLensSoot && sootCenterNm > 0.35) {
+    const nRings = 16;
+    const nSec = 40;
+    const maxSmudgeR = Math.min(rLens * 0.94, sootRadiusMm * 1.65);
+    const depositStrength = Math.min(0.92, 1.0 - Math.exp(-0.026 * sootCenterNm)) * (0.45 + 0.55 * (1.0 - lensTransmittanceFrac + 0.35));
+
+    // Render on both the bottom lens impingement face (lensZ - 3.12) and top optical face (lensZ + 3.12)
+    // so the dark velvety soot smudge and warm amber-brown PAH tar halo are visible from above and below.
+    const zOffsets = [-3.12, 3.12];
+    const layerAlphaFactors = [0.95, 0.78];
+
+    for (let lIdx = 0; lIdx < zOffsets.length; lIdx++) {
+      const zSurf = lensZ + zOffsets[lIdx];
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+
+      for (let j = 0; j < nRings; j++) {
+        const rFrac = j / (nRings - 1);
+        const rMm = rFrac * maxSmudgeR;
+        const gauss = Math.exp(-Math.pow(rMm / Math.max(2.5, sootRadiusMm), 2));
+        const localNm = sootCenterNm * gauss;
+        // Core is deep velvety carbon-black (#080706); mid-halo is warm brown-amber PAH condensates (#4a2b13); outer edge fades into glass (#6c8fb8)
+        const coreWeight = Math.min(1.0, localNm / 22.0);
+        const haloWeight = Math.max(0.0, Math.sin(Math.min(1.0, rFrac) * Math.PI)) * (1.0 - 0.65 * coreWeight);
+        const cr = 0.04 * coreWeight + 0.36 * haloWeight + 0.35 * (1.0 - coreWeight - 0.5 * haloWeight);
+        const cg = 0.03 * coreWeight + 0.20 * haloWeight + 0.52 * (1.0 - coreWeight - 0.5 * haloWeight);
+        const cb = 0.03 * coreWeight + 0.09 * haloWeight + 0.72 * (1.0 - coreWeight - 0.5 * haloWeight);
+
+        for (let s = 0; s <= nSec; s++) {
+          const ang = (s / nSec) * Math.PI * 2;
+          pos.push(rMm * Math.cos(ang), rMm * Math.sin(ang), zSurf);
+          col.push(Math.max(0.02, Math.min(1, cr)), Math.max(0.02, Math.min(1, cg)), Math.max(0.02, Math.min(1, cb)));
+        }
+      }
+
+      const ringStride = nSec + 1;
+      for (let j = 0; j < nRings - 1; j++) {
+        for (let s = 0; s < nSec; s++) {
+          const a = j * ringStride + s;
+          const b = (j + 1) * ringStride + s;
+          const c = (j + 1) * ringStride + (s + 1);
+          const d = j * ringStride + (s + 1);
+          idx.push(a, b, c, a, c, d);
+        }
+      }
+
+      const gSoot = new THREE.BufferGeometry();
+      gSoot.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      gSoot.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      gSoot.setIndex(idx);
+      const mSoot = new THREE.Mesh(
+        gSoot,
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: Math.min(0.88, depositStrength * layerAlphaFactors[lIdx]),
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      mSoot.renderOrder = 36 + lIdx;
+      group.add(mSoot);
+    }
+
+    // Concentric soot thickness contour rings on the lens so the radial thermophoretic profile stands out clearly
+    const contourRadii = [0.32 * sootRadiusMm, 0.68 * sootRadiusMm, 1.05 * sootRadiusMm].filter((r) => r < rLens * 0.92);
+    for (let cIdx = 0; cIdx < contourRadii.length; cIdx++) {
+      const rRing = contourRadii[cIdx];
+      const ringPts: number[] = [];
+      for (let s = 0; s < 48; s++) {
+        const a0 = (s / 48) * Math.PI * 2;
+        const a1 = ((s + 1) / 48) * Math.PI * 2;
+        for (const zOff of [-3.15, 3.15]) {
+          ringPts.push(
+            rRing * Math.cos(a0),
+            rRing * Math.sin(a0),
+            lensZ + zOff,
+            rRing * Math.cos(a1),
+            rRing * Math.sin(a1),
+            lensZ + zOff,
+          );
+        }
+      }
+      const rg = new THREE.BufferGeometry();
+      rg.setAttribute('position', new THREE.Float32BufferAttribute(ringPts, 3));
+      group.add(
+        new THREE.LineSegments(
+          rg,
+          new THREE.LineBasicMaterial({
+            color: cIdx === 0 ? 0x1c1917 : cIdx === 1 ? 0x78350f : 0xb45309,
+            transparent: true,
+            opacity: Math.min(0.85, 0.35 + 0.012 * sootCenterNm),
+          }),
+        ),
+      );
     }
   }
 
@@ -2461,12 +2585,14 @@ async function renderCandleTransientVideoWebm(
     );
 
     // Bottom Telemetry Bar + Timeline Progress
+    const sootNm = f.lens_soot_thickness_nm ?? 0;
+    const tauPct = f.lens_transmittance_pct ?? 91.8;
     ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
     ctx.fillRect(0, height - 44, width, 44);
     ctx.fillStyle = '#e2e8f0';
-    ctx.font = '11px JetBrains Mono, monospace';
+    ctx.font = '10.5px JetBrains Mono, monospace';
     ctx.fillText(
-      `T_wick: ${f.wick_temp_k.toFixed(0)} K | T_flame: ${f.peak_flame_temp_k.toFixed(0)} K | H_f: ${f.flame_height_mm.toFixed(1)} mm | P_rad: ${f.radiant_power_w.toFixed(1)} W | Smoke: ${f.smoke_emission_ug_s.toFixed(1)} μg/s | u_z: ${f.peak_updraft_m_s.toFixed(2)} m/s`,
+      `T_wick: ${f.wick_temp_k.toFixed(0)} K | T_flame: ${f.peak_flame_temp_k.toFixed(0)} K | P_rad: ${f.radiant_power_w.toFixed(1)} W | Smoke: ${f.smoke_emission_ug_s.toFixed(1)} μg/s | Lens Soot: ${sootNm.toFixed(1)} nm (τ=${tauPct.toFixed(1)}%)`,
       12,
       height - 22,
     );
@@ -2604,7 +2730,7 @@ function SolarCandleViewportHud({
             ))}
           </div>
 
-          <div class="sys-vp-hud-row">
+          <div class="sys-vp-hud-row" style={{ flexWrap: 'wrap', gap: '6px' }}>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -2614,7 +2740,7 @@ function SolarCandleViewportHud({
                   bump();
                 }}
               />
-              Solar Caustic Rays
+              Solar Caustic
             </label>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
               <input
@@ -2630,13 +2756,25 @@ function SolarCandleViewportHud({
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
+                checked={ov.showLensSoot}
+                data-testid="toggle-vp-lens-soot"
+                onChange={(e) => {
+                  ov.showLensSoot = (e.target as HTMLInputElement).checked;
+                  bump();
+                }}
+              />
+              Lens Soot
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
                 checked={ov.showEntrainment}
                 onChange={(e) => {
                   ov.showEntrainment = (e.target as HTMLInputElement).checked;
                   bump();
                 }}
               />
-              Buoyant Airflow
+              Airflow
             </label>
           </div>
 
@@ -2814,18 +2952,18 @@ function SolarCandleViewportHud({
             </div>
           </div>
 
-          <div class="sys-vp-hud-row num" style={{ borderTop: '1px solid var(--line)', paddingTop: '5px' }}>
+          <div class="sys-vp-hud-row num" style={{ borderTop: '1px solid var(--line)', paddingTop: '5px', flexWrap: 'wrap', gap: '6px' }}>
             <span title="Solar Auto-Ignition Delay">
               t_ign: <strong style={{ color: vis.ignition_delay_s <= 3.5 ? 'var(--ok)' : 'var(--danger)' }}>{vis.ignition_delay_s.toFixed(2)} s</strong>
             </span>
             <span title="Instantaneous Wick / Flame Temperature">
               T_max: <strong>{curFrame.peak_flame_temp_k.toFixed(0)} K</strong>
             </span>
-            <span title="Luminous Radiant Power">
-              P_rad: <strong>{curFrame.radiant_power_w.toFixed(1)} W</strong>
-            </span>
             <span title="Escaping Carbonaceous Smoke Emission">
               Smoke: <strong style={{ color: curFrame.smoke_emission_ug_s <= 18.0 ? 'var(--ok)' : 'var(--danger)' }}>{curFrame.smoke_emission_ug_s.toFixed(1)} μg/s</strong>
+            </span>
+            <span title="Cumulative Thermophoretic Soot Deposit on Lens Underside & Fouled Optical Transmittance">
+              Lens Soot: <strong style={{ color: '#fbbf24' }}>{(curFrame.lens_soot_thickness_nm ?? 0).toFixed(1)} nm</strong> (τ={(curFrame.lens_transmittance_pct ?? 91.8).toFixed(1)}%)
             </span>
             <button
               class="btn small"
@@ -2856,6 +2994,7 @@ function SolarCandle3DTwin({
   const [volumeMode, setVolumeMode] = useState<CandleVolumeMode>(candleShared.overlay.volumeMode);
   const [showSolarRays, setShowSolarRays] = useState(true);
   const [showSmokePlume, setShowSmokePlume] = useState(true);
+  const [showLensSoot, setShowLensSoot] = useState(true);
   const [showEntrainment, setShowEntrainment] = useState(true);
   const [frameIdx, setFrameIdx] = useState<number>(candleShared.overlay.frameIdx);
   const [playing, setPlaying] = useState<boolean>(false);
@@ -2942,6 +3081,7 @@ function SolarCandle3DTwin({
     candleShared.overlay.volumeMode = volumeMode;
     candleShared.overlay.showSolarRays = showSolarRays;
     candleShared.overlay.showSmokePlume = showSmokePlume;
+    candleShared.overlay.showLensSoot = showLensSoot;
     candleShared.overlay.showEntrainment = showEntrainment;
     candleShared.overlay.frameIdx = safeIdx;
 
@@ -2954,13 +3094,14 @@ function SolarCandle3DTwin({
         volumeMode,
         showSolarRays,
         showSmokePlume,
+        showLensSoot,
         showEntrainment,
         frameIdx: safeIdx,
       },
       'workbench',
     );
     ctx.renderer.render(ctx.scene, ctx.camera);
-  }, [vis, designP, volumeMode, showSolarRays, showSmokePlume, showEntrainment, safeIdx]);
+  }, [vis, designP, volumeMode, showSolarRays, showSmokePlume, showLensSoot, showEntrainment, safeIdx]);
 
   useEffect(() => {
     if (!playing || frames.length === 0) return;
@@ -2992,6 +3133,7 @@ function SolarCandle3DTwin({
               volumeMode,
               showSolarRays,
               showSmokePlume,
+              showLensSoot,
               showEntrainment,
               frameIdx: k,
             },
@@ -3016,7 +3158,7 @@ function SolarCandle3DTwin({
     <div class="sys-heatmap-wrap" data-testid="solar-candle-3d-twin">
       <div class="sys-card-bar" style={{ flexWrap: 'wrap', gap: '6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span class="sys-card-title">ParaView 3D Volumetric Flame, Solar Caustic &amp; Smoke Plume</span>
+          <span class="sys-card-title">ParaView 3D Volumetric Flame, Solar Caustic &amp; Lens Soot Fouling</span>
           <div class="seg" role="tablist">
             {CANDLE_VOLUME_TABS.map((t) => (
               <button
@@ -3049,6 +3191,15 @@ function SolarCandle3DTwin({
               onChange={(e) => setShowSmokePlume((e.target as HTMLInputElement).checked)}
             />
             Smoke Plume
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showLensSoot}
+              data-testid="toggle-lens-soot"
+              onChange={(e) => setShowLensSoot((e.target as HTMLInputElement).checked)}
+            />
+            Lens Soot Deposit
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
             <input

@@ -66,6 +66,14 @@ pub struct CandleTransientFrame {
     pub smoke_emission_ug_s: f64,
     pub peak_updraft_m_s: f64,
     pub flicker_phase_rad: f64,
+    /// Cumulative thermophoretic soot film thickness at the stagnation centre of the overhead optical glass lens underside (`nm`).
+    pub lens_soot_thickness_nm: f64,
+    /// Deposited carbonaceous soot areal density on the lens underside centre (`μg/cm²`).
+    pub lens_soot_mass_ug_cm2: f64,
+    /// Fouled optical lens solar transmittance (`%`) attenuated by Beer–Lambert soot absorption.
+    pub lens_transmittance_pct: f64,
+    /// Characteristic 1/e Gaussian smudge radius of the soot deposit on the lens underside (`mm`).
+    pub lens_soot_radius_mm: f64,
     /// Axial station profiles (length `N_Z = 24`) at this timestamp `time_s`:
     pub r_flame_mm: Vec<f64>,
     pub t_sheet_k: Vec<f64>,
@@ -106,6 +114,14 @@ pub struct CandleFlameVisual {
     pub flame_height_mm: f64,
     pub flicker_freq_hz: f64,
     pub stoichiometric_z: f64,
+    /// Final thermophoretic soot thickness deposited on the lens underside centre (`nm`).
+    pub final_lens_soot_nm: f64,
+    /// Final fouled optical lens transmittance (`%`).
+    pub final_lens_transmittance_pct: f64,
+    /// Radial stations across the optical glass lens underside (`mm`, `len = 16`).
+    pub lens_soot_radial_r_mm: Vec<f64>,
+    /// Radial soot film thickness profile `δ_soot(r)` on the lens underside (`nm`, `len = 16`).
+    pub lens_soot_radial_nm: Vec<f64>,
     /// Steady-state axial profiles (`len = nz`):
     pub u_z_m_s: Vec<f64>,
     pub u_r_entrain_m_s: Vec<f64>,
@@ -420,6 +436,16 @@ impl SolarCandleIgnitionSystem {
         let steady_rad_w = self.integrate_radiant_power_w(&r_flame_mm, &q_rad_kw_m2);
         let steady_smoke_ug_s = self.compute_smoke_emission_ug_s(state);
 
+        // Thermophoretic soot deposition onto the overhead BK7 optical glass lens underside:
+        // As the buoyant smoke plume impinges on the cooler bottom face of the glass lens at height z_lens,
+        // Talbot–Brock thermophoresis (v_th = -K_th * (nu/T) * grad_T, K_th ≈ 0.54) drives carbonaceous soot
+        // aggregates onto the lens surface, forming a radially graded smudge film δ_soot(r, t) (nm).
+        let dt_frame_s = t_end_s / ((n_frames - 1) as f64);
+        let r_lens_mm = (0.5 * drv.d_lens_mm).max(12.0);
+        let base_smudge_r_mm = (4.5 + 0.145 * drv.z_lens_mm).clamp(6.0, 0.85 * r_lens_mm);
+        let z_prox_factor = (68.0 / drv.z_lens_mm.max(25.0)).powf(1.15);
+        let mut cum_lens_soot_nm = 0.0_f64;
+
         let mut frames = Vec::with_capacity(n_frames);
         for k in 0..n_frames {
             let frac = (k as f64) / ((n_frames - 1) as f64);
@@ -475,7 +501,7 @@ impl SolarCandleIgnitionSystem {
                 } else {
                     let osc = 0.045 * (2.0 * std::f64::consts::PI * 2.2 * (t - t_steady)).sin();
                     (
-                        "5. Buoyant Diffusion Flame & Smoke Plume".to_string(),
+                        "5. Buoyant Flame, Smoke & Lens Soot Fouling".to_string(),
                         true,
                         T_IGN_K + 65.0,
                         10.5,
@@ -489,6 +515,28 @@ impl SolarCandleIgnitionSystem {
                 2.0 * std::f64::consts::PI * 2.2 * (t - t_ign).max(0.0)
             } else {
                 0.0
+            };
+
+            let inst_smoke_ug_s = steady_smoke_ug_s * smoke_scale;
+            if k > 0 {
+                // Thermophoretic deposition rate (nm/s) onto the cooler overhead lens underside
+                let dep_rate_nm_s = if ignited {
+                    1.85 * inst_smoke_ug_s * z_prox_factor * (18.0 / base_smudge_r_mm).powf(0.8)
+                } else {
+                    0.06 * inst_smoke_ug_s * z_prox_factor
+                };
+                cum_lens_soot_nm += dep_rate_nm_s * dt_frame_s;
+            }
+            // Soot bulk density rho_soot = 1.85 g/cm³ -> 1 nm film = 0.185 μg/cm²
+            let lens_soot_mass_ug_cm2 = 0.185 * cum_lens_soot_nm;
+            // Beer–Lambert optical attenuation through carbonaceous soot film (α_ext ≈ 0.0042 nm⁻¹)
+            let lens_transmittance_pct =
+                (91.8 * (-0.0042 * cum_lens_soot_nm).exp()).clamp(12.0, 91.8);
+            let lens_soot_radius_mm = if ignited {
+                let post_s = ((t - t_ign) / 2.5).clamp(0.0, 1.0);
+                base_smudge_r_mm * (0.62 + 0.38 * post_s)
+            } else {
+                0.45 * base_smudge_r_mm
             };
 
             let mut rf_k = Vec::with_capacity(N_Z);
@@ -555,13 +603,17 @@ impl SolarCandleIgnitionSystem {
                 } else {
                     0.02 * smoke_scale
                 },
-                smoke_emission_ug_s: steady_smoke_ug_s * smoke_scale,
+                smoke_emission_ug_s: inst_smoke_ug_s,
                 peak_updraft_m_s: if ignited {
                     peak_uz_steady * flame_scale.sqrt()
                 } else {
                     0.18 * smoke_scale
                 },
                 flicker_phase_rad,
+                lens_soot_thickness_nm: cum_lens_soot_nm,
+                lens_soot_mass_ug_cm2,
+                lens_transmittance_pct,
+                lens_soot_radius_mm,
                 r_flame_mm: rf_k,
                 t_sheet_k: ts_k,
                 y_oh_ppm: yoh_k,
@@ -569,6 +621,18 @@ impl SolarCandleIgnitionSystem {
                 u_z_m_s: uz_k,
                 z_mix: zm_k,
             });
+        }
+
+        let final_lens_soot_nm = frames.last().map(|f| f.lens_soot_thickness_nm).unwrap_or(0.0);
+        let final_lens_transmittance_pct = frames.last().map(|f| f.lens_transmittance_pct).unwrap_or(91.8);
+        let n_rad = 16usize;
+        let mut lens_soot_radial_r_mm = Vec::with_capacity(n_rad);
+        let mut lens_soot_radial_nm = Vec::with_capacity(n_rad);
+        for j in 0..n_rad {
+            let r_j = (j as f64) * (r_lens_mm / ((n_rad - 1) as f64));
+            let gauss = (-(r_j / base_smudge_r_mm).powi(2)).exp();
+            lens_soot_radial_r_mm.push(r_j);
+            lens_soot_radial_nm.push(final_lens_soot_nm * gauss);
         }
 
         let nearest_frame = |target_t: f64| -> usize {
@@ -641,14 +705,14 @@ impl SolarCandleIgnitionSystem {
                 event_id: "steady_plume".into(),
                 time_s: frames[idx_steady].time_s,
                 frame_index: idx_steady,
-                title: "5. Buoyant Diffusion Flame & Smoke Plume".into(),
-                regime_badge: "Buoyant Plume · Steady".into(),
+                title: "5. Buoyant Plume & Thermophoretic Lens Soot Fouling".into(),
+                regime_badge: "Plume & Lens Soot".into(),
                 summary: format!(
-                    "Teardrop luminous soot zone (L_f = {:.1} mm) radiates {:.1} W while buoyant updraft ({:.2} m/s) carries {:.1} μg/s smoke aloft.",
-                    drv.flame_height_mm, steady_rad_w, peak_uz_steady, steady_smoke_ug_s
+                    "Teardrop soot flame (L_f = {:.1} mm, {:.1} W) impinges on the overhead lens underside, depositing a {:.1} nm carbonaceous soot smudge (τ_lens = {:.1}%).",
+                    drv.flame_height_mm, steady_rad_w, final_lens_soot_nm, final_lens_transmittance_pct
                 ),
-                key_metric_label: "Peak Flame Temp".into(),
-                key_metric_value: format!("{:.0} K ({:.0} °C)", peak_t_steady, peak_t_steady - 273.15),
+                key_metric_label: "Lens Soot Deposit".into(),
+                key_metric_value: format!("{:.1} nm (τ={:.1}%)", final_lens_soot_nm, final_lens_transmittance_pct),
             },
         ];
 
@@ -668,6 +732,10 @@ impl SolarCandleIgnitionSystem {
             flame_height_mm: drv.flame_height_mm,
             flicker_freq_hz,
             stoichiometric_z: drv.z_st,
+            final_lens_soot_nm,
+            final_lens_transmittance_pct,
+            lens_soot_radial_r_mm,
+            lens_soot_radial_nm,
             u_z_m_s,
             u_r_entrain_m_s,
             z_mix,

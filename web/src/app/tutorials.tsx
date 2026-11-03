@@ -1339,6 +1339,12 @@ solve size=3.5 tref=22
             'C₂₅H₅₂ + 38 O₂ → 25 CO₂ + 26 H₂O   (Z_st = 0.0637 in air)\nu_z(z) = √( u_0² + 2 g β ∫ (T_cl(ζ) − T_∞) dζ ),   d(r_f² u_z)/dz = 2 α_ent r_f u_z',
           body: 'Once ignited, radiant feedback melts a concave liquid paraffin pool that feeds the wick by Darcy–Lucas–Washburn capillary suction. Vaporized C₂₅H₅₂ mixes with radially entrained air (α_ent ≈ 0.115); along the stoichiometric reaction sheet Z(r, z) = Z_st, excited OH*/CH* radicals emit royal-blue chemiluminescence (431 nm / 308 nm) near the oxygen-rich base. Higher in the fuel-rich interior (0.08 < Z < 0.25, T > 1300 K), polycyclic aromatic hydrocarbons nucleate carbonaceous soot (f_v ~ 1–4 ppm) whose Planckian T⁴ incandescence produces the warm yellow-white candle glow. Unoxidized soot escaping the tip cools into the dark Beer–Lambert absorbing smoke plume.',
         },
+        {
+          heading: '13.3 Thermophoretic Soot Deposition on the Overhead Glass Lens & Optical Fouling',
+          equations:
+            'v_th = −K_th · (ν_gas / T_gas) · ∇T   (K_th ≈ 0.54)\nδ_soot(r, t) = δ_soot,0(t) · exp(−(r / r_smudge)²),   τ_lens(t) = τ_clean · exp(−α_ext · δ_soot,0(t))',
+          body: 'Because the optical concentrator lens sits directly above the candle to focus overhead sunlight, the rising buoyant smoke plume impinges on the cooler bottom face of the BK7 glass lens and deflects radially outward. Across the steep thermal boundary layer between the hot plume and cooler glass, Talbot–Brock thermophoresis drives sub-micron carbonaceous soot aggregates onto the lens surface, building a radially graded velvety black core and amber-brown PAH tar halo (δ_soot ~ 25–150 nm) that progressively attenuates lens transmittance τ_lens(t).',
+        },
       ],
     },
     mcpSteps: [
