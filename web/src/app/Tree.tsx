@@ -13,12 +13,15 @@ const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: '
 
 export function RenameInput({ id, onDone }: { id: string; onDone: () => void }) {
   const ref = useRef<HTMLInputElement>(null);
+  const doneRef = useRef(false);
   const [value, setValue] = useState(id);
   useLayoutEffect(() => {
     ref.current?.focus();
     ref.current?.select();
   }, []);
   const commit = () => {
+    if (doneRef.current) return;
+    doneRef.current = true;
     const to = value.trim();
     if (to && to !== id) {
       let err: string | null = null;
@@ -26,6 +29,7 @@ export function RenameInput({ id, onDone }: { id: string; onDone: () => void }) 
         err = renameId(d, id, to);
       });
       if (err) {
+        doneRef.current = false;
         ui.notify(err, 'error');
         return;
       }
@@ -42,7 +46,10 @@ export function RenameInput({ id, onDone }: { id: string; onDone: () => void }) 
       onInput={(e) => setValue((e.target as HTMLInputElement).value)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') onDone();
+        if (e.key === 'Escape') {
+          doneRef.current = true;
+          onDone();
+        }
         e.stopPropagation();
       }}
       onBlur={commit}
@@ -133,6 +140,18 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       <span class="row-name">{ui.renaming === node.id ? <RenameInput id={node.id} onDone={() => ui.set('renaming', null)} /> : node.id}</span>
       {node.blend > 0 && <span class="meta" title="Blend radius">r{node.blend}</span>}
       <span class="row-actions">
+        <button
+          class="mini"
+          title={`Rename ${node.id} (F2)`}
+          data-testid={`rename-node-${node.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            store.select({ kind: 'node', id: node.id });
+            ui.set('renaming', node.id);
+          }}
+        >
+          <Icon.edit />
+        </button>
         <button
           class="mini"
           title={node.suppressed ? 'Unsuppress (H)' : 'Suppress (H)'}

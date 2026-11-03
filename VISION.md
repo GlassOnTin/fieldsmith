@@ -268,8 +268,9 @@ Two commercial categories border Fieldsmith:
   the repo (`V6`, `V7`, `V36`, `V42`, `V44`, `V48`), certified compliance bounds (`V34`, `V35`,
   `V43`), exact-gradient overhang and layer-peel checks (`V45`, `V46`), interactive Pareto sweep
   exploration (`V47`), direct 2D field slice stacks (`V49`), stress-driven outer shell thickening
-  (`V50`), closed-loop MCP synthesis (`V51`), face-segmented mesh/STEP field leaves (`V10`, `V14`),
-  and an automated verification ladder (`V1`–`V51`).
+  (`V50`), closed-loop MCP synthesis (`V51`), coupled multi-physics systems (`V52`) with an
+  in-app interactive Tutorials & Theory Manual (`T1–T9`), face-segmented mesh/STEP field leaves
+  (`V10`, `V14`), and an automated verification ladder (`V1`–`V52`).
 
 ### Roadmap priorities
 
@@ -287,7 +288,7 @@ Every roadmap item is governed by two execution gates:
   feature-combination pixel matrix (`V39`), surfaces rendering or empty-field errors loudly
   (`V40`), and keeps the fresh-clone README new-user gate (`V41`) green.
 
-Delivered in `v0.8` (`V48`–`V51`):
+Delivered in `v0.8` (`V48`–`V51`) and `v0.9` (`V52`):
 
 1. **Coupon-fitted per-family TPMS yield and buckling laws (`V48`, `e8765f3`).**
    - Replaced scalar open-cell placeholders in `fill.rs` with per-family and per-mode constants
@@ -307,8 +308,14 @@ Delivered in `v0.8` (`V48`–`V51`):
      `set_build`, and `sweep` solves) so an automated loop can propose `.fsm` → `sweep` /
      `ladder` → inspect yield, buckling, overhang, and layer-peel limits → refine parameters
      and orientation → export a verified 3MF meeting explicit structural and mass targets.
+5. **Coupled multi-physics systems (`V52`), interactive Tutorials & Theory Manual (`T1–T9`), and live MCP/REST co-pilot (`v0.9`).**
+   - Added the coupled multi-domain PDE solver (`float_bath.rs`, `coupled_system.rs`, `V52`),
+     9 guided lessons (`T1–T9`, including the 14-part swirl atomiser nozzle, combustor, and heat
+     exchanger with live Lefebvre/Zeldovich NOx prediction), 5S mobile portrait drawers, inline
+     Setup region rename/delete controls, and a live two-way browser `/api/mcp` bridge with
+     footer setup instructions.
 
-In priority order beyond `v0.8` (`V1`–`V51`):
+In priority order beyond `v0.9` (`V1`–`V52`):
 
 1. **Multi-body assembly mechanics & bolt preload.**
    - Tied/bonded contact and bolt preload across multi-volume 3MF and STEP assemblies.

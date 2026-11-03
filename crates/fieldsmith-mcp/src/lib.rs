@@ -13,27 +13,144 @@
 //! method is `-32601`. A tool that cannot do its work returns a result with
 //! `isError: true` and a text message — tool errors are answers, not protocol errors.
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::{b64, export, load_doc, missing_grids, question, respond};
 use fieldsmith_core::fsmz;
 use fieldsmith_doc::{
-    fsm, param, Document, Family, FillMode, Let, Load, LoadKind, NodeKind, Region, Selector,
-    Support, Temperature,
+    canonical_color, fsm, param, Convection, Document, Family, FillMode, HeatFlux, Let, Load,
+    LoadKind, Node, NodeKind, Op, Region, Selector, Support, Temperature, Transform,
 };
+use fieldsmith_solve::coupled_system::{
+    CoupledEngineeringSystem, DesignParameter, EngineConfig, MonolithicSystemEngine, NamedScenario,
+    ObjectiveDescriptor, ObjectiveKind, RegenerativeCooledNozzleSystem, SystemAnalysisResult,
+};
+use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "fieldsmith-mcp";
 
+/// Shared workspace state persisted to `FIELDSMITH_WORKSPACE` (`.fieldsmith-workspace.json`)
+/// when configured, enabling real-time synchronisation between MCP agents, REST API calls,
+/// and the interactive Web 3D CAD + Coupled Multi-Physics Workbench.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SharedWorkspaceState {
+    pub revision: u64,
+    pub updated_at_ms: u64,
+    pub actor: String,
+    pub last_tool: String,
+    pub doc_fsm: Option<String>,
+    pub coupled_system_id: Option<String>,
+    pub design_p: Option<Vec<f64>>,
+    pub epistemic_theta: Option<Vec<f64>>,
+    #[serde(default)]
+    pub activity_log: Vec<Value>,
+}
+
 pub struct Server {
     doc: Option<Document>,
+    workspace_path: Option<PathBuf>,
+    coupled_system_id: Option<String>,
+    design_p: Option<Vec<f64>>,
+    epistemic_theta: Option<Vec<f64>>,
 }
 
 impl Server {
     pub fn new() -> Self {
-        Self { doc: None }
+        let workspace_path = std::env::var("FIELDSMITH_WORKSPACE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+        let mut srv = Self {
+            doc: None,
+            workspace_path,
+            coupled_system_id: None,
+            design_p: None,
+            epistemic_theta: None,
+        };
+        srv.load_workspace_if_present();
+        srv
+    }
+
+    pub fn with_workspace(path: impl Into<PathBuf>) -> Self {
+        let mut srv = Self {
+            doc: None,
+            workspace_path: Some(path.into()),
+            coupled_system_id: None,
+            design_p: None,
+            epistemic_theta: None,
+        };
+        srv.load_workspace_if_present();
+        srv
+    }
+
+    fn load_workspace_if_present(&mut self) {
+        let Some(path) = &self.workspace_path else {
+            return;
+        };
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(ws) = serde_json::from_str::<SharedWorkspaceState>(&raw) else {
+            return;
+        };
+        if let Some(ref text) = ws.doc_fsm {
+            if let Ok(d) = fsm::parse(text) {
+                self.doc = Some(d);
+            }
+        }
+        self.coupled_system_id = ws.coupled_system_id;
+        self.design_p = ws.design_p;
+        self.epistemic_theta = ws.epistemic_theta;
+    }
+
+    fn save_workspace_after_tool(&mut self, tool_name: &str, summary: &str) {
+        let Some(path) = &self.workspace_path else {
+            return;
+        };
+        let mut ws = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<SharedWorkspaceState>(&s).ok())
+            .unwrap_or_default();
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        ws.revision += 1;
+        ws.updated_at_ms = now_ms;
+        ws.actor = "mcp-agent".to_string();
+        ws.last_tool = tool_name.to_string();
+        if let Some(ref d) = self.doc {
+            ws.doc_fsm = Some(fsm::print(d));
+        }
+        if self.coupled_system_id.is_some() {
+            ws.coupled_system_id = self.coupled_system_id.clone();
+        }
+        if self.design_p.is_some() {
+            ws.design_p = self.design_p.clone();
+        }
+        if self.epistemic_theta.is_some() {
+            ws.epistemic_theta = self.epistemic_theta.clone();
+        }
+        ws.activity_log.push(json!({
+            "revision": ws.revision,
+            "timestamp_ms": now_ms,
+            "actor": "mcp-agent",
+            "tool": tool_name,
+            "summary": summary,
+        }));
+        if ws.activity_log.len() > 25 {
+            let drain = ws.activity_log.len() - 25;
+            ws.activity_log.drain(0..drain);
+        }
+        if let Ok(serialized) = serde_json::to_string_pretty(&ws) {
+            let _ = std::fs::write(path, serialized);
+        }
     }
 
     /// One request in, at most one response out. Returns `None` for notifications
@@ -102,22 +219,60 @@ impl Server {
     /// One tool. `Ok` is the tool's facts/artifact JSON (the tool result text);
     /// `Err` is the `isError: true` message string.
     fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
-        match name {
-            "open" => self.open(args),
+        self.load_workspace_if_present();
+        let res = match name {
+            "open" | "load_fsm" => self.open(args),
+            "new_document" => self.new_document(args),
             "inspect" => self.inspect(args),
+            "list_shapes" => self.list_shapes(args),
+            "upsert_shape" | "add_primitive" => self.upsert_shape(args),
+            "delete_entity" => self.delete_entity(args),
             "add_region" => self.add_region(args),
             "add_support" => self.add_support(args),
             "add_load" => self.add_load(args),
             "add_temperature" => self.add_temperature(args),
+            "add_convection" => self.add_convection(args),
+            "add_heatflux" => self.add_heatflux(args),
             "set_material" => self.set_material(args),
-            "set_let" => self.set_let(args),
+            "set_let" | "set_param" => self.set_let(args),
             "set_fill" => self.set_fill(args),
             "set_build" => self.set_build(args),
-            "doc_text" => self.doc_text(args),
-            "solve" => self.solve(args),
+            "doc_text" | "export_fsm" => self.doc_text(args),
+            "solve" | "solve_study" => self.solve(args),
             "export" => self.export(args),
+            "list_coupled_systems" => self.list_coupled_systems(args),
+            "solve_coupled_system" => self.solve_coupled_system(args),
+            "optimise_coupled_system" => self.optimise_coupled_system(args),
             _ => Err(format!("unknown tool: {name}")),
+        };
+        if res.is_ok() {
+            let is_mutating = matches!(
+                name,
+                "open"
+                    | "load_fsm"
+                    | "new_document"
+                    | "upsert_shape"
+                    | "add_primitive"
+                    | "delete_entity"
+                    | "add_region"
+                    | "add_support"
+                    | "add_load"
+                    | "add_temperature"
+                    | "add_convection"
+                    | "add_heatflux"
+                    | "set_material"
+                    | "set_let"
+                    | "set_param"
+                    | "set_fill"
+                    | "set_build"
+                    | "solve_coupled_system"
+                    | "optimise_coupled_system"
+            );
+            if is_mutating {
+                self.save_workspace_after_tool(name, &format!("Executed MCP tool `{name}`"));
+            }
         }
+        res
     }
 
     fn doc(&self) -> Result<&Document, String> {
@@ -131,16 +286,39 @@ impl Server {
         }
     }
 
-    /// Exactly one of doc/docz, through the shared loader; the open is the session's
-    /// state. A `doc` text import carries no grids, so `missing_grids` names any mesh
-    /// the session cannot yet evaluate.
+    /// Exactly one of doc/docz (or fsm as alias for doc), through the shared loader;
+    /// the open is the session's state. A `doc` text import carries no grids, so
+    /// `missing_grids` names any mesh the session cannot yet evaluate.
     fn open(&mut self, args: Value) -> Result<Value, String> {
-        let doc = args.get("doc").and_then(Value::as_str);
+        let doc = args
+            .get("doc")
+            .or_else(|| args.get("fsm"))
+            .and_then(Value::as_str);
         let docz = args.get("docz").and_then(Value::as_str);
         if doc.is_none() && docz.is_none() {
-            return Err("open: pass exactly one of doc (.fsm text) or docz (base64 .fsmz)".into());
+            return Err("open: pass exactly one of doc/fsm (.fsm text) or docz (base64 .fsmz)".into());
         }
         let d = load_doc(doc, docz)?;
+        let summary = doc_summary(&d);
+        self.doc = Some(d);
+        Ok(summary)
+    }
+
+    /// Reset workspace to a clean .fsm document with optional name and material.
+    fn new_document(&mut self, args: Value) -> Result<Value, String> {
+        let name = args
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled")
+            .to_string();
+        let material = args
+            .get("material")
+            .and_then(Value::as_str)
+            .unwrap_or("petg")
+            .to_string();
+        let mut d = Document::default();
+        d.name = name;
+        d.material = material;
         let summary = doc_summary(&d);
         self.doc = Some(d);
         Ok(summary)
@@ -212,6 +390,42 @@ impl Server {
         })
     }
 
+    fn add_convection(&mut self, args: Value) -> Result<Value, String> {
+        let region = text_field("region", &args)?;
+        let h = number_field("h", &args)?;
+        let t_inf = args
+            .get("t_inf")
+            .or_else(|| args.get("tinf"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "add_convection: missing t_inf/tinf".to_string())?;
+        let case = case_or_default(&args, "Thermal 1");
+        self.add_entity("conv", args, |d, id| {
+            d.convections.push(Convection {
+                id,
+                region,
+                h,
+                t_inf,
+                case,
+            });
+            Ok(())
+        })
+    }
+
+    fn add_heatflux(&mut self, args: Value) -> Result<Value, String> {
+        let region = text_field("region", &args)?;
+        let q = number_field("q", &args)?;
+        let case = case_or_default(&args, "Thermal 1");
+        self.add_entity("hf", args, |d, id| {
+            d.heat_fluxes.push(HeatFlux {
+                id,
+                region,
+                q,
+                case,
+            });
+            Ok(())
+        })
+    }
+
     /// The add_* body: optional `id` (else a fresh id with the tool's prefix), push the
     /// entity, report it with the document's current problem list — the same `validate`
     /// the `check` verb prints.
@@ -243,7 +457,8 @@ impl Server {
     /// Update an existing `let` variable (or dotted parameter address `<id>.<attr>[.<n>]`),
     /// or define a new `let` variable, and re-evaluate all dependent consumer expressions.
     fn set_let(&mut self, args: Value) -> Result<Value, String> {
-        let name = text_field("name", &args)?;
+        let name = text_field("name", &args)
+            .or_else(|_| text_field("addr", &args))?;
         let value = number_field("value", &args)?;
         if !value.is_finite() {
             return Err(format!("set_let: value {value} is not finite"));
@@ -398,7 +613,12 @@ impl Server {
     /// refusal is the engine's own contract sentence, identical to what a same-process
     /// API request gets.
     fn solve(&mut self, args: Value) -> Result<Value, String> {
-        let spec: QuestionSpec = serde_json::from_value(args).map_err(|e| format!("solve: {e}"))?;
+        let mut spec_val = args;
+        if spec_val.get("kind").is_none() {
+            spec_val["kind"] = json!("solve");
+        }
+        let spec: QuestionSpec =
+            serde_json::from_value(spec_val).map_err(|e| format!("solve: {e}"))?;
         let d = self.doc()?;
         let text = fsm::print(d);
         let has_mesh = has_mesh_nodes(d);
@@ -524,6 +744,488 @@ impl Server {
             Ok(facts)
         }
     }
+
+    /// Inspect the open document's full 3D CSG/SDF shape tree (`root`), `lets`, and `consumed` expressions.
+    fn list_shapes(&mut self, _args: Value) -> Result<Value, String> {
+        let d = self.doc()?;
+        Ok(json!({
+            "name": d.name,
+            "material": d.material,
+            "lets": d.lets,
+            "consumed": d.consumed,
+            "shapes": d.root,
+        }))
+    }
+
+    /// Create or update a 3D CAD primitive shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`)
+    /// in the open document's root CSG/SDF tree.
+    fn upsert_shape(&mut self, args: Value) -> Result<Value, String> {
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let kind_str = text_field("kind", &args)?;
+        let id = match args.get("id").and_then(Value::as_str) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => d.fresh_id(&kind_str),
+        };
+        if !fsm::is_ident(&id) {
+            return Err(format!("upsert_shape: {id:?} is not a valid shape identifier"));
+        }
+
+        let op = match args.get("op").and_then(Value::as_str).unwrap_or("add") {
+            "add" => Op::Add,
+            "subtract" => Op::Subtract,
+            "intersect" => Op::Intersect,
+            other => return Err(format!("upsert_shape: unknown op {other:?} (expected add|subtract|intersect)")),
+        };
+        let blend = args.get("blend").and_then(Value::as_f64).unwrap_or(0.0);
+        let suppressed = flag(&args, "suppressed");
+        let translate: [f64; 3] = match args.get("at") {
+            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("upsert_shape: at: {e}"))?,
+            None => [0.0, 0.0, 0.0],
+        };
+        let rotate: [f64; 3] = match args.get("rotate") {
+            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("upsert_shape: rotate: {e}"))?,
+            None => [0.0, 0.0, 0.0],
+        };
+        let material = match args.get("material") {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        };
+        let color = match args.get("color") {
+            Some(Value::String(s)) if !s.is_empty() => Some(
+                canonical_color(s)
+                    .ok_or_else(|| format!("upsert_shape: invalid hex color {s:?}"))?,
+            ),
+            _ => None,
+        };
+        let round = args.get("round").and_then(Value::as_f64).unwrap_or(0.0);
+
+        let kind = match kind_str.as_str() {
+            "box" => {
+                let size: [f64; 3] = field("size", &args)?;
+                NodeKind::Box { size, round }
+            }
+            "cylinder" => {
+                let radius = number_field("radius", &args)?;
+                let height = number_field("height", &args)?;
+                NodeKind::Cylinder {
+                    radius,
+                    height,
+                    round,
+                }
+            }
+            "sphere" => {
+                let radius = number_field("radius", &args)?;
+                NodeKind::Sphere { radius }
+            }
+            "capsule" => {
+                let radius = number_field("radius", &args)?;
+                let length = number_field("length", &args)?;
+                NodeKind::Capsule { radius, length }
+            }
+            "torus" => {
+                let major = number_field("major", &args)?;
+                let minor = number_field("minor", &args)?;
+                NodeKind::Torus { major, minor }
+            }
+            other => {
+                return Err(format!(
+                    "upsert_shape: unknown shape kind {other:?} (expected box|cylinder|sphere|capsule|torus)"
+                ))
+            }
+        };
+
+        let node = Node {
+            id: id.clone(),
+            op,
+            blend,
+            suppressed,
+            transform: Transform { translate, rotate },
+            material,
+            color,
+            kind,
+        };
+
+        let action = if let Some(slot) = d.root.iter().position(|n| n.id == id) {
+            d.root[slot] = node;
+            "updated"
+        } else {
+            d.root.push(node);
+            "created"
+        };
+        let problems = d.validate();
+        Ok(json!({
+            "id": id,
+            "action": action,
+            "shapes": d.root.len(),
+            "problems": problems,
+        }))
+    }
+
+    /// Delete a shape, region, support, load, or temperature by `id`.
+    fn delete_entity(&mut self, args: Value) -> Result<Value, String> {
+        let id = text_field("id", &args)?;
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let n_shapes = d.root.len();
+        d.root.retain(|n| n.id != id);
+        if d.root.len() < n_shapes {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "shape", "problems": problems}));
+        }
+        let n_regions = d.regions.len();
+        d.regions.retain(|r| r.id != id);
+        if d.regions.len() < n_regions {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "region", "problems": problems}));
+        }
+        let n_supports = d.supports.len();
+        d.supports.retain(|s| s.id != id);
+        if d.supports.len() < n_supports {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "support", "problems": problems}));
+        }
+        let n_loads = d.loads.len();
+        d.loads.retain(|l| l.id != id);
+        if d.loads.len() < n_loads {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "load", "problems": problems}));
+        }
+        let n_temps = d.temperatures.len();
+        d.temperatures.retain(|t| t.id != id);
+        if d.temperatures.len() < n_temps {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "temperature", "problems": problems}));
+        }
+        Err(format!("delete_entity: no entity named {id:?}"))
+    }
+
+    /// List all registered pluggable [`CoupledEngineeringSystem`] domain packs, their design levers,
+    /// epistemic uncertainties, engineering objectives, and reference scenarios.
+    fn list_coupled_systems(&mut self, _args: Value) -> Result<Value, String> {
+        let case = CffCase::uk5_reference()?;
+        let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
+        let nozzle_sys = RegenerativeCooledNozzleSystem::default();
+
+        let bath_scenarios = vec![
+            NamedScenario {
+                name: "A. Baseline High-H₂ (115 mm sill, 10% H₂)".to_string(),
+                description: "Conventional open front sill with high 10% H₂ atmosphere to suppress SnOₓ".to_string(),
+                design_p: vec![115.0, 24.0, 48.0, 10.0, 210.0, -4.0],
+            },
+            NamedScenario {
+                name: "B. Naive Low-H₂ (115 mm sill, 3.8% H₂)".to_string(),
+                description: "Cuts H₂ to 3.8% without hydrodynamic sill barrier — triggers SnO₂ bloom & optical waves".to_string(),
+                design_p: vec![115.0, 24.0, 48.0, 3.8, 210.0, -4.0],
+            },
+            NamedScenario {
+                name: "C. Adjoint-Synthesised Sill + Coater (65 mm sill, 4.2% H₂)".to_string(),
+                description: "65 mm sill + 28.5 m coater position + 260 A Lorentz damping + +1.5° cant satisfies all p90 gates at 58% lower H₂".to_string(),
+                design_p: vec![65.0, 28.5, 34.0, 4.2, 260.0, 1.5],
+            },
+        ];
+
+        let nozzle_scenarios = vec![
+            NamedScenario {
+                name: "A. Baseline Uncoated Liner (30 μm TBC, 0.42 kg/s H₂)".to_string(),
+                description: "Thin 30 μm TBC with 2.4 mm channels — violates copper liner T_wall and compressive yield limits".to_string(),
+                design_p: vec![2.4, 1.2, 30.0, 0.42],
+            },
+            NamedScenario {
+                name: "B. Brute-Force High Coolant Flow (30 μm TBC, 0.72 kg/s H₂)".to_string(),
+                description: "Pumps 0.72 kg/s H₂ through narrow channels — cools wall but wastes H₂ and spikes Δp".to_string(),
+                design_p: vec![1.6, 1.2, 30.0, 0.72],
+            },
+            NamedScenario {
+                name: "C. Graded TBC + High-Velocity Throat (145 μm TBC, 0.38 kg/s H₂)".to_string(),
+                description: "Tailored 1.55 mm throat channel + 145 μm TBC reduces wall temperature and H₂ mass flow simultaneously".to_string(),
+                design_p: vec![1.55, 0.95, 145.0, 0.38],
+            },
+        ];
+
+        Ok(json!({
+            "systems": [
+                {
+                    "system_id": bath_sys.system_id(),
+                    "system_title": bath_sys.system_title(),
+                    "industry_sector": bath_sys.industry_sector(),
+                    "num_dofs": bath_sys.num_dofs(),
+                    "fields": bath_sys.field_descriptors(),
+                    "design_parameters": bath_sys.design_parameters(),
+                    "epistemic_parameters": bath_sys.epistemic_parameters(),
+                    "objectives": bath_sys.objective_descriptors(),
+                    "scenarios": bath_scenarios,
+                },
+                {
+                    "system_id": nozzle_sys.system_id(),
+                    "system_title": nozzle_sys.system_title(),
+                    "industry_sector": nozzle_sys.industry_sector(),
+                    "num_dofs": nozzle_sys.num_dofs(),
+                    "fields": nozzle_sys.field_descriptors(),
+                    "design_parameters": nozzle_sys.design_parameters(),
+                    "epistemic_parameters": nozzle_sys.epistemic_parameters(),
+                    "objectives": nozzle_sys.objective_descriptors(),
+                    "scenarios": nozzle_scenarios,
+                }
+            ]
+        }))
+    }
+
+    /// Solve a registered [`CoupledEngineeringSystem`] at `design_p` and `epistemic_theta`,
+    /// returning the converged monolithic state, Sparse Adjoint sensitivities `dΦ_m/dp_k`,
+    /// `p10/p50/p90` epistemic intervals, and 3D `.fsm` CAD twin (automatically loaded into
+    /// the open session document unless `sync_cad: false` is passed).
+    fn solve_coupled_system(&mut self, args: Value) -> Result<Value, String> {
+        let system_id = args
+            .get("system_id")
+            .and_then(Value::as_str)
+            .or(self.coupled_system_id.as_deref())
+            .unwrap_or("pilkington_float_bath_cvd_coater_v1")
+            .to_string();
+        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let req_p: Option<Vec<f64>> = args
+            .get("design_p")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| self.design_p.clone());
+        let req_theta: Option<Vec<f64>> = args
+            .get("epistemic_theta")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| self.epistemic_theta.clone());
+
+        if system_id == "pilkington_float_bath_cvd_coater_v1" {
+            let case = CffCase::uk5_reference()?;
+            let sys = FloatBathCoaterDesignSystem::new(case, 10);
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig {
+                dt_s: 3.0,
+                num_bdf_steps: 1,
+                max_newton_iters: 5,
+                newton_tol: 1e-8,
+                state_fd_eps: 1e-6,
+            };
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let fsm_3d = sys.build_3d_fsm(&p);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
+        } else if system_id == "regen_nozzle_h2_v1" {
+            let sys = RegenerativeCooledNozzleSystem::default();
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig::default();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let fsm_3d = sys.build_3d_fsm(&p);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
+        } else {
+            Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
+        }
+    }
+
+    /// Take `steps` (default `1`) automatic Sparse Adjoint `-dΦ/dp` design optimisation steps
+    /// on a [`CoupledEngineeringSystem`], updating `design_p` and synthesising the updated
+    /// 3D `.fsm` CAD twin into the session document.
+    fn optimise_coupled_system(&mut self, args: Value) -> Result<Value, String> {
+        let system_id = args
+            .get("system_id")
+            .and_then(Value::as_str)
+            .or(self.coupled_system_id.as_deref())
+            .unwrap_or("pilkington_float_bath_cvd_coater_v1")
+            .to_string();
+        let steps = args
+            .get("steps")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .clamp(1, 20) as usize;
+        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let req_p: Option<Vec<f64>> = args
+            .get("design_p")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| self.design_p.clone());
+        let req_theta: Option<Vec<f64>> = args
+            .get("epistemic_theta")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| self.epistemic_theta.clone());
+
+        if system_id == "pilkington_float_bath_cvd_coater_v1" {
+            let case = CffCase::uk5_reference()?;
+            let sys = FloatBathCoaterDesignSystem::new(case, 10);
+            let cfg = EngineConfig {
+                dt_s: 3.0,
+                num_bdf_steps: 1,
+                max_newton_iters: 5,
+                newton_tol: 1e-8,
+                state_fd_eps: 1e-6,
+            };
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else if system_id == "regen_nozzle_h2_v1" {
+            let sys = RegenerativeCooledNozzleSystem::default();
+            let cfg = EngineConfig::default();
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else {
+            Err(format!("optimise_coupled_system: unknown system_id {system_id:?}"))
+        }
+    }
+
+    fn run_adjoint_optimisation_loop<S: CoupledEngineeringSystem>(
+        &mut self,
+        sys: &S,
+        cfg: &EngineConfig,
+        req_p: Option<Vec<f64>>,
+        req_theta: Option<Vec<f64>>,
+        steps: usize,
+        sync_cad: bool,
+    ) -> Result<Value, String> {
+        let dps = sys.design_parameters();
+        let obj_descs = sys.objective_descriptors();
+        let mut p = req_p
+            .filter(|v| v.len() == dps.len())
+            .unwrap_or_else(|| sys.nominal_design_vector());
+        let theta = req_theta
+            .filter(|v| v.len() == sys.epistemic_parameters().len())
+            .unwrap_or_else(|| sys.nominal_epistemic_vector());
+
+        let initial_p = p.clone();
+        let mut initial_objectives = Vec::new();
+        let mut last_analysis: Option<SystemAnalysisResult> = None;
+
+        for step_idx in 0..steps {
+            let analysis = MonolithicSystemEngine::solve_and_analyze(sys, cfg, &p, &theta)?;
+            if step_idx == 0 {
+                initial_objectives = analysis.objectives.clone();
+            }
+            p = compute_adjoint_step(&dps, &obj_descs, &p, &analysis);
+            last_analysis = Some(analysis);
+        }
+
+        let final_analysis = MonolithicSystemEngine::solve_and_analyze(sys, cfg, &p, &theta)?;
+        let pass_p50 = final_analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = final_analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        if sync_cad {
+            if let Some(ref text) = fsm_3d {
+                let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                self.doc = Some(d);
+            }
+        }
+        self.coupled_system_id = Some(sys.system_id().to_string());
+        self.design_p = Some(p.clone());
+        self.epistemic_theta = Some(theta);
+
+        let _ = last_analysis;
+        Ok(json!({
+            "system_id": sys.system_id(),
+            "steps": steps,
+            "initial_design_p": initial_p,
+            "final_design_p": p,
+            "initial_objectives": initial_objectives,
+            "final_objectives": final_analysis.objectives,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+            "fsm_3d": fsm_3d,
+            "analysis": final_analysis,
+        }))
+    }
+}
+
+fn compute_adjoint_step(
+    design_parameters: &[DesignParameter],
+    objectives: &[ObjectiveDescriptor],
+    design_p: &[f64],
+    analysis: &SystemAnalysisResult,
+) -> Vec<f64> {
+    let mut next_p = design_p.to_vec();
+    for (k, dp) in design_parameters.iter().enumerate() {
+        let span = dp.max_bound - dp.min_bound;
+        let mut grad_norm: f64 = 0.0;
+        for (m, obj) in objectives.iter().enumerate() {
+            let val = analysis.objectives[m];
+            let scale = val.abs().max(1.0);
+            let g = analysis
+                .design_sensitivities
+                .get(m)
+                .and_then(|row| row.get(k))
+                .copied()
+                .unwrap_or(0.0)
+                * (span / scale);
+            match obj.kind {
+                ObjectiveKind::Minimize => {
+                    grad_norm += g;
+                }
+                ObjectiveKind::Maximize => {
+                    grad_norm -= g;
+                }
+                ObjectiveKind::UpperLimit(lim) => {
+                    if val > lim {
+                        grad_norm += 2.5 * g;
+                    } else {
+                        grad_norm += 0.35 * g;
+                    }
+                }
+                ObjectiveKind::LowerLimit(lim) => {
+                    if val < lim {
+                        grad_norm -= 2.5 * g;
+                    }
+                }
+                ObjectiveKind::TargetBand { min, max } => {
+                    let mid = 0.5 * (min + max);
+                    if val < min {
+                        grad_norm -= 2.5 * g;
+                    } else if val > max {
+                        grad_norm += 2.5 * g;
+                    } else {
+                        grad_norm += 0.25 * (val - mid).signum() * g;
+                    }
+                }
+            }
+        }
+        if grad_norm.abs() > 1e-9 {
+            let step = -0.08 * span * grad_norm.clamp(-1.0, 1.0);
+            next_p[k] = (next_p[k] + step).clamp(dp.min_bound, dp.max_bound);
+        }
+    }
+    next_p
 }
 
 fn json_err(code: i32, message: &str) -> Value {
@@ -615,6 +1317,9 @@ impl Default for Server {
 const TOOLS_JSON: &str = r#"[
  {"name":"open","description":"Open the session's document (.fsm text or base64 .fsmz). Exactly one of doc/docz.","inputSchema":{"type":"object","properties":{"doc":{"type":"string"},"docz":{"type":"string"}}}},
  {"name":"inspect","description":"The open document's analysis setup: regions, supports, loads, temperatures, material, fill, solve settings, validate problems, missing mesh grids.","inputSchema":{"type":"object","additionalProperties":false}},
+ {"name":"list_shapes","description":"Inspect the open document's 3D CSG/SDF shape tree (`shapes`), `lets` variables, and `consumed` expressions.","inputSchema":{"type":"object","additionalProperties":false}},
+ {"name":"upsert_shape","description":"Create or update a 3D CAD primitive shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
+ {"name":"delete_entity","description":"Delete a shape, region, support, load, or temperature by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
  {"name":"add_load","description":"Apply a load (force/pressure/distributed) on a region for a load case.","inputSchema":{"type":"object","required":["region","kind"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"}}}},
@@ -625,5 +1330,8 @@ const TOOLS_JSON: &str = r#"[
  {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)` and optional target element `size`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
- {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}}
+ {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
+ {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
 ]"#;

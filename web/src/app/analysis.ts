@@ -104,6 +104,22 @@ export class AnalysisEngine {
 
   constructor() {
     store.subscribe(() => {
+      if (store.doc.root.length === 0 && (this.state.levels.length > 0 || this.state.status !== 'idle')) {
+        this.cancel();
+        this.set({
+          status: 'idle',
+          levelLabel: '',
+          levels: [],
+          levelArrived: [],
+          error: null,
+          errorKind: null,
+          skippedFine: null,
+          resultsFor: null,
+          export: null,
+          exportError: null,
+          slice: null,
+        });
+      }
       clearTimeout(this.timer);
       this.timer = window.setTimeout(() => this.sync(), 150);
     });

@@ -557,6 +557,7 @@ dependencies = [
  "fieldsmith-api",
  "fieldsmith-core",
  "fieldsmith-doc",
+ "fieldsmith-solve",
  "serde",
  "serde_json",
 ]

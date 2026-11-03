@@ -9,7 +9,7 @@ import type { Document, Family, FillMode, Fill } from '../doc/types';
 import { NumRow, Seg, VecRow, fmt } from './fields';
 import { viewOverlays, statusItems } from './App';
 import { analysis } from './analysis';
-import { useApp } from './ui';
+import { ui, useApp } from './ui';
 
 /** Fill spec used when adding a fill (mirrors the Rust defaults for `fill`). */
 function defaultFill(): Fill {
@@ -53,7 +53,28 @@ function FillPanel() {
     <div class="results-panel" data-testid="fill-panel">
       <div class="card-head">
         <span class="title">Fill</span>
-        {fi && <span class="meta">{fi.family.toLowerCase()} · {fi.mode.toLowerCase()}</span>}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          {fi && <span class="meta">{fi.family.toLowerCase()} · {fi.mode.toLowerCase()}</span>}
+          {doc.fill && (
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="fill-inspect-interior"
+              title="Toggle 35% shell translucency and section plane to inspect the interior TPMS lattice"
+              onClick={() => {
+                if (ui.bodyAlpha < 0.99) {
+                  ui.set('bodyAlpha', 1);
+                  ui.set('clip', { ...ui.clip, on: false, t: 0 });
+                } else {
+                  ui.set('bodyAlpha', 0.35);
+                  ui.set('clip', { ...ui.clip, axis: 1, on: true, dir: 1, t: 0.5 });
+                }
+              }}
+            >
+              {ui.bodyAlpha < 0.99 ? 'Opaque shell' : 'Inspect interior'}
+            </button>
+          )}
+        </span>
       </div>
 
       {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}

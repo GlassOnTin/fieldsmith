@@ -18,6 +18,13 @@ export interface Probe {
 
 class Ui {
   paletteOpen = false;
+  /** Coupled Engineering Systems Workbench modal/overlay (V52). */
+  systemsOpen = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('systems');
+  /** Interactive 3-Column Tutorials & Theoretical Manual Drawer (T1–T9). */
+  tutorialsOpen = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('tutorials');
+  tutorialSheetId = 'T1';
+  /** MCP & REST API Co-Pilot Setup guide modal from the footer. */
+  mcpSetupOpen = false;
   /** Narrow-screen drawer state. Only meaningful under the ≤900 px layout, where the tree and
    * inspector panels overlay the viewport as slide-in drawers instead of grid columns; at
    * desktop widths the toggles and scrim are hidden by CSS and these fields are inert. */

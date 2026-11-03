@@ -9,3 +9,5 @@ web/test-results/
 *.log
 .claude/
 .agents/
+.fieldsmith-workspace.json
+web/.fieldsmith-workspace.json

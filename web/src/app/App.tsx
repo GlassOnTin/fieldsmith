@@ -34,6 +34,14 @@ function ViewTools() {
       <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
         <Icon.fit />
       </button>
+      <button
+        class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
+        data-testid="open-tutorials-drawer"
+        title="Tutorials & Theory Manual (T1–T9)"
+        onClick={() => runCommand('tutorials.open')}
+      >
+        <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
+      </button>
       {store.lens === 'shape' && (
         <>
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
@@ -72,13 +80,20 @@ function EmptyState() {
             Open .fsm…
           </button>
         </div>
-        <p style={{ margin: '14px 0 6px', fontSize: '12px' }}>Or open an example:</p>
+        <p style={{ margin: '14px 0 6px', fontSize: '12px' }}>Or open an example / tutorial:</p>
         <div class="actions">
           {EXAMPLES.map((e) => (
             <button key={e.id} class="btn small" onClick={() => openText(e.text, `${e.id}.fsm`)} data-testid={`example-${e.id}`}>
               {e.label}
             </button>
           ))}
+          <button
+            class="btn small primary"
+            onClick={() => runCommand('tutorials.open')}
+            data-testid="empty-open-tutorials"
+          >
+            Tutorials &amp; Theory Manual (T1–T9)…
+          </button>
         </div>
       </div>
     </div>

@@ -14,7 +14,7 @@ import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
 import { inspectors, NameField } from './Inspector';
-import { treeSections } from './Tree';
+import { RenameInput, treeSections } from './Tree';
 import { NumRow, VecRow, Seg } from './fields';
 import { ui, useApp } from './ui';
 import { Icon } from './icons';
@@ -140,22 +140,46 @@ function onClickRegion(hit: PickHit | null, e: PointerEvent): boolean {
   }
   const label = selectorLabel(sel);
   const target = store.selection?.kind === 'region' ? store.selection.id : null;
-  if (target) {
-    if (!store.doc.regions.some((x) => x.id === target)) return false;
-    if (!regionIn(store.doc, target).selectors.some((sl) => sameSelector(sl, sel))) {
-      store.transact(`Add face to ${target}`, (d) => {
-        regionIn(d, target).selectors.push(sel);
-      });
+  const owner = store.doc.regions.find((r) => r.selectors.some((sl) => sameSelector(sl, sel)));
+
+  if (target && store.doc.regions.some((x) => x.id === target)) {
+    const targetRegion = regionIn(store.doc, target);
+    const existingIdx = targetRegion.selectors.findIndex((sl) => sameSelector(sl, sel));
+    if (existingIdx >= 0) {
+      const onlyFace = targetRegion.selectors.length === 1;
+      removeFace(target, existingIdx);
+      if (onlyFace) {
+        store.select(null);
+        ui.notify(`Removed ${target} (${label} of ${hit.shape}).`, 'info', 3000);
+      } else {
+        ui.notify(`Removed ${label} of ${hit.shape} from ${target}.`, 'info', 3000);
+      }
+      return true;
     }
-  } else {
-    let id = '';
-    store.transact('Add region', (d) => {
-      id = freshId(d, 'region');
-      d.regions.push({ id, selectors: [sel] });
+    if (owner && owner.id !== target) {
+      store.select({ kind: 'region', id: owner.id });
+      ui.notify(`Selected existing region ${owner.id} (${label} of ${hit.shape}).`, 'info', 3500);
+      return true;
+    }
+    store.transact(`Add face to ${target}`, (d) => {
+      regionIn(d, target).selectors.push(sel);
     });
-    store.select({ kind: 'region', id });
-    ui.notify(`${id} — ${label} of ${hit.shape}. Click more surfaces to add faces.`, 'info', 4500);
+    return true;
   }
+
+  if (owner) {
+    store.select({ kind: 'region', id: owner.id });
+    ui.notify(`Selected ${owner.id} (${label} of ${hit.shape}). Click again to remove, or click more surfaces to add faces.`, 'info', 4000);
+    return true;
+  }
+
+  let id = '';
+  store.transact('Add region', (d) => {
+    id = freshId(d, 'region');
+    d.regions.push({ id, selectors: [sel] });
+  });
+  store.select({ kind: 'region', id });
+  ui.notify(`${id} — ${label} of ${hit.shape}. Click again to remove, or click more surfaces to add faces.`, 'info', 4500);
   return true;
 }
 
@@ -513,6 +537,61 @@ function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection' | '
   store.select({ kind, id });
 }
 
+export function deleteAnalysis(
+  kind: 'region' | 'support' | 'load' | 'temperature' | 'convection' | 'heatflux',
+  id: string,
+) {
+  store.transact(`Delete ${id}`, (d) => {
+    if (kind === 'region') {
+      const gone = new Set<string>([id]);
+      for (const l of d.loads) if (l.region === id) gone.add(l.id);
+      for (const t of d.temperatures) if (t.region === id) gone.add(t.id);
+      for (const c of d.convections) if (c.region === id) gone.add(c.id);
+      for (const f of d.heat_fluxes) if (f.region === id) gone.add(f.id);
+      d.regions = d.regions.filter((r) => r.id !== id);
+      d.supports = d.supports.filter((r) => r.region !== id);
+      d.loads = d.loads.filter((r) => r.region !== id);
+      d.temperatures = d.temperatures.filter((r) => r.region !== id);
+      d.convections = d.convections.filter((r) => r.region !== id);
+      d.heat_fluxes = d.heat_fluxes.filter((r) => r.region !== id);
+      if (d.fill) d.fill.protect = d.fill.protect.filter((r) => r !== id);
+      pruneConsumers(d, gone);
+    } else if (kind === 'support') {
+      d.supports = d.supports.filter((r) => r.id !== id);
+    } else if (kind === 'load') {
+      d.loads = d.loads.filter((r) => r.id !== id);
+      pruneConsumers(d, new Set([id]));
+    } else if (kind === 'temperature') {
+      d.temperatures = d.temperatures.filter((r) => r.id !== id);
+      pruneConsumers(d, new Set([id]));
+    } else if (kind === 'convection') {
+      d.convections = d.convections.filter((r) => r.id !== id);
+      pruneConsumers(d, new Set([id]));
+    } else if (kind === 'heatflux') {
+      d.heat_fluxes = d.heat_fluxes.filter((r) => r.id !== id);
+      pruneConsumers(d, new Set([id]));
+    }
+  });
+  const sel = store.selection;
+  if (sel) {
+    const stillExists =
+      sel.kind === 'region'
+        ? store.doc.regions.some((r) => r.id === sel.id)
+        : sel.kind === 'support'
+          ? store.doc.supports.some((r) => r.id === sel.id)
+          : sel.kind === 'load'
+            ? store.doc.loads.some((r) => r.id === sel.id)
+            : sel.kind === 'temperature'
+              ? store.doc.temperatures.some((r) => r.id === sel.id)
+              : sel.kind === 'convection'
+                ? store.doc.convections.some((r) => r.id === sel.id)
+                : sel.kind === 'heatflux'
+                  ? store.doc.heat_fluxes.some((r) => r.id === sel.id)
+                  : true;
+    if (!stillExists) store.select(null);
+  }
+}
+
 // ---- tree -----------------------------------------------------------------------------
 
 function SectionHead(props: { label: string; add?: () => void; title?: string; testId?: string }) {
@@ -537,14 +616,42 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature
       aria-selected={selected}
       data-testid={`${props.kind}-${props.id}`}
       onClick={() => store.select({ kind: props.kind, id: props.id })}
+      onDblClick={() => ui.set('renaming', props.id)}
     >
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
         <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : props.kind === 'heatflux' ? '→' : '↓'}</span>
       )}
-      <span class="row-name">{props.id}</span>
+      <span class="row-name">
+        {ui.renaming === props.id ? <RenameInput id={props.id} onDone={() => ui.set('renaming', null)} /> : props.id}
+      </span>
       <span class="meta">{props.meta}</span>
+      <span class="row-actions">
+        <button
+          class="mini"
+          title={`Rename ${props.kind} ${props.id} (F2)`}
+          data-testid={`rename-${props.kind}-${props.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            store.select({ kind: props.kind, id: props.id });
+            ui.set('renaming', props.id);
+          }}
+        >
+          <Icon.edit />
+        </button>
+        <button
+          class="mini"
+          title={`Delete ${props.kind} ${props.id} (Del)`}
+          data-testid={`delete-${props.kind}-${props.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteAnalysis(props.kind, props.id);
+          }}
+        >
+          <Icon.trash />
+        </button>
+      </span>
     </div>
   );
 }
@@ -797,6 +904,15 @@ function RegionInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Region</span>
         <span class="row-name">{r.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this region and any supports/loads attached to it (Del)"
+          data-testid="delete-region"
+          onClick={() => deleteAnalysis('region', r.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={r.id} />
       <div class="field-grid">
@@ -815,8 +931,8 @@ function RegionInspector({ id }: { id: string }) {
       <AddFaceRow regionId={id} />
       <div class="hint">
         {r.selectors.length === 1
-          ? 'Click surfaces to add faces, or pick a shape and face above. Removing the last face removes the region and its supports, loads and temperatures.'
-          : 'Click surfaces in the model, or pick a shape and face above.'}
+          ? 'Click surfaces to add faces, or click the highlighted surface again (or Delete above) to remove this region.'
+          : 'Click surfaces in the model to add or remove faces, or pick a shape and face above.'}
       </div>
     </div>
   );
@@ -838,6 +954,15 @@ function SupportInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Support</span>
         <span class="row-name">{s.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this support (Del)"
+          data-testid="delete-support"
+          onClick={() => deleteAnalysis('support', s.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={s.id} />
       <div class="field-grid">
@@ -992,6 +1117,15 @@ function LoadInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Load</span>
         <span class="row-name">{l.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this load (Del)"
+          data-testid="delete-load"
+          onClick={() => deleteAnalysis('load', l.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={l.id} />
       <div class="field-grid">
@@ -1148,6 +1282,15 @@ function TemperatureInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Temperature</span>
         <span class="row-name">{t.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this temperature (Del)"
+          data-testid="delete-temperature"
+          onClick={() => deleteAnalysis('temperature', t.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={t.id} />
       <div class="field-grid">
@@ -1198,6 +1341,15 @@ function ConvectionInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Convection</span>
         <span class="row-name">{c.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this convection (Del)"
+          data-testid="delete-convection"
+          onClick={() => deleteAnalysis('convection', c.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={c.id} />
       <div class="field-grid">
@@ -1261,6 +1413,15 @@ function HeatFluxInspector({ id }: { id: string }) {
       <div class="insp-heading">
         <span class="kind">Heat flux</span>
         <span class="row-name">{f.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this heat flux (Del)"
+          data-testid="delete-heatflux"
+          onClick={() => deleteAnalysis('heatflux', f.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
       </div>
       <NameField id={f.id} />
       <div class="field-grid">

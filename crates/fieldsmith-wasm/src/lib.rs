@@ -1495,3 +1495,181 @@ pub fn export_slice_stack_3mf(
     let bytes = fieldsmith_mesh::slice::write_3mf_slicestack(&doc.name, &doc.material, &stack);
     Ok(Uint8Array::from(bytes.as_slice()))
 }
+
+// ============================================================================
+// Pluggable Multi-Physics Coupled Engineering Systems (Float-Bath & Propulsion)
+// ============================================================================
+
+/// Return the catalogue of registered [`CoupledEngineeringSystem`] domain packs,
+/// including their field descriptors, design parameters `p`, epistemic parameters `θ`,
+/// objective/constraint descriptors `Φ`, and preset scenarios.
+#[wasm_bindgen(js_name = listCoupledSystems)]
+pub fn list_coupled_systems() -> Result<String, JsValue> {
+    use fieldsmith_solve::coupled_system::{
+        CoupledEngineeringSystem, NamedScenario, RegenerativeCooledNozzleSystem,
+    };
+    use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
+
+    let case = CffCase::uk5_reference().map_err(js_err)?;
+    let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
+    let nozzle_sys = RegenerativeCooledNozzleSystem::default();
+
+    let bath_scenarios = vec![
+        NamedScenario {
+            name: "A. Baseline (7.0% H₂, 90 mm Sill, Coater @ 27.5 m)".to_string(),
+            description: "Nominal UK5 bath depth (90 mm sill), 7.0% H₂ mid-bath atmosphere, CVD coater at x = 27.5 m (28 kW), motors off".to_string(),
+            design_p: vec![90.0, 27.5, 28.0, 7.0, 0.0, 0.0],
+        },
+        NamedScenario {
+            name: "B. Hot-Zone Coater (x = 14.5 m Stretching Zone)".to_string(),
+            description: "CVD coater placed in hot top-roll attenuation zone (x = 14.5 m), causing excessive T⁴ beam bow (> 0.24 mm) and varicose cooling stripe (> 14.2 Mdpt)".to_string(),
+            design_p: vec![90.0, 14.5, 28.0, 7.0, 0.0, 0.0],
+        },
+        NamedScenario {
+            name: "C. Naive Low-H₂ (4.2% H₂ on Deep 90 mm Sill)".to_string(),
+            description: "Cuts mid-bath H₂ from 7.0% to 4.2% without shallowing the sill or activating linear motors, triggering cold-return chilling and excess sinuous Mdpt".to_string(),
+            design_p: vec![90.0, 27.5, 28.0, 4.2, 0.0, 0.0],
+        },
+        NamedScenario {
+            name: "D. Synthesised (65 mm Sill + 260 A Motors + 4.2% H₂)".to_string(),
+            description: "Shallows transition sill to 65 mm to choke H³ cold-tin return, energises 260 A linear motors, positions coater at 28.5 m (34 kW), and cuts H₂ to 4.2%".to_string(),
+            design_p: vec![65.0, 28.5, 34.0, 4.2, 260.0, 0.15],
+        },
+    ];
+
+    let nozzle_scenarios = vec![
+        NamedScenario {
+            name: "A. Baseline Chamber (80 μm TBC, 0.42 kg/s H₂)".to_string(),
+            description: "Nominal 1.80 mm throat channel, 1.10 mm CuCrZr liner, 80 μm YSZ TBC, 0.42 kg/s supercritical H₂".to_string(),
+            design_p: vec![1.80, 1.10, 80.0, 0.42],
+        },
+        NamedScenario {
+            name: "B. Uncoated Thin-Coolant-Flow (0 μm TBC, 0.30 kg/s H₂)".to_string(),
+            description: "No TBC and reduced coolant mass flow — liner exceeds 860 K creep limit".to_string(),
+            design_p: vec![1.80, 1.10, 0.0, 0.30],
+        },
+        NamedScenario {
+            name: "C. Graded TBC + High-Velocity Throat (145 μm TBC, 0.38 kg/s H₂)".to_string(),
+            description: "Tailored 1.55 mm throat channel + 145 μm TBC reduces wall temperature and H₂ mass flow simultaneously".to_string(),
+            design_p: vec![1.55, 0.95, 145.0, 0.38],
+        },
+    ];
+
+    to_json(&serde_json::json!([
+        {
+            "system_id": bath_sys.system_id(),
+            "system_title": bath_sys.system_title(),
+            "industry_sector": bath_sys.industry_sector(),
+            "num_dofs": bath_sys.num_dofs(),
+            "fields": bath_sys.field_descriptors(),
+            "design_parameters": bath_sys.design_parameters(),
+            "epistemic_parameters": bath_sys.epistemic_parameters(),
+            "objectives": bath_sys.objective_descriptors(),
+            "scenarios": bath_scenarios,
+        },
+        {
+            "system_id": nozzle_sys.system_id(),
+            "system_title": nozzle_sys.system_title(),
+            "industry_sector": nozzle_sys.industry_sector(),
+            "num_dofs": nozzle_sys.num_dofs(),
+            "fields": nozzle_sys.field_descriptors(),
+            "design_parameters": nozzle_sys.design_parameters(),
+            "epistemic_parameters": nozzle_sys.epistemic_parameters(),
+            "objectives": nozzle_sys.objective_descriptors(),
+            "scenarios": nozzle_scenarios,
+        }
+    ]))
+}
+
+/// Solve a registered [`CoupledEngineeringSystem`] at the given design vector `design_p`
+/// and epistemic parameter vector `epistemic_theta`, returning the converged monolithic state,
+/// sparse Adjoint & Tangent sensitivities `dΦ_m / dp_k`, `p10/p50/p90` epistemic uncertainty
+/// intervals, conservation audits, causal attribution profiles, and 2D/1D visual fields.
+#[wasm_bindgen(js_name = solveCoupledSystem)]
+pub fn solve_coupled_system(
+    system_id: &str,
+    design_p_json: &str,
+    epistemic_theta_json: &str,
+) -> Result<String, JsValue> {
+    use fieldsmith_solve::coupled_system::{
+        CoupledEngineeringSystem, EngineConfig, MonolithicSystemEngine,
+        RegenerativeCooledNozzleSystem,
+    };
+    use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
+
+    let t0 = clock();
+    let design_p: Vec<f64> = serde_json::from_str(design_p_json)
+        .map_err(|e| js_err(format!("invalid design_p JSON: {e}")))?;
+    let epistemic_theta: Vec<f64> = serde_json::from_str(epistemic_theta_json)
+        .map_err(|e| js_err(format!("invalid epistemic_theta JSON: {e}")))?;
+
+    if system_id == "pilkington_float_bath_cvd_coater_v1" {
+        let case = CffCase::uk5_reference().map_err(js_err)?;
+        let sys = FloatBathCoaterDesignSystem::new(case, 10);
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig {
+            dt_s: 3.0,
+            num_bdf_steps: 1,
+            max_newton_iters: 5,
+            newton_tol: 1e-8,
+            state_fd_eps: 1e-6,
+        };
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": visual,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
+    } else if system_id == "regen_nozzle_h2_v1" {
+        let sys = RegenerativeCooledNozzleSystem::default();
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig::default();
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": serde_json::Value::Null,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
+    } else {
+        Err(js_err(format!("unknown coupled system_id: {system_id}")))
+    }
+}

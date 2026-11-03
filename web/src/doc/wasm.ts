@@ -777,3 +777,192 @@ export type WorkerOut =
     }
   | { type: 'sweepDone'; count: number }
   | { type: 'sweepError'; message: string };
+
+// ---- Coupled Engineering Systems (V52) ---------------------------------------------
+
+export interface CoupledFieldDescriptor {
+  name: string;
+  symbol: string;
+  unit: string;
+  reference_scale: number;
+  domain: string;
+}
+
+export interface CoupledDesignParameter {
+  name: string;
+  symbol: string;
+  unit: string;
+  category: string;
+  nominal: number;
+  min_bound: number;
+  max_bound: number;
+  fd_step: number;
+  cost_rate_per_unit: number;
+  description: string;
+}
+
+export interface CoupledEpistemicParameter {
+  name: string;
+  symbol: string;
+  unit: string;
+  nominal: number;
+  std_dev_sigma: number;
+  min_bound: number;
+  max_bound: number;
+  fd_step: number;
+  physical_mechanism: string;
+}
+
+export type CoupledObjectiveKind =
+  | 'Minimize'
+  | 'Maximize'
+  | { UpperLimit: number }
+  | { LowerLimit: number }
+  | { TargetBand: { min: number; max: number } };
+
+export interface CoupledObjectiveDescriptor {
+  name: string;
+  symbol: string;
+  unit: string;
+  kind: CoupledObjectiveKind;
+  description: string;
+}
+
+export interface CoupledConservationAudit {
+  name: string;
+  inflow: number;
+  outflow: number;
+  source_or_sink: number;
+  net_imbalance: number;
+  unit: string;
+  relative_error: number;
+  tolerance: number;
+}
+
+export interface CoupledAttributionPoint {
+  coord_m: number;
+  zone_label: string;
+  geometry_profile_m: number;
+  primary_temperature_c: number;
+  forward_transport_kw: number;
+  return_or_loss_transport_kw: number;
+  local_defect_birth: number;
+  downstream_survival_factor: number;
+  surviving_exit_defect: number;
+}
+
+export interface CoupledAttributionTrack {
+  track_name: string;
+  coord_unit: string;
+  geometry_label: string;
+  defect_label: string;
+  defect_unit: string;
+  points: CoupledAttributionPoint[];
+}
+
+export interface CoupledObjectiveUncertainty {
+  objective_index: number;
+  name: string;
+  unit: string;
+  nominal_p50: number;
+  std_dev_sigma: number;
+  p10: number;
+  p90: number;
+  epistemic_gradients: number[];
+  variance_shares: number[];
+}
+
+export interface CoupledSystemAnalysis {
+  system_id: string;
+  system_title: string;
+  num_dofs: number;
+  jacobian_nnz: number;
+  cross_physics_nnz: number;
+  initial_residual_l2: number;
+  final_residual_l2: number;
+  steady_newton_iters: number;
+  directional_fd_jacobian_rel_err: number;
+  adjoint_vs_tangent_max_rel_err: number;
+  state: number[];
+  design_p: number[];
+  epistemic_theta: number[];
+  objectives: number[];
+  design_sensitivities: number[][];
+  objective_uncertainties: CoupledObjectiveUncertainty[];
+  conservation_audits: CoupledConservationAudit[];
+  causal_tracks: CoupledAttributionTrack[];
+}
+
+export interface CoupledDistortionPoint {
+  x_m: number;
+  initial_amplitude_um: number;
+  exit_amplitude_um: number;
+  exit_half_wavelength_mm: number;
+  optical_power_mdpt: number;
+}
+
+export interface FloatBathVisualFields {
+  nx: number;
+  ny: number;
+  r_ny: number;
+  x_m: number[];
+  y_m: number[][];
+  ribbon_edge_y_m: number[];
+  ribbon_thickness_mm: number[];
+  bath_depth_mm: number[][];
+  u_tin_m_s: number[][];
+  v_tin_m_s: number[][];
+  tin_temp_c: number[][];
+  glass_temp_c: number[][];
+  roof_temp_c: number[][];
+  glass_u_m_s: number[][];
+  redox_film_um: number[][];
+  top_roll_x_m: number[];
+  coater_beam_y_m: number[];
+  coater_beam_bow_mm: number[];
+  varicose_points: CoupledDistortionPoint[];
+  sinuous_points: CoupledDistortionPoint[];
+}
+
+export interface CoupledScenarioPreset {
+  name: string;
+  description: string;
+  design_p: number[];
+}
+
+export interface CoupledSystemSummary {
+  system_id: string;
+  system_title: string;
+  industry_sector: string;
+  num_dofs: number;
+  fields: CoupledFieldDescriptor[];
+  design_parameters: CoupledDesignParameter[];
+  epistemic_parameters: CoupledEpistemicParameter[];
+  objectives: CoupledObjectiveDescriptor[];
+  scenarios: CoupledScenarioPreset[];
+}
+
+export interface CoupledSolveBundle {
+  analysis: CoupledSystemAnalysis;
+  constraints_pass_p50: boolean;
+  constraints_pass_robust_p90: boolean;
+  float_bath_visual: FloatBathVisualFields | null;
+  fsm_3d?: string | null;
+  wall_ms: number;
+}
+
+export function listCoupledSystems(): CoupledSystemSummary[] {
+  return JSON.parse(w.listCoupledSystems());
+}
+
+export function solveCoupledSystem(
+  systemId: string,
+  designP: number[] = [],
+  epistemicTheta: number[] = [],
+): CoupledSolveBundle {
+  const res = JSON.parse(w.solveCoupledSystem(systemId, JSON.stringify(designP), JSON.stringify(epistemicTheta)));
+  if (res && typeof res === 'object' && 'error' in res) {
+    throw new Error(String(res.error));
+  }
+  return res as CoupledSolveBundle;
+}

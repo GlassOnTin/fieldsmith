@@ -244,7 +244,11 @@ export function saveFile() {
 }
 
 export function newDocument() {
+  ui.set('systemsOpen', false);
+  ui.set('bodyAlpha', 1);
+  ui.set('clip', { axis: 1, dir: 1, on: false, t: 0 });
   store.load(emptyDocument());
+  store.setLens('shape');
   ui.notify('New document');
 }
 

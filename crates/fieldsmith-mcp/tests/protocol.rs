@@ -110,6 +110,9 @@ fn tools_list_is_an_array_of_the_ten_tools() {
         vec![
             "open",
             "inspect",
+            "list_shapes",
+            "upsert_shape",
+            "delete_entity",
             "add_region",
             "add_support",
             "add_load",
@@ -121,6 +124,9 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "doc_text",
             "solve",
             "export",
+            "list_coupled_systems",
+            "solve_coupled_system",
+            "optimise_coupled_system",
         ]
     );
     for t in tools {
@@ -402,4 +408,67 @@ fn set_material_errors_on_unknown_nodes_and_names_known_ones() {
     let printed = c.tool_ok(63, "doc_text", json!({}));
     let text = printed["text"].as_str().unwrap();
     assert!(text.contains("material pla"), "got: {text}");
+}
+
+/// CAD primitive authoring (`list_shapes`, `upsert_shape`, `delete_entity`) and coupled
+/// multi-physics synthesis (`list_coupled_systems`, `solve_coupled_system`,
+/// `optimise_coupled_system`) round-trip through the MCP server.
+#[test]
+fn cad_authoring_and_coupled_synthesis_round_trip() {
+    let mut c = Client::spawn();
+    c.initialize();
+    c.tool_ok(70, "open", json!({"doc": BRACKET}));
+
+    let shapes = c.tool_ok(71, "list_shapes", json!({}));
+    assert_eq!(shapes["shapes"].as_array().unwrap().len(), 5);
+
+    let upserted = c.tool_ok(
+        72,
+        "upsert_shape",
+        json!({
+            "id": "rib_gusset",
+            "kind": "box",
+            "op": "add",
+            "blend": 1.5,
+            "size": [12.0, 4.0, 10.0],
+            "at": [10.0, 0.0, 5.0],
+            "color": "#38BDF8"
+        }),
+    );
+    assert_eq!(upserted["action"], "created");
+    assert_eq!(upserted["shapes"], 6);
+    assert_eq!(upserted["problems"], json!([]));
+
+    let deleted = c.tool_ok(73, "delete_entity", json!({"id": "rib_gusset"}));
+    assert_eq!(deleted["kind"], "shape");
+
+    let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
+    let systems = catalog["systems"].as_array().unwrap();
+    assert_eq!(systems.len(), 2);
+    assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
+    assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
+
+    // Optimise the Regenerative Cooled Rocket Nozzle system via Sparse Adjoint steps
+    // and verify that its 3D `.fsm` twin is automatically synced into the open CAD document.
+    let opt = c.tool_ok(
+        75,
+        "optimise_coupled_system",
+        json!({
+            "system_id": "regen_nozzle_h2_v1",
+            "steps": 2,
+            "sync_cad": true
+        }),
+    );
+    assert_eq!(opt["synced_to_cad_doc"], true);
+    assert!(opt["fsm_3d"]
+        .as_str()
+        .unwrap()
+        .contains("Supercritical-H2 Rocket Nozzle"));
+
+    let shapes_after = c.tool_ok(76, "list_shapes", json!({}));
+    assert!(shapes_after["name"]
+        .as_str()
+        .unwrap()
+        .contains("Supercritical-H2 Rocket Nozzle"));
+    assert_eq!(shapes_after["shapes"].as_array().unwrap().len(), 9);
 }

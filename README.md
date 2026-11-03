@@ -107,9 +107,13 @@ the solved field.
   (millimetres, part name and material recorded), with exact-gradient overhang analysis
   (`V45`).
 - Automation: `fieldsmith api` (one JSON request in, one envelope out), the
-  `fieldsmith-mcp` binary (stdio MCP server over that API with closed-loop parametric
-  synthesis tools, `V51`), and the `session` and `worker` verbs to hand jobs to machines
-  you own over Noise-encrypted connections.
+  `fieldsmith-mcp` binary (stdio MCP server and live browser `/api/mcp` bridge over that API
+  with closed-loop parametric synthesis tools, `V51`), and the `session` and `worker` verbs to
+  hand jobs to machines you own over Noise-encrypted connections.
+- Interactive Tutorials & Theory Manual (`T1–T9`) and Coupled Multi-Physics Systems (`V52`,
+  Pilkington float-bath tin/glass/H₂-N₂ roof coupled PDE solver and swirl atomiser combustor
+  NOx predictor) built into the web workbench, with responsive mobile portrait drawers and
+  inline region rename/delete controls.
 
 ## Where to look next
 
@@ -128,7 +132,7 @@ By what you want to do:
 
 The full build, including the verification suite:
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V51; V24/V25/V41 in scripts/)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V52; V24/V25/V41 in scripts/)
     npm --prefix web install                  # once (if not done in Run the web app)
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist

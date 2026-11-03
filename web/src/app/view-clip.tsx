@@ -11,7 +11,7 @@ import { viewOverlays } from './App';
 
 function ClipPanel() {
   useApp();
-  if (!store.doc) return null;
+  if (!store.doc || store.doc.root.length === 0) return null;
   const clip = ui.clip;
   const toggleClip = () => {
     const vp = liveViewport;

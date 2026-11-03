@@ -126,6 +126,7 @@ update this file in a reviewed commit with the measured reason rather than skipp
 | **M27** | Direct field slice stacks (3MF Slice Ext) | Done (`0f4d75a`) | `fieldsmith_mesh::slice` + CLI `--slices` + `Make` field slice preview/export + `V49.md` |
 | **M28** | Stress-driven outer shell thickening | Done (`76f9a50`) | `fill ... skin_max=` across `.fsm`, GLSL, CPU, solver, and `Fill` UI + `V50.md` |
 | **M29** | Closed-loop agentic synthesis (`mcp`) | Done (`cf724d3`) | `set_let`/`set_fill`/`set_build`/sweep in `fieldsmith-mcp` + closed-loop `V51.md` |
+| **M30** | Coupled multi-physics, `T1–T9` tutorials & live MCP bridge (`v0.9`) | Done | `float_bath.rs` + `coupled_system.rs` (`V52.md`) + `tutorials.tsx` (`T1–T9`) + 5S mobile/region UX + live `/api/mcp` bridge |
 
 ---
 
@@ -170,3 +171,4 @@ All 26 verification cases added across `v0.6.0` (`d3cdd37`), `v0.7.0` (`d806c55`
 | `V49` | Direct field slice stacks (`slice_field`, `slice_stack`) & 3MF Slice Extension (`<s:slicestack>`) | v0.8 (`0f4d75a`) | [V49.md](docs/verification/V49.md) |
 | `V50` | Field-native stress-driven outer shell thickening (`fill ... skin_max=<mm>`) | v0.8 (`76f9a50`) | [V50.md](docs/verification/V50.md) |
 | `V51` | Closed-loop agentic synthesis via `fieldsmith-mcp` (`set_let`, `set_fill`, `set_build`, `sweep`) | v0.8 (`cf724d3`) | [V51.md](docs/verification/V51.md) |
+| `V52` | Coupled multi-physics PDE systems (Pilkington float-bath tin/glass/H₂-N₂ roof & swirl combustor `T1–T9`) | v0.9 | [V52.md](docs/verification/V52.md) |

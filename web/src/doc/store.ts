@@ -171,6 +171,7 @@ export class Store {
 
   private autosave() {
     try {
+      if ((this.doc.name || '').includes('Float-Bath')) return;
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(this.doc));
     } catch {
       /* storage unavailable or full: autosave is best-effort */
@@ -180,7 +181,13 @@ export class Store {
   static restore(): Document | null {
     try {
       const s = localStorage.getItem(AUTOSAVE_KEY);
-      return s ? withLetTables(JSON.parse(s) as Document) : null;
+      if (!s) return null;
+      const doc = withLetTables(JSON.parse(s) as Document);
+      if ((doc.name || '').includes('Float-Bath')) {
+        localStorage.removeItem(AUTOSAVE_KEY);
+        return null;
+      }
+      return doc;
     } catch {
       return null;
     }

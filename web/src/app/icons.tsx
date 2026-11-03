@@ -69,6 +69,12 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4" />
     </S>
   ),
+  edit: () => (
+    <S>
+      <path d="M11.2 2.3 13.7 4.8 5.4 13.1 2.2 13.8 2.9 10.6z" />
+      <path d="M9.6 3.9 12.1 6.4" />
+    </S>
+  ),
   chevron: () => (
     <S>
       <path d="M5.5 3.5 10 8l-4.5 4.5" />

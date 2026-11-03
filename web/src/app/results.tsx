@@ -2,6 +2,7 @@
 // by the chosen quantity, plus a status badge and a control panel. Colour comes from the
 // element that owns each boundary facet (element-centroid von Mises), so peaks read honestly.
 import { Fragment } from 'preact';
+import { useState } from 'preact/hooks';
 import { ui, useApp, RESULTS_SCALE_DEFAULT } from './ui';
 import type { ResultMode } from './ui';
 import { store } from '../doc/store';
@@ -927,6 +928,7 @@ function SweepSection() {
 
 function ResultsPanel() {
   useApp();
+  const [compact, setCompact] = useState(false);
   if (store.lens !== 'results') return null;
   const s = analysis.state;
   const lvl = s.levels[s.levels.length - 1];
@@ -944,7 +946,20 @@ function ResultsPanel() {
     <div class="results-panel" data-testid="results-panel">
       <div class="card-head">
         <span class="title">Results</span>
-        {lvl && <span class="meta">{lvl.label}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {lvl && <span class="meta">{lvl.label}</span>}
+          {lvl && (
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="results-compact-toggle"
+              title="Toggle 5S Compact Summary vs Full Rungs & Sweep View"
+              onClick={() => setCompact(!compact)}
+            >
+              {compact ? 'More ▾' : 'Compact ▴'}
+            </button>
+          )}
+        </div>
       </div>
       {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
       {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
@@ -1037,11 +1052,30 @@ function ResultsPanel() {
             {lvl.meta.max_layer_peel && lvl.meta.max_layer_peel.length > 0 && (
               <>
                 <span class="plain">Layer peel</span>
-                <span class="num" data-testid="results-peel-summary">
-                  ×{fmt(Math.max(0, ...lvl.meta.max_layer_peel), 2)} at ({fmt(lvl.meta.build_angles?.[0] ?? 0, 0)}°, {fmt(lvl.meta.build_angles?.[1] ?? 0, 0)}°)
-                  {lvl.meta.best_build_angles != null && lvl.meta.min_peak_peel != null
-                    ? ` · best (${fmt(lvl.meta.best_build_angles[0], 0)}°, ${fmt(lvl.meta.best_build_angles[1], 0)}°) → ×${fmt(lvl.meta.min_peak_peel, 2)}`
-                    : ''}
+                <span class="num" data-testid="results-peel-summary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  <span>
+                    ×{fmt(Math.max(0, ...lvl.meta.max_layer_peel), 2)} at ({fmt(lvl.meta.build_angles?.[0] ?? 0, 0)}°, {fmt(lvl.meta.build_angles?.[1] ?? 0, 0)}°)
+                    {lvl.meta.best_build_angles != null && lvl.meta.min_peak_peel != null
+                      ? ` · best (${fmt(lvl.meta.best_build_angles[0], 0)}°, ${fmt(lvl.meta.best_build_angles[1], 0)}°) → ×${fmt(lvl.meta.min_peak_peel, 2)}`
+                      : ''}
+                  </span>
+                  {lvl.meta.best_build_angles != null && (
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      data-testid="apply-best-build"
+                      title="Apply the solver's optimal additive build orientation (theta, phi)"
+                      onClick={() => {
+                        const b = lvl.meta.best_build_angles!;
+                        store.transact(`Set build orientation (${fmt(b[0], 0)}°, ${fmt(b[1], 0)}°)`, (d) => {
+                          d.solve.build = [b[0], b[1]];
+                        });
+                        ui.notify(`Applied optimal build orientation (${fmt(b[0], 0)}°, ${fmt(b[1], 0)}°)`);
+                      }}
+                    >
+                      Apply best
+                    </button>
+                  )}
                 </span>
               </>
             )}
@@ -1074,7 +1108,7 @@ function ResultsPanel() {
               );
             })}
           </div>
-          {s.levels.length > 0 && (
+          {!compact && s.levels.length > 0 && (
             <div class="field-grid" data-testid="rung-table">
               <span class="plain">Rungs</span>
               <span class="meta">fieldsmith wasm · one row per rung; changes are rung-to-rung estimates, not bounds</span>
@@ -1094,8 +1128,8 @@ function ResultsPanel() {
               })}
             </div>
           )}
-          <SweepSection />
-          {lvl.meta.cases.some((c) => (c.load_reports ?? []).length > 0) && (
+          {!compact && <SweepSection />}
+          {!compact && lvl.meta.cases.some((c) => (c.load_reports ?? []).length > 0) && (
             <div class="field-grid" data-testid="load-provenance">
               <span class="plain">Loads (applied)</span>
               <span class="meta">resultant and moment about the document origin</span>

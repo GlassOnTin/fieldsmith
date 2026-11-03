@@ -18,7 +18,9 @@
 pub mod assemble;
 pub mod bounds;
 pub mod bsr;
+pub mod coupled_system;
 pub mod dual;
+pub mod float_bath;
 pub mod modal;
 pub mod ortho;
 pub mod p2;

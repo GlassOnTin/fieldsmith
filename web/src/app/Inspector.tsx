@@ -6,7 +6,7 @@ import { findNode, kindLabel } from '../doc/types';
 import type { Document, Modifier, Node, NodeKind, Op } from '../doc/types';
 import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import { MODIFIER_LABEL, defaultModifier, inheritedColor, renameId } from '../doc/ops';
-import { drivenExpr } from '../doc/param';
+import { applyAddr, drivenExpr, parseAddr } from '../doc/param';
 import { PART_COLORS } from '../doc/types';
 import { Fragment } from 'preact';
 import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
@@ -471,6 +471,14 @@ function NodeInspector({ node }: { node: Node }) {
         </span>
       </div>
       <div class="field-grid" style={{ marginTop: '8px' }}>
+        <label class="plain">Faces</label>
+        <span class="num" style={{ color: 'var(--text-3)', fontSize: '11px' }} title="Valid face selector names for regions in Setup (2) and MCP add_region">
+          {node.kind.type === 'box'
+            ? 'px · nx · py · ny · pz · nz · all'
+            : node.kind.type === 'cylinder' || node.kind.type === 'extrude'
+              ? 'top · bottom · side · all'
+              : 'all'}
+        </span>
         <label class="plain">Suppressed</label>
         <label class="check">
           <input type="checkbox" checked={node.suppressed} onChange={(e) => store.transact(`Toggle ${id}`, (d) => (nodeIn(d, id).suppressed = (e.target as HTMLInputElement).checked))} />
@@ -493,6 +501,18 @@ function DocumentInspector() {
   const { errors: problems, warnings } = validateWithWarnings(doc);
   const mats = [...materials(), ...doc.custom_materials];
   const mat = mats.find((m) => m.id === doc.material);
+  const addNewLet = () => {
+    store.transact('Add parameter', (d) => {
+      const lets = d.lets ?? (d.lets = []);
+      let idx = lets.length + 1;
+      let name = `p${idx}`;
+      while (lets.some((l) => l.name === name)) {
+        idx++;
+        name = `p${idx}`;
+      }
+      lets.push({ name, expr: '10', value: 10 });
+    });
+  };
   return (
     <div class="insp" data-inspector="document">
       <div class="insp-heading">
@@ -509,20 +529,24 @@ function DocumentInspector() {
         </select>
       </div>
       {mat && (
-        <div class="field-grid" style={{ fontSize: '12px' }}>
-          <label class="plain">Young’s modulus</label>
-          <span class="num">{mat.e.toLocaleString()} MPa</span>
-          <label class="plain">Poisson’s ratio</label>
-          <span class="num">{mat.nu}</span>
-          <label class="plain">Yield strength</label>
-          <span class="num">{mat.yield_strength} MPa</span>
-          <label class="plain">Density</label>
-          <span class="num">{mat.density} g/cm³</span>
-          <label class="plain">Minimum wall</label>
-          <span class="num">{mat.min_wall} mm</span>
-          <label class="plain">Source</label>
-          <span style={{ color: 'var(--text-3)' }}>{mat.source}</span>
-        </div>
+        <>
+          <div class="field-grid" style={{ fontSize: '12px' }}>
+            <label class="plain">Young’s modulus</label>
+            <span class="num">{mat.e.toLocaleString()} MPa</span>
+            <label class="plain">Poisson’s ratio</label>
+            <span class="num">{mat.nu}</span>
+            <label class="plain">Yield strength</label>
+            <span class="num">{mat.yield_strength} MPa</span>
+            <label class="plain">Density</label>
+            <span class="num">{mat.density} g/cm³</span>
+            <label class="plain">Minimum wall</label>
+            <span class="num">{mat.min_wall} mm</span>
+          </div>
+          <details class="hint" style={{ marginTop: '4px' }}>
+            <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Material source datasheet</summary>
+            <div style={{ marginTop: '4px', color: 'var(--text-3)' }}>{mat.source}</div>
+          </details>
+        </>
       )}
       {problems.length > 0 && (
         <div class="error-box">
@@ -594,27 +618,52 @@ function DocumentInspector() {
           />
         )}
       </div>
-      {(doc.lets?.length ?? 0) > 0 && (
-        <>
-          <div class="section-label" style={{ marginTop: '8px' }}>
-            Parameters
-          </div>
-          <div class="field-grid" data-testid="params-panel">
-            {doc.lets?.map((l) => (
+      <div class="section-label" style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Parameters (let)</span>
+        <button
+          type="button"
+          class="btn ghost small"
+          data-testid="add-let-btn"
+          title="Add a named scalar parameter (let)"
+          onClick={addNewLet}
+        >
+          + let
+        </button>
+      </div>
+      {(doc.lets?.length ?? 0) > 0 ? (
+        <div class="field-grid" data-testid="params-panel">
+          {doc.lets?.map((l) => {
+            const isLiteral = /^-?\d+(\.\d+)?$/.test(l.expr.trim());
+            return (
               <Fragment key={l.name}>
                 <label class="plain">{l.name}</label>
-                <span class="num" title={`let ${l.name} = ${l.expr}`}>
-                  {l.expr}
-                </span>
-                <span class="num">{fmt(l.value)}</span>
+                {isLiteral ? (
+                  <NumberInput
+                    value={l.value}
+                    step={0.5}
+                    testId={`let-input-${l.name}`}
+                    onChange={(v) =>
+                      store.transact(`Set let ${l.name}`, (d) => {
+                        applyAddr(d, parseAddr(l.name), v);
+                        const slot = d.lets?.find((x) => x.name === l.name);
+                        if (slot) slot.expr = String(v);
+                      })
+                    }
+                  />
+                ) : (
+                  <span class="num" title={`let ${l.name} = ${l.expr}`}>
+                    {l.expr} = <strong>{fmt(l.value)}</strong>
+                  </span>
+                )}
               </Fragment>
-            ))}
-            <span class="hint" style={{ gridColumn: '1 / -1' }}>
-              Defined as <code>let</code> in the .fsm source. The sweep panel takes these
-              names as parameters; sweeping one recomputes everything that reads it.
-            </span>
-          </div>
-        </>
+            );
+          })}
+          <span class="hint" style={{ gridColumn: '1 / -1' }}>
+            Defined as <code>let</code> in the .fsm source. Editing or sweeping a parameter recomputes every dimension and load that reads it.
+          </span>
+        </div>
+      ) : (
+        <div class="hint">No parameters defined yet. Click <code>+ let</code> to add a design variable.</div>
       )}
       <div class="hint" style={{ marginTop: '8px' }}>
         Select a shape in the tree or the viewport to edit it.
