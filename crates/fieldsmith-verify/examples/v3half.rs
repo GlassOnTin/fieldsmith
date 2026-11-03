@@ -115,6 +115,7 @@ fn main() {
             let tv = match l.kind {
                 LoadKind::Force { vector } => vector.map(|c| c / area),
                 LoadKind::Pressure { mpa } => fct.normal(&mesh).map(|c| -mpa * c),
+                LoadKind::Preload { newtons, .. } => fct.normal(&mesh).map(|c| -(newtons / area) * c),
                 // The instrument predates distributed loads (M11); it reproduces V3's
                 // point/pressure case only. Refuse rather than silently approximate.
                 LoadKind::Distributed { .. } => {

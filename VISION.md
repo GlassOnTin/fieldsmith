@@ -156,8 +156,9 @@ For what Fieldsmith already does and verifies today, see [`README.md`](README.md
    stiffness, density, and thermal expansion (`material <id> on <node>`) plus axial bolt preload
    clamping (`load <id> <region> preload=<N> [axis=(...)]`). Next extension: nonlinear penalty
    gasket separation across unbonded contact interfaces.
-2. **Spatially varying cell-size and multi-zone lattice fields** — smooth transitions between
-   lattice cell sizes and families across functional regions.
+2. **Spatially varying cell-size and multi-zone lattice fields (`V54`, `T11` — done)** — smooth
+   transitions between lattice cell sizes (`cell_min=<mm>`) and TPMS families (`morph=<family>`)
+   driven by the 3D field grade with exact CPU/GLSL parity and two-pass homogenised FEA.
 3. **Topology optimization / level-set field evolution** — stress- and compliance-driven outer
    boundary evolution directly on the implicit field grid.
 

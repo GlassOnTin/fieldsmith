@@ -513,8 +513,18 @@ pub enum FillMode {
 pub struct Fill {
     pub family: Family,
     pub mode: FillMode,
-    /// Unit cell edge length (mm).
+    /// Unit cell edge length (mm) at low-stress (`rho_min`) regions.
     pub cell: f64,
+    /// Optional minimum unit cell edge length (mm) at high-stress (`rho_max`) regions
+    /// (`0 < cell_min <= cell`). When set with `cell_min < cell`, the local unit cell
+    /// refines smoothly from `cell` (at `rho_min`) down to `cell_min` (at `rho_max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_min: Option<f64>,
+    /// Optional secondary TPMS lattice family at high-stress (`rho_max`) regions; when
+    /// set and distinct from `family`, the lattice morphs smoothly from `family` (at
+    /// `rho_min`) to `morph` (at `rho_max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub morph: Option<Family>,
     /// Solid skin thickness kept under the outer surface (mm).
     pub skin: f64,
     /// Optional peak skin thickness (mm) at high-stress regions; when `Some(sm)` with
@@ -549,6 +559,8 @@ impl Default for Fill {
             family: Family::Gyroid,
             mode: FillMode::Sheet,
             cell: 6.0,
+            cell_min: None,
+            morph: None,
             skin: 1.2,
             skin_max: None,
             rho_min: 0.2,
@@ -1178,6 +1190,11 @@ impl Document {
         if let Some(f) = &self.fill {
             if f.cell <= 0.0 {
                 errs.push("Fill cell size must be positive".into());
+            }
+            if let Some(cm) = f.cell_min {
+                if !cm.is_finite() || cm <= 0.0 || cm > f.cell {
+                    errs.push("Fill cell_min must satisfy 0 < cell_min <= cell".into());
+                }
             }
             if let Some(sm) = f.skin_max {
                 if !sm.is_finite() || sm < f.skin {

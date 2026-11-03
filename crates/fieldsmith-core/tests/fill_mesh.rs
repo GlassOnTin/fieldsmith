@@ -146,6 +146,8 @@ fn mesh_bar_doc() -> Document {
         family: fieldsmith_doc::Family::Gyroid,
         mode: fieldsmith_doc::FillMode::Sheet,
         cell: 5.0,
+        cell_min: None,
+        morph: None,
         skin: 1.0,
         skin_max: None,
         rho_min: 0.2,

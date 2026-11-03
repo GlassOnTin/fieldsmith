@@ -147,6 +147,7 @@ fn main() {
             let tv = match l.kind {
                 LoadKind::Force { vector } => vector.map(|c| c / area),
                 LoadKind::Pressure { mpa } => fct.normal(&mesh).map(|c| -mpa * c),
+                LoadKind::Preload { newtons, .. } => fct.normal(&mesh).map(|c| -(newtons / area) * c),
                 LoadKind::Distributed { .. } => {
                     panic!("v3quarter does not implement distributed loads ({})", l.id)
                 }

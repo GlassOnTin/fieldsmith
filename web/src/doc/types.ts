@@ -104,8 +104,10 @@ export type FillMode = 'sheet' | 'network';
 
 export interface Fill {
   family: Family;
+  morph?: Family | null;
   mode: FillMode;
   cell: number;
+  cell_min?: number | null;
   skin: number;
   skin_max?: number | null;
   rho_min: number;

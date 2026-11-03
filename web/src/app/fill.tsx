@@ -110,8 +110,33 @@ function FillPanel() {
                 { value: 'primitive', label: 'Primitive' },
                 { value: 'diamond', label: 'Diamond' },
               ]}
-              onChange={(v) => store.transact('Set fill pattern', (d) => d.fill && (d.fill.family = v))}
+              onChange={(v) =>
+                store.transact('Set fill pattern', (d) => {
+                  if (!d.fill) return;
+                  d.fill.family = v;
+                  if (d.fill.morph === v) d.fill.morph = null;
+                })
+              }
               testId="fill-family"
+            />
+            <label class="plain" title="Optional secondary TPMS family at high-stress regions (morphs smoothly from Pattern at ρmin to Morph to at ρmax)">
+              Morph to
+            </label>
+            <Seg<'none' | Family>
+              value={doc.fill.morph && doc.fill.morph !== doc.fill.family ? doc.fill.morph : 'none'}
+              options={[
+                { value: 'none', label: 'Same' },
+                { value: 'gyroid', label: 'Gyroid' },
+                { value: 'primitive', label: 'Primitive' },
+                { value: 'diamond', label: 'Diamond' },
+              ]}
+              onChange={(v) =>
+                store.transact('Set fill morph family', (d) => {
+                  if (!d.fill) return;
+                  d.fill.morph = v === 'none' || v === d.fill.family ? null : v;
+                })
+              }
+              testId="fill-morph"
             />
             <label class="plain">Mode</label>
             <Seg<FillMode>
@@ -129,10 +154,30 @@ function FillPanel() {
               min={1}
               step={1}
               get={(d) => d.fill?.cell ?? 6}
-              set={(d, v) => d.fill && (d.fill.cell = v)}
+              set={(d, v) => {
+                if (!d.fill) return;
+                d.fill.cell = v;
+                if (d.fill.cell_min != null && d.fill.cell_min >= v) {
+                  d.fill.cell_min = null;
+                }
+              }}
               undoLabel="Set fill cell"
               testId="fill-cell"
-              title="Unit cell edge length"
+              title="Unit cell edge length at low-stress regions (ρmin)"
+            />
+            <NumRow
+              label="Min cell"
+              unit="mm"
+              min={0.5}
+              step={0.5}
+              get={(d) => d.fill?.cell_min ?? d.fill?.cell ?? 6}
+              set={(d, v) => {
+                if (!d.fill) return;
+                d.fill.cell_min = v >= d.fill.cell ? null : Math.max(0.5, v);
+              }}
+              undoLabel="Set min stress cell"
+              testId="fill-cell-min"
+              title="Finest unit cell edge length at high-stress regions (refines smoothly from Cell at ρmin down to Min cell at ρmax)"
             />
             <NumRow
               label="Skin"

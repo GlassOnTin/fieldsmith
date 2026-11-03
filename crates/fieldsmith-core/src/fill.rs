@@ -453,6 +453,13 @@ fn check_spec(spec: &Fill) -> Result<(), SetupError> {
     if spec.cell <= 0.0 {
         return Err(SetupError("fill cell size must be positive".into()));
     }
+    if let Some(cm) = spec.cell_min {
+        if !cm.is_finite() || cm <= 0.0 || cm > spec.cell {
+            return Err(SetupError(
+                "fill cell_min must satisfy 0 < cell_min <= cell".into(),
+            ));
+        }
+    }
     if spec.skin < 0.0 || spec.margin < 0.0 || spec.min_wall < 0.0 {
         return Err(SetupError(
             "fill skin, margin and min wall must be non-negative".into(),
@@ -528,10 +535,43 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
     } else {
         [p_lo, p0]
     };
-    let spacing = (spec.cell / 2.0).max(1e-3);
+    let cell_min = spec.cell_min.unwrap_or(spec.cell);
+    let min_cell = cell_min.min(spec.cell);
+    let spacing = (min_cell / 2.0).max(1e-3);
     let mut param = grid_over(&b, spacing, spec.cell)?;
+    let vary_preview =
+        (cell_min - spec.cell).abs() > 1e-9 || spec.morph.is_some_and(|m| m != spec.family);
     if param.dims.iter().any(|&d| d < 2) {
         param = Grid3::constant(p0 as f32);
+    } else if vary_preview {
+        // Ramp smoothly from p_lo to p0 along the dominant bounding-box axis so spatially
+        // varying cell size and multi-zone family morphing are immediately visible in the
+        // pre-solve Fill (4) viewport.
+        let spans = [b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]];
+        let ax = if spans[0] >= spans[1] && spans[0] >= spans[2] {
+            0
+        } else if spans[1] >= spans[2] {
+            1
+        } else {
+            2
+        };
+        let [nx, ny, nz] = param.dims;
+        let denom = spans[ax].max(1e-6);
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let coord = param.origin[ax]
+                        + (match ax {
+                            0 => i,
+                            1 => j,
+                            _ => k,
+                        } as f64)
+                            * param.spacing;
+                    let t = ((coord - b.lo[ax]) / denom).clamp(0.0, 1.0);
+                    param.data[(k * ny + j) * nx + i] = (p_lo + (p0 - p_lo) * t) as f32;
+                }
+            }
+        }
     } else {
         param.data.iter_mut().for_each(|v| *v = p0 as f32);
     }
@@ -541,8 +581,11 @@ pub fn preview_fill(doc: &fieldsmith_doc::Document) -> Result<FillExpr, SetupErr
         skin_max: spec.skin_max.unwrap_or(spec.skin),
         param_range,
         family: spec.family,
+        morph: spec.morph,
         mode: spec.mode,
         cell: spec.cell,
+        cell_min,
+        min_wall: spec.min_wall,
         rotate: spec.rotate,
         param,
         keep,
@@ -597,14 +640,19 @@ pub fn graded_of(
 
     // A parameter-free probe, purely to read the solid/lattice split (`in_core` never looks at
     // `param`); the real fill expression is built once the grades exist.
+    let cell_min = spec.cell_min.unwrap_or(spec.cell);
+    let min_cell = cell_min.min(spec.cell);
     let probe = FillExpr {
         body: body.clone(),
         skin: spec.skin,
         skin_max: spec.skin,
         param_range: [0.0, 0.0],
         family: spec.family,
+        morph: spec.morph,
         mode: spec.mode,
         cell: spec.cell,
+        cell_min,
+        min_wall: spec.min_wall,
         rotate: spec.rotate,
         param: Grid3::constant(0.0),
         keep: keep.clone(),
@@ -612,7 +660,7 @@ pub fn graded_of(
 
     // The grade grid: half a cell per node, padded a cell beyond the part so surface-adjacent
     // cells interpolate instead of clamping.
-    let spacing = (spec.cell / 2.0).max(1e-3);
+    let spacing = (min_cell / 2.0).max(1e-3);
     let pad = spec.cell;
     let mut core = grid_over(&b, spacing, pad)?;
     let [nx, ny, nz] = core.dims;
@@ -720,14 +768,17 @@ pub fn graded_of(
         skin_max,
         param_range: [p_lo, p_hi],
         family: spec.family,
+        morph: spec.morph,
         mode: spec.mode,
         cell: spec.cell,
+        cell_min,
+        min_wall: spec.min_wall,
         rotate: spec.rotate,
         param,
         keep: keep.clone(),
     };
     let filled = Expr::Filled(Box::new(fill.clone()));
-    let h_over_cell = base.provenance.element_size / spec.cell;
+    let morph_fam = spec.morph.filter(|&m| m != spec.family);
     let mut young = vec![0.0f64; base.mesh.tets.len()];
     let mut class = vec![0u8; base.mesh.tets.len()];
     let mut rho_elem = vec![0.0f64; base.mesh.tets.len()];
@@ -742,13 +793,25 @@ pub fn graded_of(
         } else {
             CLASS_LATTICE
         };
-        *y = mat.e * VOID_SCALE.max(element_stiffness(spec.family, spec.mode, phi, h_over_cell));
+        let c = centroid(&base.mesh, e);
+        let pv = fill.param.sample(c);
+        let a_loc = fill.cell_at_param(pv).max(1e-6);
+        let h_over_cell = base.provenance.element_size / a_loc;
+        let rel_e = if let Some(fam_hi) = morph_fam {
+            let t = fill.grade_at_param(pv);
+            let e0 = element_stiffness(spec.family, spec.mode, phi, h_over_cell);
+            let e1 = element_stiffness(fam_hi, spec.mode, phi, h_over_cell);
+            (1.0 - t) * e0 + t * e1
+        } else {
+            element_stiffness(spec.family, spec.mode, phi, h_over_cell)
+        };
+        *y = mat.e * VOID_SCALE.max(rel_e);
     }
 
     // Mass from the field with the material's density (g/cm³ → g/mm³: ÷1000). The fill never
     // exceeds the body, so both integrals cover the same volume; the difference is the lattice.
     let t_fill = clock();
-    let mass_h = (spec.cell / 4.0).min(volume::default_spacing(&b));
+    let mass_h = (min_cell / 4.0).min(volume::default_spacing(&b));
     let mass_g = volume::integrate(&Expr::Filled(Box::new(fill.clone())), mass_h, None)
         * mat.density
         / 1000.0;

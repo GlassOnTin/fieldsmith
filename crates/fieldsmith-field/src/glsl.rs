@@ -476,7 +476,7 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             Some(self.expr(&fx.keep))
         };
         let param_expr = self.param_term(&fx.param);
-        let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
+        let lattice = lattice_term(fx, &param_expr);
         let skin_expr = skin_term(fx, &param_expr);
         let mut b = format!("  vec4 d = {body}(p);\n  vec4 core = vec4(-(d.x + {skin_expr}), -d.yzw);\n{lattice}  vec4 inner = fs_min(core, lat);\n");
         if let Some(k) = keep {
@@ -501,7 +501,7 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
             Some(self.expr(&fx.keep))
         };
         let param_expr = self.param_term(&fx.param);
-        let lattice = lattice_term(fx.family, fx.mode, fx.cell, fx.rotate, &param_expr);
+        let lattice = lattice_term(fx, &param_expr);
         let skin_expr = skin_term(fx, &param_expr);
         let inner = match keep {
             Some(k) => format!("  vec4 inner = fs_min(lat, {k}(p));\n"),
@@ -554,32 +554,85 @@ fn skin_term(fx: &FillExpr, param_expr: &str) -> String {
 }
 
 /// The lattice sampler `vec4 lat = …` lines, in the mode's wall semantics (sheet walls thin
-/// by ±param, network struts thin by param), on the TPMS surfaces of `family`.
-fn lattice_term(
-    family: Family,
-    mode: FillMode,
-    cell: f64,
-    rotate: V3,
-    param_expr: &str,
-) -> String {
-    let fam = match family {
+/// by ±param, network struts thin by param), on the TPMS surfaces of `family` (with optional
+/// spatially varying cell size `cell_min` and secondary family morph `morph`).
+fn lattice_term(fx: &FillExpr, param_expr: &str) -> String {
+    let fam_code = |f: Family| match f {
         Family::Gyroid => 0,
         Family::Primitive => 1,
         Family::Diamond => 2,
     };
-    let cell = lit(cell);
-    let tpms = if rotate == [0.0; 3] {
-        format!("  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n")
+    let fam = fam_code(fx.family);
+    let morph = fx.morph.filter(|&m| m != fx.family);
+    let vary_cell = fx.cell_min > 0.0 && (fx.cell_min - fx.cell).abs() > 1e-9;
+    if !vary_cell && morph.is_none() {
+        let cell = lit(fx.cell);
+        let tpms = if fx.rotate == [0.0; 3] {
+            format!("  vec4 s = fs_tpms_distance({fam}, {cell}, p);\n")
+        } else {
+            let l = mat_t(&rotation_xyz_deg(fx.rotate));
+            format!("  mat3 L = {l};\n  vec4 s = fs_tpms_distance({fam}, {cell}, L * p);\n  s = vec4(s.x, s.yzw * L);\n")
+        };
+        return match fx.mode {
+            FillMode::Sheet => format!(
+                "{tpms}  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
+            ),
+            FillMode::Network => format!(
+                "{tpms}  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
+            ),
+        };
+    }
+
+    let span = (fx.param_range[1] - fx.param_range[0]).max(1e-9);
+    let mut pre = format!(
+        "  float fs_t = clamp(({param_expr} - {}) / {}, 0.0, 1.0);\n",
+        lit(fx.param_range[0]),
+        lit(span),
+    );
+    let (a_expr, w_expr) = if vary_cell {
+        let _ = writeln!(
+            pre,
+            "  float fs_a = {} + {} * fs_t;",
+            lit(fx.cell),
+            lit(fx.cell_min - fx.cell),
+        );
+        let w = if fx.mode == FillMode::Sheet && fx.min_wall > 0.0 {
+            format!(
+                "max({param_expr} * (fs_a / {}), {})",
+                lit(fx.cell),
+                lit(fx.min_wall)
+            )
+        } else {
+            format!("({param_expr} * (fs_a / {}))", lit(fx.cell))
+        };
+        ("fs_a".to_string(), w)
     } else {
-        let l = mat_t(&rotation_xyz_deg(rotate));
-        format!("  mat3 L = {l};\n  vec4 s = fs_tpms_distance({fam}, {cell}, L * p);\n  s = vec4(s.x, s.yzw * L);\n")
+        (lit(fx.cell), param_expr.to_string())
     };
-    match mode {
+
+    let (q_expr, rot_post) = if fx.rotate == [0.0; 3] {
+        ("p".to_string(), String::new())
+    } else {
+        let l = mat_t(&rotation_xyz_deg(fx.rotate));
+        let _ = writeln!(pre, "  mat3 L = {l};");
+        ("L * p".to_string(), "  s = vec4(s.x, s.yzw * L);\n".to_string())
+    };
+
+    let tpms = if let Some(fam_hi) = morph {
+        let fam1 = fam_code(fam_hi);
+        format!(
+            "{pre}  vec4 s = mix(fs_tpms_distance({fam}, {a_expr}, {q_expr}), fs_tpms_distance({fam1}, {a_expr}, {q_expr}), fs_t);\n{rot_post}"
+        )
+    } else {
+        format!("{pre}  vec4 s = fs_tpms_distance({fam}, {a_expr}, {q_expr});\n{rot_post}")
+    };
+
+    match fx.mode {
         FillMode::Sheet => format!(
-            "{tpms}  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {param_expr}, s.yzw * sg);\n",
+            "{tpms}  float sg = s.x < 0.0 ? -1.0 : 1.0;\n  vec4 lat = vec4(abs(s.x) - 0.5 * {w_expr}, s.yzw * sg);\n",
         ),
         FillMode::Network => format!(
-            "{tpms}  vec4 lat = vec4(s.x - {param_expr}, s.yzw);\n",
+            "{tpms}  vec4 lat = vec4(s.x - {w_expr}, s.yzw);\n",
         ),
     }
 }
@@ -952,8 +1005,11 @@ mod tests {
             skin_max: 1.2,
             param_range: [0.0, 1.0],
             family: Family::Gyroid,
+            morph: None,
             mode,
             cell: 6.0,
+            cell_min: 6.0,
+            min_wall: 0.0,
             rotate: [0.0; 3],
             param: crate::lattice::Grid3 {
                 origin: [0.0; 3],

@@ -105,8 +105,11 @@ solve size=3.5
         skin_max: 3.0,
         param_range: [0.4, 1.6],
         family: Family::Gyroid,
+        morph: None,
         mode: FillMode::Sheet,
         cell: 6.0,
+        cell_min: 6.0,
+        min_wall: 0.0,
         rotate: [0.0; 3],
         param: Grid3 {
             origin: [-30.0, -10.0, -10.0],

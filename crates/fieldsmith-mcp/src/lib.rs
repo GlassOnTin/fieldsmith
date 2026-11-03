@@ -525,13 +525,32 @@ impl Server {
             return Ok(json!({"fill": Value::Null, "problems": problems}));
         }
         let mut f = d.fill.clone().unwrap_or_default();
-        if let Some(fam) = args.get("family").and_then(Value::as_str) {
+        if let Some(fam) = args
+            .get("family")
+            .or_else(|| args.get("kind"))
+            .and_then(Value::as_str)
+        {
             f.family = match fam {
                 "gyroid" => Family::Gyroid,
-                "primitive" => Family::Primitive,
+                "primitive" | "schwarz_p" => Family::Primitive,
                 "diamond" => Family::Diamond,
                 other => return Err(format!("set_fill: unknown lattice family {other:?}")),
             };
+        }
+        if let Some(m) = args.get("morph") {
+            if m.is_null() {
+                f.morph = None;
+            } else if let Some(s) = m.as_str() {
+                f.morph = match s {
+                    "" | "none" => None,
+                    "gyroid" => Some(Family::Gyroid),
+                    "primitive" | "schwarz_p" => Some(Family::Primitive),
+                    "diamond" => Some(Family::Diamond),
+                    other => return Err(format!("set_fill: unknown morph lattice family {other:?}")),
+                };
+            } else {
+                return Err("set_fill: morph must be a lattice family string or null".into());
+            }
         }
         if let Some(mode) = args.get("mode").and_then(Value::as_str) {
             f.mode = match mode {
@@ -540,8 +559,25 @@ impl Server {
                 other => return Err(format!("set_fill: unknown fill mode {other:?}")),
             };
         }
-        if let Some(v) = args.get("cell").and_then(Value::as_f64) {
+        if let Some(v) = args
+            .get("cell")
+            .or_else(|| args.get("cell_mm"))
+            .and_then(Value::as_f64)
+        {
             f.cell = v;
+        }
+        if let Some(cm) = args.get("cell_min") {
+            if cm.is_null() {
+                f.cell_min = None;
+            } else if let Some(v) = cm.as_f64() {
+                f.cell_min = if (v - f.cell).abs() <= 1e-9 {
+                    None
+                } else {
+                    Some(v)
+                };
+            } else {
+                return Err("set_fill: cell_min must be a number or null".into());
+            }
         }
         if let Some(v) = args.get("skin").and_then(Value::as_f64) {
             f.skin = v;
@@ -555,10 +591,18 @@ impl Server {
                 return Err("set_fill: skin_max must be a number or null".into());
             }
         }
-        if let Some(v) = args.get("rho_min").and_then(Value::as_f64) {
+        if let Some(v) = args
+            .get("rho_min")
+            .or_else(|| args.get("density_min"))
+            .and_then(Value::as_f64)
+        {
             f.rho_min = v;
         }
-        if let Some(v) = args.get("rho_max").and_then(Value::as_f64) {
+        if let Some(v) = args
+            .get("rho_max")
+            .or_else(|| args.get("density_max"))
+            .and_then(Value::as_f64)
+        {
             f.rho_max = v;
         }
         if let Some(v) = args.get("curve").and_then(Value::as_f64) {

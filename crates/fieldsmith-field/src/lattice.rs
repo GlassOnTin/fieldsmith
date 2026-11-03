@@ -306,8 +306,11 @@ pub struct FillExpr {
     pub skin_max: f64,
     pub param_range: [f64; 2],
     pub family: Family,
+    pub morph: Option<Family>,
     pub mode: FillMode,
     pub cell: f64,
+    pub cell_min: f64,
+    pub min_wall: f64,
     pub rotate: V3,
     /// Lattice parameter field (mm), already including density grading and min-wall limits.
     pub param: Grid3,
@@ -316,16 +319,95 @@ pub struct FillExpr {
 }
 
 impl FillExpr {
+    /// Normalized grading fraction `t ∈ [0, 1]` at lattice parameter `param_val`
+    /// (`0` at `param_range[0]`, `1` at `param_range[1]`).
+    #[inline]
+    pub fn grade_at_param(&self, param_val: f64) -> f64 {
+        let span = self.param_range[1] - self.param_range[0];
+        if span <= 1e-9 {
+            return 0.0;
+        }
+        ((param_val - self.param_range[0]) / span).clamp(0.0, 1.0)
+    }
+
     /// Local skin thickness (mm) at lattice parameter `param_val` (interpolated linearly
     /// between `skin` at `param_range[0]` and `skin_max` at `param_range[1]`).
     #[inline]
     pub fn skin_at_param(&self, param_val: f64) -> f64 {
-        let span = self.param_range[1] - self.param_range[0];
-        if self.skin_max <= self.skin || span <= 1e-9 {
+        if self.skin_max <= self.skin {
             return self.skin;
         }
-        let t = ((param_val - self.param_range[0]) / span).clamp(0.0, 1.0);
+        let t = self.grade_at_param(param_val);
         self.skin + (self.skin_max - self.skin) * t
+    }
+
+    /// Local unit-cell edge length (mm) at lattice parameter `param_val` (interpolated
+    /// linearly between `cell` at `param_range[0]` and `cell_min` at `param_range[1]`).
+    #[inline]
+    pub fn cell_at_param(&self, param_val: f64) -> f64 {
+        if self.cell_min <= 0.0 || (self.cell_min - self.cell).abs() <= 1e-9 {
+            return self.cell;
+        }
+        let t = self.grade_at_param(param_val);
+        self.cell + (self.cell_min - self.cell) * t
+    }
+
+    /// Local wall thickness / level-set offset (mm) at `param_val`, scaled by
+    /// `cell_at_param(param_val) / cell` and floored at `min_wall` for sheet lattices.
+    #[inline]
+    pub fn wall_at_param(&self, param_val: f64) -> f64 {
+        if self.cell_min <= 0.0 || (self.cell_min - self.cell).abs() <= 1e-9 {
+            return param_val;
+        }
+        let a = self.cell_at_param(param_val);
+        let scaled = param_val * (a / self.cell);
+        if self.mode == FillMode::Sheet && self.min_wall > 0.0 {
+            scaled.max(self.min_wall)
+        } else {
+            scaled
+        }
+    }
+
+    /// Evaluate the lattice solid distance field at world point `p` for sampled parameter `pv`,
+    /// incorporating spatially varying cell size `cell_at_param(pv)` and optional TPMS family
+    /// morphing `morph`.
+    #[inline]
+    pub fn eval_lattice(&self, pv: f64, p: V3) -> D {
+        let a = self.cell_at_param(pv);
+        let w = self.wall_at_param(pv);
+        let morph = self.morph.filter(|&m| m != self.family);
+        if morph.is_none() {
+            return lattice_field_rotated(self.family, self.mode, a, w, self.rotate, p);
+        }
+        let fam_hi = morph.unwrap();
+        let t = self.grade_at_param(pv);
+        let (q, r_opt) = if self.rotate == [0.0; 3] {
+            (p, None)
+        } else {
+            let r = rotation_xyz_deg(self.rotate);
+            (mat_t_vec(&r, p), Some(r))
+        };
+        let s0 = tpms_distance(self.family, a, q);
+        let s1 = tpms_distance(fam_hi, a, q);
+        let s = D::new(
+            (1.0 - t) * s0.v + t * s1.v,
+            [
+                (1.0 - t) * s0.g[0] + t * s1.g[0],
+                (1.0 - t) * s0.g[1] + t * s1.g[1],
+                (1.0 - t) * s0.g[2] + t * s1.g[2],
+            ],
+        );
+        let d = match self.mode {
+            FillMode::Sheet => {
+                let sg = if s.v < 0.0 { -1.0 } else { 1.0 };
+                D::new(s.v.abs() - 0.5 * w, scale(s.g, sg))
+            }
+            FillMode::Network => D::new(s.v - w, s.g),
+        };
+        match r_opt {
+            Some(r) => D::new(d.v, mat_vec(&r, d.g)),
+            None => d,
+        }
     }
 
     pub fn eval(&self, p: V3) -> D {
@@ -333,14 +415,7 @@ impl FillExpr {
         let pv = self.param.sample(p);
         let sk = self.skin_at_param(pv);
         let core = D::new(-(d.v + sk), scale(d.g, -1.0));
-        let lat = lattice_field_rotated(
-            self.family,
-            self.mode,
-            self.cell,
-            pv,
-            self.rotate,
-            p,
-        );
+        let lat = self.eval_lattice(pv, p);
         let mut inner = dmin(core, lat);
         if !matches!(self.keep, Expr::Empty) {
             inner = dmin(inner, eval(&self.keep, p));
@@ -368,14 +443,7 @@ impl FillExpr {
         let d = eval(&self.body, p);
         let pv = self.param.sample(p);
         let sk = self.skin_at_param(pv);
-        let lat = lattice_field_rotated(
-            self.family,
-            self.mode,
-            self.cell,
-            pv,
-            self.rotate,
-            p,
-        );
+        let lat = self.eval_lattice(pv, p);
         let mut inner = lat;
         if !matches!(self.keep, Expr::Empty) {
             inner = dmin(inner, eval(&self.keep, p));
@@ -457,8 +525,11 @@ mod tests {
                 skin_max: 1.2,
                 param_range: [0.0, 1.0],
                 family: Family::Gyroid,
+                morph: None,
                 mode,
                 cell: 6.0,
+                cell_min: 6.0,
+                min_wall: 0.0,
                 rotate: [0.0; 3],
                 param: Grid3::constant(0.4),
                 keep: Expr::Offset {
@@ -504,8 +575,11 @@ mod tests {
             skin_max: 1.2,
             param_range: [0.0, 1.0],
             family: Family::Gyroid,
+            morph: None,
             mode: FillMode::Sheet,
             cell: 6.0,
+            cell_min: 6.0,
+            min_wall: 0.0,
             rotate: [0.0; 3],
             param: Grid3::constant(0.4),
             // Radius swallows the box: keep is ~−50 at the body centre, so only the clip

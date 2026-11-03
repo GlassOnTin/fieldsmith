@@ -1141,10 +1141,19 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let mut a = c.attrs("", &let_scope(&doc))?;
                 let d = Fill::default();
                 let (rho_min, rho_max) = a.pair("rho")?.unwrap_or((d.rho_min, d.rho_max));
+                let morph = match a.string("morph")?.as_deref() {
+                    None => None,
+                    Some("gyroid") => Some(Family::Gyroid),
+                    Some("primitive") | Some("schwarz_p") => Some(Family::Primitive),
+                    Some("diamond") => Some(Family::Diamond),
+                    Some(m) => return Err(err(format!("unknown morph lattice family '{m}'"))),
+                };
                 let fill = Fill {
                     family,
                     mode,
                     cell: a.num_or("cell", d.cell)?,
+                    cell_min: a.num("cell_min")?,
+                    morph,
                     skin: a.num_or("skin", d.skin)?,
                     skin_max: a.num("skin_max")?,
                     rho_min,
@@ -1553,6 +1562,12 @@ pub fn print(doc: &Document) -> String {
         }
         if let Some(sm) = f.skin_max {
             line += &format!(" skin_max={}", n(sm));
+        }
+        if let Some(cm) = f.cell_min {
+            line += &format!(" cell_min={}", n(cm));
+        }
+        if let Some(m) = f.morph {
+            line += &format!(" morph={}", m.name());
         }
         let _ = writeln!(o, "{line}");
     }
