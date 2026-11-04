@@ -387,6 +387,51 @@ export function commands(): Command[] {
     ...SHAPE_TYPES.map((s) => ({ id: `add.${s.type}`, group: 'Add', label: `Add ${s.label.toLowerCase()}`, keys: s.key ? `Shift ${s.key}` : undefined, run: () => void addShape(s.type) })),
     ...(['box', 'cylinder'] as const).map((t) => ({ id: `add.cut.${t}`, group: 'Add', label: `Cut with ${t}`, run: () => void addShape(t, { op: 'subtract' }) })),
     { id: 'view.fit', group: 'View', label: 'Fit model in view', keys: 'F', run: () => viewApi.fit(true) },
+    {
+      id: 'view.toggleTree',
+      group: 'View',
+      label: 'Toggle left sidebar (Parts & Regions)',
+      keys: '[',
+      run: () => {
+        if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+          ui.set('treeOpen', !ui.treeOpen);
+        } else {
+          ui.set('treeCollapsed', !ui.treeCollapsed);
+        }
+      },
+    },
+    {
+      id: 'view.toggleInsp',
+      group: 'View',
+      label: 'Toggle right sidebar (Inspector)',
+      keys: ']',
+      run: () => {
+        if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+          ui.set('inspOpen', !ui.inspOpen);
+        } else {
+          ui.set('inspCollapsed', !ui.inspCollapsed);
+        }
+      },
+    },
+    {
+      id: 'view.toggleSidebars',
+      group: 'View',
+      label: 'Toggle sidebars (Clear 3D viewport)',
+      keys: '\\',
+      run: () => {
+        if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+          const anyOpen = ui.treeOpen || ui.inspOpen;
+          ui.set('treeOpen', false);
+          ui.set('inspOpen', false);
+          ui.set('vpHudCollapsed', !anyOpen ? !ui.vpHudCollapsed : true);
+        } else {
+          const bothCollapsed = ui.treeCollapsed && ui.inspCollapsed;
+          ui.set('treeCollapsed', !bothCollapsed);
+          ui.set('inspCollapsed', !bothCollapsed);
+          ui.set('vpHudCollapsed', !bothCollapsed);
+        }
+      },
+    },
     { id: 'view.iso', group: 'View', label: 'Isometric view', keys: '0', run: () => viewApi.view([1, -1, 0.8]) },
     { id: 'view.top', group: 'View', label: 'Top view', keys: '7', run: () => viewApi.view([0, 0, 1], [0, 1, 0]) },
     { id: 'view.front', group: 'View', label: 'Front view', keys: '8', run: () => viewApi.view([0, -1, 0]) },
@@ -444,6 +489,9 @@ export function installShortcuts() {
         h: 'edit.suppress',
         escape: 'edit.deselect',
         f: 'view.fit',
+        '[': 'view.toggleTree',
+        ']': 'view.toggleInsp',
+        '\\': 'view.toggleSidebars',
         '0': 'view.iso',
         '7': 'view.top',
         '8': 'view.front',

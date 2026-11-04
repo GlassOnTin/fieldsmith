@@ -2459,21 +2459,33 @@ function CoupledViewportHud() {
     <div class="sys-vp-hud" data-testid="coupled-viewport-hud">
       <div class="sys-vp-hud-head">
         <span>3D Coupled Multi-Physics Overlay (2,520-DOF Live PDE)</span>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={ov.enabled}
-            data-testid="toggle-vp-coupled-overlay"
-            onChange={(e) => {
-              ov.enabled = (e.target as HTMLInputElement).checked;
-              bump();
-            }}
-          />
-          Show in 3D
-        </label>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={ov.enabled}
+              data-testid="toggle-vp-coupled-overlay"
+              onChange={(e) => {
+                ov.enabled = (e.target as HTMLInputElement).checked;
+                bump();
+              }}
+            />
+            Show in 3D
+          </label>
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="toggle-vp-hud-collapse"
+            title={ui.vpHudCollapsed ? 'Expand overlay controls' : 'Minimize overlay controls'}
+            onClick={() => ui.set('vpHudCollapsed', !ui.vpHudCollapsed)}
+            style={{ padding: '0 5px', height: '20px', fontSize: '11px' }}
+          >
+            {ui.vpHudCollapsed ? '▴' : '▾'}
+          </button>
+        </div>
       </div>
 
-      {ov.enabled && (
+      {ov.enabled && !ui.vpHudCollapsed && (
         <>
           <div class="seg" style={{ width: '100%', display: 'flex' }}>
             {BATH_FIELD_TABS.slice(0, 6).map((t) => (
@@ -2826,21 +2838,33 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
     >
       <div class="sys-vp-hud-head">
         <span>3D Volumetric Swirl Spray, Turbulent Flame &amp; NOx Plume (T9)</span>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={ov.enabled}
-            data-testid="toggle-vp-coupled-overlay"
-            onChange={(e) => {
-              ov.enabled = (e.target as HTMLInputElement).checked;
-              bump();
-            }}
-          />
-          Show in 3D
-        </label>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={ov.enabled}
+              data-testid="toggle-vp-coupled-overlay"
+              onChange={(e) => {
+                ov.enabled = (e.target as HTMLInputElement).checked;
+                bump();
+              }}
+            />
+            Show in 3D
+          </label>
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="toggle-vp-hud-collapse"
+            title={ui.vpHudCollapsed ? 'Expand overlay controls' : 'Minimize overlay controls'}
+            onClick={() => ui.set('vpHudCollapsed', !ui.vpHudCollapsed)}
+            style={{ padding: '0 5px', height: '20px', fontSize: '11px' }}
+          >
+            {ui.vpHudCollapsed ? '▴' : '▾'}
+          </button>
+        </div>
       </div>
 
-      {ov.enabled && (
+      {ov.enabled && !ui.vpHudCollapsed && (
         <>
           <div class="seg" style={{ width: '100%', display: 'flex' }}>
             {SWIRL_VOLUME_TABS.map((t) => (
@@ -3539,21 +3563,33 @@ function SolarCandleViewportHud({
     >
       <div class="sys-vp-hud-head">
         <span>3D Volumetric Solar Candle Flame &amp; Plume (144-DOF + 40-Frame Transient)</span>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={ov.enabled}
-            data-testid="toggle-vp-coupled-overlay"
-            onChange={(e) => {
-              ov.enabled = (e.target as HTMLInputElement).checked;
-              bump();
-            }}
-          />
-          Show in 3D
-        </label>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={ov.enabled}
+              data-testid="toggle-vp-coupled-overlay"
+              onChange={(e) => {
+                ov.enabled = (e.target as HTMLInputElement).checked;
+                bump();
+              }}
+            />
+            Show in 3D
+          </label>
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="toggle-vp-hud-collapse"
+            title={ui.vpHudCollapsed ? 'Expand overlay controls' : 'Minimize overlay controls'}
+            onClick={() => ui.set('vpHudCollapsed', !ui.vpHudCollapsed)}
+            style={{ padding: '0 5px', height: '20px', fontSize: '11px' }}
+          >
+            {ui.vpHudCollapsed ? '▴' : '▾'}
+          </button>
+        </div>
       </div>
 
-      {ov.enabled && curFrame && (
+      {ov.enabled && curFrame && !ui.vpHudCollapsed && (
         <>
           <div class="seg" style={{ width: '100%', display: 'flex' }}>
             {CANDLE_VOLUME_TABS.map((t) => (

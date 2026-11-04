@@ -159,6 +159,24 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M2.5 5 8 8.2 13.5 5M8 8.2v6" stroke-dasharray="1.5 1.5" />
     </S>
   ),
+  sidebarLeft: () => (
+    <S>
+      <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+      <path d="M6 2.5v11" />
+    </S>
+  ),
+  sidebarRight: () => (
+    <S>
+      <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+      <path d="M10 2.5v11" />
+    </S>
+  ),
+  sidebarsBoth: () => (
+    <S>
+      <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+      <path d="M5.5 2.5v11M10.5 2.5v11" />
+    </S>
+  ),
 };
 
 export function ShapeIcon({ type }: { type: string }) {

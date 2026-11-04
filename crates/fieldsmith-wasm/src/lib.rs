@@ -1514,7 +1514,7 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     let case = CffCase::uk5_reference().map_err(js_err)?;
     let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
     let nozzle_sys = RegenerativeCooledNozzleSystem::default();
-    let candle_sys = SolarCandleIgnitionSystem::default();
+    let candle_sys = SolarCandleIgnitionSystem;
 
     let bath_scenarios = vec![
         NamedScenario {
@@ -1688,7 +1688,7 @@ pub fn solve_coupled_system(
             "wall_ms": wall_ms,
         }))
     } else if system_id == "solar_candle_ignition_v1" {
-        let sys = SolarCandleIgnitionSystem::default();
+        let sys = SolarCandleIgnitionSystem;
         let p = if design_p.len() == sys.design_parameters().len() {
             design_p
         } else {

@@ -444,9 +444,10 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
 
     let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
     let systems = catalog["systems"].as_array().unwrap();
-    assert_eq!(systems.len(), 2);
+    assert_eq!(systems.len(), 3);
     assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
     assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
+    assert_eq!(systems[2]["system_id"], "solar_candle_ignition_v1");
 
     // Optimise the Regenerative Cooled Rocket Nozzle system via Sparse Adjoint steps
     // and verify that its 3D `.fsm` twin is automatically synced into the open CAD document.

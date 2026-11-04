@@ -61,9 +61,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
   grid-template-areas: 'tree view insp' 'status status status';
   height: 100%;
 }
+.app.tree-collapsed { grid-template-columns: 0px 1fr 288px; }
+.app.insp-collapsed { grid-template-columns: 240px 1fr 0px; }
+.app.tree-collapsed.insp-collapsed { grid-template-columns: 0px 1fr 0px; }
 .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .tree-panel { grid-area: tree; border-right: 1px solid var(--line); }
 .insp-panel { grid-area: insp; border-left: 1px solid var(--line); }
+.app.tree-collapsed .tree-panel { overflow: hidden; border-right: none; pointer-events: none; opacity: 0; }
+.app.insp-collapsed .insp-panel { overflow: hidden; border-left: none; pointer-events: none; opacity: 0; }
+.expand-tree-btn {
+  position: absolute; top: 10px; left: 10px; z-index: 6;
+  background: var(--panel); box-shadow: var(--shadow); border-color: var(--line);
+}
+.app.tree-collapsed .sys-launch-pill,
+.app.tree-collapsed .tut-launch-pill { left: 44px; }
 .view { grid-area: view; position: relative; background: var(--viewport); min-width: 0; overflow: hidden; }
 .viewport-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
 
@@ -294,7 +305,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
  * appear. Desktop widths never see any of this. */
 .drawer-toggles, .drawer-scrim { display: none; }
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; grid-template-areas: 'view' 'status'; }
+  .app,
+  .app.tree-collapsed,
+  .app.insp-collapsed,
+  .app.tree-collapsed.insp-collapsed { grid-template-columns: 1fr; grid-template-areas: 'view' 'status'; }
+  .expand-tree-btn { display: none; }
+  .app.tree-collapsed .sys-launch-pill,
+  .app.tree-collapsed .tut-launch-pill { left: 10px; }
   .view { min-width: 0; }
   .drawer-toggles {
     display: flex; flex-direction: column; gap: 4px;
@@ -302,13 +319,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
   }
   .drawer-toggles .btn { background: var(--panel); box-shadow: var(--shadow); border-color: var(--line); }
   .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 44; background: rgba(0, 0, 0, 0.25); }
-  .panel.tree-panel, .panel.insp-panel {
+  .panel.tree-panel, .panel.insp-panel,
+  .app.tree-collapsed .panel.tree-panel,
+  .app.insp-collapsed .panel.insp-panel {
     position: fixed; top: 0; bottom: 0; width: min(80vw, 320px); z-index: 45;
     transform: translateX(-102%); transition: transform 180ms ease; box-shadow: var(--shadow);
+    opacity: 1; pointer-events: auto; border-right: 1px solid var(--line);
   }
   .panel.tree-panel { left: 0; }
-  .panel.insp-panel { right: 0; transform: translateX(102%); border-left: none; border-right: 1px solid var(--line); }
-  .panel.tree-panel.open, .panel.insp-panel.open { transform: none; }
+  .panel.insp-panel, .app.insp-collapsed .panel.insp-panel { right: 0; transform: translateX(102%); border-left: none; border-right: 1px solid var(--line); }
+  .panel.tree-panel.open, .panel.insp-panel.open,
+  .app.tree-collapsed .panel.tree-panel.open,
+  .app.insp-collapsed .panel.insp-panel.open { transform: none; }
   /* Keyboard shortcuts are mouse hints; drop them so the lens bar clears the toggles.
    * The shortcuts themselves still work with a hardware keyboard. */
   .lenses .kbd { display: none; }

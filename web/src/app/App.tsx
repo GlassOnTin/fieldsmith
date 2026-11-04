@@ -29,11 +29,30 @@ function Lenses() {
 }
 
 function ViewTools() {
+  const clearMode = ui.treeCollapsed && ui.inspCollapsed;
   return (
     <div class="view-tools">
       <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
         <Icon.fit />
       </button>
+      <button
+        class={`btn icon ${clearMode ? 'on' : ''}`}
+        data-testid="toggle-clear-viewport"
+        title={clearMode ? 'Restore sidebars (\\)' : 'Collapse sidebars for a clear 3D viewport (\\)'}
+        onClick={() => runCommand('view.toggleSidebars')}
+      >
+        <Icon.sidebarsBoth />
+      </button>
+      {ui.inspCollapsed && (
+        <button
+          class="btn icon"
+          data-testid="expand-insp-btn"
+          title="Show Inspector sidebar (])"
+          onClick={() => runCommand('view.toggleInsp')}
+        >
+          <Icon.sidebarRight />
+        </button>
+      )}
       <button
         class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
         data-testid="open-tutorials-drawer"
@@ -173,7 +192,7 @@ function Toast() {
 export function App() {
   useApp();
   return (
-    <div class="app">
+    <div class={`app${ui.treeCollapsed ? ' tree-collapsed' : ''}${ui.inspCollapsed ? ' insp-collapsed' : ''}`}>
       <aside class={`panel tree-panel${ui.treeOpen ? ' open' : ''}`}>
         <div class="panel-head">
           <input
@@ -213,6 +232,14 @@ export function App() {
               <path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 13.5h11" />
             </svg>
           </button>
+          <button
+            class="btn ghost icon"
+            title="Collapse left sidebar ([)"
+            data-testid="collapse-tree-btn"
+            onClick={() => runCommand('view.toggleTree')}
+          >
+            <Icon.sidebarLeft />
+          </button>
         </div>
         <div class="panel-body">
           <Tree />
@@ -220,6 +247,16 @@ export function App() {
       </aside>
       <main class="view">
         <ViewportHost />
+        {ui.treeCollapsed && (
+          <button
+            class="btn icon expand-tree-btn"
+            data-testid="expand-tree-btn"
+            title="Show Parts & Regions sidebar ([)"
+            onClick={() => runCommand('view.toggleTree')}
+          >
+            <Icon.sidebarLeft />
+          </button>
+        )}
         <div class="drawer-toggles">
           <button class="btn icon" title="Parts tree" data-testid="toggle-tree" onClick={() => ui.set('treeOpen', !ui.treeOpen)}>
             <Icon.menu />
@@ -252,6 +289,14 @@ export function App() {
           <span class="title">Inspector</span>
           <button class="btn ghost small" title="Command palette (Ctrl K)" onClick={() => ui.set('paletteOpen', true)} data-testid="palette-button">
             <span class="kbd">Ctrl K</span>
+          </button>
+          <button
+            class="btn ghost icon"
+            title="Collapse Inspector sidebar (])"
+            data-testid="collapse-insp-btn"
+            onClick={() => runCommand('view.toggleInsp')}
+          >
+            <Icon.sidebarRight />
           </button>
         </div>
         <div class="panel-body">

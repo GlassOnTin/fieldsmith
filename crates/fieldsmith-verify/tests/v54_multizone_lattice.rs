@@ -249,7 +249,7 @@ solve size=3.5
     r.check(Check::absolute(
         "root cell size `< 6.0 mm` (refined toward `cell_min = 4 mm`)",
         1.0,
-        if a_root < 6.0 && a_root >= 4.0 {
+        if (4.0..6.0).contains(&a_root) {
             1.0
         } else {
             0.0

@@ -34,6 +34,11 @@ class Ui {
    * desktop widths the toggles and scrim are hidden by CSS and these fields are inert. */
   treeOpen = false;
   inspOpen = false;
+  /** Desktop sidebar collapse state (>900 px): collapses left tree panel, right inspector panel, or both for a clear 3D viewport. */
+  treeCollapsed = false;
+  inspCollapsed = false;
+  /** Whether the bottom-left 3D Coupled Multi-Physics Overlay HUD is minimized to a compact header pill. */
+  vpHudCollapsed = false;
   menu: { kind: 'add' | 'file' | 'modifier'; x: number; y: number; target?: string } | null = null;
   toast: { text: string; kind: 'info' | 'error' } | null = null;
   renaming: string | null = null;

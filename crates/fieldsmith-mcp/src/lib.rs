@@ -317,9 +317,11 @@ impl Server {
             .and_then(Value::as_str)
             .unwrap_or("petg")
             .to_string();
-        let mut d = Document::default();
-        d.name = name;
-        d.material = material;
+        let d = Document {
+            name,
+            material,
+            ..Default::default()
+        };
         let summary = doc_summary(&d);
         self.doc = Some(d);
         Ok(summary)
@@ -985,7 +987,7 @@ impl Server {
         let case = CffCase::uk5_reference()?;
         let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
         let nozzle_sys = RegenerativeCooledNozzleSystem::default();
-        let candle_sys = SolarCandleIgnitionSystem::default();
+        let candle_sys = SolarCandleIgnitionSystem;
 
         let bath_scenarios = vec![
             NamedScenario {
@@ -1153,7 +1155,7 @@ impl Server {
                 "fsm_3d": fsm_3d,
             }))
         } else if system_id == "solar_candle_ignition_v1" {
-            let sys = SolarCandleIgnitionSystem::default();
+            let sys = SolarCandleIgnitionSystem;
             let p = req_p
                 .filter(|v| v.len() == sys.design_parameters().len())
                 .unwrap_or_else(|| sys.nominal_design_vector());
@@ -1230,7 +1232,7 @@ impl Server {
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else if system_id == "solar_candle_ignition_v1" {
-            let sys = SolarCandleIgnitionSystem::default();
+            let sys = SolarCandleIgnitionSystem;
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {

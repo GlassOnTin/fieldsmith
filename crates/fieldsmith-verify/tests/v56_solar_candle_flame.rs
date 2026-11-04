@@ -38,7 +38,7 @@ fn v56_solar_candle_flame() {
         "Solar-Focused Optical Lens Candle Ignition, Buoyant Diffusion Flame, Smoke Plume & Transient Recap (`solar_candle_ignition_v1`)",
     );
 
-    let sys = SolarCandleIgnitionSystem::default();
+    let sys = SolarCandleIgnitionSystem;
     let cfg = EngineConfig::default();
     let p_nom = sys.nominal_design_vector();
     let theta_nom = sys.nominal_epistemic_vector();
