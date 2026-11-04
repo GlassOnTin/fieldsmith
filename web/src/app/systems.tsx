@@ -2344,7 +2344,6 @@ function CoupledViewportHud() {
   useEffect(() => {
     let active = true;
     const poll = async () => {
-      if (ui.systemsOpen) return;
       try {
         const resp = await fetch(apiUrl('/api/workspace'));
         if (!resp.ok || !active) return;
@@ -2392,7 +2391,31 @@ function CoupledViewportHud() {
               }
             }
             if (typeof ws.doc_fsm === 'string' && ws.doc_fsm.trim().length > 0) {
+              ui.tutorialsOpen = false;
+              ui.systemsOpen = false;
               openText(ws.doc_fsm, 'mcp-shared-workspace.fsm');
+              if (ws.last_tool === 'solve' || ws.last_tool === 'solve_study') {
+                store.setLens('results');
+              } else if (ws.last_tool === 'set_fill') {
+                store.setLens('fill');
+              } else if (
+                ws.last_tool === 'add_support' ||
+                ws.last_tool === 'add_load' ||
+                ws.last_tool === 'add_temperature' ||
+                ws.last_tool === 'add_convection' ||
+                ws.last_tool === 'add_heatflux' ||
+                ws.last_tool === 'add_region'
+              ) {
+                store.setLens('setup');
+              } else if (
+                ws.last_tool === 'open' ||
+                ws.last_tool === 'load_fsm' ||
+                ws.last_tool === 'new_document' ||
+                ws.last_tool === 'upsert_shape' ||
+                ws.last_tool === 'add_primitive'
+              ) {
+                store.setLens('shape');
+              }
               viewApi.fit(false);
               if (liveViewport) syncCoupledViewportOverlay(liveViewport);
               ui.notify(`Synced MCP Co-Pilot update (rev #${ws.revision}: ${ws.last_tool})`);
@@ -2411,7 +2434,10 @@ function CoupledViewportHud() {
     };
   }, []);
 
-  if (ui.systemsOpen || store.lens === 'theory') return null;
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
+  if (ui.systemsOpen || store.lens === 'theory' || (isMobile && (store.lens === 'results' || store.lens === 'make'))) {
+    return null;
+  }
 
   if (isSwirlCombustorDocument()) {
     return <SwirlCombustorViewportHud bump={bump} />;

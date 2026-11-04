@@ -13,6 +13,7 @@
         android:hardwareAccelerated="true"
         android:label="Fieldsmith"
         android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:usesCleartextTraffic="true">
 
         <activity

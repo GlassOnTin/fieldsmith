@@ -297,6 +297,23 @@ fn handle_connection(
                 }),
             )
         }
+        ("POST", "/mcp") => {
+            let _guard = mcp_lock.lock().unwrap_or_else(|e| e.into_inner());
+            let mut srv = Server::with_workspace(&cfg.workspace_path);
+            let reply_str = srv.handle(&body_str).unwrap_or_default();
+            write_bytes_with_isolation(
+                &mut stream,
+                200,
+                "application/json; charset=utf-8",
+                reply_str.as_bytes(),
+            )
+        }
+        ("GET", "/mcp") => write_bytes_with_isolation(
+            &mut stream,
+            405,
+            "text/plain; charset=utf-8",
+            b"Method Not Allowed",
+        ),
         ("POST", "/api/solve") => {
             let answer = respond(&body_str);
             write_bytes_with_isolation(
@@ -363,9 +380,11 @@ fn mime_for_path(path: &Path) -> &'static str {
 fn status_text(code: u16) -> &'static str {
     match code {
         200 => "OK",
+        202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         _ => "Internal Server Error",
     }
 }
@@ -375,7 +394,7 @@ fn write_empty_cors(stream: &mut TcpStream, code: u16) -> std::io::Result<()> {
         "HTTP/1.1 {code} {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+         Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version\r\n\
          Content-Length: 0\r\n\
          Connection: close\r\n\r\n",
         status_text(code)
@@ -404,7 +423,7 @@ fn write_bytes_with_isolation(
          Cross-Origin-Resource-Policy: cross-origin\r\n\
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+         Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id, Mcp-Protocol-Version\r\n\
          Connection: close\r\n\r\n",
         status_text(code),
         bytes.len()
@@ -456,6 +475,20 @@ mod tests {
         s2.read_to_string(&mut resp2).expect("read mcp");
         assert!(resp2.contains("200 OK"), "resp2={resp2}");
         assert!(resp2.contains("mobile_test"), "resp2={resp2}");
+
+        // 3. POST /mcp (Streamable HTTP JSON-RPC 2.0)
+        let rpc_init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}"#;
+        let req3 = format!(
+            "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            rpc_init.len(),
+            rpc_init
+        );
+        let mut s3 = TcpStream::connect(addr).expect("connect /mcp");
+        s3.write_all(req3.as_bytes()).expect("write /mcp");
+        let mut resp3 = String::new();
+        s3.read_to_string(&mut resp3).expect("read /mcp");
+        assert!(resp3.contains("200 OK"), "resp3={resp3}");
+        assert!(resp3.contains("fieldsmith-mcp"), "resp3={resp3}");
 
         let _ = std::fs::remove_file(&tmp_ws);
     }

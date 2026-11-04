@@ -3,14 +3,20 @@ package sh.fieldsmith.app
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.system.Os
+import android.view.Window
+import android.view.WindowInsets
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import java.io.File
 
 class MainActivity : Activity() {
@@ -19,22 +25,32 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
         super.onCreate(savedInstanceState)
 
+        val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        WebView.setWebContentsDebuggingEnabled(isDebuggable)
+
         val webDir = File(filesDir, "web")
+        if (isDebuggable) {
+            webDir.deleteRecursively()
+        }
         extractBundledAssetsIfNeeded("web", webDir)
         val workspaceFile = File(filesDir, "fieldsmith-workspace.json")
 
         Os.setenv("FIELDSMITH_WEB_DIR", webDir.absolutePath, true)
         Os.setenv("FIELDSMITH_WORKSPACE", workspaceFile.absolutePath, true)
 
-        val boundPort = FieldsmithNativeBridge.startLocalServer(0)
+        // Prefer deterministic port 18789 so `adb forward tcp:18789 tcp:18789` connects
+        // desktop/proot MCP agents directly to the mobile app's `/mcp` & `/api/mcp` server.
+        val boundPort = FieldsmithNativeBridge.startLocalServer(18789).let {
+            if (it > 0) it else FieldsmithNativeBridge.startLocalServer(0)
+        }
 
         webView = WebView(this).apply {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                databaseEnabled = true
                 allowFileAccess = false
                 allowContentAccess = true
                 mediaPlaybackRequiresUserGesture = false
@@ -59,7 +75,36 @@ class MainActivity : Activity() {
             }
         }
 
-        setContentView(webView)
+        val rootContainer = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0f172a"))
+            addView(
+                webView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+            setOnApplyWindowInsetsListener { view, insets ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+                    )
+                    view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                    WindowInsets.CONSUMED
+                } else {
+                    @Suppress("DEPRECATION")
+                    view.setPadding(
+                        insets.systemWindowInsetLeft,
+                        insets.systemWindowInsetTop,
+                        insets.systemWindowInsetRight,
+                        insets.systemWindowInsetBottom
+                    )
+                    insets
+                }
+            }
+        }
+
+        setContentView(rootContainer)
         if (boundPort > 0) {
             webView.loadUrl("http://127.0.0.1:$boundPort/")
         }
@@ -89,15 +134,6 @@ class MainActivity : Activity() {
             val results = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
             fileUploadCallback?.onReceiveValue(results)
             fileUploadCallback = null
-        }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (::webView.isInitialized && webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
         }
     }
 

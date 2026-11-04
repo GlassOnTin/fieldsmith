@@ -304,6 +304,8 @@ impl Server {
                     | "set_param"
                     | "set_fill"
                     | "set_build"
+                    | "solve"
+                    | "solve_study"
                     | "solve_coupled_system"
                     | "optimise_coupled_system"
             );

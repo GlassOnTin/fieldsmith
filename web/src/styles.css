@@ -347,7 +347,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .opacity-panel input { width: 90px; }
   .clip-panel { top: 116px; left: 10px; bottom: auto; right: auto; max-width: calc(100vw - 56px); padding: 5px 8px; }
   .clip-panel input { width: 70px; }
-  .results-panel { max-width: min(400px, calc(100vw - 24px)); }
+  .results-panel { max-width: min(400px, calc(100vw - 24px)); max-height: 46vh; overflow-y: auto; }
+  .status { gap: 6px; padding: 0 8px; overflow-x: auto; }
+  .status .grow { flex: 1 1 20px; min-width: 20px; }
+  .status > span:not(.sep):not(.grow) { max-width: 130px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+  .status button { flex-shrink: 0; }
   .row .row-actions { display: flex; }
 }
 
