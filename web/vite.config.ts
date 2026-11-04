@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import preact from '@preact/preset-vite';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 /** Cross-origin isolation: shared wasm memory (the threaded build) needs both headers. A
@@ -69,6 +70,33 @@ function fieldsmithSharedWorkspacePlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = req.url?.split('?')[0];
+        if (url?.startsWith('/api/')) {
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          if (req.method === 'OPTIONS') {
+            res.statusCode = 204;
+            res.end();
+            return;
+          }
+        }
+        if (url === '/api/health' && req.method === 'GET') {
+          const ws = readWorkspace();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              status: 'ok',
+              server: 'fieldsmith-compute-vite',
+              version: '0.10.1',
+              os: os.platform(),
+              arch: os.arch(),
+              threads: os.cpus().length,
+              workspace_revision: ws.revision,
+              capabilities: ['mcp', 'workspace', 'solve', 'coupled_systems'],
+            }),
+          );
+          return;
+        }
         if (url === '/api/workspace' && req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify(readWorkspace()));

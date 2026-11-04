@@ -33,8 +33,46 @@ use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+pub mod http;
+
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "fieldsmith-mcp";
+
+/// Start the embedded HTTP compute + MCP server on `127.0.0.1:{port_hint}` (pass `0` for an
+/// OS-assigned ephemeral port) and return the bound TCP port, or `-1` on error.
+/// Used by the Android F-Droid wrapper (`sh.fieldsmith.app`) to launch the in-process native
+/// `arm64-v8a` / `x86_64` solver and COOP/COEP asset host.
+#[no_mangle]
+pub extern "C" fn fieldsmith_start_local_server(port_hint: u16) -> i32 {
+    let ws_path = std::env::var("FIELDSMITH_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("fieldsmith-workspace.json"));
+    let web_dir = std::env::var("FIELDSMITH_WEB_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+    let cfg = http::ServeConfig {
+        bind_addr: format!("127.0.0.1:{port_hint}"),
+        workspace_path: ws_path,
+        web_dir,
+    };
+    match http::spawn_http_server(cfg) {
+        Ok(srv) => i32::from(srv.local_addr().port()),
+        Err(_) => -1,
+    }
+}
+
+/// Android JNI entry point for `sh.fieldsmith.app.FieldsmithNativeBridge.startLocalServer(portHint: Int): Int`.
+/// Uses primitive `jint` (`i32`) parameter and return types so no external `jni` crate is needed.
+#[no_mangle]
+pub extern "system" fn Java_sh_fieldsmith_app_FieldsmithNativeBridge_startLocalServer(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    port_hint: i32,
+) -> i32 {
+    let p = u16::try_from(port_hint.max(0)).unwrap_or(0);
+    fieldsmith_start_local_server(p)
+}
 
 /// Shared workspace state persisted to `FIELDSMITH_WORKSPACE` (`.fieldsmith-workspace.json`)
 /// when configured, enabling real-time synchronisation between MCP agents, REST API calls,

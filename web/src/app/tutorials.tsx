@@ -15,7 +15,7 @@ import { parseFsm, printFsm } from '../doc/wasm';
 import { EXAMPLES, extraCommands, newDocument, openFile, openText, viewApi } from './commands';
 import { viewOverlays, statusItems } from './App';
 import { markWorkspaceRevisionSeen, swirlShared } from './systems';
-import { ui, useApp } from './ui';
+import { apiUrl, ui, useApp } from './ui';
 
 export interface TutorialStep {
   title: string;
@@ -1423,7 +1423,7 @@ export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = f
   }
   if (ok) {
     ui.notify(`Loaded ${sheet.code}: ${sheet.title}`);
-    void fetch('/api/workspace', {
+    void fetch(apiUrl('/api/workspace'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2549,7 +2549,7 @@ function TutorialsDrawer() {
     try {
       // Ensure the current live document is pushed to `/api/workspace` first so `fieldsmith-mcp` operates on it cumulatively
       const currentFsm = store.doc.root.length > 0 ? printFsm(store.doc) : sheet.starterFsm;
-      await fetch('/api/workspace', {
+      await fetch(apiUrl('/api/workspace'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2559,7 +2559,7 @@ function TutorialsDrawer() {
           doc_fsm: currentFsm,
         }),
       });
-      const resp = await fetch('/api/mcp', {
+      const resp = await fetch(apiUrl('/api/mcp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2879,8 +2879,77 @@ function TutorialsDrawer() {
 
 function McpSetupModal() {
   useApp();
+  const [healthOut, setHealthOut] = useState<string | null>(null);
+  const [solveOut, setSolveOut] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'health' | 'solve' | null>(null);
+
   if (!ui.mcpSetupOpen) return null;
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://192.168.0.180:5173';
+  const origin =
+    ui.computeMode === 'remote' && ui.computeServerUrl.trim()
+      ? ui.computeServerUrl.trim().replace(/\/+$/, '')
+      : typeof window !== 'undefined'
+        ? window.location.origin
+        : 'http://192.168.0.180:5173';
+
+  const testServerHealth = async () => {
+    setBusyAction('health');
+    const t0 = performance.now();
+    try {
+      const resp = await fetch(apiUrl('/api/health'));
+      const data = await resp.json();
+      const dt = Math.round(performance.now() - t0);
+      setHealthOut(JSON.stringify({ latency_ms: dt, ...data }, null, 2));
+    } catch (e) {
+      setHealthOut(`Connection error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const runRemoteNativeSolve = async () => {
+    setBusyAction('solve');
+    const t0 = performance.now();
+    try {
+      const fsmText =
+        store.doc.root.length > 0 ? printFsm(store.doc) : TUTORIAL_SHEETS[0].starterFsm;
+      await fetch(apiUrl('/api/workspace'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: 'mobile-client',
+          last_tool: 'remote-solve-sync',
+          summary: 'Pushed active .fsm for native multi-core solve',
+          doc_fsm: fsmText,
+        }),
+      });
+      const resp = await fetch(apiUrl('/api/mcp'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: 'solve_study',
+          arguments: { include_fine: false },
+        }),
+      });
+      const data = await resp.json();
+      const dt = Math.round(performance.now() - t0);
+      const textPayload = data?.rpc?.result?.content?.[0]?.text;
+      let parsed: unknown = data?.rpc ?? data;
+      if (typeof textPayload === 'string') {
+        try {
+          parsed = JSON.parse(textPayload);
+        } catch {
+          parsed = textPayload;
+        }
+      }
+      setSolveOut(JSON.stringify({ roundtrip_ms: dt, endpoint: origin, result: parsed }, null, 2));
+      ui.notify(`Native server solve completed in ${dt} ms`, 'info');
+    } catch (e) {
+      setSolveOut(`Remote solve error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <div
       class="sys-scrim"
@@ -2890,15 +2959,15 @@ function McpSetupModal() {
       <div
         class="sys-modal"
         style={{
-          width: 'min(820px, calc(100vw - 24px))',
-          height: 'min(740px, calc(100vh - 24px))',
+          width: 'min(840px, calc(100vw - 24px))',
+          height: 'min(760px, calc(100vh - 24px))',
           padding: '0',
         }}
       >
         <div class="sys-header">
           <div class="sys-header-left">
-            <span class="sys-badge">MCP &amp; REST API CO-PILOT SETUP</span>
-            <strong>Connect Any AI Agent or Script to This Live 3D Workspace</strong>
+            <span class="sys-badge">COMPUTE, MCP &amp; REST API</span>
+            <strong>Mobile / External Compute Backend &amp; AI Co-Pilot Bridge</strong>
           </div>
           <div class="sys-header-right">
             <button
@@ -2922,6 +2991,84 @@ function McpSetupModal() {
             lineHeight: 1.5,
           }}
         >
+          <div class="tut-step-card" data-testid="compute-backend-card">
+            <strong>0. Mobile &amp; External Compute Backend (F-Droid App / Remote Workstation Offload)</strong>
+            <p class="tut-step-text">
+              Switch between on-device WebAssembly, local native multi-core execution (<code>fieldsmith-mcp --serve</code> /
+              Android <code>arm64-v8a</code> JNI host), or an external compute server over LAN / Tailscale / WireGuard:
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '8px 0' }}>
+              {(
+                [
+                  { id: 'wasm', label: 'In-Browser WASM (Offline)' },
+                  { id: 'native', label: 'Local Native Host (Android / Workstation)' },
+                  { id: 'remote', label: 'Remote Compute Server (LAN / Tailscale)' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  class={`btn small ${ui.computeMode === m.id ? 'primary' : ''}`}
+                  data-testid={`compute-mode-${m.id}`}
+                  onClick={() => ui.set('computeMode', m.id)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {ui.computeMode === 'remote' && (
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', margin: '6px 0' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text-2)' }}>Server URL:</span>
+                <input
+                  type="text"
+                  data-testid="compute-server-url-input"
+                  placeholder="http://192.168.0.180:8080"
+                  value={ui.computeServerUrl}
+                  onInput={(e) => ui.set('computeServerUrl', (e.target as HTMLInputElement).value)}
+                  style={{
+                    flex: 1,
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--line-strong)',
+                    background: 'var(--bg)',
+                    color: 'var(--text)',
+                    fontFamily: 'var(--mono)',
+                    fontSize: '11.5px',
+                  }}
+                />
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+              <button
+                type="button"
+                class="btn small"
+                data-testid="compute-test-health-btn"
+                disabled={busyAction !== null}
+                onClick={testServerHealth}
+              >
+                {busyAction === 'health' ? 'Checking…' : `Test Connection (${origin}/api/health)`}
+              </button>
+              <button
+                type="button"
+                class="btn small primary"
+                data-testid="compute-run-remote-solve-btn"
+                disabled={busyAction !== null}
+                onClick={runRemoteNativeSolve}
+              >
+                {busyAction === 'solve' ? 'Solving on Native Host…' : '⚡ Run Native Multi-Core Solve (/api/mcp)'}
+              </button>
+            </div>
+            {healthOut && (
+              <pre class="tut-mcp-out num" data-testid="compute-health-out" style={{ marginTop: '8px' }}>
+                {healthOut}
+              </pre>
+            )}
+            {solveOut && (
+              <pre class="tut-mcp-out num" data-testid="compute-solve-out" style={{ marginTop: '8px' }}>
+                {solveOut}
+              </pre>
+            )}
+          </div>
           <div class="tut-step-card">
             <strong>1. HTTP REST &amp; MCP Bridge (Zero-Install — Active Now on {origin})</strong>
             <p class="tut-step-text">

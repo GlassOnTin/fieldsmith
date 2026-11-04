@@ -20,7 +20,7 @@ import { store } from '../doc/store';
 import { detectCoupledPhysicsRegime } from '../doc/continuum';
 import { viewOverlays } from './App';
 import { extraCommands, openText, viewApi } from './commands';
-import { ui, useApp } from './ui';
+import { apiUrl, ui, useApp } from './ui';
 import { viewportExtensions, liveViewport } from './ViewportHost';
 import type { Viewport } from '../view/viewport';
 
@@ -2346,7 +2346,7 @@ function CoupledViewportHud() {
     const poll = async () => {
       if (ui.systemsOpen) return;
       try {
-        const resp = await fetch('/api/workspace');
+        const resp = await fetch(apiUrl('/api/workspace'));
         if (!resp.ok || !active) return;
         const ws = (await resp.json()) as WorkspaceSnapshot;
         if (lastSeenWorkspaceRevision < 0) {
@@ -4328,7 +4328,7 @@ async function pushWorkspaceState(payload: {
   epistemic_theta?: number[];
 }): Promise<void> {
   try {
-    const resp = await fetch('/api/workspace', {
+    const resp = await fetch(apiUrl('/api/workspace'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor: 'web-ui', ...payload }),
@@ -4378,7 +4378,7 @@ export function SystemsWorkbench() {
     let active = true;
     const poll = async () => {
       try {
-        const resp = await fetch('/api/workspace');
+        const resp = await fetch(apiUrl('/api/workspace'));
         if (!resp.ok || !active) return;
         const ws = (await resp.json()) as WorkspaceSnapshot;
         if (lastSeenWorkspaceRevision < 0) {

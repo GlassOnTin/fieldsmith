@@ -11,3 +11,10 @@ web/test-results/
 .agents/
 .fieldsmith-workspace.json
 web/.fieldsmith-workspace.json
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/web/
+android/app/src/main/jniLibs/
+android/local.properties
+android/*.jks

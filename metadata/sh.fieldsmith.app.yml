@@ -1,0 +1,51 @@
+# MIRROR of fdroiddata's metadata/sh.fieldsmith.app.yml
+# F-Droid builds from https://gitlab.com/fdroid/fdroiddata; this file tracks the
+# build recipe alongside the repository so toolchain and build-script updates
+# stay in sync with the source tree.
+Categories:
+  - Science & Education
+  - Graphics
+License: AGPL-3.0-or-later
+AuthorName: GlassOnTin
+SourceCode: https://github.com/GlassOnTin/fieldsmith
+IssueTracker: https://github.com/GlassOnTin/fieldsmith/issues
+Changelog: https://github.com/GlassOnTin/fieldsmith/releases
+
+AutoName: Fieldsmith
+
+RepoType: git
+Repo: https://github.com/GlassOnTin/fieldsmith.git
+
+Builds:
+  - versionName: 0.10.1
+    versionCode: 1011
+    commit: v0.10.1
+    subdir: android/app
+    submodules: true
+    sudo:
+      - apt-get update
+      - apt-get install -y build-essential pkg-config libssl-dev rustup nodejs npm
+    gradle:
+      - arm64
+    prebuild: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+    scandelete:
+      - web/src/pkg
+      - web/src/pkg-mt
+    build:
+      - export PATH="$HOME/.cargo/bin:$PATH"
+      - rustup default 1.89.0
+      - rustup target add aarch64-linux-android wasm32-unknown-unknown
+      - cargo install cargo-ndk@3.5.4 --locked
+      - cargo install wasm-bindgen-cli@0.2.129 --locked
+      - FIELDSMITH_WASM_ST_ONLY=1 bash ../../scripts/build-wasm.sh
+      - npm --prefix ../../web ci
+      - npm --prefix ../../web run build
+      - cargo ndk -t arm64-v8a -o src/main/jniLibs build --release -p fieldsmith-mcp
+    ndk: 29.0.14206865
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[\d.]+$
+VercodeOperation:
+  - 10 * %c + 1
+CurrentVersion: 0.10.1
+CurrentVersionCode: 1011

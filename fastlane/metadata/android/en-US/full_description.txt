@@ -1,0 +1,13 @@
+Fieldsmith is a parametric implicit CAD modeller, 3D quadratic (P2) finite-element solver, and lattice slicer built in Rust.
+
+Workflow stages:
+1. Shape: Construct parts from CSG primitives (box, cylinder, sphere, capsule, torus, extrude, revolve, loft) and imported STL/OBJ/3MF/STEP meshes with smooth fillet/chamfer blends and per-volume materials.
+2. Setup: Assign surface regions, Dirichlet displacement supports, mechanical loads (force, pressure, bolt preload), and thermal boundary conditions (temperature, convection, heat flux).
+3. Results: Solve 3D P2 linear elasticity, steady Fourier heat conduction, thermo-elastic coupling, and modal vibration. Inspect von Mises stress, safety factor, peel stress, deflection, and temperature fields with section planes and transient playback.
+4. Fill: Grade triply periodic minimal surface (Gyroid, Schwarz-P, Diamond, Lidinoid, Neovius, Split-P) and strut lattices from stress fields or evolve boundaries via level-set topology optimization.
+5. Make: Check minimum wall thickness and overhang angles, preview build layers, and export manifold STL or 3MF slice stacks.
+6. Theory: Inspect the active governing equations, boundary operators, and numerical discretizations for the current model and export a Markdown or HTML math report.
+
+Compute modes:
+- On-device WebAssembly or embedded native arm64 Rust solver for offline mobile work.
+- Optional remote compute connection over LAN, Tailscale, or WireGuard to offload large meshes and coupled multi-physics runs to a workstation running fieldsmith-mcp --serve.

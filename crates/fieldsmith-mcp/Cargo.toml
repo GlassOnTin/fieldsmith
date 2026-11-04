@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "fieldsmith_mcp"
+crate-type = ["rlib", "cdylib"]
+
 [[bin]]
 name = "fieldsmith-mcp"
 path = "src/main.rs"

@@ -14,7 +14,13 @@ wasm-bindgen target/wasm32-unknown-unknown/release/fieldsmith_wasm.wasm \
   --out-dir web/src/pkg --target web
 echo "wasm (single thread): $(du -h web/src/pkg/fieldsmith_wasm_bg.wasm | cut -f1)"
 
-if [[ "${FIELDSMITH_WASM_ST_ONLY:-}" == 1 ]]; then exit 0; fi
+if [[ "${FIELDSMITH_WASM_ST_ONLY:-}" == 1 ]]; then
+  if [[ ! -f web/src/pkg-mt/fieldsmith_wasm.js ]]; then
+    mkdir -p web/src/pkg-mt
+    cp -r web/src/pkg/* web/src/pkg-mt/
+  fi
+  exit 0
+fi
 
 # Shared, imported memory with a 4 GiB maximum (the wasm32 ceiling); the TLS exports are
 # what wasm-bindgen's thread start-up needs. Newer rustc no longer implies these linker

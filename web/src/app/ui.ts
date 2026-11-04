@@ -29,6 +29,14 @@ class Ui {
   tutorialContentsOpen = true;
   /** MCP & REST API Co-Pilot Setup guide modal from the footer. */
   mcpSetupOpen = false;
+  /** Compute engine mode: 'wasm' (in-browser WebAssembly), 'native' (local native server / Android JNI host), or 'remote' (external compute server over LAN / Tailscale / SSH). */
+  computeMode: 'wasm' | 'native' | 'remote' =
+    (typeof window !== 'undefined' &&
+      (window.localStorage?.getItem('fieldsmith.computeMode') as 'wasm' | 'native' | 'remote' | null)) ||
+    'wasm';
+  /** Base URL for external compute / MCP server when `computeMode === 'remote'` (e.g. 'http://192.168.0.180:8080'). Empty string uses current origin. */
+  computeServerUrl =
+    (typeof window !== 'undefined' && window.localStorage?.getItem('fieldsmith.computeServerUrl')) || '';
   /** Narrow-screen drawer state. Only meaningful under the ≤900 px layout, where the tree and
    * inspector panels overlay the viewport as slide-in drawers instead of grid columns; at
    * desktop widths the toggles and scrim are hidden by CSS and these fields are inert. */
@@ -136,6 +144,10 @@ class Ui {
   set<K extends keyof this>(k: K, v: this[K]) {
     if (this[k] === v) return;
     this[k] = v;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      if (k === 'computeMode') window.localStorage.setItem('fieldsmith.computeMode', String(v));
+      if (k === 'computeServerUrl') window.localStorage.setItem('fieldsmith.computeServerUrl', String(v));
+    }
     this.emit();
   }
   emit() {
@@ -154,6 +166,13 @@ class Ui {
 }
 
 export const ui = new Ui();
+
+/** Resolve an `/api/*` endpoint against `ui.computeServerUrl` when remote compute is configured. */
+export function apiUrl(path: string): string {
+  const base = ui.computeMode === 'remote' ? ui.computeServerUrl.trim().replace(/\/+$/, '') : '';
+  if (!base) return path;
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
 
 /** Re-render the calling component when the document store or UI state changes. */
 export function useApp() {

@@ -1,0 +1,1 @@
+-keep class sh.fieldsmith.app.FieldsmithNativeBridge { *; }

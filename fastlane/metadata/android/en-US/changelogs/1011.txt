@@ -1,0 +1,6 @@
+Initial F-Droid packaging for Fieldsmith v0.10.1.
+
+- Six-stage mobile and desktop workbench: Shape, Setup, Results, Fill, Make, and Theory.
+- 13 interactive tutorials and 5 starter .fsm models with searchable contents directory.
+- Collapsible sidebars and slide-over drawers for mobile portrait 3D viewports.
+- Embedded native arm64 HTTP/MCP compute bridge plus remote workstation compute offload.
