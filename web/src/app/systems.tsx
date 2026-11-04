@@ -2908,7 +2908,7 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
 
           <div
             style={{
-              background: 'rgba(15, 23, 42, 0.72)',
+              background: 'var(--panel-2)',
               border: '1px solid var(--line)',
               borderRadius: '5px',
               padding: '6px 8px',
@@ -2927,7 +2927,7 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
                 >
                   {playing ? '⏸ Pause' : '▶ Play'}
                 </button>
-                <span class="num" style={{ fontSize: '11px', color: fIdx >= 5 ? '#fbbf24' : '#38bdf8', fontWeight: 600 }}>
+                <span class="num" style={{ fontSize: '11px', color: fIdx >= 5 ? 'var(--warn)' : 'var(--accent)', fontWeight: 600 }}>
                   t = {timeS.toFixed(2)} s · S_g = {m.swirlNumber.toFixed(2)} · D₃₂ = {m.smdUm.toFixed(1)} μm
                 </span>
               </div>
@@ -3623,7 +3623,7 @@ function SolarCandleViewportHud({
           {/* Time-Dependent Transient Scrubber & Real-Time Video Recorder */}
           <div
             style={{
-              background: 'rgba(15, 23, 42, 0.72)',
+              background: 'var(--panel-2)',
               border: '1px solid var(--line)',
               borderRadius: '5px',
               padding: '6px 8px',
@@ -3650,7 +3650,7 @@ function SolarCandleViewportHud({
                 >
                   {speed}×
                 </button>
-                <span class="num" style={{ fontSize: '11px', color: curFrame.ignited ? '#fbbf24' : '#38bdf8', fontWeight: 600 }}>
+                <span class="num" style={{ fontSize: '11px', color: curFrame.ignited ? 'var(--warn)' : 'var(--accent)', fontWeight: 600 }}>
                   t = {curFrame.time_s.toFixed(2)} s · {curFrame.phase_name}
                 </span>
               </div>

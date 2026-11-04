@@ -837,20 +837,20 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
           class="card"
           data-testid="setup-mp-params"
           style={{
-            padding: '6px 8px',
+            padding: '7px 9px',
             marginBottom: '8px',
-            background: 'rgba(15, 23, 42, 0.45)',
-            border: '1px solid rgba(148, 163, 184, 0.2)',
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line)',
             borderRadius: '6px',
           }}
         >
-          <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '4px' }}>
+          <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text)', marginBottom: '5px' }}>
             Active Boundary &amp; Coupling Parameters
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: '4px 6px', alignItems: 'center', fontSize: '11px' }}>
             {doc.lets?.map((l) => (
               <Fragment key={l.name}>
-                <span class="num" style={{ color: '#cbd5e1' }} title={`let ${l.name} = ${l.expr}`}>
+                <span class="num" style={{ color: 'var(--text-2)', fontWeight: 600 }} title={`let ${l.name} = ${l.expr}`}>
                   {l.name}
                 </span>
                 <NumberInput
@@ -872,14 +872,14 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
         class="card"
         data-testid="setup-active-equations"
         style={{
-          padding: '7px 8px',
-          background: 'rgba(15, 23, 42, 0.6)',
-          border: '1px solid rgba(56, 189, 248, 0.3)',
+          padding: '7px 9px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-strong)',
           borderRadius: '6px',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-          <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#38bdf8' }}>
+          <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--accent)' }}>
             Auto-Activated PDEs ({activeEqs.length}/{eqs.length})
           </span>
           <button
@@ -892,21 +892,21 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             Theory (6) →
           </button>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
           {eqs.map((eq) => (
             <div
               key={eq.id}
               style={{
-                fontSize: '10px',
-                color: eq.active ? '#e2e8f0' : 'var(--text-3)',
+                fontSize: '10.5px',
+                color: eq.active ? 'var(--text)' : 'var(--text-3)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px',
-                opacity: eq.active ? 1 : 0.6,
+                opacity: eq.active ? 1 : 0.7,
               }}
               title={eq.triggerSummary}
             >
-              <span style={{ color: eq.active ? '#22c55e' : '#64748b', fontWeight: 700 }}>
+              <span style={{ color: eq.active ? 'var(--ok)' : 'var(--text-3)', fontWeight: 700 }}>
                 {eq.active ? '●' : '○'}
               </span>
               <span>{eq.shortName}</span>

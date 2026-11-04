@@ -2003,8 +2003,8 @@ function TutorialsContentsPage({
           gap: '10px',
           padding: '12px 14px',
           borderRadius: '8px',
-          background: 'rgba(15, 23, 42, 0.72)',
-          border: '1px solid rgba(56, 189, 248, 0.25)',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-strong)',
         }}
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
@@ -2012,7 +2012,7 @@ function TutorialsContentsPage({
             <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text)' }}>
               Tutorials, Multi-Physics Case Studies &amp; Starter Examples Directory ({totalCount} Total)
             </div>
-            <div style={{ fontSize: '11.5px', color: 'var(--text-3)', marginTop: '2px' }}>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-2)', marginTop: '2px' }}>
               Every card below is automatically indexed from its <code>.fsm</code> script — showing its Continuum Materials, Auto-Activated PDEs, Theory Manual Chapter, and 1-click actions.
             </div>
           </div>
@@ -2024,7 +2024,7 @@ function TutorialsContentsPage({
               value={searchQuery}
               data-testid="tutorial-contents-search"
               onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-              style={{ width: 'min(340px, 75vw)', fontSize: '12px', padding: '5px 10px' }}
+              style={{ width: 'min(340px, 75vw)', fontSize: '12px', padding: '5px 10px', background: 'var(--panel)' }}
             />
             {searchQuery && (
               <button
@@ -2081,6 +2081,7 @@ function TutorialsContentsPage({
         );
 
         if (trackSheets.length === 0) return null;
+        const trackAccentText = `color-mix(in srgb, ${track.accent} 65%, var(--text))`;
 
         return (
           <div key={track.id} data-testid={`contents-section-${track.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -2088,9 +2089,9 @@ function TutorialsContentsPage({
               style={{
                 display: 'flex',
                 alignItems: 'baseline',
-                 justifyContent: 'space-between',
+                justifyContent: 'space-between',
                 gap: '8px',
-                borderBottom: `1px solid ${track.accent}44`,
+                borderBottom: `1px solid color-mix(in srgb, ${track.accent} 35%, var(--line))`,
                 paddingBottom: '4px',
               }}
             >
@@ -2101,8 +2102,9 @@ function TutorialsContentsPage({
                     fontWeight: 700,
                     padding: '2px 7px',
                     borderRadius: '4px',
-                    background: `${track.accent}22`,
-                    color: track.accent,
+                    background: `color-mix(in srgb, ${track.accent} 15%, var(--panel-2))`,
+                    color: trackAccentText,
+                    border: `1px solid color-mix(in srgb, ${track.accent} 35%, var(--line-strong))`,
                     marginRight: '8px',
                     fontFamily: 'var(--mono)',
                   }}
@@ -2111,7 +2113,7 @@ function TutorialsContentsPage({
                 </span>
                 <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{track.title}</strong>
               </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>{track.subtitle}</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{track.subtitle}</span>
             </div>
 
             <div
@@ -2134,10 +2136,12 @@ function TutorialsContentsPage({
                       gap: '8px',
                       padding: '11px 13px',
                       borderRadius: '8px',
-                      background: isActive ? 'rgba(30, 41, 59, 0.92)' : 'rgba(15, 23, 42, 0.65)',
+                      background: isActive
+                        ? `color-mix(in srgb, ${track.accent} 8%, var(--panel-2))`
+                        : 'var(--panel-2)',
                       border: isActive
                         ? `1.5px solid ${track.accent}`
-                        : '1px solid rgba(148, 163, 184, 0.2)',
+                        : '1px solid var(--line-strong)',
                     }}
                   >
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
@@ -2162,8 +2166,9 @@ function TutorialsContentsPage({
                               fontSize: '10px',
                               fontWeight: 700,
                               padding: '2px 6px',
-                              borderRadius: '999px',
-                              background: 'rgba(148, 163, 184, 0.15)',
+                              borderRadius: '5px',
+                              background: 'var(--panel)',
+                              border: '1px solid var(--line)',
                               color: 'var(--text-2)',
                             }}
                           >
@@ -2191,9 +2196,9 @@ function TutorialsContentsPage({
                               fontWeight: 600,
                               padding: '1px 6px',
                               borderRadius: '4px',
-                              background: `${m.color}1f`,
-                              color: m.color,
-                              border: `1px solid ${m.color}44`,
+                              background: `color-mix(in srgb, ${m.color} 13%, var(--panel))`,
+                              color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
+                              border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
                             }}
                             title={`Continuum Phase: ${m.phaseLabel}`}
                           >
@@ -2207,9 +2212,9 @@ function TutorialsContentsPage({
                               fontWeight: 600,
                               padding: '1px 6px',
                               borderRadius: '4px',
-                              background: 'rgba(16, 185, 129, 0.16)',
-                              color: '#34d399',
-                              border: '1px solid rgba(16, 185, 129, 0.35)',
+                              background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
+                              color: 'var(--ok)',
+                              border: '1px solid color-mix(in srgb, var(--ok) 40%, var(--line-strong))',
                             }}
                           >
                             ❖ TPMS: {info.fillSummary}
@@ -2225,14 +2230,14 @@ function TutorialsContentsPage({
                             style={{
                               fontSize: '9.5px',
                               fontFamily: 'var(--mono)',
-                              padding: '1px 5px',
-                              borderRadius: '3px',
-                              background: 'rgba(2, 6, 23, 0.65)',
-                              color: '#94a3b8',
-                              border: '1px solid rgba(148, 163, 184, 0.16)',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              background: 'var(--panel)',
+                              color: 'var(--text-2)',
+                              border: '1px solid var(--line)',
                             }}
                           >
-                            ● {eq.shortName}
+                            <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
                           </span>
                         ))}
                       </div>
@@ -2241,7 +2246,7 @@ function TutorialsContentsPage({
                     {/* Metadata + Action Buttons Footer */}
                     <div
                       style={{
-                        borderTop: '1px solid rgba(148, 163, 184, 0.14)',
+                        borderTop: '1px solid var(--line)',
                         paddingTop: '7px',
                         display: 'flex',
                         flexDirection: 'column',
@@ -2301,6 +2306,7 @@ function TutorialsContentsPage({
 
         if (exampleRows.length === 0) return null;
         const tr = TUTORIAL_TRACKS.find((t) => t.id === 'examples')!;
+        const trAccentText = `color-mix(in srgb, ${tr.accent} 65%, var(--text))`;
 
         return (
           <div data-testid="contents-section-examples" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -2310,7 +2316,7 @@ function TutorialsContentsPage({
                 alignItems: 'baseline',
                 justifyContent: 'space-between',
                 gap: '8px',
-                borderBottom: `1px solid ${tr.accent}44`,
+                borderBottom: `1px solid color-mix(in srgb, ${tr.accent} 35%, var(--line))`,
                 paddingBottom: '4px',
               }}
             >
@@ -2321,8 +2327,9 @@ function TutorialsContentsPage({
                     fontWeight: 700,
                     padding: '2px 7px',
                     borderRadius: '4px',
-                    background: `${tr.accent}22`,
-                    color: tr.accent,
+                    background: `color-mix(in srgb, ${tr.accent} 15%, var(--panel-2))`,
+                    color: trAccentText,
+                    border: `1px solid color-mix(in srgb, ${tr.accent} 35%, var(--line-strong))`,
                     marginRight: '8px',
                     fontFamily: 'var(--mono)',
                   }}
@@ -2331,7 +2338,7 @@ function TutorialsContentsPage({
                 </span>
                 <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{tr.title}</strong>
               </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>{tr.subtitle}</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{tr.subtitle}</span>
             </div>
 
             <div
@@ -2352,8 +2359,8 @@ function TutorialsContentsPage({
                     gap: '8px',
                     padding: '10px 12px',
                     borderRadius: '8px',
-                    background: 'rgba(15, 23, 42, 0.55)',
-                    border: '1px solid rgba(168, 85, 247, 0.25)',
+                    background: 'var(--panel-2)',
+                    border: '1px solid var(--line-strong)',
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -2364,8 +2371,9 @@ function TutorialsContentsPage({
                           fontWeight: 700,
                           padding: '2px 6px',
                           borderRadius: '4px',
-                          background: 'rgba(168, 85, 247, 0.2)',
-                          color: '#c084fc',
+                          background: `color-mix(in srgb, ${tr.accent} 15%, var(--panel))`,
+                          color: trAccentText,
+                          border: `1px solid color-mix(in srgb, ${tr.accent} 35%, var(--line-strong))`,
                           fontFamily: 'var(--mono)',
                         }}
                       >
@@ -2380,11 +2388,12 @@ function TutorialsContentsPage({
                           key={m.id}
                           style={{
                             fontSize: '10px',
+                            fontWeight: 600,
                             padding: '1px 6px',
                             borderRadius: '4px',
-                            background: `${m.color}1f`,
-                            color: m.color,
-                            border: `1px solid ${m.color}44`,
+                            background: `color-mix(in srgb, ${m.color} 13%, var(--panel))`,
+                            color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
+                            border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
                           }}
                         >
                           ◆ {m.name}
@@ -2396,13 +2405,14 @@ function TutorialsContentsPage({
                           style={{
                             fontSize: '9.5px',
                             fontFamily: 'var(--mono)',
-                            padding: '1px 5px',
-                            borderRadius: '3px',
-                            background: 'rgba(2, 6, 23, 0.65)',
-                            color: '#94a3b8',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            background: 'var(--panel)',
+                            color: 'var(--text-2)',
+                            border: '1px solid var(--line)',
                           }}
                         >
-                          ● {eq.shortName}
+                          <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
                         </span>
                       ))}
                     </div>
@@ -2448,8 +2458,8 @@ function TutorialsContentsPage({
         style={{
           padding: '12px 14px',
           borderRadius: '8px',
-          background: 'rgba(15, 23, 42, 0.48)',
-          border: '1px dashed rgba(148, 163, 184, 0.3)',
+          background: 'var(--panel-2)',
+          border: '1px dashed var(--line-strong)',
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'space-between',
@@ -2461,7 +2471,7 @@ function TutorialsContentsPage({
           <strong style={{ fontSize: '12.5px', color: 'var(--text)' }}>
             Extending the Catalog or Authoring Your Own Multi-Physics Simulation
           </strong>
-          <div style={{ fontSize: '11px', color: 'var(--text-3)', marginTop: '2px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
             New entries added to <code>TUTORIAL_SHEETS</code> or <code>examples/*.fsm</code> are automatically introspected for continuum materials, active PDEs, and boundary conditions. Or start a blank model and assign continuum phases directly in <strong>Shape (1)</strong> and <strong>Setup (2)</strong>.
           </div>
         </div>

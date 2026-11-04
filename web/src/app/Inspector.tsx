@@ -110,74 +110,78 @@ function ContinuumConstitutiveCard({
 }) {
   const spec = getContinuumMaterialSpec(doc, matId);
   const phaseMeta = CONTINUUM_PHASE_META[spec.phase];
+  const accentText = `color-mix(in srgb, ${spec.badgeColor} 65%, var(--text))`;
   return (
     <div
       class="card"
       data-testid={testId}
       style={{
         marginTop: '8px',
-        padding: '8px 10px',
-        border: `1px solid ${spec.badgeColor}44`,
-        background: 'rgba(15, 23, 42, 0.45)',
+        padding: '9px 10px',
+        border: `1px solid color-mix(in srgb, ${spec.badgeColor} 38%, var(--line-strong))`,
+        background: 'var(--panel-2)',
         borderRadius: '6px',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-2)' }}>Continuum Phase</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)' }}>Continuum Phase</span>
         <span
           data-testid={`${testId}-phase`}
           style={{
             fontSize: '10px',
             fontWeight: 700,
             padding: '2px 7px',
-            borderRadius: '999px',
-            background: `${spec.badgeColor}22`,
-            color: spec.badgeColor,
-            border: `1px solid ${spec.badgeColor}55`,
+            borderRadius: '5px',
+            background: `color-mix(in srgb, ${spec.badgeColor} 14%, var(--panel))`,
+            color: accentText,
+            border: `1px solid color-mix(in srgb, ${spec.badgeColor} 40%, var(--line-strong))`,
           }}
         >
           {spec.phaseLabel}
         </span>
       </div>
-      <div style={{ fontSize: '10.5px', color: 'var(--text-3)', marginBottom: '6px', lineHeight: 1.35 }}>
+      <div style={{ fontSize: '11px', color: 'var(--text-2)', marginBottom: '7px', lineHeight: 1.4 }}>
         {phaseMeta.summary}
       </div>
       <div
         style={{
           fontFamily: 'var(--mono)',
           fontSize: '10.5px',
-          padding: '5px 7px',
-          background: 'rgba(2, 6, 23, 0.65)',
+          lineHeight: 1.45,
+          padding: '6px 8px',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+          borderLeft: `3px solid ${spec.badgeColor}`,
           borderRadius: '4px',
-          color: '#e2e8f0',
-          marginBottom: '6px',
-          overflowX: 'auto',
-          whiteSpace: 'nowrap',
+          color: 'var(--text)',
+          marginBottom: '7px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
         }}
         title="Active constitutive relation for this volume"
       >
         {spec.constitutiveEquation}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '3px 8px', fontSize: '11px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '4px 8px', fontSize: '11px', alignItems: 'baseline' }}>
         {spec.parameters.map((p) => (
           <Fragment key={p.symbol}>
-            <span class="num" style={{ color: spec.badgeColor, fontWeight: 600 }}>
+            <span class="num" style={{ color: accentText, fontWeight: 700 }}>
               {p.symbol}
             </span>
-            <span style={{ color: 'var(--text-3)' }}>{p.label}</span>
-            <span class="num" style={{ textAlign: 'right' }}>
+            <span style={{ color: 'var(--text-2)' }}>{p.label}</span>
+            <span class="num" style={{ textAlign: 'right', color: 'var(--text)', fontWeight: 600 }}>
               {p.value} {p.unit !== '—' ? p.unit : ''}
             </span>
           </Fragment>
         ))}
       </div>
-      <div style={{ marginTop: '7px', display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
         <button
           type="button"
           class="btn ghost small"
           data-testid={`${testId}-open-theory`}
           onClick={() => store.setLens('theory')}
-          style={{ fontSize: '10.5px', padding: '2px 8px' }}
+          style={{ fontSize: '10.5px', padding: '2px 8px', color: 'var(--accent)', fontWeight: 600 }}
         >
           Applied Math in Theory (6) →
         </button>
@@ -667,6 +671,7 @@ export function addModifier(target: string, type: Modifier['type']) {
 
 function DocumentInspector() {
   const doc = store.doc;
+  ensureContinuumMaterialInDoc(doc, doc.material);
   const { errors: problems, warnings } = validateWithWarnings(doc);
   const mats = [
     ...materials(),
@@ -853,13 +858,13 @@ function DocumentInspector() {
         style={{
           marginTop: '10px',
           padding: '8px 10px',
-          border: '1px solid rgba(56, 189, 248, 0.28)',
-          background: 'rgba(15, 23, 42, 0.5)',
+          border: '1px solid var(--line-strong)',
+          background: 'var(--panel-2)',
           borderRadius: '6px',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: '#38bdf8' }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
             Activated Field Equations ({activeEqs.length})
           </span>
           <button
@@ -878,14 +883,14 @@ function DocumentInspector() {
               key={eq.id}
               style={{
                 fontSize: '10.5px',
-                color: 'var(--text-2)',
+                color: 'var(--text)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px',
               }}
               title={eq.triggerSummary}
             >
-              <span style={{ color: '#22c55e', fontWeight: 700 }}>●</span>
+              <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span>
               <span>{eq.shortName}</span>
             </div>
           ))}

@@ -1843,7 +1843,7 @@ function ResultsTransientRecapBar({ lvl }: { lvl: LevelResult }) {
       style={{
         margin: '6px 0',
         padding: '6px 8px',
-        background: 'rgba(15, 23, 42, 0.55)',
+        background: 'var(--panel-2)',
         border: '1px solid var(--line)',
         borderRadius: '5px',
         display: 'flex',
@@ -1868,7 +1868,7 @@ function ResultsTransientRecapBar({ lvl }: { lvl: LevelResult }) {
           >
             {playing ? '⏸ Pause' : '▶ Play Ramp'}
           </button>
-          <span class="num" style={{ fontSize: '11px', fontWeight: 600, color: '#fbbf24' }}>
+          <span class="num" style={{ fontSize: '11px', fontWeight: 600, color: 'var(--warn)' }}>
             {isModeAnim
               ? `Phase ${Math.round((ui.resultsModePhase * 180) / Math.PI)}°`
               : `Load ${(ramp * 100).toFixed(0)}% · ${fmt(peakVm * ramp, 1)} MPa`}

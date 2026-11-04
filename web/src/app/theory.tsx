@@ -140,9 +140,9 @@ function TheoryLensView() {
         position: 'absolute',
         inset: 0,
         zIndex: 35,
-        background: 'rgba(9, 13, 22, 0.96)',
+        background: 'color-mix(in srgb, var(--bg) 96%, transparent)',
         backdropFilter: 'blur(10px)',
-        color: '#e2e8f0',
+        color: 'var(--text)',
         overflowY: 'auto',
         padding: '20px 26px 48px',
         display: 'flex',
@@ -158,7 +158,7 @@ function TheoryLensView() {
           justifyContent: 'space-between',
           alignItems: 'flex-start',
           gap: '12px',
-          borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+          borderBottom: '1px solid var(--line-strong)',
           paddingBottom: '14px',
         }}
       >
@@ -170,9 +170,9 @@ function TheoryLensView() {
                 fontWeight: 700,
                 padding: '2px 8px',
                 borderRadius: '999px',
-                background: 'rgba(56, 189, 248, 0.16)',
-                color: '#38bdf8',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
+                background: 'var(--accent-soft)',
+                color: 'var(--accent)',
+                border: '1px solid color-mix(in srgb, var(--accent) 45%, var(--line-strong))',
                 fontFamily: 'var(--mono)',
               }}
             >
@@ -185,9 +185,9 @@ function TheoryLensView() {
                 fontWeight: 700,
                 padding: '2px 8px',
                 borderRadius: '999px',
-                background: 'rgba(34, 197, 94, 0.16)',
-                color: '#4ade80',
-                border: '1px solid rgba(34, 197, 94, 0.4)',
+                background: 'color-mix(in srgb, var(--ok) 15%, var(--panel))',
+                color: 'var(--ok)',
+                border: '1px solid color-mix(in srgb, var(--ok) 45%, var(--line-strong))',
               }}
             >
               {activeCount} / {allEqs.length} Governing PDEs Active
@@ -200,19 +200,19 @@ function TheoryLensView() {
                   fontWeight: 700,
                   padding: '2px 8px',
                   borderRadius: '999px',
-                  background: 'rgba(249, 115, 22, 0.18)',
-                  color: '#fb923c',
-                  border: '1px solid rgba(249, 115, 22, 0.45)',
+                  background: 'color-mix(in srgb, var(--warn) 16%, var(--panel))',
+                  color: 'var(--warn)',
+                  border: '1px solid color-mix(in srgb, var(--warn) 45%, var(--line-strong))',
                 }}
               >
                 Coupled Regime: {regime}
               </span>
             )}
           </div>
-          <h2 style={{ margin: '6px 0 3px', fontSize: '18px', fontWeight: 700, color: '#f8fafc' }}>
+          <h2 style={{ margin: '6px 0 3px', fontSize: '18px', fontWeight: 700, color: 'var(--text)' }}>
             {doc.name} — Live Mathematical Formulation
           </h2>
-          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-2)' }}>
             Governing continuum laws, boundary operators, and finite-element / finite-volume discretizations automatically activated by your <strong>Shape (1)</strong> volume materials and <strong>Setup (2)</strong> boundary conditions.
           </div>
         </div>
@@ -280,7 +280,7 @@ function TheoryLensView() {
             </button>
           ))}
         </div>
-        <label class="check" style={{ fontSize: '11.5px', color: '#cbd5e1', cursor: 'pointer' }}>
+        <label class="check" style={{ fontSize: '11.5px', color: 'var(--text-2)', cursor: 'pointer' }}>
           <input
             type="checkbox"
             checked={showStandby}
@@ -295,14 +295,14 @@ function TheoryLensView() {
         <pre
           data-testid="theory-markdown-preview"
           style={{
-            background: '#020617',
-            border: '1px solid rgba(148, 163, 184, 0.25)',
+            background: 'var(--panel)',
+            border: '1px solid var(--line-strong)',
             borderRadius: '8px',
             padding: '16px',
             fontFamily: 'var(--mono)',
             fontSize: '12px',
             lineHeight: 1.55,
-            color: '#f1f5f9',
+            color: 'var(--text)',
             whiteSpace: 'pre-wrap',
             margin: 0,
           }}
@@ -318,13 +318,14 @@ function TheoryLensView() {
               data-testid="theory-subdomains-table"
               style={{
                 padding: '12px 14px',
-                background: 'rgba(15, 23, 42, 0.72)',
-                border: '1px solid rgba(148, 163, 184, 0.2)',
+                background: 'var(--panel)',
+                border: '1px solid var(--line-strong)',
                 borderRadius: '8px',
+                margin: 0,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>
                   1. Subdomain Continuum &amp; Constitutive Law Assignment (Shape 1)
                 </span>
                 <button
@@ -339,7 +340,7 @@ function TheoryLensView() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11.5px' }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.2)', color: '#94a3b8', textAlign: 'left' }}>
+                    <tr style={{ borderBottom: '1px solid var(--line-strong)', color: 'var(--text-2)', textAlign: 'left' }}>
                       <th style={{ padding: '5px 8px' }}>Volume Node</th>
                       <th style={{ padding: '5px 8px' }}>CSG Op</th>
                       <th style={{ padding: '5px 8px' }}>Assigned Material</th>
@@ -351,7 +352,7 @@ function TheoryLensView() {
                     {vols.map((v) => (
                       <tr
                         key={v.node.id}
-                        style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}
+                        style={{ borderBottom: '1px solid var(--line)' }}
                       >
                         <td style={{ padding: '6px 8px', fontFamily: 'var(--mono)', fontWeight: 600 }}>
                           <button
@@ -366,11 +367,11 @@ function TheoryLensView() {
                             {v.node.id}
                           </button>
                         </td>
-                        <td style={{ padding: '6px 8px', fontFamily: 'var(--mono)', color: '#cbd5e1' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--mono)', color: 'var(--text-2)' }}>
                           {v.node.op}
                         </td>
-                        <td style={{ padding: '6px 8px' }}>
-                          {v.spec.name} <code style={{ color: '#94a3b8' }}>({v.matId})</code>
+                        <td style={{ padding: '6px 8px', color: 'var(--text)' }}>
+                          {v.spec.name} <code style={{ color: 'var(--text-3)' }}>({v.matId})</code>
                         </td>
                         <td style={{ padding: '6px 8px' }}>
                           <span
@@ -378,10 +379,10 @@ function TheoryLensView() {
                               fontSize: '10.5px',
                               fontWeight: 700,
                               padding: '2px 7px',
-                              borderRadius: '999px',
-                              background: `${v.spec.badgeColor}22`,
-                              color: v.spec.badgeColor,
-                              border: `1px solid ${v.spec.badgeColor}55`,
+                              borderRadius: '5px',
+                              background: `color-mix(in srgb, ${v.spec.badgeColor} 14%, var(--panel-2))`,
+                              color: `color-mix(in srgb, ${v.spec.badgeColor} 68%, var(--text))`,
+                              border: `1px solid color-mix(in srgb, ${v.spec.badgeColor} 40%, var(--line-strong))`,
                             }}
                           >
                             {v.spec.phaseLabel}
@@ -392,7 +393,7 @@ function TheoryLensView() {
                             padding: '6px 8px',
                             fontFamily: 'var(--mono)',
                             fontSize: '11px',
-                            color: '#e2e8f0',
+                            color: 'var(--text)',
                           }}
                         >
                           {v.spec.constitutiveEquation}
@@ -412,13 +413,14 @@ function TheoryLensView() {
               data-testid="theory-bcs-table"
               style={{
                 padding: '12px 14px',
-                background: 'rgba(15, 23, 42, 0.72)',
-                border: '1px solid rgba(148, 163, 184, 0.2)',
+                background: 'var(--panel)',
+                border: '1px solid var(--line-strong)',
                 borderRadius: '8px',
+                margin: 0,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>
                   2. Boundary Value Problem (Γ_D, Γ_N, Γ_R) &amp; Multiphysics Couplings (Setup 2)
                 </span>
                 <button
@@ -431,30 +433,30 @@ function TheoryLensView() {
                 </button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
-                <div style={{ background: 'rgba(2, 6, 23, 0.55)', padding: '8px 10px', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#4ade80', marginBottom: '4px' }}>
+                <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', padding: '8px 10px', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ok)', marginBottom: '4px' }}>
                     Dirichlet Supports (Γ_D: u = 0)
                   </div>
                   {doc.supports.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b' }}>None defined</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>None defined</div>
                   ) : (
                     doc.supports.map((s) => (
-                      <div key={s.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                      <div key={s.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                         • {s.id} on {s.region}: u_[{['x', 'y', 'z'].filter((_, i) => s.fixed[i]).join('')}] = 0
                       </div>
                     ))
                   )}
                 </div>
 
-                <div style={{ background: 'rgba(2, 6, 23, 0.55)', padding: '8px 10px', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#f87171', marginBottom: '4px' }}>
+                <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', padding: '8px 10px', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--danger)', marginBottom: '4px' }}>
                     Neumann Mechanical Loads (Γ_N: σ·n = t̂)
                   </div>
                   {doc.loads.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b' }}>None defined (or thermal-driven)</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>None defined (or thermal-driven)</div>
                   ) : (
                     doc.loads.map((l) => (
-                      <div key={l.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                      <div key={l.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                         • {l.id} on {l.region}:{' '}
                         {l.kind.type === 'force'
                           ? `F = (${l.kind.vector.join(', ')}) N`
@@ -466,26 +468,26 @@ function TheoryLensView() {
                   )}
                 </div>
 
-                <div style={{ background: 'rgba(2, 6, 23, 0.55)', padding: '8px 10px', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>
+                <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', padding: '8px 10px', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warn)', marginBottom: '4px' }}>
                     Thermal Boundary Operators (Γ_T, Γ_R, Γ_q)
                   </div>
                   {doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b' }}>Isothermal (T = T_ref)</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>Isothermal (T = T_ref)</div>
                   ) : (
                     <>
                       {doc.temperatures.map((t) => (
-                        <div key={t.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                        <div key={t.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                           • {t.id} ({t.region}): T = {t.celsius} °C
                         </div>
                       ))}
                       {doc.convections.map((c) => (
-                        <div key={c.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                        <div key={c.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                           • {c.id} ({c.region}): −k∇T·n = {c.h}(T − {c.t_inf} °C)
                         </div>
                       ))}
                       {doc.heat_fluxes.map((q) => (
-                        <div key={q.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                        <div key={q.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                           • {q.id} ({q.region}): q_n = {q.q} W/mm²
                         </div>
                       ))}
@@ -493,15 +495,15 @@ function TheoryLensView() {
                   )}
                 </div>
 
-                <div style={{ background: 'rgba(2, 6, 23, 0.55)', padding: '8px 10px', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#38bdf8', marginBottom: '4px' }}>
+                <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', padding: '8px 10px', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)', marginBottom: '4px' }}>
                     Coupled PDE / Design Parameters (let)
                   </div>
                   {(doc.lets?.length ?? 0) === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b' }}>Default regime constants active</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>Default regime constants active</div>
                   ) : (
                     doc.lets!.map((l) => (
-                      <div key={l.name} style={{ fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                      <div key={l.name} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
                         • {l.name} = {l.value}
                       </div>
                     ))
@@ -513,7 +515,7 @@ function TheoryLensView() {
 
           {/* Section 3: Governing Field Equations Cards */}
           <div data-testid="theory-equations-list" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>
               3. Governing Field Equations &amp; Variational Discretizations ({filteredEqs.length} shown)
             </div>
             {filteredEqs.map((eq) => (
@@ -523,10 +525,10 @@ function TheoryLensView() {
                 style={{
                   padding: '12px 14px',
                   borderRadius: '8px',
-                  background: eq.active ? 'rgba(15, 23, 42, 0.85)' : 'rgba(15, 23, 42, 0.42)',
+                  background: 'var(--panel)',
                   border: eq.active
-                    ? '1px solid rgba(56, 189, 248, 0.38)'
-                    : '1px solid rgba(148, 163, 184, 0.15)',
+                    ? '1.5px solid color-mix(in srgb, var(--accent) 55%, var(--line-strong))'
+                    : '1px solid var(--line)',
                   opacity: eq.active ? 1 : 0.72,
                 }}
               >
@@ -547,14 +549,15 @@ function TheoryLensView() {
                         fontWeight: 700,
                         padding: '2px 6px',
                         borderRadius: '4px',
-                        background: 'rgba(148, 163, 184, 0.16)',
-                        color: '#cbd5e1',
+                        background: 'var(--panel-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--text-2)',
                         fontFamily: 'var(--mono)',
                       }}
                     >
                       STAGE {eq.stageNumber} · {eq.stage.toUpperCase()}
                     </span>
-                    <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#f8fafc' }}>
+                    <span style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--text)' }}>
                       {eq.title}
                     </span>
                   </div>
@@ -564,49 +567,53 @@ function TheoryLensView() {
                       fontWeight: 700,
                       padding: '2px 8px',
                       borderRadius: '999px',
-                      background: eq.active ? 'rgba(34, 197, 94, 0.18)' : 'rgba(100, 116, 139, 0.2)',
-                      color: eq.active ? '#4ade80' : '#94a3b8',
+                      background: eq.active
+                        ? 'color-mix(in srgb, var(--ok) 15%, var(--panel-2))'
+                        : 'var(--panel-2)',
+                      color: eq.active ? 'var(--ok)' : 'var(--text-3)',
                       border: eq.active
-                        ? '1px solid rgba(34, 197, 94, 0.45)'
-                        : '1px solid rgba(100, 116, 139, 0.35)',
+                        ? '1px solid color-mix(in srgb, var(--ok) 45%, var(--line-strong))'
+                        : '1px solid var(--line)',
                     }}
                   >
                     {eq.active ? '● ACTIVE IN SOLVE' : '○ STANDBY'}
                   </span>
                 </div>
 
-                <div style={{ fontSize: '11.5px', color: '#94a3b8', marginBottom: '8px' }}>
+                <div style={{ fontSize: '11.5px', color: 'var(--text-2)', marginBottom: '8px' }}>
                   {eq.triggerSummary}
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '8px', marginBottom: '8px' }}>
                   <div
                     style={{
-                      background: '#020617',
-                      border: '1px solid rgba(56, 189, 248, 0.22)',
+                      background: 'var(--panel-2)',
+                      border: '1px solid var(--line-strong)',
+                      borderLeft: '3px solid var(--accent)',
                       borderRadius: '6px',
                       padding: '8px 10px',
                     }}
                   >
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#38bdf8', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent)', marginBottom: '4px' }}>
                       STRONG DIFFERENTIAL FORM
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11.5px', color: '#f8fafc', overflowX: 'auto' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11.5px', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {eq.strongForm}
                     </div>
                   </div>
                   <div
                     style={{
-                      background: '#020617',
-                      border: '1px solid rgba(168, 85, 247, 0.25)',
+                      background: 'var(--panel-2)',
+                      border: '1px solid var(--line-strong)',
+                      borderLeft: '3px solid color-mix(in srgb, #a855f7 68%, var(--text))',
                       borderRadius: '6px',
                       padding: '8px 10px',
                     }}
                   >
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#c084fc', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: 'color-mix(in srgb, #a855f7 68%, var(--text))', marginBottom: '4px' }}>
                       WEAK VARIATIONAL / DISCRETE FORM
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11.5px', color: '#f8fafc', overflowX: 'auto' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11.5px', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {eq.weakOrDiscreteForm}
                     </div>
                   </div>
@@ -621,8 +628,9 @@ function TheoryLensView() {
                         fontFamily: 'var(--mono)',
                         padding: '3px 8px',
                         borderRadius: '4px',
-                        background: 'rgba(30, 41, 59, 0.75)',
-                        color: '#cbd5e1',
+                        background: 'var(--panel-2)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--text-2)',
                       }}
                     >
                       {lp}
