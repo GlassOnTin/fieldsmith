@@ -6060,11 +6060,7 @@ mod tests {
 
     #[test]
     fn unit_varicose_and_sinuous_distortion_uk5() {
-        let cff_path = "/home/ian/Code/Pilks/bath/float/src/python-tin2fe/uk5-585mm-mw-01e.cff";
-        if !Path::new(cff_path).exists() {
-            return;
-        }
-        let case = CffCase::from_path(cff_path).expect("parse uk5 cff");
+        let case = CffCase::uk5_reference().expect("parse uk5 cff");
         assert_eq!(case.sinuous.num_meshes, 100);
         assert_eq!(case.sinuous.num_steps, 81);
         assert!((case.varicose.temp_fluctuation_c - 0.50).abs() < 1e-9);
@@ -6095,11 +6091,7 @@ mod tests {
     #[test]
     fn unit_pluggable_float_bath_coater_system_adjoint_and_uq() {
         use crate::coupled_system::{EngineConfig, MonolithicSystemEngine};
-        let cff_path = "/home/ian/Code/Pilks/bath/float/src/python-tin2fe/uk5-585mm-mw-01e.cff";
-        if !Path::new(cff_path).exists() {
-            return;
-        }
-        let case = CffCase::from_path(cff_path).expect("parse uk5 cff");
+        let case = CffCase::uk5_reference().expect("parse uk5 cff");
         let sys = FloatBathCoaterDesignSystem::new(case, 10);
         let cfg = EngineConfig {
             dt_s: 3.0,

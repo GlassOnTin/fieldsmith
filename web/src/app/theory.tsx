@@ -139,12 +139,12 @@ function TheoryLensView() {
       style={{
         position: 'absolute',
         inset: 0,
-        zIndex: 35,
+        zIndex: 30,
         background: 'color-mix(in srgb, var(--bg) 96%, transparent)',
         backdropFilter: 'blur(10px)',
         color: 'var(--text)',
         overflowY: 'auto',
-        padding: '20px 26px 48px',
+        padding: '76px 18px 48px',
         display: 'flex',
         flexDirection: 'column',
         gap: '16px',
@@ -221,6 +221,15 @@ function TheoryLensView() {
           data-testid="theory-report-toolbar"
           style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}
         >
+          <button
+            type="button"
+            class="btn small"
+            data-testid="theory-close-btn"
+            title="Close Theory view and return to 3D viewport (1)"
+            onClick={() => store.setLens('shape')}
+          >
+            ✕ Close Theory (3D View)
+          </button>
           <button
             type="button"
             class={`btn small ${showMarkdownPreview ? 'primary' : ''}`}

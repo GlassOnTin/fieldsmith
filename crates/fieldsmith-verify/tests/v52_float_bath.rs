@@ -28,8 +28,6 @@
 //!    verifying exact directional derivatives (`< 1e-6`), quadratic Newton convergence, and
 //!    free-boundary ribbon widening/thinning when top-roll nip angles are canted outward (`+3°`).
 
-use std::path::Path;
-
 use fieldsmith_solve::coupled_system::{
     CoupledEngineeringSystem, EngineConfig, MonolithicSystemEngine, NamedScenario,
     RegenerativeCooledNozzleSystem,
@@ -43,13 +41,9 @@ use fieldsmith_solve::float_bath::{
 };
 use fieldsmith_verify::{Check, Report};
 
-const UK5_CFF_PATH: &str =
-    "/home/ian/Code/Pilks/bath/float/src/python-tin2fe/uk5-585mm-mw-01e.cff";
-
 #[test]
 fn v52_float_bath() {
-    let cff_path = Path::new(UK5_CFF_PATH);
-    let case = CffCase::from_path(cff_path).expect("parse Pilkington UK5 5.85 mm .cff file");
+    let case = CffCase::uk5_reference().expect("parse Pilkington UK5 5.85 mm .cff file");
 
     let mut r = Report::new(
         "V52",

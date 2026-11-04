@@ -274,7 +274,7 @@ export async function shapeTest(browser, url, { screens, docsDir }) {
     const first = d2.root[0]?.id;
     await selectRow(page, rid);
     const supBefore = findIn(d2.root, rid).suppressed;
-    await page.locator(`.row[data-node="${rid}"] button.mini`).click();
+    await page.locator(`.row[data-node="${rid}"] button.mini[title*="uppress"]`).click();
     const supAfter = findIn((await doc(page)).root, rid).suppressed;
     await selectRow(page, ids.extrude);
     await page.keyboard.press('Delete');

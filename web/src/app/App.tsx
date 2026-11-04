@@ -19,7 +19,15 @@ function Lenses() {
   return (
     <div class="lenses" role="tablist" aria-label="Lens">
       {LENSES.map((l) => (
-        <button key={l.id} role="tab" class={store.lens === l.id ? 'on' : ''} aria-selected={store.lens === l.id} data-lens={l.id} title={`${l.label} (${l.key})`} onClick={() => store.setLens(l.id)}>
+        <button
+          key={l.id}
+          role="tab"
+          class={store.lens === l.id ? 'on' : ''}
+          aria-selected={store.lens === l.id}
+          data-lens={l.id}
+          title={l.id === 'theory' && store.lens === 'theory' ? 'Close Theory & return to Shape (1)' : `${l.label} (${l.key})`}
+          onClick={() => store.setLens(l.id === 'theory' && store.lens === 'theory' ? 'shape' : l.id)}
+        >
           {l.label}
           <span class="kbd">{l.key}</span>
         </button>
@@ -44,25 +52,29 @@ function ViewTools() {
           <Icon.sidebarRight />
         </button>
       )}
-      <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
-        <Icon.fit />
-      </button>
-      <button
-        class={`btn icon ${clearMode ? 'on' : ''}`}
-        data-testid="toggle-clear-viewport"
-        title={clearMode ? 'Restore sidebars & HUD overlays (\\)' : 'Clear 3D viewport / Toggle sidebars (\\)'}
-        onClick={() => runCommand('view.toggleSidebars')}
-      >
-        <Icon.sidebarsBoth />
-      </button>
-      <button
-        class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
-        data-testid="open-tutorials-drawer"
-        title="Tutorials & Theory Manual (T1–T13)"
-        onClick={() => runCommand('tutorials.open')}
-      >
-        <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
-      </button>
+      {store.lens !== 'theory' && (
+        <>
+          <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
+            <Icon.fit />
+          </button>
+          <button
+            class={`btn icon ${clearMode ? 'on' : ''}`}
+            data-testid="toggle-clear-viewport"
+            title={clearMode ? 'Restore sidebars & HUD overlays (\\)' : 'Clear 3D viewport / Toggle sidebars (\\)'}
+            onClick={() => runCommand('view.toggleSidebars')}
+          >
+            <Icon.sidebarsBoth />
+          </button>
+          <button
+            class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
+            data-testid="open-tutorials-drawer"
+            title="Tutorials & Theory Manual (T1–T13)"
+            onClick={() => runCommand('tutorials.open')}
+          >
+            <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
+          </button>
+        </>
+      )}
       {store.lens === 'shape' && (
         <>
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
