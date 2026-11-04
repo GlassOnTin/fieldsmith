@@ -39,7 +39,12 @@ Builds:
       - rm -f node_modules/@rollup/rollup-linux-x64-gnu/rollup.linux-x64-gnu.node
       - popd
     scandelete:
+      - fenics-rs/web/pkg
+      - web/node_modules/@dimforge/rapier3d-compat
       - web/node_modules/@esbuild
+      - web/node_modules/playwright-core
+      - web/node_modules/source-map
+      - web/node_modules/three/examples/jsm/libs
     build:
       - export PATH="$HOME/.cargo/bin:$PATH"
       - rustup default 1.89.0
