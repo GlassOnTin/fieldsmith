@@ -29,30 +29,32 @@ function Lenses() {
 }
 
 function ViewTools() {
-  const clearMode = ui.treeCollapsed && ui.inspCollapsed;
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
+  const clearMode = isMobile ? ui.vpHudCollapsed : ui.treeCollapsed && ui.inspCollapsed;
+  const showExpandInsp = isMobile ? !ui.inspOpen : ui.inspCollapsed;
   return (
     <div class="view-tools">
+      {showExpandInsp && (
+        <button
+          class="btn icon"
+          data-testid="expand-insp-btn"
+          title="Open Inspector sidebar (])"
+          onClick={() => runCommand('view.toggleInsp')}
+        >
+          <Icon.sidebarRight />
+        </button>
+      )}
       <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
         <Icon.fit />
       </button>
       <button
         class={`btn icon ${clearMode ? 'on' : ''}`}
         data-testid="toggle-clear-viewport"
-        title={clearMode ? 'Restore sidebars (\\)' : 'Collapse sidebars for a clear 3D viewport (\\)'}
+        title={clearMode ? 'Restore sidebars & HUD overlays (\\)' : 'Clear 3D viewport / Toggle sidebars (\\)'}
         onClick={() => runCommand('view.toggleSidebars')}
       >
         <Icon.sidebarsBoth />
       </button>
-      {ui.inspCollapsed && (
-        <button
-          class="btn icon"
-          data-testid="expand-insp-btn"
-          title="Show Inspector sidebar (])"
-          onClick={() => runCommand('view.toggleInsp')}
-        >
-          <Icon.sidebarRight />
-        </button>
-      )}
       <button
         class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
         data-testid="open-tutorials-drawer"

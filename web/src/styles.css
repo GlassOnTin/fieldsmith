@@ -333,11 +333,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .app.insp-collapsed .panel.insp-panel.open { transform: none; }
   /* Keyboard shortcuts are mouse hints; drop them so the lens bar clears the toggles.
    * The shortcuts themselves still work with a hardware keyboard. */
+  .lenses {
+    left: 44px; right: 44px; transform: none;
+    justify-content: space-between; overflow-x: auto;
+  }
+  .lenses button {
+    height: 26px; padding: 0 6px; font-size: 11px; gap: 3px; flex: 1; justify-content: center;
+  }
   .lenses .kbd { display: none; }
   /* The make/fill panel owns the bottom-left, so the opacity control moves under the
    * toggles top-left (78 = toggle column height + gap). */
-  .opacity-panel { top: 78px; left: 10px; bottom: auto; right: auto; }
-  .clip-panel { top: 122px; left: 10px; bottom: auto; right: auto; }
+  .opacity-panel { top: 78px; left: 10px; bottom: auto; right: auto; max-width: calc(100vw - 56px); padding: 6px 10px; }
+  .opacity-panel input { width: 90px; }
+  .clip-panel { top: 116px; left: 10px; bottom: auto; right: auto; max-width: calc(100vw - 56px); padding: 5px 8px; }
+  .clip-panel input { width: 70px; }
   .results-panel { max-width: min(400px, calc(100vw - 24px)); }
   .row .row-actions { display: flex; }
 }

@@ -9,7 +9,7 @@ import { viewOverlays } from './App';
 
 function OpacityPanel() {
   useApp();
-  if (store.lens === 'results' || store.doc.root.length === 0) return null;
+  if (store.lens === 'results' || store.doc.root.length === 0 || ui.vpHudCollapsed) return null;
   return (
     <div class="opacity-panel" data-testid="opacity-panel">
       <span class="plain">Semi-transparent</span>
