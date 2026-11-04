@@ -1,0 +1,5 @@
+v0.11.0:
+- Native Android app with embedded 8-core arm64-v8a Rust finite-element solver and local COOP/COEP WebGL2 server.
+- Streamable HTTP MCP server (/mcp on port 18789) and REST workspace sync for live AI agent CAD & FEA co-pilot workflows.
+- Mobile portrait UI with collapsible sidebars, floating inspector drawer, and Theory governing-equation sheet.
+- Remote compute offload toggle for connecting to workstation fieldsmith-mcp --serve backends over LAN/Tailscale/WireGuard.

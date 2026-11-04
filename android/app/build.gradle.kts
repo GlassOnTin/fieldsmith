@@ -12,8 +12,15 @@ android {
         applicationId = "sh.fieldsmith.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 101
-        versionName = "0.10.1"
+        versionCode = 110
+        versionName = "0.11.0"
+    }
+
+    // Omit AGP's Play-specific DependencyInfoBlock so F-Droid scanner and
+    // reproducible-build verification pass without extra signing blocks.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
     }
 
     flavorDimensions += listOf("abi")
@@ -29,9 +36,10 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            val ksFile = rootProject.file("fieldsmith-release.jks")
-            if (ksFile.exists()) {
+        val envKsPath = System.getenv("KEYSTORE_PATH")
+        val ksFile = if (!envKsPath.isNullOrBlank()) file(envKsPath) else rootProject.file("fieldsmith-release.jks")
+        if (ksFile.exists()) {
+            create("release") {
                 storeFile = ksFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
                 keyAlias = System.getenv("KEY_ALIAS") ?: ""
@@ -42,20 +50,13 @@ android {
 
     buildTypes {
         release {
-            val ksFile = rootProject.file("fieldsmith-release.jks")
-            if (ksFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.findByName("release")
             vcsInfo.include = false
         }
         debug {
-            if (System.getenv("KEYSTORE_PASSWORD") != null) {
+            if (signingConfigs.findByName("release") != null && System.getenv("KEYSTORE_PASSWORD") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
