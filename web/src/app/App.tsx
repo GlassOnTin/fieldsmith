@@ -8,6 +8,8 @@ import { Inspector } from './Inspector';
 import { ViewportHost } from './ViewportHost';
 import { Palette, Menus } from './Palette';
 import { EXAMPLES, addShape, importMeshCommand, newDocument, openFile, openText, runCommand, saveFile } from './commands';
+import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbench';
+import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -68,7 +70,7 @@ function ViewTools() {
           <button
             class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
             data-testid="open-tutorials-drawer"
-            title="Tutorials & Theory Manual (T1–T13)"
+            title="Tutorials & Theory Manual (T1–T14)"
             onClick={() => runCommand('tutorials.open')}
           >
             <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -77,6 +79,22 @@ function ViewTools() {
       )}
       {store.lens === 'shape' && (
         <>
+          <button
+            class="btn icon"
+            data-testid="hud-open-sketch-workbench"
+            title="Parametric 2D Sketcher & Surface-Feature Engine (LM + QR Solver)"
+            onClick={() => openSketchWorkbenchModal()}
+          >
+            <Icon.sketcher />
+          </button>
+          <button
+            class="btn icon"
+            data-testid="hud-open-fixings-catalog"
+            title="Engineering Fixings & Snap-Fit Catalogue (Auto-Tap Host)"
+            onClick={() => openFixingsCatalogueModal()}
+          >
+            <Icon.fixing />
+          </button>
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
             <Icon.move />
           </button>
@@ -125,7 +143,7 @@ function EmptyState() {
             onClick={() => runCommand('tutorials.open')}
             data-testid="empty-open-tutorials"
           >
-            Tutorials &amp; Theory Manual (T1–T13)…
+            Tutorials &amp; Theory Manual (T1–T14)…
           </button>
         </div>
       </div>
@@ -320,6 +338,8 @@ export function App() {
       <StatusBar />
       <Palette />
       <Menus />
+      <SketchWorkbenchModal />
+      <FixingsCatalogueModal />
     </div>
   );
 }

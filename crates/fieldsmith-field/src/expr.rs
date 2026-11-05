@@ -136,7 +136,9 @@ pub fn compile_node(doc: &Document, node: &Node) -> Expr {
             minor: *minor,
         }),
         NodeKind::Extrude { profile, height } => {
-            if profile.len() < 3 {
+            if profile.len() < 3
+                && !(profile.len() == 2 && profile.iter().any(|v| v.bulge != 0.0))
+            {
                 Expr::Empty
             } else {
                 let segs = (0..profile.len())
@@ -154,6 +156,30 @@ pub fn compile_node(doc: &Document, node: &Node) -> Expr {
                 Expr::Prim(Prim::Extrude {
                     segs,
                     half_h: height * 0.5,
+                })
+            }
+        }
+        NodeKind::Revolve { profile, angle } => {
+            if profile.len() < 3
+                && !(profile.len() == 2 && profile.iter().any(|v| v.bulge != 0.0))
+            {
+                Expr::Empty
+            } else {
+                let segs = (0..profile.len())
+                    .map(|i| {
+                        let a = profile[i];
+                        let b = profile[(i + 1) % profile.len()];
+                        ArcSeg {
+                            a: [a.x, a.y],
+                            b: [b.x, b.y],
+                            bulge: a.bulge,
+                        }
+                    })
+                    .filter(|s| s.a != s.b)
+                    .collect();
+                Expr::Prim(Prim::Revolve {
+                    segs,
+                    angle_deg: angle.clamp(1.0, 360.0),
                 })
             }
         }

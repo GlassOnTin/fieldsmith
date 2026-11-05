@@ -37,6 +37,10 @@ pub enum Prim {
         segs: Vec<ArcSeg>,
         half_h: f64,
     },
+    Revolve {
+        segs: Vec<ArcSeg>,
+        angle_deg: f64,
+    },
 }
 
 #[inline]
@@ -154,6 +158,45 @@ pub fn eval_prim(prim: &Prim, p: V3) -> D {
         Prim::Extrude { segs, half_h } => {
             let (s, g2) = profile_sd(segs, [p[0], p[1]]);
             extrude_combine(s, g2, p[2].abs() - half_h, sgn(p[2]))
+        }
+        Prim::Revolve { segs, angle_deg } => {
+            let rl = (p[0] * p[0] + p[1] * p[1]).sqrt();
+            let u = if rl > 1e-12 {
+                [p[0] / rl, p[1] / rl]
+            } else {
+                [1.0, 0.0]
+            };
+            let (s, g2) = profile_sd(segs, [rl, p[2]]);
+            let g_rev = [g2[0] * u[0], g2[0] * u[1], g2[1]];
+            if *angle_deg >= 359.999 {
+                D::new(s, g_rev)
+            } else {
+                let half_a = (angle_deg.clamp(1.0, 360.0) * 0.5).to_radians();
+                let sa = half_a.sin();
+                let ca = half_a.cos();
+                let sy = sgn(p[1]);
+                let w_theta = -p[0] * sa + p[1].abs() * ca;
+                let g_theta = [-sa, sy * ca, 0.0];
+                let ox = s.max(0.0);
+                let oy = w_theta.max(0.0);
+                let ol = (ox * ox + oy * oy).sqrt();
+                if ol > 0.0 {
+                    let cx = ox / ol;
+                    let cy = oy / ol;
+                    D::new(
+                        ol,
+                        [
+                            cx * g_rev[0] + cy * g_theta[0],
+                            cx * g_rev[1] + cy * g_theta[1],
+                            cx * g_rev[2],
+                        ],
+                    )
+                } else if s > w_theta {
+                    D::new(s, g_rev)
+                } else {
+                    D::new(w_theta, g_theta)
+                }
+            }
         }
     }
 }
@@ -285,6 +328,20 @@ pub fn face_carrier(prim: &Prim, p: V3, face: Face) -> Option<f64> {
             Face::Bottom => Some(-(p[2] + half_h)),
             _ => None,
         },
+        Prim::Revolve { segs, .. } => {
+            let rl = (p[0] * p[0] + p[1] * p[1]).sqrt();
+            let ( mut z_lo, mut z_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+            for s in segs {
+                z_lo = z_lo.min(s.a[1]).min(s.b[1]);
+                z_hi = z_hi.max(s.a[1]).max(s.b[1]);
+            }
+            match face {
+                Face::Side => Some(profile_sd(segs, [rl, p[2]]).0),
+                Face::Top => Some(p[2] - z_hi),
+                Face::Bottom => Some(z_lo - p[2]),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -336,6 +393,19 @@ pub fn classify_face(prim: &Prim, p: V3) -> Face {
                 Face::Bottom
             }
         }
+        Prim::Revolve { segs, .. } => {
+            let rl = (p[0] * p[0] + p[1] * p[1]).sqrt();
+            let (_, g2) = profile_sd(segs, [rl, p[2]]);
+            if g2[1].abs() > g2[0].abs() * 1.1 {
+                if g2[1] >= 0.0 {
+                    Face::Top
+                } else {
+                    Face::Bottom
+                }
+            } else {
+                Face::Side
+            }
+        }
         _ => Face::All,
     }
 }
@@ -344,7 +414,9 @@ pub fn classify_face(prim: &Prim, p: V3) -> Face {
 pub fn faces_of(prim: &Prim) -> &'static [Face] {
     match prim {
         Prim::Box { .. } => &[Face::Px, Face::Nx, Face::Py, Face::Ny, Face::Pz, Face::Nz],
-        Prim::Cylinder { .. } | Prim::Extrude { .. } => &[Face::Side, Face::Top, Face::Bottom],
+        Prim::Cylinder { .. } | Prim::Extrude { .. } | Prim::Revolve { .. } => {
+            &[Face::Side, Face::Top, Face::Bottom]
+        }
         _ => &[],
     }
 }
@@ -383,6 +455,25 @@ pub fn prim_bounds(prim: &Prim) -> (V3, V3) {
                 }
             }
             ([lo[0], lo[1], -half_h], [hi[0], hi[1], *half_h])
+        }
+        Prim::Revolve { segs, .. } => {
+            let mut r_max = 0.0_f64;
+            let mut z_lo = f64::INFINITY;
+            let mut z_hi = f64::NEG_INFINITY;
+            for s in segs {
+                let mut pts = vec![s.a, s.b];
+                if s.bulge != 0.0 {
+                    let (c, r, _, _) = arc_geom(s);
+                    pts.push([c[0] - r, c[1] - r]);
+                    pts.push([c[0] + r, c[1] + r]);
+                }
+                for q in pts {
+                    r_max = r_max.max(q[0].abs());
+                    z_lo = z_lo.min(q[1]);
+                    z_hi = z_hi.max(q[1]);
+                }
+            }
+            ([-r_max, -r_max, z_lo], [r_max, r_max, z_hi])
         }
     }
 }

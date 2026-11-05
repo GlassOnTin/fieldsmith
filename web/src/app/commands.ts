@@ -10,6 +10,8 @@ import type { ShapeType } from '../doc/ops';
 import { pruneConsumers } from '../doc/param';
 import { analysis } from './analysis';
 import { ui } from './ui';
+import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
+import { openFixingsCatalogueModal } from './FixingsModal';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
 import bracketThermalFsm from '../../../examples/bracket-thermal.fsm?raw';
 import boxCylFsm from '../../../examples/box-minus-cylinder.fsm?raw';
@@ -386,6 +388,13 @@ export function commands(): Command[] {
     { id: 'edit.deselect', group: 'Edit', label: 'Clear selection', keys: 'Esc', enabled: () => !!store.selection, run: () => store.select(null) },
     ...SHAPE_TYPES.map((s) => ({ id: `add.${s.type}`, group: 'Add', label: `Add ${s.label.toLowerCase()}`, keys: s.key ? `Shift ${s.key}` : undefined, run: () => void addShape(s.type) })),
     ...(['box', 'cylinder'] as const).map((t) => ({ id: `add.cut.${t}`, group: 'Add', label: `Cut with ${t}`, run: () => void addShape(t, { op: 'subtract' }) })),
+    ...FIXINGS_CATALOGUE.map((f) => ({
+      id: `add.fixing.${f.id}`,
+      group: 'Add',
+      label: `Add ${f.shortLabel} (attach to object & surface)…`,
+      keys: f.isoStandard.split('/')[0].trim(),
+      run: () => openFixingsCatalogueModal(f.id),
+    })),
     { id: 'view.fit', group: 'View', label: 'Fit model in view', keys: 'F', run: () => viewApi.fit(true) },
     {
       id: 'view.toggleTree',
@@ -423,12 +432,15 @@ export function commands(): Command[] {
           const anyOpen = ui.treeOpen || ui.inspOpen;
           ui.set('treeOpen', false);
           ui.set('inspOpen', false);
-          ui.set('vpHudCollapsed', !anyOpen ? !ui.vpHudCollapsed : true);
+          const nextCollapsed = !anyOpen ? !(ui.vpHudCollapsed || ui.panelMinimized) : true;
+          ui.set('vpHudCollapsed', nextCollapsed);
+          ui.set('panelMinimized', nextCollapsed);
         } else {
           const bothCollapsed = ui.treeCollapsed && ui.inspCollapsed;
           ui.set('treeCollapsed', !bothCollapsed);
           ui.set('inspCollapsed', !bothCollapsed);
           ui.set('vpHudCollapsed', !bothCollapsed);
+          ui.set('panelMinimized', !bothCollapsed);
         }
       },
     },

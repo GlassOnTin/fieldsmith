@@ -17,6 +17,7 @@ import { inspectors, NameField } from './Inspector';
 import { RenameInput, treeSections } from './Tree';
 import { NumberInput, NumRow, VecRow, Seg } from './fields';
 import {
+  detectCoupledPhysicsRegime,
   evaluateDocumentFieldEquations,
   upsertLetParam,
 } from '../doc/continuum';
@@ -734,52 +735,152 @@ function SetupTree() {
 }
 treeSections.push(SetupTree);
 
+function ensureDefaultRegion(d: Document): string | null {
+  const existing = selectedRegion(d) ?? d.regions[0]?.id;
+  if (existing) return existing;
+  let firstNode: Node | null = null;
+  walk(d.root, (n) => {
+    if (!firstNode && n.kind.type !== 'group' && !n.suppressed && n.op === 'add') {
+      firstNode = n;
+    }
+  });
+  if (!firstNode) return null;
+  const node = firstNode as Node;
+  const face: Face =
+    node.kind.type === 'box'
+      ? 'pz'
+      : node.kind.type === 'cylinder' || node.kind.type === 'extrude' || node.kind.type === 'capsule'
+        ? 'top'
+        : 'all';
+  const rid = freshId(d, 'region');
+  d.regions.push({ id: rid, selectors: [{ shape: node.id, face }] });
+  return rid;
+}
+
 function addMultiphysicsPresetBc(
   preset: 'vft_pull' | 'em_lorentz' | 'optical_beam' | 'combustor_spray',
 ) {
+  let selAfter: { kind: 'load' | 'temperature' | 'heatflux'; id: string } | null = null;
   store.transact(`Add ${preset} multiphysics BC`, (d) => {
-    const rid = selectedRegion(d) ?? d.regions[0]?.id;
+    const rid = ensureDefaultRegion(d);
+    const regime = detectCoupledPhysicsRegime(d);
+
     if (preset === 'vft_pull') {
-      upsertLetParam(d, 'h_sill', 65);
       upsertLetParam(d, 'u_pull', 0.16);
-      upsertLetParam(d, 'top_roll_cant', 0);
-      if (rid && !d.temperatures.some((t) => t.id === 'spout_hot')) {
-        d.temperatures.push({
-          id: freshId(d, 'spout_hot'),
-          region: rid,
-          celsius: 1050,
-          case: 'Float Bath Thermal',
-        });
+      if (regime === 'pilkington_uk5_float_bath') {
+        upsertLetParam(d, 'h_sill', 65);
+        upsertLetParam(d, 'top_roll_cant', 0);
+        if (rid && !d.temperatures.some((t) => t.id === 'spout_hot')) {
+          const id = freshId(d, 'spout_hot');
+          d.temperatures.push({
+            id,
+            region: rid,
+            celsius: 1050,
+            case: 'Float Bath Thermal',
+          });
+          selAfter = { kind: 'temperature', id };
+        }
+      } else if (rid) {
+        if (!d.loads.some((l) => l.id.includes('viscous_pull'))) {
+          const id = freshId(d, 'viscous_pull');
+          d.loads.push({
+            id,
+            region: rid,
+            case: 'Viscous Pull & Creep',
+            kind: { type: 'force', vector: [120, 0, 0] },
+          });
+          selAfter = { kind: 'load', id };
+        }
+        if (!d.temperatures.some((t) => t.id.includes('melt_hot'))) {
+          d.temperatures.push({
+            id: freshId(d, 'melt_hot'),
+            region: rid,
+            celsius: 650,
+            case: 'Viscous Pull & Creep',
+          });
+        }
       }
     } else if (preset === 'em_lorentz') {
-      upsertLetParam(d, 'i_motor', 260);
-      upsertLetParam(d, 'p_h2', 4.2);
-      upsertLetParam(d, 'q_beam', 34);
+      if (regime === 'pilkington_uk5_float_bath') {
+        upsertLetParam(d, 'i_motor', 260);
+        upsertLetParam(d, 'p_h2', 4.2);
+        upsertLetParam(d, 'q_beam', 34);
+      } else {
+        upsertLetParam(d, 'i_current', 250);
+        upsertLetParam(d, 'b_field', 0.8);
+      }
+      if (rid) {
+        if (!d.loads.some((l) => l.id.includes('lorentz_force'))) {
+          const id = freshId(d, 'lorentz_force');
+          d.loads.push({
+            id,
+            region: rid,
+            case: 'EM Lorentz & Joule',
+            kind: { type: 'pressure', mpa: 1.5 },
+          });
+          selAfter = { kind: 'load', id };
+        }
+        if (!d.heat_fluxes.some((f) => f.id.includes('joule_heating'))) {
+          d.heat_fluxes.push({
+            id: freshId(d, 'joule_heating'),
+            region: rid,
+            q: 0.12,
+            case: 'EM Lorentz & Joule',
+          });
+        }
+      }
     } else if (preset === 'optical_beam') {
-      upsertLetParam(d, 'i_solar', 1000);
+      if (regime === 'solar_candle_ignition') {
+        upsertLetParam(d, 'i_solar', 1000);
+      } else {
+        upsertLetParam(d, 'i_beam', 1000);
+      }
       upsertLetParam(d, 'f_lens', 60);
       upsertLetParam(d, 'd_lens', 44);
-      if (rid && !d.heat_fluxes.some((f) => f.id.includes('solar'))) {
+      if (rid && !d.heat_fluxes.some((f) => f.id.includes('optical') || f.id.includes('solar'))) {
+        const id = freshId(
+          d,
+          regime === 'solar_candle_ignition' ? 'solar_caustic_flux' : 'optical_beam_flux',
+        );
         d.heat_fluxes.push({
-          id: freshId(d, 'solar_caustic_flux'),
+          id,
           region: rid,
           q: 0.285,
-          case: '1. Solar Focal Heating & Buoyant Plume',
+          case:
+            regime === 'solar_candle_ignition'
+              ? '1. Solar Focal Heating & Buoyant Plume'
+              : 'Optical Radiative Heating',
         });
+        selAfter = { kind: 'heatflux', id };
       }
     } else if (preset === 'combustor_spray') {
       upsertLetParam(d, 'swirl_number', 0.72);
-      upsertLetParam(d, 'm_dot_fuel', 1.85);
-      if (rid && !d.temperatures.some((t) => t.id.includes('flame'))) {
+      if (regime === 'annular_swirl_spray_combustor') {
+        upsertLetParam(d, 'm_dot_fuel', 1.85);
+      } else {
+        upsertLetParam(d, 'm_dot_jet', 1.85);
+      }
+      if (rid && !d.temperatures.some((t) => t.id.includes('flame') || t.id.includes('thermal_jet'))) {
+        const id = freshId(
+          d,
+          regime === 'annular_swirl_spray_combustor' ? 'flame_liner_hot' : 'thermal_jet_hot',
+        );
         d.temperatures.push({
-          id: freshId(d, 'flame_liner_hot'),
+          id,
           region: rid,
           celsius: 820,
-          case: '1. Combustor Thermal & Pressure',
+          case:
+            regime === 'annular_swirl_spray_combustor'
+              ? '1. Combustor Thermal & Pressure'
+              : 'Thermal Jet & Swirl Flow',
         });
+        selAfter = { kind: 'temperature', id };
       }
     }
   });
+  if (selAfter) {
+    store.select(selAfter);
+  }
 }
 
 function SetupMultiphysicsSection({ doc }: { doc: Document }) {
@@ -795,27 +896,27 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
           type="button"
           class="btn small"
           data-testid="add-mp-vft-pull"
-          title="Add Viscous Ribbon Pull Speed & Sill Depth BCs (activates VFT Glass Sheet + Tin Bath PDEs)"
+          title="Add Viscoelastic / VFT Creep Pull Traction & Thermal BC to selected region"
           onClick={() => addMultiphysicsPresetBc('vft_pull')}
           style={{ fontSize: '10px', padding: '4px 6px' }}
         >
-          + VFT Pull / Sill
+          + Viscous / Creep Pull
         </button>
         <button
           type="button"
           class="btn small"
           data-testid="add-mp-em-lorentz"
-          title="Add Linear Induction Motor Lorentz Current & H₂ Redox Cushion BCs"
+          title="Add Electromagnetic Lorentz Pressure (J × B) & Joule Heating BCs to selected region"
           onClick={() => addMultiphysicsPresetBc('em_lorentz')}
           style={{ fontSize: '10px', padding: '4px 6px' }}
         >
-          + EM Lorentz / H₂
+          + EM Lorentz Force
         </button>
         <button
           type="button"
           class="btn small"
           data-testid="add-mp-optical-beam"
-          title="Add Collimated Solar Beam Irradiance & Refractive Lens Caustic BC"
+          title="Add Collimated Optical Ray Beam Irradiance & Focal Heat Flux BC to selected region"
           onClick={() => addMultiphysicsPresetBc('optical_beam')}
           style={{ fontSize: '10px', padding: '4px 6px' }}
         >
@@ -825,11 +926,11 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
           type="button"
           class="btn small"
           data-testid="add-mp-combustor-spray"
-          title="Add Swirl Spray / Arrhenius Combustion Source BC"
+          title="Add Swirl / Reactive Thermal Jet BC to selected region"
           onClick={() => addMultiphysicsPresetBc('combustor_spray')}
           style={{ fontSize: '10px', padding: '4px 6px' }}
         >
-          + Swirl / Flame BC
+          + Swirl / Thermal Jet
         </button>
       </div>
       {(doc.lets?.length ?? 0) > 0 && (

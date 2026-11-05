@@ -20,15 +20,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::{b64, export, load_doc, missing_grids, question, respond};
 use fieldsmith_core::fsmz;
+use fieldsmith_doc::fixings::{
+    insert_fixing_into_document, FixingInsertRequest, FixingKind,
+};
+use fieldsmith_doc::sketch::{
+    apply_sketch_feature_to_document, preset_sketch_template, solve_sketch as solve_sketch_doc,
+    ParametricSketch, SketchFeatureRequest,
+};
 use fieldsmith_doc::{
     canonical_color, fsm, param, Convection, Document, Family, FillMode, HeatFlux, Let, Load,
-    LoadKind, Node, NodeKind, Op, Region, Selector, Support, Temperature, Transform,
+    LoadKind, Node, NodeKind, Op, ProfileVertex, Region, Selector, Support, Temperature, Transform,
 };
 use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
 use fieldsmith_solve::coupled_system::{
     CoupledEngineeringSystem, DesignParameter, EngineConfig, MonolithicSystemEngine, NamedScenario,
     ObjectiveDescriptor, ObjectiveKind, RegenerativeCooledNozzleSystem, SystemAnalysisResult,
 };
+use fieldsmith_solve::fixings::FastenerFixingSystem;
 use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -265,6 +273,9 @@ impl Server {
             "inspect" => self.inspect(args),
             "list_shapes" => self.list_shapes(args),
             "upsert_shape" | "add_primitive" => self.upsert_shape(args),
+            "insert_fixing" => self.insert_fixing(args),
+            "solve_sketch" => self.solve_sketch(args),
+            "apply_sketch_feature" => self.apply_sketch_feature(args),
             "delete_entity" => self.delete_entity(args),
             "add_region" => self.add_region(args),
             "add_support" => self.add_support(args),
@@ -292,6 +303,8 @@ impl Server {
                     | "new_document"
                     | "upsert_shape"
                     | "add_primitive"
+                    | "insert_fixing"
+                    | "apply_sketch_feature"
                     | "delete_entity"
                     | "add_region"
                     | "add_support"
@@ -950,9 +963,19 @@ impl Server {
                 let minor = number_field("minor", &args)?;
                 NodeKind::Torus { major, minor }
             }
+            "extrude" => {
+                let height = number_field("height", &args)?;
+                let profile = parse_profile_vertices(args.get("profile"))?;
+                NodeKind::Extrude { profile, height }
+            }
+            "revolve" => {
+                let angle = args.get("angle").and_then(Value::as_f64).unwrap_or(360.0);
+                let profile = parse_profile_vertices(args.get("profile"))?;
+                NodeKind::Revolve { profile, angle }
+            }
             other => {
                 return Err(format!(
-                    "upsert_shape: unknown shape kind {other:?} (expected box|cylinder|sphere|capsule|torus)"
+                    "upsert_shape: unknown shape kind {other:?} (expected box|cylinder|sphere|capsule|torus|extrude|revolve)"
                 ))
             }
         };
@@ -981,6 +1004,145 @@ impl Server {
             "action": action,
             "shapes": d.root.len(),
             "problems": problems,
+        }))
+    }
+
+    /// Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`,
+    /// `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in catalogue into
+    /// the open document, automatically drilling/tapping/counterboring the fixed host object
+    /// and computing the minimal (`T_min`) and maximal (`T_max`) torque envelope.
+    fn insert_fixing(&mut self, args: Value) -> Result<Value, String> {
+        let kind_str = args
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("self_tapping_screw");
+        let kind = FixingKind::parse(kind_str).ok_or_else(|| {
+            format!(
+                "insert_fixing: unknown kind {kind_str:?} (expected self_tapping_screw|hex_head_screw|hex_cap_bolt|washer|hex_nut|nyloc_nut|hook_clip_box)"
+            )
+        })?;
+        let req = FixingInsertRequest {
+            kind,
+            size: args
+                .get("size")
+                .and_then(Value::as_str)
+                .unwrap_or("M4")
+                .to_string(),
+            engagement_mm: args
+                .get("engagement_mm")
+                .and_then(Value::as_f64)
+                .unwrap_or(8.0),
+            at: args
+                .get("at")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            id_prefix: args
+                .get("id_prefix")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            host_id: args
+                .get("host_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            fastener_material: args
+                .get("fastener_material")
+                .and_then(Value::as_str)
+                .unwrap_or("ti64")
+                .to_string(),
+            substrate_material: args
+                .get("substrate_material")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            vibration_g: args
+                .get("vibration_g")
+                .and_then(Value::as_f64)
+                .unwrap_or(12.0),
+            payload_mass_kg: args
+                .get("payload_mass_kg")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.15),
+        };
+        if self.doc.is_none() {
+            self.doc = Some(Document::default());
+        }
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let summary = insert_fixing_into_document(d, &req);
+        let problems = d.validate();
+        Ok(json!({
+            "fixing": summary,
+            "shapes": d.root.len(),
+            "regions": d.regions.len(),
+            "loads": d.loads.len(),
+            "problems": problems,
+        }))
+    }
+
+    /// Solve a 2D parametric sketch (points, segments, circles, 12 geometric + 6 dimensional
+    /// constraints, or declarative macros) using damped Levenberg–Marquardt + homotopy continuation
+    /// and column-pivoted QR rank decomposition. Returns the solved `(x, y, bulge)` outer & hole
+    /// loops, exact DOF count, per-point freedom status, and redundant/conflicting constraint IDs.
+    fn solve_sketch(&mut self, args: Value) -> Result<Value, String> {
+        let mut sk: ParametricSketch = if let Some(preset_name) =
+            args.get("preset").and_then(Value::as_str)
+        {
+            let mut p = preset_sketch_template(preset_name)?;
+            if let Some(sub) = args.get("sketch") {
+                let extra: ParametricSketch = serde_json::from_value(sub.clone())
+                    .map_err(|e| format!("solve_sketch: sketch: {e}"))?;
+                for c in extra.constraints {
+                    if let Some(ex) = p.constraints.iter_mut().find(|ec| ec.id == c.id) {
+                        *ex = c;
+                    } else {
+                        p.constraints.push(c);
+                    }
+                }
+            }
+            p
+        } else if let Some(sub) = args.get("sketch") {
+            serde_json::from_value(sub.clone())
+                .map_err(|e| format!("solve_sketch: sketch: {e}"))?
+        } else {
+            serde_json::from_value(args.clone())
+                .map_err(|e| format!("solve_sketch: {e}"))?
+        };
+
+        let mut lets: Vec<(String, f64)> = self
+            .doc
+            .as_ref()
+            .map(|d| d.lets.iter().map(|l| (l.name.clone(), l.value)).collect())
+            .unwrap_or_default();
+        if let Some(lets_obj) = args.get("lets").and_then(Value::as_object) {
+            for (k, v) in lets_obj {
+                if let Some(num) = v.as_f64() {
+                    if let Some(ex) = lets.iter_mut().find(|(n, _)| n == k) {
+                        ex.1 = num;
+                    } else {
+                        lets.push((k.clone(), num));
+                    }
+                }
+            }
+        }
+
+        let report = solve_sketch_doc(&mut sk, &lets)?;
+        serde_json::to_value(report).map_err(|e| e.to_string())
+    }
+
+    /// Solve a 2D parametric sketch on a datum plane (`"xy"`, `"xz"`, `"yz"`) or attached directly
+    /// to a 3D shape face (`on: "<shape_id>.<face>"`) and compile it into a 3D feature
+    /// (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.
+    fn apply_sketch_feature(&mut self, args: Value) -> Result<Value, String> {
+        let req: SketchFeatureRequest = serde_json::from_value(args)
+            .map_err(|e| format!("apply_sketch_feature: {e}"))?;
+        if self.doc.is_none() {
+            self.doc = Some(Document::default());
+        }
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let summary = apply_sketch_feature_to_document(d, &req)?;
+        let problems = d.validate();
+        Ok(json!({
+            "feature": summary,
+            "shapes": d.root.len(),
+            "problems": problems,
+            "fsm": fsm::print(d),
         }))
     }
 
@@ -1066,6 +1228,24 @@ impl Server {
         ];
 
         let candle_scenarios = candle_sys.named_scenarios();
+        let fixing_sys = FastenerFixingSystem::new();
+        let fixing_scenarios = vec![
+            NamedScenario {
+                name: "A. Plastic Boss Setting (M4 Self-Tapping in PETG, 1.45 N·m)".to_string(),
+                description: "M4 Plastite self-tapping screw in ⌀10 mm PETG boss (E = 1.65 GPa, 12 g vibe) — governed by viscoplastic creep & boss hoop stress".to_string(),
+                design_p: vec![1.45, 4.0, 0.70, 8.0, 10.0, 1.65, 12.0, -20.0],
+            },
+            NamedScenario {
+                name: "B. Metal Housing Setting (M4 in AlSi10Mg LPBF, 3.20 N·m)".to_string(),
+                description: "M4 screw in AlSi10Mg housing (E = 70 GPa, 18 g vibe) — higher T_max governed by thread shear & core tension-torsion yield".to_string(),
+                design_p: vec![3.20, 4.0, 0.70, 8.0, 12.0, 70.0, 18.0, -40.0],
+            },
+            NamedScenario {
+                name: "C. JWST Cryo-Optics Setting (M5 Ti64 in SiC Bench @ 38 K, 28 g Launch)".to_string(),
+                description: "JWST-class M5 Ti-6Al-4V fastener on SiC optical bench (E = 410 GPa, ΔT = −255 °C cryo cooldown, 28 g Ariane 5 launch)".to_string(),
+                design_p: vec![4.80, 5.0, 0.80, 12.0, 15.0, 410.0, 28.0, -255.0],
+            },
+        ];
 
         Ok(json!({
             "systems": [
@@ -1101,6 +1281,17 @@ impl Server {
                     "epistemic_parameters": candle_sys.epistemic_parameters(),
                     "objectives": candle_sys.objective_descriptors(),
                     "scenarios": candle_scenarios,
+                },
+                {
+                    "system_id": fixing_sys.system_id(),
+                    "system_title": fixing_sys.system_title(),
+                    "industry_sector": fixing_sys.industry_sector(),
+                    "num_dofs": fixing_sys.num_dofs(),
+                    "fields": fixing_sys.field_descriptors(),
+                    "design_parameters": fixing_sys.design_parameters(),
+                    "epistemic_parameters": fixing_sys.epistemic_parameters(),
+                    "objectives": fixing_sys.objective_descriptors(),
+                    "scenarios": fixing_scenarios,
                 }
             ]
         }))
@@ -1226,6 +1417,36 @@ impl Server {
                 "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
                 "fsm_3d": fsm_3d,
             }))
+        } else if system_id == "jwst_fastener_fixing_envelope_v1" {
+            let sys = FastenerFixingSystem::new();
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig::default();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let fsm_3d = sys.build_3d_fsm(&p);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
         } else {
             Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
         }
@@ -1273,6 +1494,10 @@ impl Server {
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else if system_id == "solar_candle_ignition_v1" {
             let sys = SolarCandleIgnitionSystem;
+            let cfg = EngineConfig::default();
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else if system_id == "jwst_fastener_fixing_envelope_v1" {
+            let sys = FastenerFixingSystem::new();
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {
@@ -1471,6 +1696,41 @@ fn case_or_default(args: &Value, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn parse_profile_vertices(val: Option<&Value>) -> Result<Vec<ProfileVertex>, String> {
+    let arr = val
+        .and_then(Value::as_array)
+        .ok_or_else(|| "profile: expected an array of [x, y] or {x, y, bulge} vertices".to_string())?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        if let Some(coords) = item.as_array() {
+            if coords.len() < 2 {
+                return Err("profile vertex array must have at least [x, y]".into());
+            }
+            let x = coords[0].as_f64().ok_or("profile vertex x must be a number")?;
+            let y = coords[1].as_f64().ok_or("profile vertex y must be a number")?;
+            let bulge = coords.get(2).and_then(Value::as_f64).unwrap_or(0.0);
+            out.push(ProfileVertex { x, y, bulge });
+        } else if let Some(obj) = item.as_object() {
+            let x = obj
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or("profile vertex missing numeric 'x'")?;
+            let y = obj
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or("profile vertex missing numeric 'y'")?;
+            let bulge = obj.get("bulge").and_then(Value::as_f64).unwrap_or(0.0);
+            out.push(ProfileVertex { x, y, bulge });
+        } else {
+            return Err("profile vertex must be [x, y, bulge?] or {x, y, bulge?}".into());
+        }
+    }
+    if out.len() < 2 {
+        return Err("profile requires at least 2 vertices".into());
+    }
+    Ok(out)
+}
+
 /// The tool catalogue, parsed once. Named exactly; the schemas state the typed shapes
 /// the handlers deserialize into.
 fn tools_catalog() -> &'static Value {
@@ -1491,7 +1751,10 @@ const TOOLS_JSON: &str = r#"[
  {"name":"open","description":"Open the session's document (.fsm text or base64 .fsmz). Exactly one of doc/docz.","inputSchema":{"type":"object","properties":{"doc":{"type":"string"},"docz":{"type":"string"}}}},
  {"name":"inspect","description":"The open document's analysis setup: regions, supports, loads, temperatures, material, fill, solve settings, validate problems, missing mesh grids.","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"list_shapes","description":"Inspect the open document's 3D CSG/SDF shape tree (`shapes`), `lets` variables, and `consumed` expressions.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"upsert_shape","description":"Create or update a 3D CAD primitive shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
+ {"name":"upsert_shape","description":"Create or update a 3D CAD primitive or profile-swept shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`, `extrude`, `revolve`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus","extrude","revolve"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"angle":{"type":"number"},"profile":{"type":"array","items":{"type":"object"}},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
+ {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in geometry catalogue, automatically drilling/tapping/counterboring the fixed object and calculating minimal (`T_min`) and maximal (`T_max`) torque.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
+ {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
+ {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`) and compile it into a 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
  {"name":"delete_entity","description":"Delete a shape, region, support, load, or temperature by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -1505,6 +1768,6 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
 ]"#;

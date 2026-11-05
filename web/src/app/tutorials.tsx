@@ -16,6 +16,8 @@ import { EXAMPLES, extraCommands, newDocument, openFile, openText, viewApi } fro
 import { viewOverlays, statusItems } from './App';
 import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { apiUrl, ui, useApp } from './ui';
+import { FixingTorqueAndWeibullWorkbench } from './FixingsModal';
+import { SketchWorkbench } from './SketchWorkbench';
 
 export interface TutorialStep {
   title: string;
@@ -1403,6 +1405,324 @@ solve tref=22
       },
     ],
   },
+  {
+    id: 'T14',
+    code: 'T14',
+    title:
+      'Engineering Fixings: Minimal & Maximal Torque, Weibull/Creep Spreadsheet & JWST Qualification',
+    subtitle:
+      'Built-in catalogue of self-tapping screws, hex head screws, socket cap bolts, washers, nuts, Nyloc nuts, and cantilever hook-clip plastic boxes — with automatic host tapping, Motosh sliding-surface torque T_min, and material-adaptive T_max (Plastic Creep vs Metal Yield vs JWST Weibull Fracture + 3K Woven CFRP).',
+    level: 'Flagship Multi-Physics',
+    verificationBadge:
+      'Verified by V57 (Motosh Sliding Surface + Weibull Regression R² > 0.999 + 72-DOF Adjoint)',
+    starterFsmName: 't14-self-tapping-fixing-torque.fsm',
+    starterFsm: `fieldsmith 1
+name "T14 Self-Tapping Screw & Hook-Clip Fixing Qualification"
+material petg
+
+let screw_d = 4.0
+let screw_pitch = 0.70
+let pilot_r = 1.60
+let boss_r = 5.0
+let eng_len = 8.0
+let torque_nm = 1.38
+let preload_n = 795.0
+
+box instrument_flange size=(36, 26, 6) at=(0, 0, -3) round=1.2
+cylinder receiving_boss r=boss_r h=eng_len at=(0, 0, 2) round=0.4 blend=0.6
+cylinder seat_spotface r=4.5 h=0.8 at=(0, 0, 5.8) subtract
+cylinder self_tap_bore r=pilot_r h=eng_len at=(0, 0, 2.2) subtract
+torus thread_bite_ring major=1.80 minor=0.35 at=(0, 0, 3.2) subtract
+cylinder screw_head r=3.5 h=3.8 at=(0, 0, 7.8) round=0.35
+material ti64 on screw_head
+color "#94A3B8" on screw_head
+
+box snap_catch_pocket size=(3.0, 6.8, 3.0) at=(14.5, 0, -1.2) round=0.2 subtract
+box hook_clip_arm size=(1.8, 6.0, 10.0) at=(16.5, 0, 2.0) round=0.35 blend=0.5
+color "#38BDF8" on hook_clip_arm
+box hook_clip_tip size=(2.8, 6.0, 2.4) at=(15.9, 0, 6.2) round=0.3 blend=0.25
+color "#0284C7" on hook_clip_tip
+
+region base_mount = instrument_flange.nz
+region screw_clamp_seat = screw_head.top + seat_spotface.bottom + self_tap_bore.side
+support mount_fix base_mount fixed=xyz
+load screw_preload screw_clamp_seat preload=preload_n
+`,
+    userSteps: [
+      {
+        title: '1. Insert Engineering Fixings & Auto-Tap the Fixed Object (Shape 1)',
+        lens: 'shape',
+        instruction:
+          'In the Shapes tree on the left, click "🔩 Fixings…" (or click + and choose any fixing). Browse the 7 built-in engineering fixings: Self-Tapping Screw, Hex Head Screw (ISO 4017), Hex Cap Bolt (ISO 4762), Structural Washer, Hex Nut, Nyloc Lock Nut (with PA12 insert), and Cantilever Hook-Clip Plastic Box Snap-Fit. Clicking Insert automatically cuts the pilot bore, spotface/counterbore, thread-bite rings, hex nut trap, or snap-fit catch slot into the host object and configures the clamping preload.',
+        expected:
+          'The host housing automatically gains subtracted pilot/tapped holes and counterbores alongside the 3D fixing hardware and let parameters.',
+      },
+      {
+        title: '2. Minimal Torque (T_min) from Sliding-Surface Friction & Vibration/Knock',
+        lens: 'shape',
+        instruction:
+          'In the interactive Fixing Torque Envelope Lab above, adjust the Vibration / Knock RMS g-slider (1–45 g) and Thread Friction μ_t slider. Observe how Minimal Torque T_min is computed from the helical inclined-plane sliding surface (Motosh lead P/(2π) + flank friction μ_t r_t / cos α_n + underhead friction μ_h r_h) plus self-tapping thread-forming torque T_form to maintain Junker anti-slip clamping after viscoplastic boss creep η_creep and thermal ΔT.',
+        expected:
+          'Raising vibration from 12 g to 28 g increases the required residual clamp force F_clamp,min and raises T_min accordingly.',
+      },
+      {
+        title: '3. Compare Plastic Boss (PETG/PA12) vs Metal Housing (AlSi10Mg) Maximal Torque (T_max)',
+        lens: 'setup',
+        instruction:
+          'Click "1. Plastic Boss (PETG/PA12)" and then "2. Metal Housing (AlSi10Mg)" in the workbench preset bar (or switch to 4. 3K Woven CFRP). Observe how Fieldsmith automatically selects the governing failure mode for the material regime: Viscoplastic Boss Hoop Creep / Radial Split in polymers (T_max ≈ 1.9 N·m), Internal Thread Shear / Core Tension–Torsion Yield in metals (T_max ≈ 4.6 N·m), or Tsai–Wu Interlaminar Peel in woven composites.',
+        expected:
+          'T_max and the Governing Failure Mode readout automatically adapt to the selected substrate material.',
+      },
+      {
+        title: '4. Fit Failure Distributions in the Interactive Empirical Coupon Spreadsheet',
+        lens: 'results',
+        instruction:
+          'In the Empirical Failure Sample Probability Spreadsheet table above, inspect or edit the coupon rows (Applied Torque T, Peak Principal Stress σ₁, and Observed Failure Probability P_f %) or click "+ Add Sample Row". The live linear regression fits the 2-parameter Weibull distribution (slope m, characteristic scale σ₀, torque scale T₀, and R²) and updates the SVG Weibull plot and T_max.',
+        expected:
+          'Editing any coupon cell or switching target reliability P_f (10⁻² down to 10⁻⁶) immediately updates the Weibull regression line and allowable torque T_max.',
+      },
+      {
+        title: '5. A-Priori JWST Cryogenic Spaceflight Qualification (38 K, P_f ≤ 10⁻⁶)',
+        lens: 'systems',
+        instruction:
+          'Click "3. JWST Cryo-Optics (38 K, P_f ≤ 10⁻⁶)" to simulate an M5 Ti-6Al-4V bolt on a sintered SiC optical bench cooled by ΔT = −255 °C to 38 K under 28 g Ariane 5 launch vibration, then click "🔄 Sync Torque & Preload to 3D .fsm" and inspect the 3D P2 stress field in Results (3) or the 72-DOF Adjoint solver in Coupled (5).',
+        expected:
+          'The 1-in-10⁶ Weibull principal-stress bound sets the safe cryogenic torque envelope and syncs the exact clamping preload into the 3D FEA model.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle:
+        'Chapter 14: Inclined-Plane Sliding-Surface Fastener Mechanics, Junker Vibration Slip, Viscoplastic Boss Creep & Weibull Fracture Qualification',
+      summary:
+        'Derives the complete a-priori and empirical mechanics of threaded fixings and snap-fit clips — linking helical sliding-surface tribology (Motosh / Kellermann–Klein + self-tapping thread-forming work) to Junker transverse vibration self-loosening, thick-wall Lamé boss hoop creep, VDI 2230 torsional-tensile bolt yield, Tsai–Wu woven composite peel, and 2-parameter Weibull principal-stress fracture statistics.',
+      sections: [
+        {
+          heading: '14.1 Helical Inclined-Plane Sliding-Surface Torque–Preload Relation (Motosh + Thread-Forming)',
+          equations: `T_install = F_preload · [ P / (2π)  +  (μ_t · r_t) / cos(α_n)  +  μ_h · r_h ]  +  T_form(d, P, L_eng, σ_y,sub)
+K_nut = (T_install − T_form) / (F_preload · d)`,
+          body: 'A screw thread is a fundamental engineering sliding surface: an inclined plane wrapped helically around pitch radius r_t = (d − 0.6495 P)/2 with lead angle β = arctan(P / (2π r_t)) and flank half-angle α_n (30° for ISO 60° metric threads; 15° for 30°-profile Plastite self-tapping screws). The applied screwdriver torque T_install partitions into useful axial clamping work F_preload · P/(2π), helical flank sliding friction, under-head/washer bearing friction, and irreversible plastic/elastic thread-forming torque T_form (or Nyloc prevailing torque T_prev).',
+        },
+        {
+          heading: '14.2 Minimal Torque (T_min): Junker Transverse Vibration Slip, Shock G-Load, Creep & Cryo ΔT',
+          equations: `F_clamp,min = SF_slip · (m_p · a_vib · g₀) / μ_joint  +  SF_shock · (m_p · a_shock · g₀) / (1 − Φ_k)
+ΔF_thermal  = (α_sub − α_screw) · ΔT · L_eng · (k_b · k_m) / (k_b + k_m)
+F_install,min = (F_clamp,min + max(0, −ΔF_thermal)) / η_creep(t, T)`,
+          body: 'Under transverse knock or harmonic vibration a_vib, Junker (1969) demonstrated that self-loosening begins the instant transverse shear force F_trans exceeds the clamped interface friction μ_joint · F_clamp, causing radial micro-slip across the thread flanks. To guarantee zero release over a mission duration t (up to a 10-year JWST L2 cryogenic mission), the initial installation preload F_install,min must exceed F_clamp,min after accounting for polymer viscoplastic stress relaxation η_creep(t) = 1 − C_cr ln(1 + t) and differential thermal contraction ΔF_thermal.',
+        },
+        {
+          heading: '14.3 Material-Adaptive Maximal Torque (T_max) & Empirical Weibull Spreadsheet Regression',
+          equations: `P_f(σ₁) = 1 − exp[ −(V_eff / V₀) · (σ₁ / σ₀)^m ]   ⇒   ln(−ln(1 − P_f)) = m · ln(σ₁) − m · ln(σ₀)
+σ_θ,Lamé = p_rad · (r_o² + r_i²) / (r_o² − r_i²),   σ_vM,bolt = √( (F/A_s)² + 3 · (16 T_th / (π d_s³))² ) ≤ 0.9 R_p0.2`,
+          body: 'Maximal torque T_max is governed by the lowest upper bound among five physical failure modes automatically selected by substrate regime: (1) 2-parameter Weibull principal-stress volume fracture for brittle ceramics/optics (SiC) and cold polymers; (2) thick-walled Lamé hoop stress and viscoplastic creep splitting in thermoplastic bosses (PETG, PA12, ABS); (3) cylindrical shear stripping of internal threads at major diameter d; (4) VDI 2230 combined axial tension + thread-torsion von Mises yield of the fastener core; and (5) Tsai–Wu interlaminar tensile/shear peel U_peel = √((σ_zz/S_z)² + (τ_rz/S_s)²) in anisotropic 3K woven CFRP laminates.',
+        },
+        {
+          heading: '14.4 Open Public Standards vs. First-Principles Rederivation (FED-STD-H28, NASA-STD-5020B, NIST §8.1.6.2 & NASA-HDBK-7005)',
+          equations: `(a) FED-STD-H28 §2B / ISO 898-1:   A_s = (π/4)·(d − 0.938194·P)²
+(b) 60° Fundamental Triangle H = (√3/2)·P:   d_s = (d₂ + d₃)/2 = d − (13√3 / 24)·P = d − 0.93819418·P
+(a) NASA-STD-5020B / MIL-HDBK-60:  T = K·d·F + T_prev   ⇔   (b) Motosh 3-Surface Wedge Integral
+(a) NASA-HDBK-7005 / Sopwith:      F_1 / F_avg = λ·coth(λ),   λ = L_eng / (1.05·d)`,
+          body: 'Whereas commercial standards such as ISO 898-1, ISO 4762, and VDI 2230 are paywalled, their exact governing tables and equations are publicly established in unencumbered US federal and space-agency standards: FED-STD-H28 §2B (metric 60° screw-thread stress areas), NASA-STD-5020B (spaceflight fastener torque–preload and locking criteria), NIST/SEMATECH e-Handbook §8.1.6.2 (Weibull extreme-value fracture regression with Bernard median ranks), and NASA-HDBK-7005 / CARES (2-parameter Weibull brittle ceramics + Sopwith hyperbolic first-thread load concentration). Fieldsmith evaluates both (a) the quick standard lookup rule and (b) the a-priori continuum/statistical rederivation side-by-side so engineers can apply the standard in one click or verify where empirical shortcuts diverge.',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: 'Step 1: Auto-Tap Host & Insert M4 Self-Tapping Screw via MCP (`insert_fixing`)',
+        description:
+          'Calls `insert_fixing` on the live workspace to automatically subtract the pilot bore, spotface, and thread-bite groove on the fixed object, add the Ti-6Al-4V screw head, and compute the [T_min, T_max] torque envelope.',
+        tool: 'insert_fixing',
+        arguments: {
+          kind: 'self_tapping_screw',
+          size: 'M4',
+          engagement_mm: 8.0,
+          substrate_material: 'petg',
+          fastener_material: 'ti64',
+          vibration_g: 14.0,
+        },
+      },
+      {
+        title: 'Step 2: Solve 72-DOF Monolithic Fastener PDE & Sparse Adjoint (`solve_coupled_system`)',
+        description:
+          'Solves `jwst_fastener_fixing_envelope_v1` (12 axial stations × 6 fields: Sopwith hyperbolic thread load concentration q_th(z), Lamé hoop stress σ_θ(z), root principal stress σ₁(z), viscoplastic creep, and Weibull hazard density) with exact Sparse Adjoint sensitivities dΦ/dp.',
+        tool: 'solve_coupled_system',
+        arguments: {
+          system_id: 'jwst_fastener_fixing_envelope_v1',
+          design_p: [1.45, 4.0, 0.7, 8.0, 10.0, 1.65, 12.0, -20.0],
+          sync_cad: true,
+        },
+      },
+      {
+        title: 'Step 3: Solve 3D P2 Tetrahedral FEA under Clamping Preload (`solve_study`)',
+        description:
+          'Runs the 3D quadratic (P2) finite-element solver on the auto-tapped boss assembly to verify peak von Mises and principal stress under the recommended clamping preload.',
+        tool: 'solve_study',
+        arguments: {
+          include_fine: false,
+        },
+      },
+    ],
+  },
+  {
+    id: 'T15',
+    code: 'T15',
+    title:
+      'Parametric 2D Sketching, Jacobian QR Constraint Solver & Surface-Attached 3D Feature Engine',
+    subtitle:
+      'Solve geometric & dimensional 2D sketch constraints via Damped Levenberg–Marquardt with homotopy continuation and column-pivoted QR rank diagnostics (DOF = N_vars − rank(J)), drag along the constraint nullspace, and project profiles onto any 3D face as Boss Extrudes, Pocket Cuts, or Revolves.',
+    level: 'Intermediate',
+    verificationBadge:
+      'Verified by V58 (LM + Homotopy + QR Rank DOF + Surface-Attached Extrude/Revolve + MCP Round-Trip)',
+    starterFsmName: 't15-parametric-sketch-bracket.fsm',
+    starterFsm: `fieldsmith 1
+name "T15 Parametric Sketch & Surface-Feature Bracket"
+material alsi10mg
+
+let base_w = 54.0
+let base_d = 36.0
+let base_h = 10.0
+let boss_h = 16.0
+let hole_r = 4.5
+let pull_n = 1200.0
+
+box base_block size=(base_w, base_d, base_h) at=(0, 0, 5) round=1.2
+extrude flange_boss profile=[(-22,-13),(22,-13),(22,13),(-22,13)] h=boss_h at=(0, 0, 18) blend=1.5
+cylinder flange_boss_hole_1 r=hole_r h=20 at=(-12, 0, 18) subtract
+cylinder flange_boss_hole_2 r=hole_r h=20 at=(12, 0, 18) subtract
+revolve spool_collar profile=[(6,-4),(11,-4),(11,-1.5),(8.5,-1.5),(8.5,1.5),(11,1.5),(11,4),(6,4)] angle=360 at=(0, 0, 29) blend=0.8
+
+region mount_bottom = base_block.nz
+region load_bore = flange_boss_hole_2.side
+support base_fix mount_bottom fixed=xyz
+load pin_pull load_bore force=(pull_n, 0, -450)
+`,
+    userSteps: [
+      {
+        title: '1. Inspect Color-Coded Degrees of Freedom (DOF = N_vars − rank(J))',
+        lens: 'shape',
+        instruction:
+          'In the embedded Parametric 2D Sketcher & Constraint Solver workbench above (or by clicking "✏️ Sketch…" in the Shapes tree), inspect the top-right status badge: "✓ Fully Constrained (0 DOF)" in green. Click the preset dropdown and select "Under-Constrained Four-Bar (2 DOF — Blue Drag Demo)". Notice how unconstrained vertices turn sky-blue with a "+1" or "+2" DOF badge computed directly from the column-pivoted Householder QR rank of the constraint Jacobian J.',
+        expected:
+          'Switching to the Under-Constrained preset changes the status badge to "2 DOF Remaining (Drag Blue Points)" and marks movable vertices in blue.',
+      },
+      {
+        title: '2. Drag Vertices Along the Constraint Nullspace & Test Smart Dimensioning (D)',
+        lens: 'shape',
+        instruction:
+          'While in the "Under-Constrained Four-Bar" preset, drag vertex p3 on the 2D canvas: the Damped Levenberg–Marquardt solver projects your cursor motion onto the Jacobian nullspace P_null = I − J⁺J so all existing Horizontal, Fixed, and Distance constraints remain satisfied in real time. Or click any dimension badge (e.g. "40 mm" or "let base_w") on the canvas to open the inline Smart Dimension popover and type a new millimeter value or .fsm let variable name.',
+        expected:
+          'Dragging a blue point moves the linkage smoothly without breaking any active geometric or dimensional constraint.',
+      },
+      {
+        title: '3. Diagnose Conflicting Constraints via RREF Pivot Analysis',
+        lens: 'shape',
+        instruction:
+          'Click the "⚡ Test Conflict" button in the Sketch Workbench toolbar. This injects a contradictory HorizontalDistance constraint on an already-fixed span. Observe how the solver never explodes or silently corrupts your sketch: it isolates the conflicting constraint IDs via Gauss–Jordan RREF pivot analysis and highlights them in red ("✕ Conflicting Constraints"). Click "✕" next to the conflicting constraint in the right-hand list (or reload "Flanged Mounting Bracket (0 DOF)") to restore a clean 0-DOF state.',
+        expected:
+          'Injecting a redundant conflict turns the status badge red and lists the exact conflicting constraint IDs so you can delete the offending rule in one click.',
+      },
+      {
+        title: '4. Apply Surface-Attached 3D Features: Boss Extrude, Pocket Cut & Revolve (Stage 2)',
+        lens: 'shape',
+        instruction:
+          'In the bottom "Stage 2 — Surface-Attached 3D Feature Builder" bar, choose preset "1. Flanged Mounting Bracket (0 DOF)" or "3. Bolt Flange Plate (bolt_circle macro)", set Target Plane / Face to "base_block.top" (or "xy"), choose Feature Operation "+ Boss Extrude (Union + Auto-Holes)" or "− Pocket Cut (Subtract)", and click "⚡ Apply 3D Feature to Document". Exterior closed loops automatically extrude as a boss while interior closed loops (circles/polygons) automatically subtract as matching 3D through-holes. Try preset "2. Turned Aerospace Spool (Revolve)" to generate a 360° axisymmetric Revolve feature.',
+        expected:
+          'Clicking Apply 3D Feature compiles the solved 2D profile into exact 3D Extrude, Subtracted Hole, or Revolve nodes attached to the target face.',
+      },
+      {
+        title: '5. Solve 3D P2 Stress on the Sketch-Driven Part & Inspect Theory (6)',
+        lens: 'results',
+        instruction:
+          'Click "Go to Results →" (or press 3) to run the 3D quadratic (P2) tetrahedral FEA solver on the sketch-driven bracket and spool collar under the 1200 N pin load, then open Theory (6) to inspect the active Stage 1 Parametric Sketch Solver equations alongside the Stage 2/3 continuum elasticity equations.',
+        expected:
+          'The 3D P2 solver meshes the extruded boss, subtracted bolt bores, and revolved collar seamlessly and reports peak von Mises stress and safety factor.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle:
+        'Chapter 15: Parametric 2D Variational Sketching — Damped Levenberg–Marquardt, Homotopy Continuation, Jacobian QR Rank & Surface-Attached 3D SDF Calculus',
+      summary:
+        'Formulates the mathematical engine behind modern variational 2D CAD sketchers (SolveSpace, FreeCAD Sketcher / PlaneGCS, Onshape) and couples it directly to Fieldsmith’s implicit Signed Distance Field (SDF) CSG tree for surface-attached Boss Extrudes, Pocket Cuts, and Axisymmetric Revolves.',
+      sections: [
+        {
+          heading: '15.1 Variational Constraint Residuals & Analytical Jacobian Assembly',
+          equations: `q = [ x₁, y₁, x₂, y₂, …, x_n, y_n, r₁, …, r_m ]ᵀ ∈ ℝ^(N_vars)
+r_Horizontal(p_i, p_j) = y_j − y_i = 0,     r_Perpendicular(e₁, e₂) = (t̂₁ · t̂₂) · L̄ = 0
+r_Distance(p_i, p_j; d) = ‖p_j − p_i‖₂ − d(let) = 0,     J_km = ∂r_k(q) / ∂q_m`,
+          body: 'Every 2D sketch entity contributes free coordinates to the state vector q ∈ ℝ^(N_vars) (2 DOFs per point (x_i, y_i) and 1 additional radius DOF r_c per circle/arc). Each geometric rule (Coincident, Horizontal, Vertical, Parallel, Perpendicular, EqualLength, Tangent, Concentric, Midpoint, Symmetric, PointOnLine) and dimensional rule (Distance, HorizontalDistance, VerticalDistance, Angle, Radius, Diameter) is normalized to millimeter length units so the analytical Jacobian matrix J_km = ∂r_k/∂q_m is well-conditioned across mixed angular and linear constraints.',
+        },
+        {
+          heading: '15.2 Damped Levenberg–Marquardt with Homotopy Continuation & Nullspace Dragging',
+          equations: `(Jᵀ J + λ I) δq = −Jᵀ r(q; α_s),     α_s ∈ { 0.25, 0.50, 0.75, 1.00 }
+d_target(α_s) = (1 − α_s) · d_initial(q⁰) + α_s · d_final
+δq_drag = (I − J⁺ J) δq_cursor`,
+          body: 'Large dimensional edits in standard Newton–Raphson sketchers frequently flip triangle orientations or diverge near kinematic singularities. Fieldsmith combines adaptive Levenberg–Marquardt Marquardt-diagonal damping λ ∈ [10⁻¹⁰, 10⁶] with 4-stage homotopy continuation α_s ∈ {0.25, 0.5, 0.75, 1.0}: when a dimension change exceeds 25% of the current geometry scale, target dimensions are smoothly interpolated from the initial configuration q⁰ to the final target, while the LM trust-region parameter λ I regularizes near-degenerate or collinear intermediate Jacobians (preventing singular JᵀJ stalls even when two lines pass within 0.001° of collinearity). During interactive mouse dragging, cursor displacements δq_cursor are projected onto the constraint nullspace P_null = I − J⁺J at 60 Hz.',
+        },
+        {
+          heading: '15.3 Exact Degrees-of-Freedom (DOF) & Conflict Isolation via Column-Pivoted QR / RREF',
+          equations: `J P = Q R   (Householder column-pivoted QR,  rank(J) = #{ k : |R_kk| > ε_rank })
+DOF = N_vars − rank(J)
+DOF = 0 ∧ ‖r(q*)‖_∞ ≤ 10⁻⁶ ⇒ FullyConstrained,   ‖r(q*)‖_∞ > 10⁻³ ⇒ OverConstrainedConflict`,
+          body: 'Counting constraints naively (N_vars − N_eqs) fails whenever a user adds a redundant constraint (such as a fourth 90° angle on a rectangle). By factoring J via column-pivoted QR and Gauss–Jordan Reduced Row Echelon Form (RREF), Fieldsmith computes the exact numerical rank(J) and true remaining degrees of freedom DOF = N_vars − rank(J). Zero-pivot rows in RREF of Jᵀ identify dependent constraint rows: if their converged residual vanishes, they are flagged Amber (RedundantConstraints); if non-zero, they are flagged Red (OverConstrainedConflict) with per-constraint IDs.',
+        },
+        {
+          heading: '15.4 Stage 2 Surface-Attached Coordinate Frames & Exact 2D-to-3D Extrude / Revolve SDFs',
+          equations: `(n̂, û, v̂, o_face) = FaceFrame(shape_id, face ∈ {top, bottom, front, back, left, right})
+d_extrude(p) = max_±( d_poly2d(p_u, p_v), |p_n| − h/2 ),     d_revolve(p) = d_poly2d( √(p_x² + p_y²), p_z )`,
+          body: 'In Stage 2, a solved 2D sketch is bound either to a canonical plane (xy, xz, yz) or parametrically to a face of an existing 3D primitive (on = "base_block.top"). Exterior closed loops compile into 3D Extrude or Revolve primitives oriented along the face normal n̂, while interior closed loops (circles or polygons inside the outer boundary) are automatically classified by winding/containment and subtracted as matching 3D through-holes or pockets.',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: 'Step 1: Solve a Parametric 2D Sketch with Macros & Inspect DOF/Rank (`solve_sketch`)',
+        description:
+          'Calls `solve_sketch` with a declarative `center_rect` + `bolt_circle` macro sketch. Returns converged vertex coordinates, exact Jacobian rank, `dof = 0` (`FullyConstrained`), and outer/inner closed profile loops in one round-trip.',
+        tool: 'solve_sketch',
+        arguments: {
+          preset: 'flanged_mounting_bracket',
+        },
+      },
+      {
+        title: 'Step 2: Project Solved Sketch onto `base_block.top` as a 3D Boss + Auto-Holes (`apply_sketch_feature`)',
+        description:
+          'Solves the sketch and compiles it into a 3D `boss_extrude` feature attached to `base_block.top`, automatically subtracting the interior mounting holes and updating the live `.fsm` workspace.',
+        tool: 'apply_sketch_feature',
+        arguments: {
+          feature_id: 'top_mounting_boss',
+          preset: 'flanged_mounting_bracket',
+          on: 'base_block.top',
+          operation: {
+            kind: 'boss_extrude',
+            height: 14.0,
+            blend: 1.2,
+          },
+        },
+      },
+      {
+        title: 'Step 3: Add an Axisymmetric Turned Collar via `upsert_shape` (`revolve`) & Solve 3D P2 Stress',
+        description:
+          'Uses `upsert_shape` with `kind: "revolve"` to add a 360° turned aerospace collar from a 2D `(r, z)` meridional profile, ready for 3D P2 finite-element analysis.',
+        tool: 'upsert_shape',
+        arguments: {
+          id: 'turned_collar',
+          kind: 'revolve',
+          angle: 360.0,
+          profile: [
+            [7.0, -3.5],
+            [12.0, -3.5],
+            [12.0, -1.2],
+            [9.2, -1.2],
+            [9.2, 1.2],
+            [12.0, 1.2],
+            [12.0, 3.5],
+            [7.0, 3.5],
+          ],
+          at: [0, 0, 29],
+          blend: 0.6,
+        },
+      },
+    ],
+  },
 ];
 
 export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = false) {
@@ -1835,11 +2155,13 @@ function getTrackForSheet(sheetId: string): TutorialTrackId {
   switch (sheetId) {
     case 'T1':
     case 'T2':
+    case 'T15':
       return 'foundations';
     case 'T3':
     case 'T4':
     case 'T5':
     case 'T10':
+    case 'T14':
       return 'structural_thermal';
     case 'T6':
     case 'T7':
@@ -2597,6 +2919,8 @@ function TutorialsDrawer() {
     <div class="tut-col-body" data-testid="tutorial-col-user">
       <div class="tut-col-head">1. Step-by-Step User Tutorial</div>
       {sheet.id === 'T9' && <SwirlAtomiserNoxPredictor />}
+      {sheet.id === 'T14' && <FixingTorqueAndWeibullWorkbench />}
+      {sheet.id === 'T15' && <SketchWorkbench embedded />}
       {sheet.userSteps.map((st, i) => (
         <div key={i} class="tut-step-card">
           <div class="tut-step-top">
@@ -3114,11 +3438,14 @@ curl -s -X POST ${origin}/api/mcp \\
           </div>
 
           <div class="tut-step-card">
-            <strong>3. Available Fieldsmith MCP Tools (15 Tools)</strong>
+            <strong>3. Available Fieldsmith MCP Tools (18 Tools)</strong>
             <pre class="tut-code num" style={{ maxHeight: '220px' }}>{`• new_document(name, material)            — Reset workspace to a clean .fsm document
 • load_fsm(fsm)                           — Load a complete parametric .fsm script (with let variables, CSG & BCs)
 • export_fsm()                            — Return canonical .fsm text of the active workspace
-• add_primitive(kind, id, op, blend, ...) — Add/cut/intersect box, cylinder, sphere, capsule, or torus
+• upsert_shape(id, kind, ...)             — Add/update box, cylinder, sphere, capsule, torus, extrude, or revolve
+• solve_sketch(preset?, entities?, constraints?, macros?) — Solve 2D parametric sketch (LM + QR DOF & conflict check)
+• apply_sketch_feature(id, kind, plane, depth, ...)       — Compile solved 2D sketch onto any 3D face (Boss/Pocket/Revolve)
+• insert_fixing(kind, size, ...)          — Auto-tap host & insert screw/bolt/nut/washer/snap-clip + [T_min, T_max]
 • set_param(addr, value)                  — Update a let variable (e.g. "orifice_r") or attribute ("nozzle.radius")
 • set_material(material, node?)           — Set document material or per-volume material override (e.g. cucrzr on nozzle_body)
 • add_region(id, selectors)               — Define a named surface region (e.g. ["chamber_bore.side"])
@@ -3163,7 +3490,7 @@ function TutorialsStatusItem() {
         style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
         onClick={toggleTutorialsDrawer}
       >
-        Tutorials (T1–T13)
+        Tutorials (T1–T15)
       </button>
       <span class="sep">|</span>
       <button
@@ -3188,7 +3515,7 @@ extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T13)',
+    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T15)',
     run: () => toggleTutorialsDrawer(),
   },
   {

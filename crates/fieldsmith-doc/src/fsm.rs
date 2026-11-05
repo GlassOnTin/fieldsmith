@@ -793,8 +793,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     value,
                 });
             }
-            "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "mesh" | "group"
-            | "extend" => {
+            "box" | "cylinder" | "sphere" | "capsule" | "torus" | "extrude" | "revolve"
+            | "mesh" | "group" | "extend" => {
                 let id = c.ident("a shape name")?;
                 // Lets share the statement-name space with shapes, in either direction.
                 if doc.lets.iter().any(|l| l.name == id) {
@@ -879,6 +879,43 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                             _ => return Err(err("extrude needs profile=[(x, y), …]".into())),
                         };
                         NodeKind::Extrude { profile, height }
+                    }
+                    "revolve" => {
+                        let angle = a.expr_num_or("angle", "angle", 360.0)?;
+                        let profile = match a.take("profile") {
+                            Some(Some(Val::List(items))) => items
+                                .into_iter()
+                                .map(|v| match v {
+                                    Val::Tuple(t) if t.len() == 2 || t.len() == 3 => {
+                                        let n: Vec<f64> = t
+                                            .iter()
+                                            .filter_map(|x| {
+                                                if let Val::Num(n) = x {
+                                                    Some(*n)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+                                        if n.len() != t.len() {
+                                            return Err(err(
+                                                "profile points must be numbers".into()
+                                            ));
+                                        }
+                                        Ok(ProfileVertex {
+                                            x: n[0],
+                                            y: n[1],
+                                            bulge: *n.get(2).unwrap_or(&0.0),
+                                        })
+                                    }
+                                    _ => Err(err(
+                                        "profile points are (r, z) or (r, z, bulge)".into()
+                                    )),
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                            _ => return Err(err("revolve needs profile=[(r, z), …]".into())),
+                        };
+                        NodeKind::Revolve { profile, angle }
                     }
                     "mesh" => NodeKind::Mesh {
                         src: a
@@ -1676,6 +1713,25 @@ fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
                 "extrude {} h={} profile=[{}]",
                 node.id,
                 p.num_for(&node.id, "height", None, *height),
+                pts.join(", ")
+            );
+        }
+        NodeKind::Revolve { profile, angle } => {
+            let pts: Vec<String> = profile
+                .iter()
+                .map(|pt| {
+                    if pt.bulge != 0.0 {
+                        format!("({}, {}, {})", n(pt.x), n(pt.y), n(pt.bulge))
+                    } else {
+                        format!("({}, {})", n(pt.x), n(pt.y))
+                    }
+                })
+                .collect();
+            let _ = write!(
+                line,
+                "revolve {} angle={} profile=[{}]",
+                node.id,
+                p.num_for(&node.id, "angle", None, *angle),
                 pts.join(", ")
             );
         }

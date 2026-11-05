@@ -196,3 +196,4 @@ export class Store {
 }
 
 export const store = new Store();
+(globalThis as unknown as { __fieldsmith_store?: Store }).__fieldsmith_store = store;

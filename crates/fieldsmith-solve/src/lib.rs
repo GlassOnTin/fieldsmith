@@ -21,6 +21,7 @@ pub mod bsr;
 pub mod candle_flame;
 pub mod coupled_system;
 pub mod dual;
+pub mod fixings;
 pub mod float_bath;
 pub mod modal;
 pub mod ortho;

@@ -4,9 +4,11 @@ import type { JSX } from 'preact';
 import { store } from '../doc/store';
 import { kindLabel } from '../doc/types';
 import type { Node } from '../doc/types';
-import { moveNode, renameId, inheritedColor } from '../doc/ops';
+import { moveNode, renameId, inheritedColor, removeNodeAndCompanion, ungroupNode } from '../doc/ops';
 import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
+import { openFixingsCatalogueModal } from './FixingsModal';
+import { openSketchWorkbenchModal } from './SketchWorkbench';
 
 const OP_GLYPH = { add: '+', subtract: '−', intersect: '∩' } as const;
 const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: 'Keeps only the overlap' } as const;
@@ -140,6 +142,29 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       <span class="row-name">{ui.renaming === node.id ? <RenameInput id={node.id} onDone={() => ui.set('renaming', null)} /> : node.id}</span>
       {node.blend > 0 && <span class="meta" title="Blend radius">r{node.blend}</span>}
       <span class="row-actions">
+        {isGroup && (
+          <button
+            class="mini"
+            title={`Ungroup ${node.id} (keep ${children.length} child object${children.length === 1 ? '' : 's'})`}
+            data-testid={`ungroup-node-${node.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              let kept: Node[] = [];
+              store.transact(`Ungroup ${node.id}`, (d) => {
+                kept = ungroupNode(d, node.id);
+              });
+              if (kept.length > 0) {
+                store.select({ kind: 'node', id: kept[0].id });
+                ui.notify(`Ungrouped ${node.id} (${kept.length} child object${kept.length === 1 ? '' : 's'} kept)`, 'info');
+              } else {
+                store.select(null);
+              }
+            }}
+            style={{ fontSize: '10px', fontWeight: 700, padding: '0 4px' }}
+          >
+            📂
+          </button>
+        )}
         <button
           class="mini"
           title={`Rename ${node.id} (F2)`}
@@ -175,6 +200,27 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
         >
           {node.suppressed ? <Icon.eyeOff /> : <Icon.eye />}
         </button>
+        <button
+          class="mini"
+          title={
+            isGroup
+              ? `Delete group ${node.id} and all ${children.length} child object(s) (Del)`
+              : `Delete ${node.id} (Del)`
+          }
+          data-testid={`delete-node-${node.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            store.transact(`Delete ${node.id}`, (d) => {
+              removeNodeAndCompanion(d, node.id, !node.id.endsWith('_bore'));
+            });
+            if (store.selection?.kind === 'node' && store.selection.id === node.id) {
+              store.select(null);
+            }
+          }}
+          style={{ color: 'var(--bad, #ef4444)' }}
+        >
+          <Icon.trash />
+        </button>
       </span>
     </div>
   );
@@ -197,17 +243,37 @@ export function Tree() {
     <div class="tree" role="tree" aria-label="Model tree" onClick={(e) => e.target === e.currentTarget && store.select(null)}>
       <div class="section-label">
         <span>Shapes</span>
-        <button
-          class="btn ghost icon small"
-          title="Add shape (Shift B, Shift C, …)"
-          data-action="add-menu"
-          onClick={(e) => {
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            ui.set('menu', { kind: 'add', x: r.left, y: r.bottom + 4 });
-          }}
-        >
-          <Icon.plus />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <button
+            class="btn ghost small"
+            title="Open Parametric 2D Sketch & Surface-Feature Workbench (LM + QR Constraint Solver)"
+            data-testid="open-sketch-workbench"
+            onClick={() => openSketchWorkbenchModal()}
+            style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Icon.sketcher /> Sketch…
+          </button>
+          <button
+            class="btn ghost small"
+            title="Open Built-In Engineering Fixings & Snap-Fit Geometry Catalogue (Auto-Tap Host)"
+            data-testid="open-fixings-catalog"
+            onClick={() => openFixingsCatalogueModal()}
+            style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Icon.fixing /> Fixings…
+          </button>
+          <button
+            class="btn ghost icon small"
+            title="Add shape (Shift B, Shift C, …)"
+            data-action="add-menu"
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              ui.set('menu', { kind: 'add', x: r.left, y: r.bottom + 4 });
+            }}
+          >
+            <Icon.plus />
+          </button>
+        </div>
       </div>
       {doc.root.length === 0 && <div class="hint">No shapes yet. Add one with the + button, or press Ctrl K.</div>}
       {doc.root.map((n) => (

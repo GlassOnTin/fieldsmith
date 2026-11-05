@@ -38,6 +38,21 @@ vec4 fs_extrude(float wx, vec2 gx, float wy, float sz) {
   if (wx > wy) return vec4(wx, gx.x, gx.y, 0.0);
   return vec4(wy, 0.0, 0.0, sz);
 }
+vec4 fs_revolve(vec3 p, vec3 s, float deg) {
+  float rl = length(p.xy);
+  vec2 u = rl > 1e-12 ? p.xy / rl : vec2(1.0, 0.0);
+  vec3 gr = vec3(s.y * u, s.z);
+  if (deg >= 359.999) return vec4(s.x, gr);
+  float ha = radians(clamp(deg, 1.0, 360.0) * 0.5);
+  float sa = sin(ha); float ca = cos(ha); float sy = fs_sgn(p.y);
+  float wt = -p.x * sa + abs(p.y) * ca;
+  vec3 gt = vec3(-sa, sy * ca, 0.0);
+  float ox = max(s.x, 0.0); float oy = max(wt, 0.0);
+  float ol = sqrt(ox * ox + oy * oy);
+  if (ol > 0.0) return vec4(ol, (ox * gr + oy * gt) / ol);
+  if (s.x > wt) return vec4(s.x, gr);
+  return vec4(wt, gt);
+}
 vec4 fs_sphere(vec3 p, float r) {
   float l = length(p);
   return vec4(l - r, l > 1e-12 ? p / l : vec3(0.0, 0.0, 1.0));
@@ -367,6 +382,13 @@ return vec4(v, gx / {}, gy / {}, gz / {});\n}}",
                         format!(
                             "  vec3 s = {pf}(p.xy);\n  return fs_extrude(s.x, s.yz, abs(p.z) - {}, fs_sgn(p.z));\n",
                             lit(*half_h)
+                        )
+                    }
+                    Prim::Revolve { segs, angle_deg } => {
+                        let pf = self.profile(segs);
+                        format!(
+                            "  vec3 s = {pf}(vec2(length(p.xy), p.z));\n  return fs_revolve(p, s, {});\n",
+                            lit(*angle_deg)
                         )
                     }
                 };
@@ -826,6 +848,15 @@ impl Gen {
                         format!(
                             "  float side = {pf}(p.xy).x; float cap = abs(p.z) - {};\n  float f = side >= cap ? {s}.0 : (p.z >= 0.0 ? {t}.0 : {b}.0);\n  return vec2({v}(p).x, f);\n",
                             lit(*half_h),
+                            s = fc(Face::Side),
+                            t = fc(Face::Top),
+                            b = fc(Face::Bottom)
+                        )
+                    }
+                    Prim::Revolve { segs, .. } => {
+                        let pf = self.profile(segs);
+                        format!(
+                            "  vec3 s = {pf}(vec2(length(p.xy), p.z));\n  float f = abs(s.z) > abs(s.y) * 1.1 ? (s.z >= 0.0 ? {t}.0 : {b}.0) : {s}.0;\n  return vec2({v}(p).x, f);\n",
                             s = fc(Face::Side),
                             t = fc(Face::Top),
                             b = fc(Face::Bottom)

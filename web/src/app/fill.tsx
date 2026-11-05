@@ -44,18 +44,31 @@ function caseNames(d: Document): string[] {
 function FillPanel() {
   useApp();
   if (store.lens !== 'fill') return null;
+  const minimized = ui.panelMinimized || ui.vpHudCollapsed;
+  const toggleMinimized = () => {
+    if (minimized) {
+      ui.set('panelMinimized', false);
+      if (ui.vpHudCollapsed) ui.set('vpHudCollapsed', false);
+    } else {
+      ui.set('panelMinimized', true);
+    }
+  };
   const doc = store.doc;
   const s = analysis.state;
   const lvl = s.levels[s.levels.length - 1];
   const fi = lvl?.meta.fill;
 
   return (
-    <div class="results-panel" data-testid="fill-panel">
-      <div class="card-head">
+    <div class={`results-panel${minimized ? ' minimized' : ''}`} data-testid="fill-panel">
+      <div
+        class="card-head"
+        style={minimized ? { marginBottom: 0, cursor: 'pointer' } : undefined}
+        onClick={minimized ? toggleMinimized : undefined}
+      >
         <span class="title">Fill</span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
           {fi && <span class="meta">{fi.family.toLowerCase()} · {fi.mode.toLowerCase()}</span>}
-          {doc.fill && (
+          {!minimized && doc.fill && (
             <button
               type="button"
               class="mini-btn"
@@ -74,32 +87,43 @@ function FillPanel() {
               {ui.bodyAlpha < 0.99 ? 'Opaque shell' : 'Inspect interior'}
             </button>
           )}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="fill-minimize-toggle"
+            title={minimized ? 'Expand Fill panel' : 'Minimize Fill panel to bottom bar'}
+            onClick={toggleMinimized}
+          >
+            {minimized ? '▴ Expand' : '▾ Min'}
+          </button>
         </span>
       </div>
 
-      {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
-      {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
-
-      {!doc.root.length && <div class="hint">Add shapes to the model first.</div>}
-
-      {!doc.fill && doc.root.length > 0 && (
+      {!minimized && (
         <>
-          <div class="hint">No fill: the part is solid everywhere.</div>
-          <button
-            class="btn primary"
-            data-testid="add-fill"
-            onClick={() =>
-              store.transact('Add fill', (d) => {
-                d.fill = defaultFill();
-              })
-            }
-          >
-            Add lattice fill
-          </button>
-        </>
-      )}
+          {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
+          {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
 
-      {doc.fill && (
+          {!doc.root.length && <div class="hint">Add shapes to the model first.</div>}
+
+          {!doc.fill && doc.root.length > 0 && (
+            <>
+              <div class="hint">No fill: the part is solid everywhere.</div>
+              <button
+                class="btn primary"
+                data-testid="add-fill"
+                onClick={() =>
+                  store.transact('Add fill', (d) => {
+                    d.fill = defaultFill();
+                  })
+                }
+              >
+                Add lattice fill
+              </button>
+            </>
+          )}
+
+          {doc.fill && (
         <>
           <div class="field-grid">
             <label class="plain">Pattern</label>
@@ -355,6 +379,8 @@ function FillPanel() {
           <button class="btn ghost" data-testid="remove-fill" onClick={() => store.transact('Remove fill', (d) => (d.fill = null))}>
             Remove fill
           </button>
+            </>
+          )}
         </>
       )}
     </div>

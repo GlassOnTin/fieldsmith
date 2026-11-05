@@ -13,6 +13,7 @@ function ClipPanel() {
   useApp();
   if (!store.doc || store.doc.root.length === 0 || ui.vpHudCollapsed) return null;
   const clip = ui.clip;
+  if (ui.panelMinimized && !clip.on) return null;
   const toggleClip = () => {
     const vp = liveViewport;
     const b = vp?.bounds;

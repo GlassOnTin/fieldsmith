@@ -177,6 +177,11 @@ pub enum NodeKind {
         profile: Vec<ProfileVertex>,
         height: f64,
     },
+    /// Closed 2D meridian profile in local (R, Z), revolved around local Z by `angle` degrees (default 360).
+    Revolve {
+        profile: Vec<ProfileVertex>,
+        angle: f64,
+    },
     Group {
         children: Vec<Node>,
         modifiers: Vec<Modifier>,

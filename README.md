@@ -126,6 +126,7 @@ By what you want to do:
 | check one measured claim | [docs/verification/](docs/verification/): one report per case, numbered from V1 in gate order, each with Method and Limits sections |
 | know the performance | [budgets.md](docs/verification/budgets.md) and the machine variants beside it; per-run wall times in [data/costs/costs.csv](data/costs/costs.csv) |
 | know where the project is going | [VISION.md](VISION.md) (architecture, invariants, and roadmap) |
+| review a tutorial or solver module | [REVIEW.md](REVIEW.md) (three-tier student, physics, and browser/MCP review workflow) |
 | automate or distribute | each verb's help text (`fieldsmith --help`, and the `fieldsmith-mcp` binary's own help) |
 | build it | the next section |
 

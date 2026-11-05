@@ -172,15 +172,41 @@ function MakePanel() {
   const zr = zRange();
   const nLayers = zr ? layerCount(zr[0], zr[1]) : 1;
   const layer = Math.min(Math.max(0, ui.makeLayer), nLayers - 1);
+  const minimized = ui.panelMinimized || ui.vpHudCollapsed;
+  const toggleMinimized = () => {
+    if (minimized) {
+      ui.set('panelMinimized', false);
+      if (ui.vpHudCollapsed) ui.set('vpHudCollapsed', false);
+    } else {
+      ui.set('panelMinimized', true);
+    }
+  };
 
   return (
-    <div class="results-panel" data-testid="make-panel">
-      <div class="card-head">
+    <div class={`results-panel${minimized ? ' minimized' : ''}`} data-testid="make-panel">
+      <div
+        class="card-head"
+        style={minimized ? { marginBottom: 0, cursor: 'pointer' } : undefined}
+        onClick={minimized ? toggleMinimized : undefined}
+      >
         <span class="title">Make</span>
-        {ex && <span class="meta">{ex.meta.what} · h {fmt(ex.meta.h)} mm</span>}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+          {ex && <span class="meta">{ex.meta.what} · h {fmt(ex.meta.h)} mm</span>}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="make-minimize-toggle"
+            title={minimized ? 'Expand Make panel' : 'Minimize Make panel to bottom bar'}
+            onClick={toggleMinimized}
+          >
+            {minimized ? '▴ Expand' : '▾ Min'}
+          </button>
+        </span>
       </div>
 
-      <div class="field-grid">
+      {!minimized && (
+        <>
+          <div class="field-grid">
         {fill && (
           <>
             <label class="plain">Part</label>
@@ -303,6 +329,8 @@ function MakePanel() {
       </div>
 
       {!ex && s.export !== 'running' && <div class="hint">No export yet: pick a mesh spacing and build one.</div>}
+        </>
+      )}
     </div>
   );
 }

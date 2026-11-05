@@ -47,6 +47,8 @@ class Ui {
   inspCollapsed = false;
   /** Whether the bottom-left 3D Coupled Multi-Physics Overlay HUD is minimized to a compact header pill. */
   vpHudCollapsed = false;
+  /** Whether the bottom-left lens panel (Results / Fill / Make) is minimized to a compact bottom bar. */
+  panelMinimized = false;
   menu: { kind: 'add' | 'file' | 'modifier'; x: number; y: number; target?: string } | null = null;
   toast: { text: string; kind: 'info' | 'error' } | null = null;
   renaming: string | null = null;

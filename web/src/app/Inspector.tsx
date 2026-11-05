@@ -2,10 +2,23 @@
 import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { store } from '../doc/store';
-import { findNode, kindLabel } from '../doc/types';
-import type { Document, Modifier, Node, NodeKind, Op } from '../doc/types';
+import { containerOf, findNode, kindLabel, walk } from '../doc/types';
+import type { Document, Face, Modifier, Node, NodeKind, Op } from '../doc/types';
 import { materialLibrary, validateWithWarnings } from '../doc/wasm';
-import { MODIFIER_LABEL, defaultModifier, inheritedColor, renameId } from '../doc/ops';
+import {
+  MODIFIER_LABEL,
+  defaultModifier,
+  findCompanionFixingNode,
+  groupNode,
+  inheritedColor,
+  nestExistingNodeWithHost,
+  positionNodeOnHostSurface,
+  promoteNodeOutOfGroup,
+  removeNodeAndCompanion,
+  renameId,
+  resolveHostSurfaceFrame,
+  ungroupNode,
+} from '../doc/ops';
 import { applyAddr, drivenExpr, parseAddr } from '../doc/param';
 import { PART_COLORS } from '../doc/types';
 import {
@@ -21,6 +34,14 @@ import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 import { SketchCanvas } from './Sketch';
+import { openSketchWorkbenchModal } from './SketchWorkbench';
+import { openFixingsCatalogueModal } from './FixingsModal';
+import {
+  FASTENER_MATERIAL_GROUPS,
+  inspectFixingGroupStack,
+  reconfigureExistingBoltStack,
+  type AssociatedNutKind,
+} from '../doc/fixings-catalog';
 
 let library: ReturnType<typeof materialLibrary> | null = null;
 export function materials() {
@@ -243,6 +264,12 @@ function Dimensions({ node }: { node: Node }) {
           <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'extrude').height} set={(d, v) => (kindIn(d, id, 'extrude').height = v)} undoLabel={u} driven={drv('height')} />
         </>
       );
+    case 'revolve':
+      return (
+        <>
+          <NumRow label="Sweep angle" unit="°" min={1} max={360} step={15} get={(d) => kindIn(d, id, 'revolve').angle} set={(d, v) => (kindIn(d, id, 'revolve').angle = v)} undoLabel={u} driven={drv('angle')} />
+        </>
+      );
     case 'mesh':
       return null;
     case 'extend': {
@@ -274,28 +301,42 @@ function Dimensions({ node }: { node: Node }) {
 }
 
 function ProfileEditor({ node }: { node: Node }) {
-  if (node.kind.type !== 'extrude') return null;
+  if (node.kind.type !== 'extrude' && node.kind.type !== 'revolve') return null;
   const id = node.id;
   const pts = node.kind.profile;
   const edit = (label: string, f: (p: { x: number; y: number; bulge: number }[]) => void) =>
-    store.transact(label, (d) => f(kindIn(d, id, 'extrude').profile));
+    store.transact(label, (d) => {
+      const k = nodeIn(d, id).kind;
+      if (k.type === 'extrude' || k.type === 'revolve') f(k.profile);
+    });
   return (
     <div class="card">
       <div class="card-head">
         <span>Profile</span>
-        <button
-          class="btn ghost small"
-          title="Add a point after the last one"
-          onClick={() =>
-            edit('Add profile point', (p) => {
-              const a = p[p.length - 1];
-              const b = p[0];
-              p.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, bulge: 0 });
-            })
-          }
-        >
-          Add point
-        </button>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            class="btn ghost small"
+            title="Open Parametric 2D Constraint Solver & Surface-Feature Workbench"
+            data-testid="inspector-open-sketch-workbench"
+            onClick={() => openSketchWorkbenchModal()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Icon.sketcher /> Constraints…
+          </button>
+          <button
+            class="btn ghost small"
+            title="Add a point after the last one"
+            onClick={() =>
+              edit('Add profile point', (p) => {
+                const a = p[p.length - 1];
+                const b = p[0];
+                p.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, bulge: 0 });
+              })
+            }
+          >
+            Add point
+          </button>
+        </div>
       </div>
       <div style={{ padding: '6px 8px 2px' }}>
         <SketchCanvas id={id} />
@@ -511,14 +552,740 @@ function MeshPanel({ node }: { node: Node }) {
   );
 }
 
+function BoltHardwareAndForcesPanel({ node }: { node: Node }) {
+  const stack = inspectFixingGroupStack(store.doc, node.id);
+  if (!stack) return null;
+
+  const { sizeSpec, includeWasher, associatedNut, fastenerMaterial, envelope, hwGroupId } = stack;
+  const hf = envelope.holdableForces;
+
+  const applyStackChange = (
+    nextWasher: boolean,
+    nextNut: AssociatedNutKind,
+    nextMat = fastenerMaterial,
+  ) => {
+    store.transact(
+      `Update ${hwGroupId} hardware stack (washer=${nextWasher}, nut=${nextNut}, mat=${nextMat})`,
+      (d) => {
+        reconfigureExistingBoltStack(d, hwGroupId, {
+          includeWasher: nextWasher,
+          associatedNut: nextNut,
+          fastenerMaterial: nextMat,
+        });
+      },
+    );
+    ui.notify(
+      `Updated ${hwGroupId}: ${nextWasher ? 'Washer ON' : 'Washer OFF'}, Nut = ${nextNut}, Mat = ${nextMat}`,
+      'info',
+    );
+  };
+
+  return (
+    <div
+      data-testid="inspector-fixing-hardware-card"
+      style={{
+        marginTop: '8px',
+        padding: '9px 10px',
+        borderRadius: '8px',
+        background: 'rgba(56, 189, 248, 0.08)',
+        border: '1.5px solid rgba(56, 189, 248, 0.45)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '7px',
+        fontSize: '11.5px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '6px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontWeight: 700, color: 'var(--accent)' }}>
+          🔩 Bolt Stack ({sizeSpec.name} × {stack.engagementMm} mm) &amp; Holdable Forces
+        </span>
+        <span style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text-2)' }}>
+          K = {envelope.nutFactorK.toFixed(3)} · A_brg = {envelope.bearingAreaMm2.toFixed(1)} mm²
+        </span>
+      </div>
+
+      {/* Washer & Nut Controls */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px',
+          padding: '6px 8px',
+          borderRadius: '6px',
+          background: 'rgba(56, 189, 248, 0.08)',
+          border: '1px solid rgba(56, 189, 248, 0.28)',
+        }}
+      >
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            cursor: 'pointer',
+            fontWeight: 600,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={includeWasher}
+            data-testid="inspector-fixing-washer-toggle"
+            style={{ width: '14px', height: '14px', margin: 0, flex: 'none' }}
+            onChange={(e) =>
+              applyStackChange((e.target as HTMLInputElement).checked, associatedNut)
+            }
+          />
+          <span>
+            ⭕ Include Bearing Washer (⌀{sizeSpec.washer_od.toFixed(1)}×
+            {sizeSpec.washer_t.toFixed(1)} mm)
+          </span>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-2)' }}>
+            ⬡ Associated Mated Nut
+          </span>
+          <select
+            class="select"
+            data-testid="inspector-fixing-nut-select"
+            value={associatedNut}
+            onChange={(e) =>
+              applyStackChange(
+                includeWasher,
+                (e.target as HTMLSelectElement).value as AssociatedNutKind,
+              )
+            }
+          >
+            <option value="none">None (Tapped into Host)</option>
+            <option value="hex_nut">
+              ⬡ Hex Nut (ISO 4032 — s={sizeSpec.hex_flats_s} mm, m={sizeSpec.nut_h} mm)
+            </option>
+            <option value="nyloc_nut">
+              🔒 Nyloc Lock Nut (ISO 10511 — +Prevailing Torque)
+            </option>
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-2)' }}>
+            🔩 Fastener Hardware Material
+          </span>
+          <select
+            class="select"
+            data-testid="inspector-fixing-material-select"
+            value={fastenerMaterial}
+            onChange={(e) =>
+              applyStackChange(
+                includeWasher,
+                associatedNut,
+                (e.target as HTMLSelectElement).value,
+              )
+            }
+          >
+            {FASTENER_MATERIAL_GROUPS.map((grp) => (
+              <optgroup key={grp.group} label={grp.group}>
+                {grp.options.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {/* Torque Requirements */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '4px 8px',
+          fontFamily: 'var(--mono)',
+          fontSize: '10.5px',
+          padding: '5px 7px',
+          borderRadius: '6px',
+          background: 'rgba(16, 185, 129, 0.08)',
+          border: '1px solid rgba(16, 185, 129, 0.3)',
+        }}
+      >
+        <div>
+          T_rec: <strong style={{ color: '#34d399' }}>{envelope.recommendedTorqueNm.toFixed(2)} N·m</strong>
+        </div>
+        <div>
+          Window: <strong>[{envelope.minTorqueNm.toFixed(2)}, {envelope.maxTorqueNm.toFixed(2)}] N·m</strong>
+        </div>
+        <div>
+          Bearing σ_brg: <strong>{envelope.bearingPressureAtRecMpa.toFixed(1)} MPa</strong>
+        </div>
+        <div>
+          Creep Kept: <strong>{(envelope.creepRetentionFactor * 100).toFixed(0)}%</strong>
+        </div>
+      </div>
+
+      {/* Holdable Forces Readout */}
+      <div
+        data-testid="inspector-fixing-forces-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '3px 8px',
+          fontFamily: 'var(--mono)',
+          fontSize: '10.5px',
+        }}
+      >
+        <div title="Axial clamping preload force at T_rec">
+          Preload F_0:{' '}
+          <strong>
+            {hf.axialPreloadAtRecN.toFixed(0)} N ({(hf.axialPreloadAtRecN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Residual clamp force after creep relaxation">
+          After Creep:{' '}
+          <strong>
+            {hf.residualClampAfterCreepN.toFixed(0)} N ({(hf.residualClampAfterCreepN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Max external axial pull force before joint separates (gaps)">
+          Axial No-Gap F_sep:{' '}
+          <strong style={{ color: '#38bdf8' }}>
+            {hf.maxAxialLoadBeforeGappingN.toFixed(0)} N ({(hf.maxAxialLoadBeforeGappingN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Max transverse shear force held by friction before slip">
+          Friction Grip F_slip:{' '}
+          <strong style={{ color: '#34d399' }}>
+            {hf.maxTransverseFrictionSlipN.toFixed(0)} N ({(hf.maxTransverseFrictionSlipN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Ultimate thread pull-out / stripping capacity">
+          Thread Pull-Out:{' '}
+          <strong>
+            {hf.maxThreadPulloutN.toFixed(0)} N ({(hf.maxThreadPulloutN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Underhead / washer surface crush capacity">
+          Bearing Crush:{' '}
+          <strong>
+            {hf.maxUnderheadBearingN.toFixed(0)} N ({(hf.maxUnderheadBearingN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Bolt shank pin shear capacity">
+          Shank Shear:{' '}
+          <strong>
+            {hf.maxShankShearPinN.toFixed(0)} N ({(hf.maxShankShearPinN / 9.80665).toFixed(1)} kgf)
+          </strong>
+        </div>
+        <div title="Safe continuous working axial / shear loads">
+          Safe Work (Ax/Sh):{' '}
+          <strong style={{ color: '#fbbf24' }}>
+            {hf.safeWorkingAxialLoadN.toFixed(0)} / {hf.safeWorkingShearLoadN.toFixed(0)} N
+          </strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SurfaceMateAndTreePanel({ node }: { node: Node }) {
+  const doc = store.doc;
+  const id = node.id;
+  const companion = findCompanionFixingNode(doc, id);
+  const cont = containerOf(doc, id);
+  const parentGroup = cont?.parent ?? null;
+
+  // Collect candidate host parts (excluding `node` itself, its companion, and its descendants)
+  const excludedIds = new Set<string>([id]);
+  if (companion) excludedIds.add(companion.id);
+  walk([node], (n) => excludedIds.add(n.id));
+  if (companion) walk([companion], (n) => excludedIds.add(n.id));
+
+  const hostCandidates: Node[] = [];
+  const collectHosts = (nodes: Node[]) => {
+    for (const n of nodes) {
+      if (excludedIds.has(n.id) || n.suppressed || n.op !== 'add') continue;
+      if (n.kind.type === 'group') {
+        collectHosts(n.kind.children);
+      } else {
+        hostCandidates.push(n);
+      }
+    }
+  };
+  collectHosts(doc.root);
+
+  const [hostId, setHostId] = useState<string>(() => hostCandidates[0]?.id ?? '');
+  const [face, setFace] = useState<Face>('top');
+  const [mode, setMode] = useState<'edge' | 'center'>('edge');
+  const [seating, setSeating] = useState<'flush' | 'centered' | 'recessed'>(() =>
+    companion ? 'centered' : 'flush',
+  );
+  const [bindLets, setBindLets] = useState<boolean>(true);
+
+  const activeHostId =
+    (hostId && hostCandidates.some((h) => h.id === hostId) ? hostId : undefined) ??
+    hostCandidates[0]?.id ??
+    '';
+
+  const frame = activeHostId ? resolveHostSurfaceFrame(doc, activeHostId, face) : null;
+  const currentUV = frame
+    ? frame.uvFromPoint(node.transform.translate)
+    : { u: 0, v: 0, dx: 10, dy: 10, normalOffset: 0 };
+
+  const applyPosition = (
+    nextDx: number,
+    nextDy: number,
+    nextU: number,
+    nextV: number,
+    nextSeating = seating,
+    nextFace = face,
+    nextHostId = activeHostId,
+  ) => {
+    if (!nextHostId) return;
+    store.transact(`Position ${id} on ${nextHostId}.${nextFace}`, (d) => {
+      positionNodeOnHostSurface(d, id, {
+        hostId: nextHostId,
+        face: nextFace,
+        mode,
+        dx: nextDx,
+        dy: nextDy,
+        u: nextU,
+        v: nextV,
+        seating: nextSeating,
+        bindLets,
+        associateInTree: false,
+      });
+    });
+  };
+
+  return (
+    <div
+      class="card"
+      data-testid="surface-mate-panel"
+      style={{
+        marginTop: '8px',
+        padding: '8px 10px',
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line-strong)',
+        borderRadius: '6px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '6px',
+          marginBottom: '6px',
+        }}
+      >
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
+          📐 Surface Mate &amp; Object Tree
+        </span>
+        {companion && (
+          <span
+            style={{
+              fontSize: '10px',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              background: 'rgba(56, 189, 248, 0.14)',
+              color: 'var(--accent)',
+              fontFamily: 'var(--mono)',
+            }}
+            title="Paired fixing assembly: moving this node moves its companion bore/hardware group in lockstep"
+          >
+            🔗 {companion.id}
+          </span>
+        )}
+      </div>
+
+      {/* Tree Hierarchy Status & Actions */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '6px',
+          flexWrap: 'wrap',
+          fontSize: '11px',
+          marginBottom: '8px',
+          paddingBottom: '6px',
+          borderBottom: '1px solid var(--line)',
+        }}
+      >
+        <span style={{ color: 'var(--text-2)' }}>
+          Tree:{' '}
+          <strong style={{ color: 'var(--text)' }}>
+            {parentGroup ? `📁 ${parentGroup.id}` : 'Root'}
+          </strong>
+        </span>
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {node.kind.type === 'group' && (
+            <button
+              type="button"
+              class="btn small"
+              data-testid="tree-ungroup-keep-children-btn"
+              title={`Dissolve group ${id} and keep all ${node.kind.children.length} child object(s) in place`}
+              onClick={() => {
+                let kept: Node[] = [];
+                store.transact(`Ungroup ${id}`, (d) => {
+                  kept = ungroupNode(d, id);
+                });
+                if (kept.length > 0) {
+                  store.select({ kind: 'node', id: kept[0].id });
+                  ui.notify(`Ungrouped ${id} (${kept.length} child object${kept.length === 1 ? '' : 's'} kept)`, 'info');
+                } else {
+                  store.select(null);
+                }
+              }}
+              style={{ fontSize: '10px', padding: '2px 6px' }}
+            >
+              📂 Ungroup (Keep {node.kind.children.length})
+            </button>
+          )}
+          {activeHostId && (
+            <button
+              type="button"
+              class="btn small"
+              data-testid="tree-associate-host-btn"
+              title={`Nest ${id} inside ${activeHostId}'s assembly group in the Object Tree`}
+              onClick={() => {
+                store.transact(`Associate ${id} with ${activeHostId}`, (d) => {
+                  nestExistingNodeWithHost(d, id, activeHostId);
+                });
+                ui.notify(`Associated ${id} under ${activeHostId} assembly group`, 'info');
+              }}
+              style={{ fontSize: '10px', padding: '2px 6px' }}
+            >
+              🔗 Group with {activeHostId}
+            </button>
+          )}
+          {node.kind.type !== 'group' && !parentGroup && (
+            <button
+              type="button"
+              class="btn ghost small"
+              data-testid="tree-wrap-group-btn"
+              title="Wrap this node in a new Group (Ctrl+G)"
+              onClick={() => {
+                let gid = '';
+                store.transact(`Group ${id}`, (d) => {
+                  const g = groupNode(d, id);
+                  if (g) gid = g.id;
+                });
+                if (gid) store.select({ kind: 'node', id: gid });
+              }}
+              style={{ fontSize: '10px', padding: '2px 6px' }}
+            >
+              📁 Wrap Group
+            </button>
+          )}
+          {parentGroup && (
+            <button
+              type="button"
+              class="btn ghost small"
+              data-testid="tree-promote-btn"
+              title={`Move ${id} out of group ${parentGroup.id}`}
+              onClick={() =>
+                store.transact(`Promote ${id}`, (d) => {
+                  promoteNodeOutOfGroup(d, id);
+                })
+              }
+              style={{ fontSize: '10px', padding: '2px 6px' }}
+            >
+              ⬆ Remove from {parentGroup.id}
+            </button>
+          )}
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="tree-delete-node-btn"
+            title={
+              node.kind.type === 'group'
+                ? `Delete group ${id} and all ${node.kind.children.length} child object(s)${companion ? ` (+ companion ${companion.id})` : ''}`
+                : `Delete ${id}`
+            }
+            onClick={() => {
+              store.transact(`Delete ${id}`, (d) => {
+                removeNodeAndCompanion(d, id, Boolean(companion));
+              });
+              store.select(null);
+              ui.notify(
+                node.kind.type === 'group'
+                  ? `Deleted group ${id} and its child objects`
+                  : `Deleted ${id}`,
+                'info',
+              );
+            }}
+            style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--bad, #ef4444)' }}
+          >
+            🗑 {node.kind.type === 'group' ? `Delete Group & All (${node.kind.children.length})` : 'Delete'}
+          </button>
+        </div>
+      </div>
+
+      {hostCandidates.length === 0 ? (
+        <div class="hint" style={{ padding: 0 }}>
+          Add another shape to mate or dimension this part onto a host surface.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>Host Part</span>
+              <select
+                class="select"
+                data-testid="surface-mate-host"
+                value={activeHostId}
+                onChange={(e) => setHostId((e.target as HTMLSelectElement).value)}
+              >
+                {hostCandidates.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.id} ({h.kind.type})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>Target Surface</span>
+              <select
+                class="select"
+                data-testid="surface-mate-face"
+                value={face}
+                onChange={(e) => {
+                  const nextF = (e.target as HTMLSelectElement).value as Face;
+                  setFace(nextF);
+                  if (frame) {
+                    const nf = resolveHostSurfaceFrame(doc, activeHostId, nextF);
+                    applyPosition(
+                      0.5 * nf.faceWidth,
+                      0.5 * nf.faceHeight,
+                      0,
+                      0,
+                      seating,
+                      nextF,
+                      activeHostId,
+                    );
+                  }
+                }}
+              >
+                <option value="top">Top (+Z)</option>
+                <option value="bottom">Bottom (−Z)</option>
+                <option value="px">Right (+X)</option>
+                <option value="nx">Left (−X)</option>
+                <option value="py">Back (+Y)</option>
+                <option value="ny">Front (−Y)</option>
+              </select>
+            </label>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+            <button
+              type="button"
+              class={`btn small ${mode === 'edge' ? 'primary' : ''}`}
+              data-testid="surface-mate-mode-edge"
+              onClick={() => setMode('edge')}
+              style={{ fontSize: '10.5px', padding: '3px 6px' }}
+            >
+              📏 Edge Distances (dx, dy)
+            </button>
+            <button
+              type="button"
+              class={`btn small ${mode === 'center' ? 'primary' : ''}`}
+              data-testid="surface-mate-mode-center"
+              onClick={() => setMode('center')}
+              style={{ fontSize: '10.5px', padding: '3px 6px' }}
+            >
+              ⊕ Centre Offset (u, v)
+            </button>
+          </div>
+
+          {frame && mode === 'edge' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>
+                  dx from −{frame.uLabel} edge (mm)
+                </span>
+                <NumberInput
+                  value={currentUV.dx}
+                  step={1}
+                  testId="surface-mate-dx"
+                  onChange={(v) =>
+                    applyPosition(v, currentUV.dy, v - 0.5 * frame.faceWidth, currentUV.v)
+                  }
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>
+                  dy from −{frame.vLabel} edge (mm)
+                </span>
+                <NumberInput
+                  value={currentUV.dy}
+                  step={1}
+                  testId="surface-mate-dy"
+                  onChange={(v) =>
+                    applyPosition(currentUV.dx, v, currentUV.u, v - 0.5 * frame.faceHeight)
+                  }
+                />
+              </label>
+            </div>
+          )}
+
+          {frame && mode === 'center' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>
+                  u along {frame.uLabel} (mm)
+                </span>
+                <NumberInput
+                  value={currentUV.u}
+                  step={1}
+                  testId="surface-mate-u"
+                  onChange={(v) =>
+                    applyPosition(0.5 * frame.faceWidth + v, currentUV.dy, v, currentUV.v)
+                  }
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>
+                  v along {frame.vLabel} (mm)
+                </span>
+                <NumberInput
+                  value={currentUV.v}
+                  step={1}
+                  testId="surface-mate-v"
+                  onChange={(v) =>
+                    applyPosition(currentUV.dx, 0.5 * frame.faceHeight + v, currentUV.u, v)
+                  }
+                />
+              </label>
+            </div>
+          )}
+
+          {!companion && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px', alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>Seating</span>
+              <Seg<'flush' | 'centered' | 'recessed'>
+                value={seating}
+                options={[
+                  { value: 'flush', label: 'Flush', title: 'Base sits flush on host face' },
+                  { value: 'centered', label: 'Centred', title: 'Origin lies on host face' },
+                  { value: 'recessed', label: 'Recessed', title: 'Sunk inside host face' },
+                ]}
+                onChange={(s) => {
+                  setSeating(s);
+                  applyPosition(currentUV.dx, currentUV.dy, currentUV.u, currentUV.v, s);
+                }}
+              />
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={bindLets}
+                data-testid="surface-mate-bind-lets"
+                onChange={(e) => setBindLets((e.target as HTMLInputElement).checked)}
+              />
+              <span>Bind <code>let</code> params</span>
+            </label>
+            {frame && (
+              <button
+                type="button"
+                class="btn small primary"
+                data-testid="surface-mate-apply-btn"
+                onClick={() =>
+                  applyPosition(currentUV.dx, currentUV.dy, currentUV.u, currentUV.v)
+                }
+                style={{ fontSize: '10.5px', padding: '3px 8px' }}
+              >
+                Snap to {activeHostId}.{face}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NodeInspector({ node }: { node: Node }) {
   const id = node.id;
   const u = `Edit ${id}`;
   const inherited = node.color ? undefined : inheritedColor(store.doc, id);
   return (
     <div class="insp" data-inspector="node">
-      <div class="insp-heading">
+      <div class="insp-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
         <span class="kind">{kindLabel(node.kind)}</span>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {node.op === 'add' && node.kind.type !== 'group' && !findCompanionFixingNode(store.doc, id) && (
+            <button
+              type="button"
+              class="btn small"
+              data-testid="inspector-attach-bolt-btn"
+              title={`Add a bolt or fixing attached to ${id} (choose target surface & edge dimensions)`}
+              onClick={() => openFixingsCatalogueModal('hex_cap_bolt', id, 'top')}
+              style={{
+                fontSize: '10.5px',
+                padding: '2px 7px',
+                fontWeight: 600,
+                background: 'rgba(56, 189, 248, 0.12)',
+                borderColor: 'rgba(56, 189, 248, 0.4)',
+              }}
+            >
+              🔩 Attach Bolt to {id}…
+            </button>
+          )}
+          {node.kind.type === 'group' && (
+            <button
+              type="button"
+              class="btn ghost small"
+              data-testid="inspector-ungroup-btn"
+              title={`Dissolve group ${id} and keep all ${node.kind.children.length} child object(s)`}
+              onClick={() => {
+                let kept: Node[] = [];
+                store.transact(`Ungroup ${id}`, (d) => {
+                  kept = ungroupNode(d, id);
+                });
+                if (kept.length > 0) {
+                  store.select({ kind: 'node', id: kept[0].id });
+                  ui.notify(`Ungrouped ${id} (${kept.length} child object${kept.length === 1 ? '' : 's'} kept)`, 'info');
+                } else {
+                  store.select(null);
+                }
+              }}
+              style={{ fontSize: '10.5px', padding: '2px 7px' }}
+            >
+              📂 Ungroup (Keep {node.kind.children.length})
+            </button>
+          )}
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="inspector-delete-node-btn"
+            title={
+              node.kind.type === 'group'
+                ? `Delete group ${id} and all ${node.kind.children.length} child object(s) (Del)`
+                : `Delete ${id} (Del)`
+            }
+            onClick={() => {
+              store.transact(`Delete ${id}`, (d) => {
+                removeNodeAndCompanion(d, id, Boolean(findCompanionFixingNode(d, id)));
+              });
+              store.select(null);
+            }}
+            style={{ fontSize: '10.5px', padding: '2px 7px', color: 'var(--bad, #ef4444)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Icon.trash />
+            <span>{node.kind.type === 'group' ? `Delete Group (${node.kind.children.length})` : 'Delete'}</span>
+          </button>
+        </div>
       </div>
       <div class="field-grid">
         <label class="plain">Name</label>
@@ -549,9 +1316,36 @@ function NodeInspector({ node }: { node: Node }) {
       </div>
       <div class="section-label">Placement</div>
       <div class="field-grid">
-        <VecRow label="Position" unit="mm" get={(d) => nodeIn(d, id).transform.translate} set={(d, v) => (nodeIn(d, id).transform.translate = v)} undoLabel={`Move ${id}`} testId="position" driven={(i) => drivenExpr(store.doc, id, 'at', i)} />
-        <VecRow label="Rotation" unit="°" step={15} get={(d) => nodeIn(d, id).transform.rotate} set={(d, v) => (nodeIn(d, id).transform.rotate = v)} undoLabel={`Rotate ${id}`} testId="rotation" driven={(i) => drivenExpr(store.doc, id, 'rotate', i)} />
+        <VecRow
+          label="Position"
+          unit="mm"
+          get={(d) => nodeIn(d, id).transform.translate}
+          set={(d, v) => {
+            nodeIn(d, id).transform.translate = v;
+            const comp = findCompanionFixingNode(d, id);
+            if (comp) comp.transform.translate = [...v];
+          }}
+          undoLabel={`Move ${id}`}
+          testId="position"
+          driven={(i) => drivenExpr(store.doc, id, 'at', i)}
+        />
+        <VecRow
+          label="Rotation"
+          unit="°"
+          step={15}
+          get={(d) => nodeIn(d, id).transform.rotate}
+          set={(d, v) => {
+            nodeIn(d, id).transform.rotate = v;
+            const comp = findCompanionFixingNode(d, id);
+            if (comp) comp.transform.rotate = [...v];
+          }}
+          undoLabel={`Rotate ${id}`}
+          testId="rotation"
+          driven={(i) => drivenExpr(store.doc, id, 'rotate', i)}
+        />
       </div>
+      <BoltHardwareAndForcesPanel node={node} />
+      <SurfaceMateAndTreePanel node={node} />
       <ProfileEditor node={node} />
       {node.kind.type === 'mesh' && <MeshPanel node={node} />}
       {node.kind.type === 'group' && (

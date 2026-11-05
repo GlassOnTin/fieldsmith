@@ -1509,12 +1509,14 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     use fieldsmith_solve::coupled_system::{
         CoupledEngineeringSystem, NamedScenario, RegenerativeCooledNozzleSystem,
     };
+    use fieldsmith_solve::fixings::FastenerFixingSystem;
     use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
 
     let case = CffCase::uk5_reference().map_err(js_err)?;
     let bath_sys = FloatBathCoaterDesignSystem::new(case, 10);
     let nozzle_sys = RegenerativeCooledNozzleSystem::default();
     let candle_sys = SolarCandleIgnitionSystem;
+    let fixing_sys = FastenerFixingSystem::new();
 
     let bath_scenarios = vec![
         NamedScenario {
@@ -1558,6 +1560,23 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     ];
 
     let candle_scenarios = candle_sys.named_scenarios();
+    let fixing_scenarios = vec![
+        NamedScenario {
+            name: "A. Plastic Boss Setting (M4 Self-Tapping in PETG, 1.45 N·m)".to_string(),
+            description: "M4 Plastite self-tapping screw in ⌀10 mm PETG boss (E = 1.65 GPa, 12 g vibe) — governed by viscoplastic creep & boss hoop stress".to_string(),
+            design_p: vec![1.45, 4.0, 0.70, 8.0, 10.0, 1.65, 12.0, -20.0],
+        },
+        NamedScenario {
+            name: "B. Metal Housing Setting (M4 in AlSi10Mg LPBF, 3.20 N·m)".to_string(),
+            description: "M4 screw in AlSi10Mg housing (E = 70 GPa, 18 g vibe) — higher T_max governed by thread shear & core tension-torsion yield".to_string(),
+            design_p: vec![3.20, 4.0, 0.70, 8.0, 12.0, 70.0, 18.0, -40.0],
+        },
+        NamedScenario {
+            name: "C. JWST Cryo-Optics Setting (M5 Ti64 in SiC Bench @ 38 K, 28 g Launch)".to_string(),
+            description: "JWST-class M5 Ti-6Al-4V fastener on SiC optical bench (E = 410 GPa, ΔT = −255 °C cryo cooldown, 28 g Ariane 5 launch)".to_string(),
+            design_p: vec![4.80, 5.0, 0.80, 12.0, 15.0, 410.0, 28.0, -255.0],
+        },
+    ];
 
     to_json(&serde_json::json!([
         {
@@ -1592,6 +1611,17 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
             "epistemic_parameters": candle_sys.epistemic_parameters(),
             "objectives": candle_sys.objective_descriptors(),
             "scenarios": candle_scenarios,
+        },
+        {
+            "system_id": fixing_sys.system_id(),
+            "system_title": fixing_sys.system_title(),
+            "industry_sector": fixing_sys.industry_sector(),
+            "num_dofs": fixing_sys.num_dofs(),
+            "fields": fixing_sys.field_descriptors(),
+            "design_parameters": fixing_sys.design_parameters(),
+            "epistemic_parameters": fixing_sys.epistemic_parameters(),
+            "objectives": fixing_sys.objective_descriptors(),
+            "scenarios": fixing_scenarios,
         }
     ]))
 }
@@ -1611,6 +1641,7 @@ pub fn solve_coupled_system(
         CoupledEngineeringSystem, EngineConfig, MonolithicSystemEngine,
         RegenerativeCooledNozzleSystem,
     };
+    use fieldsmith_solve::fixings::FastenerFixingSystem;
     use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
 
     let t0 = clock();
@@ -1715,6 +1746,36 @@ pub fn solve_coupled_system(
             "constraints_pass_robust_p90": pass_p90,
             "float_bath_visual": serde_json::Value::Null,
             "candle_flame_visual": visual,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
+    } else if system_id == "jwst_fastener_fixing_envelope_v1" {
+        let sys = FastenerFixingSystem::new();
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig::default();
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": serde_json::Value::Null,
+            "candle_flame_visual": serde_json::Value::Null,
             "fsm_3d": fsm_3d,
             "wall_ms": wall_ms,
         }))

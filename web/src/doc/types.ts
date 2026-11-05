@@ -29,6 +29,7 @@ export type NodeKind =
   | { type: 'capsule'; radius: number; length: number }
   | { type: 'torus'; major: number; minor: number }
   | { type: 'extrude'; profile: ProfileVertex[]; height: number }
+  | { type: 'revolve'; profile: ProfileVertex[]; angle: number }
   | {
       type: 'mesh';
       src: string;
@@ -348,6 +349,8 @@ export function kindLabel(k: NodeKind): string {
       return 'Torus';
     case 'extrude':
       return 'Extrude';
+    case 'revolve':
+      return 'Revolve';
     case 'mesh':
       return 'Mesh';
     case 'extend':

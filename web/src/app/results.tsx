@@ -1983,6 +1983,15 @@ function ResultsPanel() {
   useApp();
   const [compact, setCompact] = useState(false);
   if (store.lens !== 'results') return null;
+  const minimized = ui.panelMinimized || ui.vpHudCollapsed;
+  const toggleMinimized = () => {
+    if (minimized) {
+      ui.set('panelMinimized', false);
+      if (ui.vpHudCollapsed) ui.set('vpHudCollapsed', false);
+    } else {
+      ui.set('panelMinimized', true);
+    }
+  };
   const s = analysis.state;
   const lvl = s.levels[s.levels.length - 1];
   const shown = lvl ? shownDisp(lvl) : null;
@@ -1993,15 +2002,40 @@ function ResultsPanel() {
   const legend = lvl ? legendLabels(lvl, mode, ci, hi, lvl.meta.yield_strength) : null;
   if (legend && animating) legend.caption = shown?.caption ?? '';
   const rng = lvl ? shownRange(lvl, shown!) : null;
+  const peakVmSummary = lvl ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem)) : 0;
+  const peakDeflSummary = lvl ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement)) : 0;
   // Arrow-key step inside the legend inputs: a tenth of the top bound, on the input's decade.
   const rangeStep = rng ? Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rng.hi))) - 1) : 1;
   return (
-    <div class="results-panel" data-testid="results-panel">
-      <div class="card-head">
-        <span class="title">Results</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {lvl && <span class="meta">{lvl.label}</span>}
-          {lvl && (
+    <div class={`results-panel${minimized ? ' minimized' : ''}`} data-testid="results-panel">
+      <div
+        class="card-head"
+        style={minimized ? { marginBottom: 0, cursor: 'pointer' } : undefined}
+        onClick={minimized ? toggleMinimized : undefined}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
+          <span class="title">Results</span>
+          {minimized && lvl && (
+            <span class="num" style={{ fontSize: '11px', color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <span
+                style={{
+                  width: '28px',
+                  height: '6px',
+                  borderRadius: '3px',
+                  background: gradientCss(mode),
+                  display: 'inline-block',
+                }}
+              />
+              <span>{fmt(peakVmSummary)} MPa · {fmt(peakDeflSummary)} mm</span>
+            </span>
+          )}
+          {minimized && !lvl && s.status === 'running' && (
+            <span class="meta">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+          {!minimized && lvl && <span class="meta">{lvl.label}</span>}
+          {!minimized && lvl && (
             <button
               type="button"
               class="mini-btn"
@@ -2012,12 +2046,23 @@ function ResultsPanel() {
               {compact ? 'More ▾' : 'Compact ▴'}
             </button>
           )}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="results-minimize-toggle"
+            title={minimized ? 'Expand Results panel' : 'Minimize Results panel to bottom bar'}
+            onClick={toggleMinimized}
+          >
+            {minimized ? '▴ Expand' : '▾ Min'}
+          </button>
         </div>
       </div>
-      {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
-      {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
-      {!lvl && s.status === 'ready' && <div class="hint">No results yet.</div>}
-      {lvl && (
+      {!minimized && (
+        <>
+          {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
+          {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
+          {!lvl && s.status === 'ready' && <div class="hint">No results yet.</div>}
+          {lvl && (
         <>
           <div class="field-grid">
             {/* Full-span row: five mode chips need the whole row width — with the 42px
@@ -2349,6 +2394,8 @@ function ResultsPanel() {
             <div class="probe" data-testid="probe">
               {fmt(ui.probe.value)} {ui.probe.unit} at ({ui.probe.point.map((v) => v.toFixed(1)).join(', ')}) mm
             </div>
+          )}
+            </>
           )}
         </>
       )}

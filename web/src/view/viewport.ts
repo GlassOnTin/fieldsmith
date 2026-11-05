@@ -745,8 +745,8 @@ export class Viewport {
       this.invalidate();
       return;
     }
-    const mat = this.buildMaterial(spec, { translucent: this.bodyAlpha < 1 });
-    const probe = new THREE.Mesh(this.quad.geometry, mat);
+    let mat = this.buildMaterial(spec, { translucent: this.bodyAlpha < 1 });
+    let probe = new THREE.Mesh(this.quad.geometry, mat);
     probe.frustumCulled = false;
     this.compiling++;
     let compileThrew: unknown = null;
@@ -766,7 +766,37 @@ export class Viewport {
     // runnable — a failed compile or link still resolves (verified on the headless stack).
     // Ask the wrapper; if the program is dead, keep the previous shader on screen and
     // surface the driver's log instead of rendering a silently blank viewport.
-    const linkFail = compileThrew !== null ? null : this.programLinkFailure(mat);
+    let linkFail = compileThrew !== null ? null : this.programLinkFailure(mat);
+    // Mobile GPU drivers (e.g. Adreno on Android WebGL2) inline every GLSL function call;
+    // when 4+ blends are nested, the secondary `fs_cgate` contact-probe calls cause 2^N
+    // instruction expansion that can exceed the mobile linker's instruction budget. Retry
+    // without the `fs_cgate` recursive re-evaluations before surfacing a link failure.
+    if (compileThrew === null && linkFail !== null && spec.source.includes('fs_cgate(')) {
+      this.dropFieldTextures(mat);
+      mat.dispose();
+      const mobileSpec: FieldSpec = {
+        ...spec,
+        source: spec.source.replace(/if \(k > 0\.0 && x\.x < k && y\.x < k\) \{[\s\S]*?\}/g, ''),
+        ident: spec.ident?.replace(/if \(abs\(da\.x\) < [^\n]+\n/g, ''),
+      };
+      mat = this.buildMaterial(mobileSpec, { translucent: this.bodyAlpha < 1 });
+      probe = new THREE.Mesh(this.quad.geometry, mat);
+      probe.frustumCulled = false;
+      this.compiling++;
+      try {
+        await this.renderer.compileAsync(probe, this.camera, this.scene);
+      } catch (err) {
+        compileThrew = err;
+      } finally {
+        this.compiling--;
+      }
+      if (gen !== this.fieldGen) {
+        this.dropFieldTextures(mat);
+        mat.dispose();
+        return;
+      }
+      linkFail = compileThrew !== null ? null : this.programLinkFailure(mat);
+    }
     if (compileThrew !== null || linkFail !== null) {
       this.onRenderError?.({
         kind: 'shader',

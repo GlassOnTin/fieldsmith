@@ -112,6 +112,9 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "inspect",
             "list_shapes",
             "upsert_shape",
+            "insert_fixing",
+            "solve_sketch",
+            "apply_sketch_feature",
             "delete_entity",
             "add_region",
             "add_support",
@@ -444,10 +447,11 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
 
     let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
     let systems = catalog["systems"].as_array().unwrap();
-    assert_eq!(systems.len(), 3);
+    assert_eq!(systems.len(), 4);
     assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
     assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
     assert_eq!(systems[2]["system_id"], "solar_candle_ignition_v1");
+    assert_eq!(systems[3]["system_id"], "jwst_fastener_fixing_envelope_v1");
 
     // Optimise the Regenerative Cooled Rocket Nozzle system via Sparse Adjoint steps
     // and verify that its 3D `.fsm` twin is automatically synced into the open CAD document.

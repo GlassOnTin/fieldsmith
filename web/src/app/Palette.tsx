@@ -8,6 +8,8 @@ import type { Modifier } from '../doc/types';
 import { ShapeIcon } from './icons';
 import { addModifier } from './Inspector';
 import { ui, useApp } from './ui';
+import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
+import { openFixingsCatalogueModal } from './FixingsModal';
 
 function score(c: Command, q: string): number {
   if (!q) return 1;
@@ -103,7 +105,21 @@ export function Menus() {
   const close = () => ui.set('menu', null);
   let items: { label: string; icon?: string; keys?: string; run: () => void; testId?: string }[] = [];
   if (m.kind === 'add') {
-    items = SHAPE_TYPES.map((s) => ({ label: s.label, icon: s.type, keys: s.key ? `Shift ${s.key}` : undefined, run: () => void addShape(s.type), testId: `add-${s.type}` }));
+    items = [
+      ...SHAPE_TYPES.map((s) => ({
+        label: s.label,
+        icon: s.type,
+        keys: s.key ? `Shift ${s.key}` : undefined,
+        run: () => void addShape(s.type),
+        testId: `add-${s.type}`,
+      })),
+      ...FIXINGS_CATALOGUE.map((f) => ({
+        label: `${f.icon} ${f.shortLabel}…`,
+        keys: f.isoStandard.split('/')[0].trim(),
+        run: () => openFixingsCatalogueModal(f.id),
+        testId: `add-fixing-${f.id}`,
+      })),
+    ];
   } else if (m.kind === 'modifier' && m.target) {
     items = (Object.keys(MODIFIER_LABEL) as Modifier['type'][]).map((t) => ({ label: MODIFIER_LABEL[t], run: () => addModifier(m.target!, t), testId: `mod-${t}` }));
   }

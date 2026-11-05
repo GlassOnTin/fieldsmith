@@ -85,6 +85,35 @@ fn m(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn m_ortho(
+    id: &str,
+    name: &str,
+    e: f64,
+    nu: f64,
+    ys: f64,
+    rho: f64,
+    wall: f64,
+    alpha: Option<f64>,
+    yield_z: Option<f64>,
+    shear_z: Option<f64>,
+    source: &str,
+) -> Material {
+    Material {
+        id: id.into(),
+        name: name.into(),
+        e,
+        nu,
+        yield_strength: ys,
+        density: rho,
+        min_wall: wall,
+        alpha,
+        yield_z,
+        shear_z,
+        source: source.into(),
+    }
+}
+
 /// The built-in library, in display order.
 pub fn library() -> Vec<Material> {
     vec![
@@ -104,6 +133,10 @@ pub fn library() -> Vec<Material> {
           "EOS StainlessSteel 316L data sheet: E ≈ 180–185 GPa, Rp0.2 ≈ 470–530 MPa (lower bound used), density 7.98 g/cm³. CTE 15.7 ×10⁻⁶/°C (25–100 °C, ASTM E228)."),
         m("cucrzr", "CuCrZr copper alloy (LPBF)", 128000.0, 0.34, 420.0, 8.91, 0.4, Some(17.0e-6),
           "Age-hardened CuCrZr LPBF data sheet class values: E ≈ 128 GPa, Rp0.2 ≈ 420 MPa, density 8.91 g/cm³. CTE 17.0 ×10⁻⁶/°C (20–300 °C, ASTM E228)."),
+        m_ortho("cf_woven_3k", "3K Woven CFRP Laminate (Space Epoxy, Tsai–Wu)", 70000.0, 0.10, 620.0, 1.58, 0.6, Some(2.1e-6), Some(42.0), Some(58.0),
+          "Aerospace 3K plain-weave carbon/epoxy quasi-balanced laminate (AGATE / T300-Cycom 934 class): in-plane E₁₁ = E₂₂ = 70 GPa, ν₁₂ = 0.10, in-plane tensile/bearing strength 620 MPa, out-of-plane interlaminar tensile S_z = 42 MPa, interlaminar shear S_s = 58 MPa (ASTM D2344), CTE = 2.1 ×10⁻⁶/°C."),
+        m("sic_jwst", "SiC Space-Optics Ceramic (Weibull Brittle)", 410000.0, 0.17, 340.0, 3.10, 1.0, Some(2.2e-6),
+          "Sintered Silicon Carbide (Boostec SiC space-optics bench class): E = 410 GPa, ν = 0.17, characteristic flexural/tensile Weibull scale σ₀ = 340 MPa (Weibull modulus m = 10.5), ρ = 3.10 g/cm³, CTE = 2.2 ×10⁻⁶/°C."),
     ]
 }
 

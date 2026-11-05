@@ -1,6 +1,6 @@
 # Mobile e2e — the narrow-screen layout
 
-**Result: PASS**  ·  2026-10-18T07:02:54.785Z
+**Result: PASS**  ·  2026-11-05T00:05:22.884Z
 
 Viewport 412 × 892 (below the 900 px breakpoint): one column, slide-in drawers, no overlay collisions.
 
@@ -29,7 +29,7 @@ Viewport 412 × 892 (below the 900 px breakpoint): one column, slide-in drawers,
 | a scrim covers the viewport | pass | {"x":0,"y":0,"w":412,"h":892} |
 | tree drawer parked again | pass | {"x":-321,"y":0,"w":320,"h":892} |
 | inspector drawer at the right edge | pass | {"x":92,"y":0,"w":320,"h":892} |
-| make panel and opacity panel do not overlap | pass | make {"x":12,"y":711,"w":330,"h":143} vs opacity {"x":10,"y":78,"w":310,"h":38} |
+| make panel and opacity panel do not overlap | pass | make {"x":12,"y":573,"w":330,"h":281} vs opacity {"x":10,"y":78,"w":266,"h":34} |
 | no horizontal overflow with panels shown | pass |  |
 | drawer toggles hidden on desktop | pass | {"x":0,"y":0,"w":0,"h":0} |
 | tree panel is a 240 px column again | pass | {"x":0,"y":0,"w":240,"h":774} |

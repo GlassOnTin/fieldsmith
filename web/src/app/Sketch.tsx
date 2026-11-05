@@ -164,7 +164,7 @@ export function SketchCanvas({ id }: { id: string }) {
     const canvas = ref.current;
     if (!canvas) return;
     const nd = findExtrude(store.doc.root, id);
-    if (!nd || nd.kind.type !== 'extrude') return;
+    if (!nd || (nd.kind.type !== 'extrude' && nd.kind.type !== 'revolve')) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
@@ -224,7 +224,7 @@ export function SketchCanvas({ id }: { id: string }) {
 
   const down = (e: PointerEvent) => {
     const nd = findExtrude(store.doc.root, id);
-    if (!nd || nd.kind.type !== 'extrude') return;
+    if (!nd || (nd.kind.type !== 'extrude' && nd.kind.type !== 'revolve')) return;
     const [px, py] = local(e);
     const { view, pxLine, ends } = sketchView(nd.kind.profile);
     const hit = locate(nd.kind.profile, pxLine, ends, px, py);
@@ -243,7 +243,7 @@ export function SketchCanvas({ id }: { id: string }) {
     const at = hit.i;
     store.transact('Add profile point', (d: Document) => {
       const ex = findExtrude(d.root, id);
-      if (ex && ex.kind.type === 'extrude') ex.kind.profile.splice(at + 1, 0, { x: mx, y: my, bulge: 0 });
+      if (ex && (ex.kind.type === 'extrude' || ex.kind.type === 'revolve')) ex.kind.profile.splice(at + 1, 0, { x: mx, y: my, bulge: 0 });
     });
   };
 
@@ -252,7 +252,7 @@ export function SketchCanvas({ id }: { id: string }) {
       if (e.buttons !== 0) return;
       const [px, py] = local(e);
       const nd = findExtrude(store.doc.root, id);
-      if (!nd || nd.kind.type !== 'extrude') {
+      if (!nd || (nd.kind.type !== 'extrude' && nd.kind.type !== 'revolve')) {
         setHot(null);
         return;
       }
@@ -269,7 +269,7 @@ export function SketchCanvas({ id }: { id: string }) {
     const i = drag.current;
     store.transient((d: Document) => {
       const ex = findExtrude(d.root, id);
-      if (ex && ex.kind.type === 'extrude') {
+      if (ex && (ex.kind.type === 'extrude' || ex.kind.type === 'revolve')) {
         ex.kind.profile[i].x = mx;
         ex.kind.profile[i].y = my;
       }

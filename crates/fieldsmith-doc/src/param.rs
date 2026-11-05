@@ -164,7 +164,8 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             | (NodeKind::Sphere { .. }, "radius")
             | (NodeKind::Capsule { .. }, "radius" | "length")
             | (NodeKind::Torus { .. }, "major" | "minor")
-            | (NodeKind::Extrude { .. }, "height") => no_index(addr, attr),
+            | (NodeKind::Extrude { .. }, "height")
+            | (NodeKind::Revolve { .. }, "angle") => no_index(addr, attr),
             (NodeKind::Group { .. }, _)
             | (NodeKind::Mesh { .. }, _)
             | (NodeKind::Extend { .. }, _) => Err(format!(
@@ -354,6 +355,7 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
             (NodeKind::Torus { major, .. }, "major", None) => *major = v,
             (NodeKind::Torus { minor, .. }, "minor", None) => *minor = v,
             (NodeKind::Extrude { height, .. }, "height", None) => *height = v,
+            (NodeKind::Revolve { angle, .. }, "angle", None) => *angle = v,
             (_, "at", Some(k)) => node.transform.translate[k] = v,
             (_, "rotate", Some(k)) => node.transform.rotate[k] = v,
             _ => unreachable!("the writer was checked against this statement"),
@@ -399,6 +401,7 @@ fn attrs_note(kind: &NodeKind) -> String {
         NodeKind::Capsule { .. } => "radius, length",
         NodeKind::Torus { .. } => "major, minor",
         NodeKind::Extrude { .. } => "height (profile vertices are not sweep parameters)",
+        NodeKind::Revolve { .. } => "angle (profile vertices are not sweep parameters)",
         NodeKind::Group { .. } => "a group carries no numbers; its shapes do",
         NodeKind::Mesh { .. } => {
             "a mesh import carries no sweep parameters (its grid was \
@@ -417,6 +420,7 @@ fn kind_name(kind: &NodeKind) -> &'static str {
         NodeKind::Capsule { .. } => "capsule",
         NodeKind::Torus { .. } => "torus",
         NodeKind::Extrude { .. } => "extrude",
+        NodeKind::Revolve { .. } => "revolve",
         NodeKind::Group { .. } => "group",
         NodeKind::Mesh { .. } => "mesh",
         NodeKind::Extend { .. } => "extend",

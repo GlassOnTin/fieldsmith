@@ -43,6 +43,13 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M2.5 5.5h7v6M9.5 5.5l3-3" />
     </S>
   ),
+  revolve: () => (
+    <S>
+      <path d="M8 2v12" stroke-dasharray="1.5 1.5" />
+      <path d="M9.5 3.5h3v9h-3z" />
+      <path d="M6.5 4.5a4.5 2 0 1 0 3 0" />
+    </S>
+  ),
   group: () => (
     <S>
       <path d="M2 4.5h4.5l1.2 1.5H14v7.5H2z" />
@@ -175,6 +182,188 @@ export const Icon: Record<string, () => JSX.Element> = {
     <S>
       <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
       <path d="M5.5 2.5v11M10.5 2.5v11" />
+    </S>
+  ),
+  // ---- Parametric Sketcher & Constraint Solver Icons (FreeCAD / SolveSpace / Shapr3D visual language) ----
+  sketcher: () => (
+    <S>
+      <rect x="2" y="2" width="12" height="12" rx="1.5" stroke-dasharray="2 1.5" />
+      <path d="M4.5 11.5h7v-5l-3.5-2.5-3.5 2.5z" />
+      <circle cx="4.5" cy="11.5" r="1.2" fill="currentColor" />
+      <circle cx="11.5" cy="11.5" r="1.2" fill="currentColor" />
+    </S>
+  ),
+  fixing: () => (
+    <S>
+      <path d="M4.5 2.5h7v2.5h-7z" />
+      <path d="M6.2 5v8.5l1.8 1.2 1.8-1.2V5" />
+      <path d="M6.2 7.2h3.6M6.2 9.5h3.6M6.2 11.8h3.6" />
+    </S>
+  ),
+  // 2D Geometry Creation Icons
+  geomLine: () => (
+    <S>
+      <path d="M3 13 13 3" />
+      <circle cx="3" cy="13" r="1.6" fill="currentColor" />
+      <circle cx="13" cy="3" r="1.6" fill="currentColor" />
+    </S>
+  ),
+  geomRect: () => (
+    <S>
+      <rect x="2.5" y="3.5" width="11" height="9" />
+      <circle cx="2.5" cy="3.5" r="1.4" fill="currentColor" />
+      <circle cx="13.5" cy="12.5" r="1.4" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.1" fill="currentColor" />
+    </S>
+  ),
+  geomCircle: () => (
+    <S>
+      <circle cx="8" cy="8" r="5.5" />
+      <circle cx="8" cy="8" r="1.3" fill="currentColor" />
+    </S>
+  ),
+  geomSlot: () => (
+    <S>
+      <rect x="2" y="5" width="12" height="6" rx="3" />
+      <path d="M5 8h6" stroke-dasharray="1.5 1.5" />
+    </S>
+  ),
+  geomBoltCircle: () => (
+    <S>
+      <circle cx="8" cy="8" r="5.2" stroke-dasharray="1.8 1.8" />
+      <circle cx="8" cy="2.8" r="1.4" />
+      <circle cx="13.2" cy="8" r="1.4" />
+      <circle cx="8" cy="13.2" r="1.4" />
+      <circle cx="2.8" cy="8" r="1.4" />
+    </S>
+  ),
+  geomPolygon: () => (
+    <S>
+      <path d="M8 2.2 13 5.1v5.8L8 13.8 3 10.9V5.1z" />
+      <circle cx="8" cy="8" r="1.8" />
+    </S>
+  ),
+  geomFillet: () => (
+    <S>
+      <path d="M3 13V8a5 5 0 0 1 5-5h5" />
+      <path d="M3 6.5V3h3.5" stroke-dasharray="1.3 1.3" />
+      <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+    </S>
+  ),
+  // Geometric & Dimensional Constraint Icons (FreeCAD crimson/amber icon style)
+  conCoincident: () => (
+    <S>
+      <circle cx="8" cy="8" r="4.2" />
+      <circle cx="8" cy="8" r="1.8" fill="currentColor" />
+      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2" />
+    </S>
+  ),
+  conFixed: () => (
+    <S>
+      <rect x="4" y="7.5" width="8" height="6" rx="1" />
+      <path d="M5.5 7.5V5.2a2.5 2.5 0 0 1 5 0v2.3" />
+    </S>
+  ),
+  conHorizontal: () => (
+    <S>
+      <path d="M2 8h12" stroke-width="2" />
+      <circle cx="2.5" cy="8" r="1.5" fill="currentColor" />
+      <circle cx="13.5" cy="8" r="1.5" fill="currentColor" />
+    </S>
+  ),
+  conVertical: () => (
+    <S>
+      <path d="M8 2v12" stroke-width="2" />
+      <circle cx="8" cy="2.5" r="1.5" fill="currentColor" />
+      <circle cx="8" cy="13.5" r="1.5" fill="currentColor" />
+    </S>
+  ),
+  conParallel: () => (
+    <S>
+      <path d="M3 12 9 3M7 13l6-9" stroke-width="1.7" />
+    </S>
+  ),
+  conPerpendicular: () => (
+    <S>
+      <path d="M3 13h10M8 13V3" stroke-width="1.7" />
+      <path d="M8 10h3v3" />
+    </S>
+  ),
+  conEqual: () => (
+    <S>
+      <path d="M3.5 6h9M3.5 10h9" stroke-width="1.9" />
+    </S>
+  ),
+  conTangent: () => (
+    <S>
+      <circle cx="6.5" cy="9.5" r="4.2" />
+      <path d="M2.5 13.5 13.5 2.5" stroke-width="1.6" />
+    </S>
+  ),
+  conConcentric: () => (
+    <S>
+      <circle cx="8" cy="8" r="5.8" />
+      <circle cx="8" cy="8" r="2.6" />
+      <circle cx="8" cy="8" r="0.9" fill="currentColor" />
+    </S>
+  ),
+  conSymmetric: () => (
+    <S>
+      <path d="M8 2v12" stroke-dasharray="1.6 1.6" />
+      <path d="M5.5 5 2.5 8l3 3M10.5 5l3 3-3 3" />
+    </S>
+  ),
+  conMidpoint: () => (
+    <S>
+      <path d="M2.5 13.5 13.5 2.5" />
+      <circle cx="8" cy="8" r="2" fill="currentColor" />
+    </S>
+  ),
+  conDistance: () => (
+    <S>
+      <path d="M2.5 4v8M13.5 4v8M2.5 8h11" />
+      <path d="M4.8 6 2.5 8l2.3 2M11.2 6l2.3 2-2.3 2" />
+    </S>
+  ),
+  conDiameter: () => (
+    <S>
+      <circle cx="8" cy="8" r="5" />
+      <path d="M3.2 12.8 12.8 3.2" stroke-width="1.6" />
+    </S>
+  ),
+  conAngle: () => (
+    <S>
+      <path d="M3 13h10M3 13 11 3.5" stroke-width="1.5" />
+      <path d="M9.5 13a6.5 6.5 0 0 0-2.3-5" />
+    </S>
+  ),
+  // Stage 2 3D Surface-Feature Operation Icons (Pad/Boss, Pocket/Cut, Revolve Boss, Groove Cut)
+  featBossExtrude: () => (
+    <S>
+      <path d="M3 11.5 8 14l5-2.5V6L8 3.5 3 6z" />
+      <path d="M3 6 8 8.5 13 6M8 8.5V14" />
+      <path d="M8 1.2v3.5M6.3 2.8 8 1.2l1.7 1.6" stroke-width="1.6" />
+    </S>
+  ),
+  featPocketCut: () => (
+    <S>
+      <path d="M2.5 11.5 8 14l5.5-2.5V5L8 2.5 2.5 5z" />
+      <path d="M5.2 6.2 8 7.6l2.8-1.4v3.6L8 11.2 5.2 9.8z" stroke-dasharray="1.5 1.2" />
+    </S>
+  ),
+  featRevolveBoss: () => (
+    <S>
+      <path d="M8 1.5v13" stroke-dasharray="1.5 1.5" />
+      <path d="M9.8 3.5h3.2v9H9.8z" />
+      <path d="M5.8 5a4.5 2.2 0 1 0 4 0" />
+      <path d="M4.5 3.6 5.8 5l-1.8.8" />
+    </S>
+  ),
+  featRevolveCut: () => (
+    <S>
+      <path d="M8 1.5v13" stroke-dasharray="1.5 1.5" />
+      <path d="M9.8 3h3.4v3.2h-1.8v3.6h1.8V13H9.8z" />
+      <path d="M5.8 5a4.5 2.2 0 1 0 4 0" stroke-dasharray="1.4 1.2" />
     </S>
   ),
 };

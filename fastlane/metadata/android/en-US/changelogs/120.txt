@@ -1,0 +1,5 @@
+v0.12.0:
+- Fixings workbench: attach bolts, screws, ISO 7089 washers, hex/nyloc nuts, and snap-fits to any part surface by edge (dx, dy) or centre (u, v) dimensions.
+- Fastener mechanics: torque windows (T_min, T_rec, T_max), Weibull fracture, creep retention, and holdable axial/shear forces across 19 fastener and 24 host materials.
+- 2D sketch constraint solver (Gauss-Newton) with DOF tracking and Extrude/Revolve/Hole-Pattern output.
+- Collapsible mobile Results drawer.

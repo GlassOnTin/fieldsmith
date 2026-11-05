@@ -4,6 +4,7 @@
 
 import type { Document, Material, Node } from './types';
 import { walk } from './types';
+import { applyAddrs } from './param';
 import { materialLibrary } from './wasm';
 
 export type ContinuumPhaseId =
@@ -361,6 +362,65 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
         'EOS NickelAlloy IN718 heat-treated LPBF data sheet: E = 190 GPa, Rp0.2 = 980 MPa, ρ = 8.19 g/cm³, CTE = 13.0×10⁻⁶/°C.',
     },
   },
+  {
+    id: 'cf_woven_3k',
+    name: '3K Woven CFRP Laminate (Space Epoxy, Tsai–Wu)',
+    phase: 'solid_elastic',
+    phaseLabel: 'Orthotropic Woven Composite · Tsai–Wu',
+    badgeColor: '#0284c7',
+    defaultHexColor: '#334155',
+    constitutiveEquation:
+      'σ = C_ortho(E₁₁, E₂₂, G₁₂) : ε,   U_peel = √((max(0, σ_nn)/S_z)² + (τ_nt/S_s)²) ≤ 1',
+    parameters: [
+      { symbol: 'E₁₁ = E₂₂', label: 'In-plane woven modulus', value: '70.0', unit: 'GPa' },
+      { symbol: 'S_inline', label: 'In-plane tensile/bearing strength', value: '620.0', unit: 'MPa' },
+      { symbol: 'S_z', label: 'Interlaminar tensile peel strength', value: '42.0', unit: 'MPa' },
+      { symbol: 'S_s', label: 'Interlaminar shear strength (ASTM D2344)', value: '58.0', unit: 'MPa' },
+      { symbol: 'α', label: 'In-plane thermal expansion', value: '2.1 × 10⁻⁶', unit: 'K⁻¹' },
+    ],
+    fsmMaterial: {
+      id: 'cf_woven_3k',
+      name: '3K Woven CFRP Laminate (Space Epoxy, Tsai–Wu)',
+      e: 70000.0,
+      nu: 0.1,
+      yield_strength: 620.0,
+      density: 1.58,
+      min_wall: 0.6,
+      alpha: 2.1e-6,
+      yield_z: 42.0,
+      shear_z: 58.0,
+      source:
+        'Aerospace 3K plain-weave carbon/epoxy quasi-balanced laminate: E₁₁=E₂₂=70 GPa, S_z=42 MPa, S_s=58 MPa.',
+    },
+  },
+  {
+    id: 'sic_jwst',
+    name: 'SiC Space-Optics Ceramic (Weibull Brittle)',
+    phase: 'solid_elastic',
+    phaseLabel: 'Cryo Space-Optics Ceramic · Weibull',
+    badgeColor: '#0ea5e9',
+    defaultHexColor: '#475569',
+    constitutiveEquation:
+      'P_f(σ₁) = 1 − exp(−∫_V (max(0, σ₁) / σ₀)^m dV / V₀)',
+    parameters: [
+      { symbol: 'E', label: 'Young’s modulus', value: '410.0', unit: 'GPa' },
+      { symbol: 'σ₀', label: 'Weibull characteristic scale (63.2%)', value: '340.0', unit: 'MPa' },
+      { symbol: 'm', label: 'Weibull flaw modulus', value: '10.5', unit: '—' },
+      { symbol: 'α', label: 'Cryogenic CTE', value: '2.2 × 10⁻⁶', unit: 'K⁻¹' },
+    ],
+    fsmMaterial: {
+      id: 'sic_jwst',
+      name: 'SiC Space-Optics Ceramic (Weibull Brittle)',
+      e: 410000.0,
+      nu: 0.17,
+      yield_strength: 340.0,
+      density: 3.1,
+      min_wall: 1.0,
+      alpha: 2.2e-6,
+      source:
+        'Sintered Silicon Carbide (Boostec SiC space-optics bench class): E = 410 GPa, ν = 0.17, σ₀ = 340 MPa, m = 10.5.',
+    },
+  },
 ];
 
 /** Look up rich continuum metadata for any material ID (built-in solid, multiphysics continuum, or custom). */
@@ -417,7 +477,8 @@ export function ensureContinuumMaterialInDoc(draft: Document, matId: string): vo
   }
 }
 
-/** Set or update a named scalar `let` parameter in `draft.lets`. */
+/** Set or update a named scalar `let` parameter in `draft.lets`, and re-evaluate any
+ * consumer expressions in `draft.consumed` that depend on it. */
 export function upsertLetParam(draft: Document, name: string, value: number): void {
   if (!draft.lets) draft.lets = [];
   const existing = draft.lets.find((l) => l.name === name);
@@ -427,6 +488,13 @@ export function upsertLetParam(draft: Document, name: string, value: number): vo
     existing.expr = formatted;
   } else {
     draft.lets.push({ name, expr: formatted, value });
+  }
+  if (draft.consumed && draft.consumed.length > 0) {
+    try {
+      applyAddrs(draft, [[{ id: name, attr: '', comp: null }, value]], true);
+    } catch {
+      // Ignore if an unrelated consumer expression is mid-edit
+    }
   }
 }
 
@@ -482,69 +550,54 @@ export function collectVolumeContinuumNodes(doc: Document): {
   return out;
 }
 
-/** Determine which coupled multiphysics solver regime is active by inspecting:
- * 1. Assigned volume continuum materials in `Shape (1)` and `let` BCs in `Setup (2)` FIRST,
- * 2. Document name fallback for legacy `.fsm` files. */
+/** Determine which coupled multiphysics benchmark digital-twin regime is active.
+ * IMPORTANT: Only return one of the 3 fixed-coordinate benchmark twin regimes when the
+ * document actually IS that multi-body benchmark assembly (by volume material pair,
+ * benchmark node IDs, or explicit benchmark document name). Never trigger a benchmark
+ * 3D overlay merely because a user added a general `let` parameter or boundary condition
+ * in Setup (2) on their own CAD part. */
 export function detectCoupledPhysicsRegime(doc: Document): CoupledPhysicsRegime {
   const vols = collectVolumeContinuumNodes(doc);
   const matIds = new Set<string>([doc.material, ...vols.map((v) => v.matId)]);
-  const letNames = new Set<string>((doc.lets ?? []).map((l) => l.name));
-
-  // 1. Float Bath regime: molten_tin or soda_lime_glass material, or float-bath BCs (h_sill, i_motor, u_pull)
-  if (
-    matIds.has('molten_tin') ||
-    matIds.has('soda_lime_glass') ||
-    matIds.has('h2_n2_gas') ||
-    letNames.has('h_sill') ||
-    letNames.has('i_motor') ||
-    letNames.has('u_pull')
-  ) {
-    return 'pilkington_uk5_float_bath';
-  }
-
-  // 2. Solar Candle Ignition regime: nbk7_glass + paraffin_wax / cotton_wick, or solar beam BCs (i_solar, f_lens)
-  if (
-    matIds.has('paraffin_wax') ||
-    matIds.has('cotton_wick') ||
-    (matIds.has('nbk7_glass') && (letNames.has('i_solar') || letNames.has('f_lens') || doc.heat_fluxes.length > 0)) ||
-    letNames.has('i_solar')
-  ) {
-    return 'solar_candle_ignition';
-  }
-
-  // 3. Swirl Spray Combustor regime: jet_a1_spray or swirl BCs (swirl_number, m_dot_fuel)
-  if (
-    matIds.has('jet_a1_spray') ||
-    letNames.has('swirl_number') ||
-    letNames.has('m_dot_fuel')
-  ) {
-    return 'annular_swirl_spray_combustor';
-  }
-
-  // 4. Fallback for legacy documents by name/shape IDs
+  const nodeIds = new Set<string>(vols.map((v) => v.node.id.toLowerCase()));
   const nameLower = (doc.name ?? '').toLowerCase();
-  const nodeIds = vols.map((v) => v.node.id.toLowerCase());
+
+  // 1. Pilkington UK5 Float-Bath benchmark twin: requires both molten_tin and soda_lime_glass volumes,
+  //    or explicit float-bath assembly node IDs / document title.
   if (
-    nameLower.includes('candle') ||
-    nameLower.includes('t13') ||
-    (nodeIds.includes('focus_lens') && nodeIds.includes('wax_column'))
-  ) {
-    return 'solar_candle_ignition';
-  }
-  if (
-    nameLower.includes('swirl') ||
-    nameLower.includes('combustor') ||
-    nameLower.includes('t9')
-  ) {
-    return 'annular_swirl_spray_combustor';
-  }
-  if (
-    nameLower.includes('float') ||
+    (matIds.has('molten_tin') && matIds.has('soda_lime_glass')) ||
+    (nodeIds.has('tin_bath_pool') && nodeIds.has('glass_ribbon')) ||
+    nameLower.includes('float-bath') ||
+    nameLower.includes('float bath') ||
     nameLower.includes('pilkington') ||
     nameLower.includes('uk5') ||
-    nameLower.includes('t8')
+    nameLower.includes('t8 —')
   ) {
     return 'pilkington_uk5_float_bath';
+  }
+
+  // 2. Solar Candle Ignition benchmark twin: requires paraffin_wax + cotton_wick volumes,
+  //    or explicit candle assembly node IDs / document title.
+  if (
+    (matIds.has('paraffin_wax') && matIds.has('cotton_wick')) ||
+    (nodeIds.has('candle_column') && nodeIds.has('candle_wick')) ||
+    (nodeIds.has('focus_lens') && nodeIds.has('wax_column')) ||
+    nameLower.includes('candle') ||
+    nameLower.includes('t13 —')
+  ) {
+    return 'solar_candle_ignition';
+  }
+
+  // 3. Annular Swirl Spray Combustor benchmark twin: requires combustor + swirl chamber nodes,
+  //    or explicit swirl combustor document title.
+  if (
+    (nodeIds.has('combustor_casing') && nodeIds.has('swirl_chamber')) ||
+    (matIds.has('jet_a1_spray') && nodeIds.has('nozzle_body')) ||
+    nameLower.includes('swirl atomiser') ||
+    nameLower.includes('spray combustor') ||
+    nameLower.includes('t9 —')
+  ) {
+    return 'annular_swirl_spray_combustor';
   }
 
   return null;
@@ -556,6 +609,7 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
   const vols = collectVolumeContinuumNodes(doc);
   const phases = new Set<ContinuumPhaseId>(vols.map((v) => v.spec.phase));
   const matIds = new Set<string>([doc.material, ...vols.map((v) => v.matId)]);
+  const letNames = new Set<string>((doc.lets ?? []).map((l) => l.name));
   const regime = detectCoupledPhysicsRegime(doc);
 
   const hasShapes = doc.root.length > 0;
@@ -571,21 +625,37 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
   const hasFill = doc.fill != null;
   const hasErode = (doc.fill?.erode ?? 0) > 0;
 
-  const isFloatBath =
+  const isViscousCreep =
     regime === 'pilkington_uk5_float_bath' ||
     phases.has('viscous_melt') ||
-    phases.has('liquid_metal');
+    letNames.has('u_pull') ||
+    letNames.has('h_sill') ||
+    doc.loads.some((l) => l.id.includes('viscous_pull'));
+  const isEmLorentz =
+    regime === 'pilkington_uk5_float_bath' ||
+    phases.has('liquid_metal') ||
+    letNames.has('i_current') ||
+    letNames.has('b_field') ||
+    letNames.has('i_motor') ||
+    doc.loads.some((l) => l.id.includes('lorentz')) ||
+    doc.heat_fluxes.some((f) => f.id.includes('joule'));
   const isOptics =
     regime === 'solar_candle_ignition' ||
     phases.has('optical_medium') ||
-    doc.lets?.some((l) => l.name === 'i_solar') === true;
+    letNames.has('i_beam') ||
+    letNames.has('i_solar') ||
+    doc.heat_fluxes.some((f) => f.id.includes('optical') || f.id.includes('solar'));
   const isPhaseChange =
     regime === 'solar_candle_ignition' || phases.has('phase_change_fuel');
   const isReactiveFlow =
     regime === 'solar_candle_ignition' ||
     regime === 'annular_swirl_spray_combustor' ||
     phases.has('reactive_gas') ||
-    phases.has('phase_change_fuel');
+    phases.has('phase_change_fuel') ||
+    letNames.has('swirl_number') ||
+    letNames.has('m_dot_jet') ||
+    letNames.has('m_dot_fuel') ||
+    doc.temperatures.some((t) => t.id.includes('flame') || t.id.includes('thermal_jet'));
 
   const docMatSpec = getContinuumMaterialSpec(doc, doc.material);
 
@@ -600,7 +670,7 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       active: hasShapes,
       triggerSummary: hasShapes
         ? `Active: ${vols.length} primitive/group volume(s) in Shape (1)${hasSubdomains ? ` across ${matIds.size} distinct material subdomains` : ''}.`
-        : 'Standby: Add a shape primitive (Box, Cylinder, Extrude, …) in Shape (1).',
+        : 'Standby: Add a shape primitive (Box, Cylinder, Extrude, Revolve, …) in Shape (1).',
       strongForm:
         'd_Ω(x) = fold_k Op_k(d_{k−1}(x), T_k⁻¹ d_prim,k(x), r_blend),   Ω = { x ∈ ℝ³ : d_Ω(x) ≤ 0 }',
       weakOrDiscreteForm:
@@ -608,6 +678,27 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       liveParameters: [
         `Active CSG primitives: ${vols.map((v) => `${v.node.id} (${v.node.op}, ${v.spec.name})`).join(', ') || 'none'}`,
         `Subdomain indicator fields χ_m(x): ${matIds.size} material domain(s) (${Array.from(matIds).join(', ')})`,
+      ],
+    },
+
+    // 1b. Shape Stage: Parametric 2D Sketch Constraint Solver (Damped Levenberg–Marquardt + Column-Pivoted QR + Surface-Attached 3D Extrude/Revolve)
+    {
+      id: 'sketch_lm_qr_constraint_solver',
+      stage: 'shape',
+      stageNumber: 1,
+      title: 'Parametric 2D Sketch Constraint Solver (Damped Levenberg–Marquardt, Homotopy & Column-Pivoted QR Rank)',
+      shortName: 'Parametric Sketch Solver (LM + QR DOF & Revolve SDF)',
+      active: vols.some((v) => v.node.kind.type === 'extrude' || v.node.kind.type === 'revolve'),
+      triggerSummary: vols.some((v) => v.node.kind.type === 'extrude' || v.node.kind.type === 'revolve')
+        ? `Active: ${vols.filter((v) => v.node.kind.type === 'extrude' || v.node.kind.type === 'revolve').length} profile-driven Extrude/Revolve feature(s) in Shape (1).`
+        : 'Standby: Click ✏️ Sketch… in Shape (1) or add an Extrude / Revolve profile.',
+      strongForm:
+        '(Jᵀ J + λ I) δq = −Jᵀ r(q; α),   DOF = N_vars − rank(J),   d_revolve(x) = d_poly2d(√(x² + y²), z)',
+      weakOrDiscreteForm:
+        'J P = Q R  (Householder column-pivoted QR, |R_kk| > 10⁻⁷)  ⇒  P_null = I − J⁺ J,   homotopy α ∈ {0.25, 0.5, 0.75, 1.0}',
+      liveParameters: [
+        `Profile-driven 3D nodes: ${vols.filter((v) => v.node.kind.type === 'extrude' || v.node.kind.type === 'revolve').map((v) => `${v.node.id} (${v.node.kind.type})`).join(', ') || 'none (ready in ✏️ Sketch…)'}`,
+        `Parametric let variables available for sketch dimensions: ${(doc.lets ?? []).map((l) => `${l.name}=${l.value}`).join(', ') || 'none'}`,
       ],
     },
 
@@ -656,47 +747,69 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       ],
     },
 
-    // 4. Viscous Glass Sheet Extension & VFT Rheology (Float Bath)
+    // 4. Viscoelastic / VFT Melt Extension & Creep Rheology
     {
       id: 'vft_viscous_glass_sheet',
       stage: 'setup',
       stageNumber: 2,
-      title: '2D Extensional Viscous Glass Sheet & Vogel–Fulcher–Tammann (VFT) Rheology',
-      shortName: 'VFT Viscous Glass Sheet (float2fe)',
-      active: isFloatBath,
-      triggerSummary: isFloatBath
-        ? `Active: Volume assigned 'soda_lime_glass' (VFT Viscous Melt) in Shape (1) or float-bath pull/attenuation BCs in Setup (2).`
-        : "Standby: Assign material 'Soda-Lime Float Glass (VFT Melt)' to a ribbon volume in Shape (1).",
+      title:
+        regime === 'pilkington_uk5_float_bath'
+          ? '2D Extensional Viscous Glass Sheet & Vogel–Fulcher–Tammann (VFT) Rheology'
+          : 'Viscoelastic / VFT Melt Extension & High-Temperature Creep Rheology',
+      shortName:
+        regime === 'pilkington_uk5_float_bath'
+          ? 'VFT Viscous Glass Sheet (float2fe)'
+          : 'VFT Viscous Melt & Creep Rheology',
+      active: isViscousCreep,
+      triggerSummary: isViscousCreep
+        ? `Active: VFT Viscous Melt material in Shape (1) or Viscous Pull / Creep BC in Setup (2).`
+        : "Standby: Assign a VFT Viscous Melt material in Shape (1) or click '+ Viscous Pull' in Setup (2).",
       strongForm:
-        '∇ · (h η(T_g) [2 D + tr(D) I]) + τ_top_roll − τ_Sn,slip = 0,   log₁₀ η(T_g) = −A + B / (T_g − T₀)',
+        '∇ · (h η(T) [2 D + tr(D) I]) + τ_traction = 0,   log₁₀ η(T) = −A + B / (T − T₀)',
       weakOrDiscreteForm:
-        'u_x ∂h/∂x + ∂(h u_y)/∂y = 0,   σ_nn|edge = γ_g / h − ½ ρ_g g (1 − ρ_g / ρ_Sn) h   (h_eq = 6.84 mm)',
+        'u_x ∂h/∂x + ∂(h u_y)/∂y = 0,   D = ½ (∇u + ∇uᵀ)',
       liveParameters: [
         `VFT Constants: A = 2.65, B = 4210 K, T₀ = 264 °C (η spans 1.2×10³ Pa·s at 1050 °C → 1.6×10¹⁰ Pa·s at 600 °C)`,
-        `Top-roll cant angle θ_roll = ${readLetParam(doc, 'top_roll_cant', 0).toFixed(1)}°, Lehr pull speed u_pull = ${readLetParam(doc, 'u_pull', 0.16).toFixed(2)} m/s`,
+        `Pull speed u_pull = ${readLetParam(doc, 'u_pull', 0.16).toFixed(2)} m/s`,
       ],
     },
 
-    // 5. Turbulent Molten-Tin VMS Circulation + Lorentz MHD + Interfacial Navier Slip
+    // 5. Electromagnetic Lorentz Force (J × B), Eddy-Current MHD & Joule Heating
     {
       id: 'turbulent_tin_vms_mhd',
       stage: 'setup',
       stageNumber: 2,
-      title: 'Depth-Averaged Turbulent Molten-Tin VMS Flow, Lorentz MHD & Redox Navier-Slip',
-      shortName: 'Molten-Tin VMS + Lorentz MHD + Navier Slip',
-      active: isFloatBath,
-      triggerSummary: isFloatBath
-        ? `Active: Volume assigned 'molten_tin' / 'h2_n2_gas' in Shape (1) or EM Inductor / Sill Step BCs in Setup (2).`
-        : "Standby: Assign material 'Molten Tin Bath Sn(l)' to a fluid cavity in Shape (1) or add an EM Lorentz BC in Setup (2).",
+      title:
+        regime === 'pilkington_uk5_float_bath'
+          ? 'Depth-Averaged Turbulent Molten-Tin VMS Flow, Lorentz MHD & Redox Navier-Slip'
+          : 'Electromagnetic Lorentz Force (J × B), Eddy-Current MHD & Joule Heating',
+      shortName:
+        regime === 'pilkington_uk5_float_bath'
+          ? 'Molten-Tin VMS + Lorentz MHD + Navier Slip'
+          : 'EM Lorentz Force (J × B) & Joule Heating',
+      active: isEmLorentz,
+      triggerSummary: isEmLorentz
+        ? `Active: Electromagnetic Lorentz Force / MHD / Joule Heating BC in Setup (2) or conductive liquid-metal volume in Shape (1).`
+        : "Standby: Click '+ EM Lorentz' in Setup (2) or assign a conductive MHD material in Shape (1).",
       strongForm:
-        '∂(H u_Sn)/∂t + ∇·(H u_Sn ⊗ u_Sn) + g H ∇ζ + ½ g H² β_Sn ∇T_Sn = (τ_ribbon − τ_bed)/ρ_Sn + ∇·(H ν_t ∇u_Sn) + F_EM(I_motor)',
+        regime === 'pilkington_uk5_float_bath'
+          ? '∂(H u_Sn)/∂t + ∇·(H u_Sn ⊗ u_Sn) + g H ∇ζ + ½ g H² β_Sn ∇T_Sn = (τ_ribbon − τ_bed)/ρ_Sn + ∇·(H ν_t ∇u_Sn) + F_EM(I_motor)'
+          : 'f_L = J × B = (1 / μ₀) (∇ × B) × B,   −∇ · σ(u) = f_L  in Ω,   q_Joule = |J|² / σ_e',
       weakOrDiscreteForm:
-        'Skew-symmetric Variational Multiscale (VMS) projection + interfacial Navier slip length L_s = (μ_Sn / μ_gas) δ_film(X_H2)',
-      liveParameters: [
-        `Downstream sill depth H_sill = ${readLetParam(doc, 'h_sill', 65).toFixed(1)} mm`,
-        `Linear induction motor current I_motor = ${readLetParam(doc, 'i_motor', 260).toFixed(0)} A`,
-        `Reducing headspace hydrogen fraction X_H2 = ${readLetParam(doc, 'p_h2', 4.2).toFixed(2)} %, CVD beam load Q_beam = ${readLetParam(doc, 'q_beam', 34).toFixed(1)} kW`,
-      ],
+        regime === 'pilkington_uk5_float_bath'
+          ? 'Skew-symmetric Variational Multiscale (VMS) projection + interfacial Navier slip length L_s = (μ_Sn / μ_gas) δ_film(X_H2)'
+          : '∫_Ω ε(v_h) : C_e : ε(u_h) dΩ = ∫_Ω v_h · (J × B) dΩ + ∫_{Γ_N} v_h · p_mag n̂ dΓ,   p_mag = B² / (2 μ₀)',
+      liveParameters:
+        regime === 'pilkington_uk5_float_bath'
+          ? [
+              `Downstream sill depth H_sill = ${readLetParam(doc, 'h_sill', 65).toFixed(1)} mm`,
+              `Linear induction motor current I_motor = ${readLetParam(doc, 'i_motor', 260).toFixed(0)} A`,
+              `Reducing headspace hydrogen fraction X_H2 = ${readLetParam(doc, 'p_h2', 4.2).toFixed(2)} %, CVD beam load Q_beam = ${readLetParam(doc, 'q_beam', 34).toFixed(1)} kW`,
+            ]
+          : [
+              `Excitation current I = ${readLetParam(doc, 'i_current', readLetParam(doc, 'i_motor', 250)).toFixed(0)} A, Magnetic flux density B₀ = ${readLetParam(doc, 'b_field', 0.8).toFixed(2)} T`,
+              `Active Lorentz / Joule BCs: ${[...doc.loads.filter((l) => l.id.includes('lorentz')).map((l) => `${l.id} on ${l.region}`), ...doc.heat_fluxes.filter((f) => f.id.includes('joule')).map((f) => `${f.id} on ${f.region}`)].join(', ') || 'parameter coupled'}`,
+            ],
     },
 
     // 6. Optical Snell–Descartes Ray Tracing & Caustic Irradiance Focusing
@@ -705,17 +818,17 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       stage: 'setup',
       stageNumber: 2,
       title: 'Snell–Descartes Refractive Ray Tracing, Fresnel Losses & Caustic Focal Irradiance',
-      shortName: 'Snell–Descartes Ray Caustic & Soot Extinction',
+      shortName: 'Snell–Descartes Ray Optics & Radiative Flux',
       active: isOptics,
       triggerSummary: isOptics
-        ? `Active: Optical lens volume ('nbk7_glass', n = 1.5168) in Shape (1) + Collimated Solar Beam BC in Setup (2).`
-        : "Standby: Assign material 'N-BK7 Optical Crown Glass' to a lens shape in Shape (1) or add an Optical Beam BC in Setup (2).",
+        ? `Active: Optical lens volume ('nbk7_glass', n = 1.5168) in Shape (1) or Optical Ray Beam BC in Setup (2).`
+        : "Standby: Assign material 'N-BK7 Optical Crown Glass' to a lens shape in Shape (1) or click '+ Optical Ray Beam' in Setup (2).",
       strongForm:
         'n₁ (ŝ_i × n̂) = n₂ (ŝ_t × n̂),   1 / f = (n_lens − 1) (1 / R₁ − 1 / R₂),   I_focus(r, z) = τ_lens(t) I₀ (D_lens / 2 w(z))² exp(−2 r² / w(z)²)',
       weakOrDiscreteForm:
         'τ_lens(r, t) = (1 − R_Fresnel)² exp(−κ_abs d_lens) · exp(−K_ext δ_soot(r, t)),   K_ext = 2.4 μm⁻¹',
       liveParameters: [
-        `Solar irradiance I₀ = ${readLetParam(doc, 'i_solar', 1000).toFixed(0)} W/m², Lens aperture D_lens = ${readLetParam(doc, 'd_lens', 44).toFixed(1)} mm`,
+        `Beam irradiance I₀ = ${readLetParam(doc, 'i_beam', readLetParam(doc, 'i_solar', 1000)).toFixed(0)} W/m², Lens aperture D_lens = ${readLetParam(doc, 'd_lens', 44).toFixed(1)} mm`,
         `Focal length f_lens = ${readLetParam(doc, 'f_lens', 60).toFixed(1)} mm, Refractive index n_d = 1.5168 (Fresnel loss 2×4.22%)`,
       ],
     },
