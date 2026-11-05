@@ -1,4 +1,9 @@
-Fieldsmith is a parametric implicit CAD modeller, 3D quadratic (P2) finite-element solver, and lattice slicer built in Rust.
+Fieldsmith is a parametric implicit CAD modeller, 3D quadratic (P2) finite-element solver, RF antenna VNA workbench, and TPMS lattice slicer built in Rust.
+
+Mobile CAD Driven by Haven MCP & External Compute:
+- Local MCP Co-Pilot Server (127.0.0.1:18789/mcp): The Android app runs an embedded Streamable HTTP Model Context Protocol server. Connecting from Haven on the same device (or over SSH/ADB port forwarding) lets an agent build CSG assemblies, place metric fasteners, tune dual-band drone antennas, and run finite-element solves while the 3D WebGL2 viewport updates live on the phone.
+- External Compute Offload (LAN / Tailscale / WireGuard): Point the mobile app at a desktop or server running fieldsmith-mcp --serve to offload heavy 3D P2 tetrahedral meshes, level-set topology runs, and multi-parameter sweeps while keeping touch inspection and 3D sectioning on Android.
+- On-Device Native arm64 & WebAssembly Solvers: Works offline using the embedded Rust JNI solver and WebAssembly workers, with big.LITTLE thread capping so heavy solves do not lock up mobile UI threads.
 
 Workflow stages:
 1. Shape: Construct parts from CSG primitives (box, cylinder, sphere, capsule, torus, extrude, revolve, loft), 2D constraint-solved sketches (Gauss-Newton solver with DOF and conflict tracking), built-in metric fasteners (bolts, screws, washers, hex/nyloc nuts, and snap-fits positioned by surface edge dimensions), and imported STL/OBJ/3MF/STEP meshes with fillet/chamfer blends and per-volume materials.
@@ -7,7 +12,3 @@ Workflow stages:
 4. Fill: Grade triply periodic minimal surface (Gyroid, Schwarz-P, Diamond, Lidinoid, Neovius, Split-P) and strut lattices from stress fields or evolve boundaries via level-set topology optimization.
 5. Make: Check minimum wall thickness and overhang angles, preview build layers, and export manifold STL or 3MF slice stacks.
 6. Theory: Inspect the active governing equations, boundary operators, and numerical discretizations for the current model and export a Markdown or HTML math report.
-
-Compute modes:
-- On-device WebAssembly or embedded native arm64 Rust solver for offline mobile work.
-- Optional remote compute connection over LAN, Tailscale, or WireGuard to offload large meshes and coupled multi-physics runs to a workstation running fieldsmith-mcp --serve.

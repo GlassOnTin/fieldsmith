@@ -1,4 +1,4 @@
 v0.13.0:
-- Drone and antenna VNA workbench (Tutorial T16): 4-inch DeadCat carbon-fibre frame with 1404 motors, PCBs, LiPo, and TPU/PA12 Gemini dual-band (900 MHz / 2.4 GHz) antenna pod.
-- 50 Ohm Smith chart locus, S11 return loss, S21 diversity isolation, 3D radiation lobe cuts, CFRP eddy-current loss, and geometry + L-network matching optimiser.
-- Mobile compute guards: big.LITTLE Rayon/Tokio thread caps, debounced shader sync on slider drag, and adaptive WebGL pixel ratio.
+- 4-inch DeadCat carbon-fibre drone & Gemini dual-band (900 MHz / 2.4 GHz) antenna VNA, 50 Ohm Smith chart, 3D radiation lobe, and L-network matching workbench (Tutorial T16).
+- Multi-body 3D P2 FEA meshing and face-connected component pinning for full DeadCat airframe stress analysis.
+- Driven live on Android via Haven MCP (127.0.0.1:18789/mcp) with optional LAN/Tailscale external compute offload, big.LITTLE thread caps, and R8 shrinking.

@@ -32,10 +32,20 @@ class MainActivity : Activity() {
         WebView.setWebContentsDebuggingEnabled(isDebuggable)
 
         val webDir = File(filesDir, "web")
-        if (isDebuggable) {
-            webDir.deleteRecursively()
+        val versionStampFile = File(filesDir, "web-version.txt")
+        val pkgVersion = try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionCode.toString()
+        } catch (_: Exception) {
+            "0"
         }
-        extractBundledAssetsIfNeeded("web", webDir)
+        val expectedStamp = "$pkgVersion-debug=$isDebuggable"
+        val currentStamp = if (versionStampFile.exists()) versionStampFile.readText().trim() else ""
+        if (isDebuggable || currentStamp != expectedStamp || !File(webDir, "index.html").exists()) {
+            webDir.deleteRecursively()
+            extractBundledAssetsIfNeeded("web", webDir)
+            versionStampFile.writeText(expectedStamp)
+        }
         val workspaceFile = File(filesDir, "fieldsmith-workspace.json")
 
         Os.setenv("FIELDSMITH_WEB_DIR", webDir.absolutePath, true)

@@ -58,6 +58,24 @@ live in `examples/`:
     fieldsmith solve  examples/bracket.fsm --report
     fieldsmith export examples/bracket-filled.fsm --3mf bracket.3mf --stl bracket.stl
 
+## Run on Android (Haven MCP & external compute)
+
+The Android package (`sh.fieldsmith.app`, available on GitHub Releases and F-Droid) embeds
+the native `arm64-v8a` Rust HTTP solver and a Streamable HTTP Model Context Protocol server
+on `http://127.0.0.1:18789/mcp`:
+
+- **Drive CAD from Haven over MCP**: Connect Haven (or any MCP client on the phone or over
+  SSH/ADB port-forwarding) to `http://127.0.0.1:18789/mcp`. Tool calls (`upsert_shape`,
+  `add_support`, `add_load`, `solve`, `optimise_coupled_system`) update the phone's 3D
+  WebGL2 viewport live.
+- **External compute offload**: Point the in-app compute selector (`MCP / API Setup`) at a
+  workstation or server running `fieldsmith-mcp --serve 0.0.0.0:18789` over LAN, Tailscale,
+  or WireGuard to offload dense 3D P2 tetrahedral meshes and coupled multi-physics runs
+  while keeping touch inspection and 3D sectioning on Android.
+- **Offline on-device compute**: Works standalone without network access using the embedded
+  native `arm64-v8a` Rust solver and WebAssembly workers, with big.LITTLE thread capping so
+  solves stay responsive.
+
 ## The document
 
 A `.fsm` document is the whole thing: shapes, materials, supports, loads, and the lattice
