@@ -12,6 +12,11 @@ import { analysis } from './analysis';
 import { ui } from './ui';
 import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
 import { openFixingsCatalogueModal } from './FixingsModal';
+import {
+  buildDeadCatDroneFsmText,
+  defaultOptimisedDroneAntennaSpec,
+} from '../doc/antenna-vna';
+import { openAntennaWorkbenchModal } from './AntennaWorkbench';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
 import bracketThermalFsm from '../../../examples/bracket-thermal.fsm?raw';
 import boxCylFsm from '../../../examples/box-minus-cylinder.fsm?raw';
@@ -42,6 +47,11 @@ export const EXAMPLES: { id: string; label: string; text: string }[] = [
   { id: 'bracket', label: 'L-bracket (the bracket test)', text: bracketFsm },
   { id: 'bracket-thermal', label: 'L-bracket heated mount (thermal case)', text: bracketThermalFsm },
   { id: 'box-minus-cylinder', label: 'Box minus cylinder', text: boxCylFsm },
+  {
+    id: 'deadcat-drone-antenna',
+    label: '4" DeadCat Drone + Gemini Dual-Band Antenna (900 MHz / 2.4 GHz)',
+    text: buildDeadCatDroneFsmText(defaultOptimisedDroneAntennaSpec()),
+  },
 ];
 
 function selectedNodeId(): string | null {
@@ -395,6 +405,12 @@ export function commands(): Command[] {
       keys: f.isoStandard.split('/')[0].trim(),
       run: () => openFixingsCatalogueModal(f.id),
     })),
+    {
+      id: 'antenna.open',
+      group: 'Add',
+      label: 'Open 4" DeadCat Drone & Gemini Dual-Band Antenna VNA / Smith / 3D Lobe Workbench…',
+      run: () => openAntennaWorkbenchModal(),
+    },
     { id: 'view.fit', group: 'View', label: 'Fit model in view', keys: 'F', run: () => viewApi.fit(true) },
     {
       id: 'view.toggleTree',

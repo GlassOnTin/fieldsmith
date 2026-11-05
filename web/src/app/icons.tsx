@@ -200,6 +200,14 @@ export const Icon: Record<string, () => JSX.Element> = {
       <path d="M6.2 7.2h3.6M6.2 9.5h3.6M6.2 11.8h3.6" />
     </S>
   ),
+  antenna: () => (
+    <S>
+      <circle cx="8" cy="7.2" r="1.4" fill="currentColor" />
+      <path d="M8 8.6v5.2M5.5 13.8h5" />
+      <path d="M5.2 4.8a4 4 0 0 0 0 4.8M10.8 4.8a4 4 0 0 1 0 4.8" />
+      <path d="M3.2 3a6.8 6.8 0 0 0 0 8.4M12.8 3a6.8 6.8 0 0 1 0 8.4" />
+    </S>
+  ),
   // 2D Geometry Creation Icons
   geomLine: () => (
     <S>

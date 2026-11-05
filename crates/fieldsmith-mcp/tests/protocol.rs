@@ -130,6 +130,8 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "list_coupled_systems",
             "solve_coupled_system",
             "optimise_coupled_system",
+            "solve_drone_antenna",
+            "optimise_drone_antenna",
         ]
     );
     for t in tools {
@@ -447,11 +449,12 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
 
     let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
     let systems = catalog["systems"].as_array().unwrap();
-    assert_eq!(systems.len(), 4);
+    assert_eq!(systems.len(), 5);
     assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
     assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
     assert_eq!(systems[2]["system_id"], "solar_candle_ignition_v1");
     assert_eq!(systems[3]["system_id"], "jwst_fastener_fixing_envelope_v1");
+    assert_eq!(systems[4]["system_id"], "deadcat_4in_gemini_antenna_v1");
 
     // Optimise the Regenerative Cooled Rocket Nozzle system via Sparse Adjoint steps
     // and verify that its 3D `.fsm` twin is automatically synced into the open CAD document.

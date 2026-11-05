@@ -31,6 +31,10 @@ use fieldsmith_doc::{
     canonical_color, fsm, param, Convection, Document, Family, FillMode, HeatFlux, Let, Load,
     LoadKind, Node, NodeKind, Op, ProfileVertex, Region, Selector, Support, Temperature, Transform,
 };
+use fieldsmith_solve::antenna::{
+    analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
+    DeadCatGeminiAntennaSystem, DroneAntennaDesignSpec, DroneAntennaTopology,
+};
 use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
 use fieldsmith_solve::coupled_system::{
     CoupledEngineeringSystem, DesignParameter, EngineConfig, MonolithicSystemEngine, NamedScenario,
@@ -293,6 +297,8 @@ impl Server {
             "list_coupled_systems" => self.list_coupled_systems(args),
             "solve_coupled_system" => self.solve_coupled_system(args),
             "optimise_coupled_system" => self.optimise_coupled_system(args),
+            "solve_drone_antenna" => self.solve_drone_antenna(args),
+            "optimise_drone_antenna" => self.optimise_drone_antenna(args),
             _ => Err(format!("unknown tool: {name}")),
         };
         if res.is_ok() {
@@ -321,6 +327,8 @@ impl Server {
                     | "solve_study"
                     | "solve_coupled_system"
                     | "optimise_coupled_system"
+                    | "solve_drone_antenna"
+                    | "optimise_drone_antenna"
             );
             if is_mutating {
                 self.save_workspace_after_tool(name, &format!("Executed MCP tool `{name}`"));
@@ -1247,6 +1255,20 @@ impl Server {
             },
         ];
 
+        let drone_sys = DeadCatGeminiAntennaSystem::new();
+        let drone_scenarios = vec![
+            NamedScenario {
+                name: "A. Unoptimised Tucked Pod (6.5 mm CFRP Standoff, Free-Space Lengths, 38° Skew)".to_string(),
+                description: "Gemini V-antenna tucked flush against rear CFRP standoffs (d_cfrp = 6.5 mm, z = 4 mm) inside a thick 3.2 mm TPU boot — severe dielectric detuning, 42% CFRP eddy loss, and -14 dBi nose-on shadow null".to_string(),
+                design_p: vec![6.5, 156.0, 59.0, 38.0, 4.0, 3.2, 0.0, 0.0],
+            },
+            NamedScenario {
+                name: "B. Optimised Rear V-Tail Pod (24 mm Standoff, 88° Orthogonal Skew, L/C Matched)".to_string(),
+                description: "Dielectric pre-compensated dipole lengths (136.5 / 51.2 mm) on a 24 mm elevated TPU boom (z = 16 mm, α = 88°) with L-network match — S11 < -18 dB in both bands and > 82% efficiency".to_string(),
+                design_p: vec![24.0, 136.5, 51.2, 88.0, 16.0, 1.6, 1.8, 0.65],
+            },
+        ];
+
         Ok(json!({
             "systems": [
                 {
@@ -1292,6 +1314,17 @@ impl Server {
                     "epistemic_parameters": fixing_sys.epistemic_parameters(),
                     "objectives": fixing_sys.objective_descriptors(),
                     "scenarios": fixing_scenarios,
+                },
+                {
+                    "system_id": drone_sys.system_id(),
+                    "system_title": drone_sys.system_title(),
+                    "industry_sector": drone_sys.industry_sector(),
+                    "num_dofs": drone_sys.num_dofs(),
+                    "fields": drone_sys.field_descriptors(),
+                    "design_parameters": drone_sys.design_parameters(),
+                    "epistemic_parameters": drone_sys.epistemic_parameters(),
+                    "objectives": drone_sys.objective_descriptors(),
+                    "scenarios": drone_scenarios,
                 }
             ]
         }))
@@ -1447,9 +1480,93 @@ impl Server {
                 "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
                 "fsm_3d": fsm_3d,
             }))
+        } else if system_id == "deadcat_4in_gemini_antenna_v1" {
+            let sys = DeadCatGeminiAntennaSystem::new();
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig::default();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let spec = sys.spec_from_params(&p, &theta);
+            let vna_report = analyze_drone_antenna(&spec);
+            let fsm_3d = sys.build_3d_fsm(&p);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "drone_antenna_vna": vna_report,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
         } else {
             Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
         }
+    }
+
+    /// Solve the 4-inch DeadCat FPV Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna
+    /// VNA sweep (`S11`, `S21`, `VSWR`, Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`)
+    /// and 3D radiation lobes (`G(theta, phi)`), optionally syncing the 3D `.fsm` drone assembly.
+    fn solve_drone_antenna(&mut self, args: Value) -> Result<Value, String> {
+        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let spec = parse_drone_antenna_spec(&args);
+        let report = analyze_drone_antenna(&spec);
+        let fsm_3d = build_deadcat_drone_fsm(&spec);
+        if sync_cad {
+            let d = fsm::parse(&fsm_3d).map_err(|e| e.to_string())?;
+            self.doc = Some(d);
+        }
+        Ok(json!({
+            "report": report,
+            "synced_to_cad_doc": sync_cad,
+            "fsm_3d": fsm_3d,
+        }))
+    }
+
+    /// Optimise the 4-inch DeadCat FPV Drone + Gemini Dual-Band Antenna geometry (`cfrp_standoff_mm`,
+    /// `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`,
+    /// `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance matching, and sync
+    /// the optimised 3D `.fsm` drone assembly into the session document.
+    fn optimise_drone_antenna(&mut self, args: Value) -> Result<Value, String> {
+        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let max_iters = args
+            .get("iterations")
+            .and_then(Value::as_u64)
+            .unwrap_or(8)
+            .clamp(1, 25) as usize;
+        let spec = if args.get("preset").and_then(Value::as_str) == Some("unoptimised_tucked")
+            || args.as_object().map(|o| o.is_empty()).unwrap_or(true)
+        {
+            DroneAntennaDesignSpec::unoptimised_tucked_preset()
+        } else {
+            parse_drone_antenna_spec(&args)
+        };
+        let opt = optimise_drone_antenna(&spec, max_iters);
+        if sync_cad {
+            let d = fsm::parse(&opt.fsm_3d).map_err(|e| e.to_string())?;
+            self.doc = Some(d);
+        }
+        Ok(json!({
+            "initial_report": opt.initial_report,
+            "optimised_report": opt.optimised_report,
+            "iterations": opt.iterations,
+            "synced_to_cad_doc": sync_cad,
+            "fsm_3d": opt.fsm_3d,
+        }))
     }
 
     /// Take `steps` (default `1`) automatic Sparse Adjoint `-dΦ/dp` design optimisation steps
@@ -1498,6 +1615,10 @@ impl Server {
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else if system_id == "jwst_fastener_fixing_envelope_v1" {
             let sys = FastenerFixingSystem::new();
+            let cfg = EngineConfig::default();
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else if system_id == "deadcat_4in_gemini_antenna_v1" {
+            let sys = DeadCatGeminiAntennaSystem::new();
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {
@@ -1731,6 +1852,63 @@ fn parse_profile_vertices(val: Option<&Value>) -> Result<Vec<ProfileVertex>, Str
     Ok(out)
 }
 
+fn parse_drone_antenna_spec(args: &Value) -> DroneAntennaDesignSpec {
+    let mut s = if args.get("preset").and_then(Value::as_str) == Some("unoptimised_tucked") {
+        DroneAntennaDesignSpec::unoptimised_tucked_preset()
+    } else {
+        DroneAntennaDesignSpec::default()
+    };
+    if let Some(t) = args.get("topology").and_then(Value::as_str) {
+        s.topology = DroneAntennaTopology::from_str_id(t);
+    }
+    if let Some(v) = args.get("target_low_freq_ghz").and_then(Value::as_f64) {
+        s.target_low_freq_ghz = v;
+    }
+    if let Some(v) = args.get("target_high_freq_ghz").and_then(Value::as_f64) {
+        s.target_high_freq_ghz = v;
+    }
+    if let Some(v) = args.get("cfrp_standoff_mm").and_then(Value::as_f64) {
+        s.cfrp_standoff_mm = v;
+    }
+    if let Some(v) = args.get("low_band_arm_length_mm").and_then(Value::as_f64) {
+        s.low_band_arm_length_mm = v;
+    }
+    if let Some(v) = args.get("high_band_arm_length_mm").and_then(Value::as_f64) {
+        s.high_band_arm_length_mm = v;
+    }
+    if let Some(v) = args.get("diversity_skew_deg").and_then(Value::as_f64) {
+        s.diversity_skew_deg = v;
+    }
+    if let Some(v) = args.get("elevation_above_plate_mm").and_then(Value::as_f64) {
+        s.elevation_above_plate_mm = v;
+    }
+    if let Some(v) = args.get("dielectric_pod_wall_mm").and_then(Value::as_f64) {
+        s.dielectric_pod_wall_mm = v;
+    }
+    if let Some(v) = args.get("pod_eps_r").and_then(Value::as_f64) {
+        s.pod_eps_r = v;
+    }
+    if let Some(v) = args.get("pod_loss_tan").and_then(Value::as_f64) {
+        s.pod_loss_tan = v;
+    }
+    if let Some(v) = args.get("cfrp_conductivity_s_per_m").and_then(Value::as_f64) {
+        s.cfrp_conductivity_s_per_m = v;
+    }
+    if let Some(v) = args.get("wheelbase_mm").and_then(Value::as_f64) {
+        s.wheelbase_mm = v;
+    }
+    if let Some(v) = args.get("match_series_nh").and_then(Value::as_f64) {
+        s.match_series_nh = v;
+    }
+    if let Some(v) = args.get("match_shunt_pf").and_then(Value::as_f64) {
+        s.match_shunt_pf = v;
+    }
+    if let Some(v) = args.get("tx_power_mw").and_then(Value::as_f64) {
+        s.tx_power_mw = v;
+    }
+    s
+}
+
 /// The tool catalogue, parsed once. Named exactly; the schemas state the typed shapes
 /// the handlers deserialize into.
 fn tools_catalog() -> &'static Value {
@@ -1768,6 +1946,8 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
+ {"name":"solve_drone_antenna","description":"Solve the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz` ELRS) Antenna VNA frequency sweep (`S11`, `S21`, `VSWR`, 50 Ω Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`, CFRP eddy-current loss) and 3D radiation lobes (`G(theta, phi)`), and sync the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["optimised_default","unoptimised_tucked"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"pod_eps_r":{"type":"number"},"pod_loss_tan":{"type":"number"},"cfrp_conductivity_s_per_m":{"type":"number"},"match_series_nh":{"type":"number"},"match_shunt_pf":{"type":"number"},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_drone_antenna","description":"Optimise the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna geometry (`cfrp_standoff_mm`, `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`, `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance match (`match_series_nh`, `match_shunt_pf`), returning initial vs. optimised VNA/Smith/Lobe reports and syncing the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["unoptimised_tucked","optimised_default"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"iterations":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
 ]"#;

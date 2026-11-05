@@ -1,0 +1,4 @@
+v0.13.0:
+- Drone and antenna VNA workbench (Tutorial T16): 4-inch DeadCat carbon-fibre frame with 1404 motors, PCBs, LiPo, and TPU/PA12 Gemini dual-band (900 MHz / 2.4 GHz) antenna pod.
+- 50 Ohm Smith chart locus, S11 return loss, S21 diversity isolation, 3D radiation lobe cuts, CFRP eddy-current loss, and geometry + L-network matching optimiser.
+- Mobile compute guards: big.LITTLE Rayon/Tokio thread caps, debounced shader sync on slider drag, and adaptive WebGL pixel ratio.

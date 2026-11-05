@@ -41,6 +41,14 @@ class MainActivity : Activity() {
         Os.setenv("FIELDSMITH_WEB_DIR", webDir.absolutePath, true)
         Os.setenv("FIELDSMITH_WORKSPACE", workspaceFile.absolutePath, true)
 
+        // Cap native Rayon / Tokio worker threads on mobile big.LITTLE SoCs (e.g. 8-core
+        // phones with 4 efficiency cores) so heavy FEM/VNA solves stay on the performance
+        // cores and never starve Android's UI / RenderThread or background apps.
+        val totalCores = Runtime.getRuntime().availableProcessors()
+        val perfThreads = (totalCores / 2).coerceIn(2, 4)
+        Os.setenv("RAYON_NUM_THREADS", perfThreads.toString(), true)
+        Os.setenv("TOKIO_WORKER_THREADS", "2", true)
+
         // Prefer deterministic port 18789 so `adb forward tcp:18789 tcp:18789` connects
         // desktop/proot MCP agents directly to the mobile app's `/mcp` & `/api/mcp` server.
         val boundPort = FieldsmithNativeBridge.startLocalServer(18789).let {

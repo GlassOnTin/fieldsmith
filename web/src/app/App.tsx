@@ -10,6 +10,7 @@ import { Palette, Menus } from './Palette';
 import { EXAMPLES, addShape, importMeshCommand, newDocument, openFile, openText, runCommand, saveFile } from './commands';
 import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbench';
 import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
+import { AntennaWorkbenchModal, openAntennaWorkbenchModal } from './AntennaWorkbench';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -70,7 +71,7 @@ function ViewTools() {
           <button
             class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
             data-testid="open-tutorials-drawer"
-            title="Tutorials & Theory Manual (T1–T14)"
+            title="Tutorials & Theory Manual (T1–T16)"
             onClick={() => runCommand('tutorials.open')}
           >
             <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -94,6 +95,14 @@ function ViewTools() {
             onClick={() => openFixingsCatalogueModal()}
           >
             <Icon.fixing />
+          </button>
+          <button
+            class="btn icon"
+            data-testid="hud-open-antenna-workbench"
+            title="4-Inch DeadCat Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench"
+            onClick={() => openAntennaWorkbenchModal()}
+          >
+            <Icon.antenna />
           </button>
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
             <Icon.move />
@@ -143,7 +152,7 @@ function EmptyState() {
             onClick={() => runCommand('tutorials.open')}
             data-testid="empty-open-tutorials"
           >
-            Tutorials &amp; Theory Manual (T1–T14)…
+            Tutorials &amp; Theory Manual (T1–T16)…
           </button>
         </div>
       </div>
@@ -340,6 +349,7 @@ export function App() {
       <Menus />
       <SketchWorkbenchModal />
       <FixingsCatalogueModal />
+      <AntennaWorkbenchModal />
     </div>
   );
 }

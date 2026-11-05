@@ -9,6 +9,7 @@ import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
 import { openFixingsCatalogueModal } from './FixingsModal';
 import { openSketchWorkbenchModal } from './SketchWorkbench';
+import { openAntennaWorkbenchModal } from './AntennaWorkbench';
 
 const OP_GLYPH = { add: '+', subtract: '−', intersect: '∩' } as const;
 const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: 'Keeps only the overlap' } as const;
@@ -261,6 +262,15 @@ export function Tree() {
             style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
           >
             <Icon.fixing /> Fixings…
+          </button>
+          <button
+            class="btn ghost small"
+            title="Open 4-Inch DeadCat Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench"
+            data-testid="open-antenna-workbench"
+            onClick={() => openAntennaWorkbenchModal()}
+            style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Icon.antenna /> Antenna…
           </button>
           <button
             class="btn ghost icon small"

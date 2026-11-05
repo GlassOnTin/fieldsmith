@@ -15,6 +15,7 @@
 //!   energy carries the upper end against the same load: exact when the exact field is
 //!   representable, and certified up to the P2 interpolation defect otherwise.
 
+pub mod antenna;
 pub mod assemble;
 pub mod bounds;
 pub mod bsr;

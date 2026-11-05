@@ -18,6 +18,18 @@ import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { apiUrl, ui, useApp } from './ui';
 import { FixingTorqueAndWeibullWorkbench } from './FixingsModal';
 import { SketchWorkbench } from './SketchWorkbench';
+import {
+  openAntennaWorkbenchModal,
+  syncDeadCatDroneToDocument,
+} from './AntennaWorkbench';
+import {
+  analyzeDroneAntenna,
+  buildDeadCatDroneFsmText,
+  defaultOptimisedDroneAntennaSpec,
+  extractDroneAntennaSpecFromDoc,
+  optimiseDroneAntenna,
+  unoptimisedTuckedDroneAntennaSpec,
+} from '../doc/antenna-vna';
 
 export interface TutorialStep {
   title: string;
@@ -1723,6 +1735,129 @@ d_extrude(p) = max_±( d_poly2d(p_u, p_v), |p_n| − h/2 ),     d_revolve(p) = d
       },
     ],
   },
+  {
+    id: 'T16',
+    code: 'T16',
+    title:
+      '4-Inch DeadCat FPV Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA, 50 Ω Smith Chart & 3D Lobe Optimisation',
+    subtitle:
+      'Design a 4-inch DeadCat carbon-fibre (CFRP) FPV drone airframe with 4 × 1404 brushless motors, 20×20 mm FC/ESC/ELRS stack, Al 7075 camera cage, 4S LiPo, and 3D-printed TPU/PA12 Gemini dual-band antenna pod. Eliminate CFRP eddy-current absorption, dielectric boot detuning, and nose-on shadow nulls via VNA S₁₁/S₂₁ sweeps, 50 Ω Smith Chart matching, and 3D radiation lobe synthesis.',
+    level: 'Flagship Multi-Physics',
+    verificationBadge:
+      'Verified by V59 (Dual-Band VNA S₁₁/S₂₁ + 50 Ω Smith Chart + 3D Polar Lobes + CFRP Eddy Loss + Auto-Optimiser)',
+    starterFsmName: 't16-deadcat-4in-gemini-antenna.fsm',
+    starterFsm: buildDeadCatDroneFsmText(defaultOptimisedDroneAntennaSpec()),
+    userSteps: [
+      {
+        title: '1. Inspect the Unoptimised Tucked CFRP Build (d_cfrp = 6.5 mm, Detuned TPU Boot, 38° Skew)',
+        lens: 'shape',
+        instruction:
+          'In the embedded Gemini Dual-Band Antenna VNA & Smith Chart Workbench card above (or by clicking "📡 Open Full Smith / VNA / Lobe Workbench…"), click "⚠️ Load Unoptimised Tucked Build (6.5 mm Standoff)". When the coaxial dipole is tucked only 6.5 mm behind the conductive 3K woven carbon-fibre plate inside a thick 3.2 mm TPU boot (ε_r = 2.95) at a narrow 38° V-angle, image currents in the carbon plate cancel radiation resistance R_rad while inducing heavy Leontovich eddy-current ohmic loss R_cfrp. Both 915 MHz (S₁₁ = −0.5 dB, VSWR 35.4, η = 6.5%) and 2.44 GHz (S₁₁ = −1.2 dB, VSWR 14.0, η = 16.7%) sit near the outer rim of the 50 Ω Smith Chart.',
+        expected:
+          'Loading the unoptimised tucked build turns the qualification badge red ("DETUNED / CFRP EDDY LOSS"), shows S₁₁ > −1.5 dB on both bands, and colors the 3D radiation lobe toroid crimson (#F43F5E) in the CAD viewport.',
+      },
+      {
+        title: '2. Read the 50 Ω Smith Chart Γ(f) Trajectory & Dual-Band VNA Scattering (S₁₁, S₂₁)',
+        lens: 'shape',
+        instruction:
+          'Open the full Antenna VNA / Smith / 3D Lobe Workbench ("📡 Antenna…" in the Shapes header or the button above). Inspect Panel 1 (50 Ω Smith Chart): the green dashed circle marks the VSWR = 2:1 qualification boundary (|Γ| = 0.333, S₁₁ = −9.54 dB). In the tucked build, the amber 820–980 MHz curve and cyan 2.30–2.58 GHz curve sit far in the upper-right inductive/high-VSWR region because the thick TPU boot shifts resonance downward by −95 MHz and −140 MHz while narrow 38° port skew causes severe mutual coupling (S₂₁ = −5.7 dB, ECC = 0.950).',
+        expected:
+          'The Smith Chart clearly displays the complex impedance Z_in = R + jX Ω and reflection coefficient |Γ| at 915 MHz and 2.44 GHz relative to the 50 Ω bullseye.',
+      },
+      {
+        title: '3. Analyse Far-Field 3D Radiation Lobes G(θ, φ) & Carbon/Battery Shadow Nulls',
+        lens: 'shape',
+        instruction:
+          'In Panel 3 (Far-Field Radiation Lobe G(θ, φ)), switch between the "Yaw Horizon (XY)", "Pitch Elevation (YZ)", and "Roll Bank (XZ)" cuts and toggle between 915 MHz and 2.44 GHz. Notice the forward NOSE +Y (90°) diffraction shadow cast by the conductive CFRP plates, 4 × 1404 motor bells, Al 7075 camera cage, and top-mounted 4S LiPo pack. With a narrow 38° skew and 4 mm elevation, the p10 blind-spot floor drops to −11.7 dBi.',
+        expected:
+          'The polar diagram plots Port 1 (amber), Port 2 (purple), and the Gemini Diversity Combined envelope (emerald) alongside the red p10 blind-spot floor circle.',
+      },
+      {
+        title: '4. Run Automated Multi-Objective Geometry & Conjugate L-Network Optimisation',
+        lens: 'shape',
+        instruction:
+          'Click "⚡ Auto-Optimise Geometry & L/C Match". The coordinate/Nelder–Mead + analytical L-network optimiser extends the rear TPU standoff boom clear of the CFRP eddy-current near-field (d_cfrp ≥ 24 mm, elevation z_pod ≥ 16 mm), spreads the Gemini V-arms to orthogonal polarisation diversity (86°–92° skew, dropping S₂₁ below −17 dB and ECC to 0.001), trims L_900 and L_2400 by 1/√ε_eff to pre-compensate for TPU dielectric wave slowing, and synthesises the feed L-network (L_ser, C_sh) to bullseye both 915 MHz and 2.44 GHz inside the 50 Ω Smith Chart center (S₁₁ < −38 dB, VSWR ≤ 1.02, η = 80%–92%).',
+        expected:
+          'The qualification badge turns emerald ("PASS · DUAL-BAND 50 Ω MATCHED & CFRP DECOUPLED"), the 3D radiation lobe envelope in the CAD viewport turns emerald (#10B981), and p10 blind-spot gain improves by > +10 dB.',
+      },
+      {
+        title: '5. Solve 3D Structural Stress & Inspect Active RF Equations in Theory (6)',
+        lens: 'results',
+        instruction:
+          'Click "Go to Results →" (or press 3) to solve the 3D quadratic (P2) tetrahedral structural stress on the 3K woven CFRP DeadCat frame under the 18 N prop-thrust load, then open Theory (6) to verify that Equation #11 ("Dual-Band RF VNA Scattering (S₁₁, S₂₁), 50 Ω Smith Chart & Anisotropic CFRP Eddy-Current Coupling") is active alongside the orthotropic composite Tsai–Wu continuum equations.',
+        expected:
+          'Results (3) solves the DeadCat airframe structural deflection and stress, and Theory (6) displays the active RF VNA / Smith Chart / CFRP Leontovich equations with live let parameters.',
+      },
+    ],
+    theoryChapter: {
+      chapterTitle:
+        'Chapter 16: Coupled RF Electromagnetics on Composite Drone Airframes — VNA Scattering (S₁₁, S₂₁), 50 Ω Smith Chart Trajectories, Anisotropic CFRP Eddy-Current Loss & 3D Diversity Lobes',
+      summary:
+        'Derives the coupled electromagnetic formulation for dual-band (868/915 MHz + 2.4 GHz ExpressLRS Gemini Xrossband) diversity antennas integrated onto conductive 3K woven carbon-fibre (CFRP) multirotor airframes with 3D-printed TPU/PA12 dielectric mounts, brushless motor bells, and LiPo battery shadowing.',
+      sections: [
+        {
+          heading: '16.1 Anisotropic CFRP Leontovich Surface Impedance & Near-Field Eddy-Current Absorption',
+          equations: `δ_skin(f) = 1 / √(π f μ₀ σ_cfrp),     Z_s(f) = (1 + j) / (σ_cfrp δ_skin(f))
+R_rad(d_cfrp) = R_rad,0 · (1 − 0.78 exp(−3.8 d_cfrp / λ)),     R_cfrp(d_cfrp) = R_s0 (f / 1 GHz)^0.65 exp(−4.6 d_cfrp / λ)
+η_rad(f) = R_rad / (R_rad + R_cfrp + R_diel + R_ohmic),     η_tot(f) = (1 − |Γ(f)|²) · η_rad(f)`,
+          body: 'Unlike fiberglass or polymer frames, 3K woven carbon-fibre composite (CFRP) has high in-plane electrical conductivity (σ_cfrp ≈ 1.5 × 10⁴ S/m) but finite skin depth δ_skin. When a dipole element is mounted at a small standoff distance d_cfrp ≪ λ/4 parallel to a carbon plate or swept arm, anti-phase image currents induced in the conductive carbon sheet cancel far-field radiation resistance R_rad while dissipating transmitter power as eddy-current Joule heat R_cfrp = ∮ |H_tan|² Re(Z_s) dS in the carbon laminate.',
+        },
+        {
+          heading: '16.2 TPU / PA12 Dielectric Pod Loading & Effective Permittivity Wave Slowing',
+          equations: `ε_eff(t_pod, ε_r) = 1 + q_fill(t_pod) · (ε_r − 1),     v_p = c₀ / √ε_eff
+f_res = c₀ / (2 (L_tip + 0.9 d_wire) √ε_eff) − Δf_cfrp(d_cfrp)
+L_opt(f_target) = (c₀ / (2 f_target √ε_eff)) − 0.9 d_wire`,
+          body: 'Encapsulating the dipole arms inside a 3D-printed TPU 95A (ε_r ≈ 2.75–2.95, tan δ ≈ 0.014–0.022) or SLS PA12 Nylon (ε_r ≈ 2.65) protective boot increases the local filling factor q_fill around the high-E-field dipole tips. This slows the guided phase velocity by 1/√ε_eff and shifts the unloaded half-wave resonance downward by 60–150 MHz unless the physical element lengths L_900 and L_2400 are pre-shortened to compensate.',
+        },
+        {
+          heading: '16.3 2-Port VNA Scattering Matrix (S₁₁, S₂₁, VSWR), 50 Ω Smith Chart & L-Network Matching',
+          equations: `z_norm(f) = Z_in(f) / Z₀ = r + j x,     Γ(f) = (Z_in(f) − Z₀) / (Z_in(f) + Z₀) = (z_norm − 1) / (z_norm + 1)
+S₁₁(dB) = 20 log₁₀|Γ(f)|,     VSWR = (1 + |Γ(f)|) / (1 − |Γ(f)|)
+S₂₁(dB) = 20 log₁₀|Z₁₂(d_port, α_skew) / (2 Z₀)|,     ECC = |S₁₁* S₁₂ + S₂₁* S₂₂|² / ((1 − |S₁₁|² − |S₂₁|²)(1 − |S₂₂|² − |S₁₂|²))`,
+          body: 'The bilinear Möbius transformation Γ = (z − 1)/(z + 1) maps the right half of the complex impedance plane Re(Z_in) ≥ 0 onto the unit disk |Γ| ≤ 1 of the 50 Ω Smith Chart. For an ExpressLRS Gemini dual-transceiver link, both Port 1 and Port 2 must simultaneously satisfy S₁₁ ≤ −10 dB (VSWR ≤ 1.92, inside the green |Γ| = 1/3 circle) across both 868/915 MHz and 2.40–2.48 GHz while maintaining port-to-port isolation S₂₁ ≤ −15 dB and Envelope Correlation Coefficient ECC < 0.05 via orthogonal V-dipole skew α_skew ≈ 86°–90°.',
+        },
+        {
+          heading: '16.4 3D Far-Field Radiation Pattern G(θ, φ), Airframe Shadow Diffraction & Link Budget',
+          equations: `G_p(θ, φ) = η_tot · D_dipole(θ, φ; α_p) · A_cfrp(θ, φ; d_cfrp, z_pod) · A_motors(θ, φ) · A_lipo(θ, φ)
+G_Gemini(θ, φ) = 10 log₁₀( max(g₁, g₂) + 0.35 min(g₁, g₂) )
+R_LOS(km) = (λ / 4π) · 10^((P_tx + G_p10 + G_rx − S_rx − M_fade) / 20)`,
+          body: 'In flight, a 4-inch DeadCat quadcopter pitches and banks through all attitudes (θ, φ). While a single dipole has deep axial nulls (−18 dBi) along its wire axis and a forward shadow cast by the conductive carbon frame and LiPo battery, an elevated orthogonal V-tail Gemini pod (α_skew ≈ 88°, z_pod ≥ 16 mm) fills each port’s axial null with the orthogonal port’s peak lobe, raising the 10th-percentile (p10) spherical blind-spot floor above 0 dBi.',
+        },
+      ],
+    },
+    mcpSteps: [
+      {
+        title: 'Step 1: Evaluate VNA Sweep, 50 Ω Smith Chart & 3D Lobes on Unoptimised Tucked Build (`solve_drone_antenna`)',
+        description:
+          'Runs the coupled electromagnetic VNA & 3D radiation lobe solver on the unoptimised tucked preset (`cfrp_standoff_mm = 6.5`, detuned `3.2 mm` TPU boot, `38°` skew) and syncs the 3D DeadCat assembly into the workspace.',
+        tool: 'solve_drone_antenna',
+        arguments: {
+          preset: 'unoptimised_tucked',
+          sync_to_document: true,
+        },
+      },
+      {
+        title: 'Step 2: Run Automated Multi-Objective Geometry & L/C Matching Optimiser (`optimise_drone_antenna`)',
+        description:
+          'Optimises CFRP standoff `d_cfrp`, elevation `z_pod`, dielectric-compensated dipole lengths `L_900` & `L_2400`, orthogonal diversity skew `α_skew`, and conjugate L-network matching (`L_ser`, `C_sh`), then updates the 3D `.fsm` DeadCat drone in the viewport.',
+        tool: 'optimise_drone_antenna',
+        arguments: {
+          preset: 'unoptimised_tucked',
+          max_iters: 8,
+          sync_to_document: true,
+        },
+      },
+      {
+        title: 'Step 3: Solve 3D P2 Structural Stress on the 4-Inch DeadCat CFRP Frame (`solve_study`)',
+        description:
+          'Runs the 3D quadratic (P2) tetrahedral finite-element solver on the optimised 4-inch DeadCat carbon-fibre airframe under the 18 N prop-thrust load.',
+        tool: 'solve_study',
+        arguments: {
+          include_fine: false,
+        },
+      },
+    ],
+  },
 ];
 
 export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = false) {
@@ -2827,6 +2962,140 @@ function TutorialsContentsPage({
   );
 }
 
+function DroneAntennaTutorialCard() {
+  useApp();
+  const docSpec =
+    extractDroneAntennaSpecFromDoc(store.doc) ?? defaultOptimisedDroneAntennaSpec();
+  const rep = analyzeDroneAntenna(docSpec);
+  const low = rep.low_band_summary;
+  const high = rep.high_band_summary;
+
+  return (
+    <div
+      class="tut-step-card"
+      data-testid="t16-drone-antenna-workbench-card"
+      style={{
+        background: '#0F172A',
+        color: '#F1F5F9',
+        border: `1.5px solid ${rep.all_targets_met ? '#10B981' : '#F43F5E'}`,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px',
+          flexWrap: 'wrap',
+          marginBottom: '6px',
+        }}
+      >
+        <strong style={{ color: '#38BDF8', fontSize: '12.5px' }}>
+          📡 Interactive Gemini Dual-Band (900 MHz + 2.4 GHz) VNA / 50 Ω Smith / 3D Lobe Controls
+        </strong>
+        <span
+          data-testid="t16-qualification-badge"
+          style={{
+            fontSize: '10px',
+            fontWeight: 700,
+            fontFamily: 'var(--mono)',
+            padding: '2px 8px',
+            borderRadius: '999px',
+            background: rep.all_targets_met
+              ? 'rgba(16, 185, 129, 0.2)'
+              : 'rgba(244, 63, 94, 0.22)',
+            color: rep.all_targets_met ? '#34D399' : '#FDA4AF',
+            border: `1px solid ${rep.all_targets_met ? '#10B981' : '#F43F5E'}`,
+          }}
+        >
+          {rep.all_targets_met
+            ? 'PASS · DUAL-BAND 50 Ω MATCHED'
+            : 'DETUNED / CFRP EDDY LOSS'}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))',
+          gap: '6px',
+          fontFamily: 'var(--mono)',
+          fontSize: '11px',
+          marginBottom: '8px',
+        }}
+      >
+        <div style={{ padding: '6px 8px', background: '#1E293B', borderRadius: '5px' }}>
+          <div style={{ fontSize: '9.5px', color: '#94A3B8' }}>915 MHz SUB-GHZ</div>
+          <div style={{ color: '#FDE047', fontWeight: 700 }}>
+            S₁₁ = {low.s11_at_target_db.toFixed(1)} dB · VSWR {low.vswr_at_target.toFixed(2)}
+          </div>
+          <div style={{ fontSize: '10px', color: '#CBD5E1' }}>
+            η = {low.total_efficiency_pct.toFixed(1)}% · CFRP {low.cfrp_power_loss_pct.toFixed(1)}%
+          </div>
+        </div>
+        <div style={{ padding: '6px 8px', background: '#1E293B', borderRadius: '5px' }}>
+          <div style={{ fontSize: '9.5px', color: '#94A3B8' }}>2.44 GHZ HIGH-BAND</div>
+          <div style={{ color: '#7DD3FC', fontWeight: 700 }}>
+            S₁₁ = {high.s11_at_target_db.toFixed(1)} dB · VSWR {high.vswr_at_target.toFixed(2)}
+          </div>
+          <div style={{ fontSize: '10px', color: '#CBD5E1' }}>
+            η = {high.total_efficiency_pct.toFixed(1)}% · CFRP {high.cfrp_power_loss_pct.toFixed(1)}%
+          </div>
+        </div>
+        <div style={{ padding: '6px 8px', background: '#1E293B', borderRadius: '5px' }}>
+          <div style={{ fontSize: '9.5px', color: '#94A3B8' }}>DIVERSITY &amp; 3D LOBE</div>
+          <div style={{ color: '#C084FC', fontWeight: 700 }}>
+            S₂₁ = {high.s21_isolation_db.toFixed(1)} dB · p10 {high.p10_blind_spot_floor_dbi.toFixed(1)} dBi
+          </div>
+          <div style={{ fontSize: '10px', color: '#CBD5E1' }}>
+            Standoff {docSpec.cfrp_standoff_mm.toFixed(1)} mm · Skew {docSpec.diversity_skew_deg.toFixed(0)}°
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="t16-load-unoptimised"
+          onClick={() => {
+            const bad = unoptimisedTuckedDroneAntennaSpec();
+            syncDeadCatDroneToDocument(bad, analyzeDroneAntenna(bad), true);
+            ui.notify('Loaded T16 Unoptimised Tucked CFRP Build (6.5 mm standoff, detuned TPU boot)');
+          }}
+          style={{ background: 'rgba(244,63,94,0.18)', borderColor: '#F43F5E', color: '#FDA4AF' }}
+        >
+          ⚠️ Load Unoptimised Tucked Build (6.5 mm)
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="t16-run-optimiser"
+          onClick={() => {
+            const res = optimiseDroneAntenna(docSpec, 8);
+            syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, true);
+            ui.notify('Auto-Optimised 4" DeadCat Gemini Antenna & L/C Matching Network');
+          }}
+          style={{ background: 'rgba(16,185,129,0.2)', borderColor: '#10B981', color: '#6EE7B7' }}
+        >
+          ⚡ Auto-Optimise Geometry &amp; L/C Match
+        </button>
+        <button
+          type="button"
+          class="btn small primary"
+          data-testid="t16-open-antenna-workbench"
+          onClick={() => {
+            ui.set('tutorialsOpen', false);
+            openAntennaWorkbenchModal('from_doc');
+          }}
+        >
+          📡 Open Full Smith / VNA / Lobe Workbench…
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TutorialsDrawer() {
   useApp();
   const [activeTab, setActiveTab] = useState<ColumnTab>('user');
@@ -2921,6 +3190,7 @@ function TutorialsDrawer() {
       {sheet.id === 'T9' && <SwirlAtomiserNoxPredictor />}
       {sheet.id === 'T14' && <FixingTorqueAndWeibullWorkbench />}
       {sheet.id === 'T15' && <SketchWorkbench embedded />}
+      {sheet.id === 'T16' && <DroneAntennaTutorialCard />}
       {sheet.userSteps.map((st, i) => (
         <div key={i} class="tut-step-card">
           <div class="tut-step-top">
@@ -3456,6 +3726,8 @@ curl -s -X POST ${origin}/api/mcp \\
 • add_heatflux(id, region, q)             — Apply surface heat flux (W/mm²)
 • set_fill(family, morph?, cell, cell_min?, erode?, ...) — Configure level-set boundary evolution & multi-zone TPMS infill
 • solve_study(include_fine)               — Run 3D P2 tetrahedral FEA + thermal conduction + modal solver
+• solve_drone_antenna(preset?, spec?, ...)— Evaluate dual-band VNA S₁₁/S₂₁, 50 Ω Smith Chart & 3D radiation lobes
+• optimise_drone_antenna(preset?, ...)    — Auto-optimise CFRP standoff, dielectric dipole lengths, skew & L/C match
 • list_coupled_systems()                  — List registered multi-physics PDE + Adjoint packs
 • optimise_coupled_system(system_id, ...) — Step coupled PDE design levers along exact Adjoint gradients`}</pre>
           </div>
@@ -3490,7 +3762,7 @@ function TutorialsStatusItem() {
         style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
         onClick={toggleTutorialsDrawer}
       >
-        Tutorials (T1–T15)
+        Tutorials (T1–T16)
       </button>
       <span class="sep">|</span>
       <button
@@ -3515,7 +3787,7 @@ extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T15)',
+    label: 'Open Interactive Tutorials & Theoretical Manual (T1–T16)',
     run: () => toggleTutorialsDrawer(),
   },
   {

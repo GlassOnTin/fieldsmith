@@ -1505,6 +1505,10 @@ pub fn export_slice_stack_3mf(
 /// objective/constraint descriptors `Φ`, and preset scenarios.
 #[wasm_bindgen(js_name = listCoupledSystems)]
 pub fn list_coupled_systems() -> Result<String, JsValue> {
+    use fieldsmith_solve::antenna::{
+        analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
+        DeadCatGeminiAntennaSystem, DroneAntennaDesignSpec,
+    };
     use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
     use fieldsmith_solve::coupled_system::{
         CoupledEngineeringSystem, NamedScenario, RegenerativeCooledNozzleSystem,
@@ -1517,6 +1521,8 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     let nozzle_sys = RegenerativeCooledNozzleSystem::default();
     let candle_sys = SolarCandleIgnitionSystem;
     let fixing_sys = FastenerFixingSystem::new();
+    let drone_sys = DeadCatGeminiAntennaSystem::new();
+    let _ = (analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna, DroneAntennaDesignSpec::default);
 
     let bath_scenarios = vec![
         NamedScenario {
@@ -1578,6 +1584,19 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
         },
     ];
 
+    let drone_scenarios = vec![
+        NamedScenario {
+            name: "A. Unoptimised Tucked Pod (6.5 mm CFRP Standoff, Free-Space Lengths, 38° Skew)".to_string(),
+            description: "Gemini V-antenna tucked flush against rear CFRP standoffs (d_cfrp = 6.5 mm, z = 4 mm) inside a thick 3.2 mm TPU boot — severe dielectric detuning, 42% CFRP eddy loss, and -14 dBi nose-on shadow null".to_string(),
+            design_p: vec![6.5, 156.0, 59.0, 38.0, 4.0, 3.2, 0.0, 0.0],
+        },
+        NamedScenario {
+            name: "B. Optimised Rear V-Tail Pod (24 mm Standoff, 88° Orthogonal Skew, L/C Matched)".to_string(),
+            description: "Dielectric pre-compensated dipole lengths (136.5 / 51.2 mm) on a 24 mm elevated TPU boom (z = 16 mm, α = 88°) with L-network match — S11 < -18 dB in both bands and > 82% efficiency".to_string(),
+            design_p: vec![24.0, 136.5, 51.2, 88.0, 16.0, 1.6, 1.8, 0.65],
+        },
+    ];
+
     to_json(&serde_json::json!([
         {
             "system_id": bath_sys.system_id(),
@@ -1622,6 +1641,17 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
             "epistemic_parameters": fixing_sys.epistemic_parameters(),
             "objectives": fixing_sys.objective_descriptors(),
             "scenarios": fixing_scenarios,
+        },
+        {
+            "system_id": drone_sys.system_id(),
+            "system_title": drone_sys.system_title(),
+            "industry_sector": drone_sys.industry_sector(),
+            "num_dofs": drone_sys.num_dofs(),
+            "fields": drone_sys.field_descriptors(),
+            "design_parameters": drone_sys.design_parameters(),
+            "epistemic_parameters": drone_sys.epistemic_parameters(),
+            "objectives": drone_sys.objective_descriptors(),
+            "scenarios": drone_scenarios,
         }
     ]))
 }
@@ -1779,7 +1809,78 @@ pub fn solve_coupled_system(
             "fsm_3d": fsm_3d,
             "wall_ms": wall_ms,
         }))
+    } else if system_id == "deadcat_4in_gemini_antenna_v1" {
+        use fieldsmith_solve::antenna::{analyze_drone_antenna, DeadCatGeminiAntennaSystem};
+        let sys = DeadCatGeminiAntennaSystem::new();
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig::default();
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let spec = sys.spec_from_params(&p, &theta);
+        let vna_report = analyze_drone_antenna(&spec);
+        let fsm_3d = sys.build_3d_fsm(&p);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": serde_json::Value::Null,
+            "candle_flame_visual": serde_json::Value::Null,
+            "drone_antenna_vna": vna_report,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
     } else {
         Err(js_err(format!("unknown coupled system_id: {system_id}")))
     }
+}
+
+/// Evaluate the 4-inch DeadCat FPV Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna
+/// VNA sweep (`S11`, `S21`, `VSWR`, Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`)
+/// and 3D radiation lobes (`G(theta, phi)`).
+#[wasm_bindgen(js_name = solveDroneAntennaVna)]
+pub fn solve_drone_antenna_vna(spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_solve::antenna::{
+        analyze_drone_antenna, build_deadcat_drone_fsm, DroneAntennaDesignSpec,
+    };
+    let spec: DroneAntennaDesignSpec = if spec_json.trim().is_empty() {
+        DroneAntennaDesignSpec::default()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid DroneAntennaDesignSpec JSON: {e}")))?
+    };
+    let report = analyze_drone_antenna(&spec);
+    let fsm_3d = build_deadcat_drone_fsm(&spec);
+    to_json(&serde_json::json!({
+        "report": report,
+        "fsm_3d": fsm_3d,
+    }))
+}
+
+/// Optimise the 4-inch DeadCat FPV Drone + Gemini Dual-Band Antenna geometry and L-network
+/// impedance matching, returning the initial vs. optimised VNA/Smith/Lobe report and 3D `.fsm`.
+#[wasm_bindgen(js_name = optimiseDroneAntennaVna)]
+pub fn optimise_drone_antenna_vna(spec_json: &str, max_iters: usize) -> Result<String, JsValue> {
+    use fieldsmith_solve::antenna::{optimise_drone_antenna, DroneAntennaDesignSpec};
+    let spec: DroneAntennaDesignSpec = if spec_json.trim().is_empty() {
+        DroneAntennaDesignSpec::unoptimised_tucked_preset()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid DroneAntennaDesignSpec JSON: {e}")))?
+    };
+    let result = optimise_drone_antenna(&spec, max_iters.clamp(1, 25));
+    to_json(&result)
 }

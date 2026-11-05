@@ -657,6 +657,13 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
     letNames.has('m_dot_fuel') ||
     doc.temperatures.some((t) => t.id.includes('flame') || t.id.includes('thermal_jet'));
 
+  const isDroneAntenna =
+    letNames.has('cfrp_standoff_mm') ||
+    letNames.has('gemini_l900_mm') ||
+    letNames.has('gemini_l2400_mm') ||
+    doc.name.toLowerCase().includes('deadcat') ||
+    doc.name.toLowerCase().includes('antenna');
+
   const docMatSpec = getContinuumMaterialSpec(doc, doc.material);
 
   return [
@@ -923,6 +930,28 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       liveParameters: [
         `Build orientation (θ, φ): ${doc.solve.build ? `(${doc.solve.build[0]}°, ${doc.solve.build[1]}°)` : '73-orientation hemisphere sweep (0°..90°)'}`,
         `Inter-layer bond allowables: S_z = ${(docMatSpec.fsmMaterial.yield_z ?? 0.6 * docMatSpec.fsmMaterial.yield_strength).toFixed(0)} MPa, S_s = ${(docMatSpec.fsmMaterial.shear_z ?? docMatSpec.fsmMaterial.yield_strength / Math.sqrt(3)).toFixed(0)} MPa`,
+      ],
+    },
+
+    // 11. RF VNA Scattering, 50 Ω Smith Chart & Anisotropic CFRP Eddy-Current Coupling
+    {
+      id: 'vna_smith_cfrp_antenna',
+      stage: 'setup',
+      stageNumber: 2,
+      title: 'Dual-Band RF VNA Scattering (S₁₁, S₂₁), 50 Ω Smith Chart & Anisotropic CFRP Eddy-Current Coupling',
+      shortName: 'RF VNA / 50 Ω Smith Chart & CFRP Eddy-Current Lobes',
+      active: isDroneAntenna,
+      triggerSummary: isDroneAntenna
+        ? 'Active: 4-Inch DeadCat CFRP Airframe + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna VNA & 3D Lobe parameters in Document.'
+        : "Standby: Click 'Antenna…' in the Shapes tree to open the 4-Inch DeadCat Drone & Gemini Dual-Band Antenna VNA Workbench.",
+      strongForm:
+        '∇ × ∇ × E − k₀² ε_r*(r) E = −j ω μ₀ J_feed,   Z_s(CFRP) = (1 + j) / (σ_cfrp δ_skin),   Γ(f) = (Z_in(f) − Z₀) / (Z_in(f) + Z₀)',
+      weakOrDiscreteForm:
+        'S₁₁(dB) = 20 log₁₀|Γ(f)|,   VSWR = (1 + |Γ|) / (1 − |Γ|),   η_tot = (1 − |Γ|²) · R_rad / (R_rad + R_cfrp(d_cfrp) + R_diel(ε_r, tan δ))',
+      liveParameters: [
+        `CFRP Standoff d_cfrp = ${readLetParam(doc, 'cfrp_standoff_mm', 24.0).toFixed(1)} mm, Pod Elevation z_pod = ${readLetParam(doc, 'antenna_elev_mm', 16.0).toFixed(1)} mm, Skew α_skew = ${readLetParam(doc, 'gemini_skew_deg', 86.0).toFixed(0)}°`,
+        `Dipole Arms: L_900 = ${readLetParam(doc, 'gemini_l900_mm', 136.5).toFixed(1)} mm, L_2400 = ${readLetParam(doc, 'gemini_l2400_mm', 51.2).toFixed(1)} mm, TPU Boot Wall t_tpu = ${readLetParam(doc, 'tpu_pod_wall_mm', 1.8).toFixed(1)} mm`,
+        `VNA Match: 915 MHz S₁₁ = ${readLetParam(doc, 'vna_s11_915_db', -23.2).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_915_pct', 80.0).toFixed(1)}%), 2.44 GHz S₁₁ = ${readLetParam(doc, 'vna_s11_2440_db', -28.9).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_2440_pct', 91.6)}%)`,
       ],
     },
   ];

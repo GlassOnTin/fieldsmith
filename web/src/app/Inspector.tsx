@@ -42,6 +42,15 @@ import {
   reconfigureExistingBoltStack,
   type AssociatedNutKind,
 } from '../doc/fixings-catalog';
+import {
+  analyzeDroneAntenna,
+  extractDroneAntennaSpecFromDoc,
+  optimiseDroneAntenna,
+} from '../doc/antenna-vna';
+import {
+  openAntennaWorkbenchModal,
+  syncDeadCatDroneToDocument,
+} from './AntennaWorkbench';
 
 let library: ReturnType<typeof materialLibrary> | null = null;
 export function materials() {
@@ -1452,6 +1461,110 @@ function NodeInspector({ node }: { node: Node }) {
         matId={node.material || store.doc.material}
         testId="node-continuum-card"
       />
+      <DroneAntennaInspectorCard doc={store.doc} />
+    </div>
+  );
+}
+
+function DroneAntennaInspectorCard({ doc }: { doc: Document }) {
+  const spec = extractDroneAntennaSpecFromDoc(doc);
+  if (!spec) return null;
+  const rep = analyzeDroneAntenna(spec);
+  const low = rep.low_band_summary;
+  const high = rep.high_band_summary;
+  return (
+    <div
+      class="card"
+      data-testid="inspector-drone-antenna-card"
+      style={{
+        marginTop: '10px',
+        padding: '9px 10px',
+        border: `1px solid ${rep.all_targets_met ? '#10B981' : '#F43F5E'}`,
+        background: '#0F172A',
+        color: '#E2E8F0',
+        borderRadius: '6px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: '#38BDF8' }}>
+          📡 Gemini Dual-Band VNA &amp; 3D Lobe
+        </span>
+        <span
+          style={{
+            fontSize: '9.5px',
+            fontWeight: 700,
+            fontFamily: 'var(--mono)',
+            padding: '1px 6px',
+            borderRadius: '999px',
+            background: rep.all_targets_met ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)',
+            color: rep.all_targets_met ? '#34D399' : '#FDA4AF',
+          }}
+        >
+          {rep.all_targets_met ? '50 Ω MATCHED' : 'DETUNED'}
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '4px 8px',
+          fontSize: '10.5px',
+          fontFamily: 'var(--mono)',
+        }}
+      >
+        <div>
+          915 MHz: <strong>{low.s11_at_target_db.toFixed(1)} dB</strong> (VSWR {low.vswr_at_target.toFixed(2)})
+        </div>
+        <div>
+          2.44 GHz: <strong>{high.s11_at_target_db.toFixed(1)} dB</strong> (VSWR {high.vswr_at_target.toFixed(2)})
+        </div>
+        <div>
+          Rad Eff η: <strong>{low.total_efficiency_pct.toFixed(0)}% / {high.total_efficiency_pct.toFixed(0)}%</strong>
+        </div>
+        <div>
+          CFRP Loss: <strong>{low.cfrp_power_loss_pct.toFixed(1)}% / {high.cfrp_power_loss_pct.toFixed(1)}%</strong>
+        </div>
+        <div>
+          Isolation S₂₁: <strong>{high.s21_isolation_db.toFixed(1)} dB</strong>
+        </div>
+        <div>
+          p10 Floor: <strong>{high.p10_blind_spot_floor_dbi.toFixed(1)} dBi</strong>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+        <button
+          type="button"
+          class="btn small primary"
+          data-testid="inspector-open-antenna-workbench"
+          onClick={() => openAntennaWorkbenchModal('from_doc')}
+          style={{ flex: 1, fontSize: '10.5px' }}
+        >
+          Open Smith / VNA / Lobe Workbench…
+        </button>
+        {!rep.all_targets_met && (
+          <button
+            type="button"
+            class="btn small"
+            data-testid="inspector-auto-optimise-antenna"
+            onClick={() => {
+              const res = optimiseDroneAntenna(spec, 8);
+              syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, false);
+              ui.notify('Auto-optimised Gemini antenna & CFRP standoff');
+            }}
+            style={{
+              fontSize: '10.5px',
+              background: 'rgba(16, 185, 129, 0.2)',
+              borderColor: '#10B981',
+              color: '#6EE7B7',
+            }}
+          >
+            ⚡ Auto-Optimise
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1491,6 +1604,7 @@ function DocumentInspector() {
       <div class="insp-heading">
         <span class="kind">Document</span>
       </div>
+      <DroneAntennaInspectorCard doc={doc} />
       <div class="field-grid">
         <label class="plain">Material</label>
         <select

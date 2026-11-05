@@ -110,11 +110,15 @@ the solved field.
   `fieldsmith-mcp` binary (stdio MCP server and live browser `/api/mcp` bridge over that API
   with closed-loop parametric synthesis tools, `V51`), and the `session` and `worker` verbs to
   hand jobs to machines you own over Noise-encrypted connections.
-- Interactive Tutorials & Theory Manual (`T1–T12`) and Coupled Multi-Physics Systems (`V52`,
+- Interactive Tutorials & Theory Manual (`T1–T16`, `Ch. 1–16`) and Coupled Multi-Physics Systems (`V52`,
   Pilkington float-bath tin/glass/H₂-N₂ roof coupled PDE solver and swirl atomiser combustor
   NOx predictor), plus multi-body assembly mechanics & bolt preload (`V53`, `T10`), spatially
-  varying cell-size & multi-zone TPMS family morphing (`V54`, `T11`), and level-set outer
-  boundary topology evolution (`V55`, `T12`), built into the web workbench.
+  varying cell-size & multi-zone TPMS family morphing (`V54`, `T11`), level-set outer
+  boundary topology evolution (`V55`, `T12`), electromagnetic Lorentz forces & vacuum systems (`V56`, `T13`),
+  ISO/FED-STD-H28/VDI 2230 engineering fixings with underhead washers & mated hex/Nyloc nuts (`V57`, `T14`),
+  2D constraint sketch solver with 3D extrude/revolve (`V58`, `T15`), and 4-inch DeadCat FPV drone &
+  Gemini dual-band (`900 MHz` + `2.4 GHz`) antenna VNA, 50 Ω Smith chart & 3D radiation lobe optimisation (`V59`, `T16`),
+  built into the web and Android workbench.
 
 ## Where to look next
 

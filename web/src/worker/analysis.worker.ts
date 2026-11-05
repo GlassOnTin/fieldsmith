@@ -17,6 +17,24 @@ import type { SweepRecord } from '../doc/wasm';
 
 let ready: Promise<void> | null = null;
 
+const isMobileWorker =
+  typeof navigator !== 'undefined' &&
+  /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent ?? '');
+
+/** Cap the WASM Rayon thread pool on mobile big.LITTLE SoCs (e.g. 8-core Android phones
+ * with 4 efficiency cores) so busy-spin barriers do not block on LITTLE cores or starve
+ * Android's UI / RenderThread and background services. */
+function optimalWorkerPoolSize(): number {
+  const hw = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+  if (isMobileWorker) {
+    return Math.min(4, Math.max(2, hw - 2));
+  }
+  return Math.min(8, Math.max(2, hw - 1));
+}
+
+const EFFECTIVE_COARSE_DOFS = isMobileWorker ? Math.min(COARSE_DOFS, 12_000) : COARSE_DOFS;
+const EFFECTIVE_FINE_DOFS = isMobileWorker ? Math.min(FINE_DOFS, 40_000) : FINE_DOFS;
+
 /** The fine (or, when the fine level skipped, the coarse) graded handle of the last run.
  * `null` for solid documents and after this worker has never run a fill document. */
 let graded: GradedHandleWithExport | null = null;
@@ -176,7 +194,7 @@ function unhydratedHash(doc: Document): string | null {
  * main-thread cache. The worker's own registry is hydrated by `importMesh` itself. */
 async function doImport(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj' | '3mf', src: string, opts: { units?: string; up?: string; voxel?: number; ids?: string[] }) {
   // The import can be the first message a fresh worker sees, so wasm is not loaded yet.
-  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
   await ready;
   try {
     const result = importMesh(new Uint8Array(bytes), kind, { ...opts, src });
@@ -210,7 +228,7 @@ async function doImport(bytes: ArrayBuffer, kind: 'glb' | 'stl' | 'obj' | '3mf',
 
 async function doHydrate(entries: HydrateEntry[]) {
   // Hydration feeds wasm-held grids, so it too can be the first message on a fresh worker.
-  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
   await ready;
   for (const e of entries) {
     hydrateGrid(
@@ -247,7 +265,7 @@ async function run(doc: Document) {
     });
     return;
   }
-  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
   await ready;
   const unh = unhydratedHash(doc);
   if (unh) {
@@ -292,15 +310,15 @@ async function run(doc: Document) {
     return null;
   };
 
-  const coarse = runLevel({ dofs: COARSE_DOFS }, 'coarse mesh', true);
+  const coarse = runLevel({ dofs: EFFECTIVE_COARSE_DOFS }, 'coarse mesh', true);
   if (!coarse) return;
   const skip = skipFine(coarse.meta.provenance.element_size);
   if (skip !== null) {
     post({ type: 'done', skippedFine: skip });
     return;
   }
-  const label = size !== null ? `refined · h ${size.toFixed(2)} mm` : `refined · ${Math.round(FINE_DOFS / 1000)}k DOF`;
-  if (!runLevel(size !== null ? { h: size } : { dofs: FINE_DOFS }, label, true)) return;
+  const label = size !== null ? `refined · h ${size.toFixed(2)} mm` : `refined · ${Math.round(EFFECTIVE_FINE_DOFS / 1000)}k DOF`;
+  if (!runLevel(size !== null ? { h: size } : { dofs: EFFECTIVE_FINE_DOFS }, label, true)) return;
   post({ type: 'done', skippedFine: null });
 }
 
@@ -308,7 +326,7 @@ async function run(doc: Document) {
  * field; fill documents reuse the run's stored graded handle when one exists, else build
  * the graded fill on the spot. */
 async function doExport(doc: Document, h: number, solid: boolean) {
-  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
   await ready;
   const unh = unhydratedHash(doc);
   if (unh) {
@@ -356,7 +374,7 @@ async function doSlice(z: number, doc?: Document, h?: number, solid?: boolean) {
   }
   slicing = true;
   try {
-    if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+    if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
     await ready;
     let segs: Float64Array;
     if (mesh) {
@@ -403,7 +421,7 @@ async function doBytes(
       return;
     }
     try {
-      if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+      if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
       await ready;
       const lh = layerH ?? 1.0;
       const sh = h ?? 0.25;
@@ -438,7 +456,7 @@ async function doBytes(
  * native question, which discards partial work on a point failure, this worker streams
  * the points before the failing one so they stand in the table. */
 async function doSweep(doc: Document, addr: string, values: number[], rungs: number[], addr2?: string, values2?: number[]) {
-  if (!ready) ready = loadWasm({ pool: navigator.hardwareConcurrency });
+  if (!ready) ready = loadWasm({ pool: optimalWorkerPoolSize() });
   await ready;
   try {
     if (doc.fill !== null) {

@@ -26,8 +26,8 @@ interface WebGLProgramLike {
     fragmentShader?: { log?: string };
   } | null;
 }
-/** Per-leaf colour cap; beyond the first 32 (tree order) parts render in the base colour. */
-export const MAX_PARTCOLORS = 32;
+/** Per-leaf colour cap; beyond the first 64 (tree order) parts render in the base colour. */
+export const MAX_PARTCOLORS = 64;
 
 function fragSource(field: string, ident: string, core = false): string {
   const active = core && field.includes('vec4 fs_core(vec3 p) {')
@@ -407,9 +407,21 @@ export class Viewport {
   onFrame: (() => void) | null = null;
   readonly canvas: HTMLCanvasElement;
 
+  private effectiveDpr(): number {
+    const raw = window.devicePixelRatio || 1;
+    const isMobile =
+      window.innerWidth <= 900 ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent ?? '');
+    // High-DPI mobile screens (2.75x–3.5x) invoke 8x–12x more fragment shader rays per
+    // frame than a 1x viewport. Capping mobile raymarching DPR at 1.5x when idle and
+    // ~0.85x while actively orbiting prevents Adreno/Mali GPU stalls and thermal throttling.
+    const cap = isMobile ? Math.min(raw, 1.5) : Math.min(raw, 2.0);
+    return this.interacting ? Math.max(0.5, cap * (isMobile ? 0.55 : 0.5)) : cap;
+  }
+
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(this.effectiveDpr());
     this.renderer.setClearColor(0x000000, 0);
     // Built-in overlay materials (result mesh, glyphs) honour the section plane through
     // three's local clipping; the raymarched passes implement it in their own shader.
@@ -1037,9 +1049,8 @@ export class Viewport {
   }
 
   private render() {
-    // Render at reduced resolution while the camera moves; full resolution when idle.
-    const dpr = window.devicePixelRatio;
-    const target = this.interacting ? Math.max(0.5, dpr * 0.5) : dpr;
+    // Render at reduced resolution while the camera moves; capped resolution when idle.
+    const target = this.effectiveDpr();
     if (this.renderer.getPixelRatio() !== target) {
       this.renderer.setPixelRatio(target);
       this.renderer.setSize(this.host.clientWidth, this.host.clientHeight, false);
