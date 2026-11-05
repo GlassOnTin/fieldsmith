@@ -16,7 +16,7 @@ Binaries: https://github.com/GlassOnTin/fieldsmith/releases/download/v%v/fieldsm
 Builds:
   - versionName: 0.12.0
     versionCode: 1201
-    commit: v0.12.0
+    commit: 843b0fc287d8750d5877e15bf285ab135f2a22f0
     subdir: android/app
     submodules: true
     sudo:
