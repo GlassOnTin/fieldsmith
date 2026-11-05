@@ -3471,11 +3471,29 @@ function TutorialsDrawer() {
   );
 }
 
+interface DiscoveredPeer {
+  url: string;
+  host?: string;
+  port?: number;
+  hostname: string;
+  version: string;
+  os: string;
+  arch: string;
+  threads: number;
+  max_recommended_dofs: number;
+  latency_ms: number;
+  via?: string;
+  source?: string;
+}
+
 function McpSetupModal() {
   useApp();
   const [healthOut, setHealthOut] = useState<string | null>(null);
   const [solveOut, setSolveOut] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<'health' | 'solve' | null>(null);
+  const [peers, setPeers] = useState<DiscoveredPeer[]>([]);
+  const [activeRemotePeer, setActiveRemotePeer] = useState<string | null>(null);
+  const [scanSummary, setScanSummary] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'health' | 'solve' | 'discover' | 'connect' | null>(null);
 
   if (!ui.mcpSetupOpen) return null;
   const origin =
@@ -3485,6 +3503,87 @@ function McpSetupModal() {
         ? window.location.origin
         : 'http://192.168.0.180:5173';
 
+  const scanSubnetForPeers = async () => {
+    setBusyAction('discover');
+    setScanSummary(null);
+    const t0 = performance.now();
+    try {
+      const resp = await fetch('/api/peers/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timeout_ms: 150 }),
+      });
+      const data = await resp.json();
+      const dt = Math.round(performance.now() - t0);
+      const found: DiscoveredPeer[] = Array.isArray(data?.peers) ? data.peers : [];
+      setPeers(found);
+      if (data?.active_remote_compute_url) {
+        setActiveRemotePeer(data.active_remote_compute_url);
+      }
+      setScanSummary(
+        `Scanned local subnet + loopback in ${dt} ms — found ${found.length} Fieldsmith compute server${found.length === 1 ? '' : 's'}.`,
+      );
+    } catch (e) {
+      setScanSummary(`Subnet scan failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const connectToPeer = async (targetUrl: string) => {
+    setBusyAction('connect');
+    try {
+      const resp = await fetch('/api/peers/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl, sync_workspace: true }),
+      });
+      const data = await resp.json();
+      if (data?.ok === false) {
+        ui.notify(`Failed to connect peer: ${data.error ?? 'unreachable'}`, 'error');
+        setHealthOut(JSON.stringify(data, null, 2));
+        return;
+      }
+      const connectedUrl = data?.remote_compute_url ?? (targetUrl !== 'auto' ? targetUrl : null);
+      setActiveRemotePeer(connectedUrl);
+      if (connectedUrl && connectedUrl !== 'auto') {
+        ui.set('computeServerUrl', connectedUrl);
+        ui.set('computeMode', 'remote');
+      }
+      setHealthOut(JSON.stringify(data, null, 2));
+      const peerThreads = data?.peer?.threads ?? data?.peer_health?.threads ?? '?';
+      ui.notify(
+        connectedUrl
+          ? `Connected to compute peer ${connectedUrl} (${peerThreads} threads)`
+          : 'Disconnected remote compute peer (using local solver)',
+        'info',
+      );
+    } catch (e) {
+      ui.notify(`Connect error: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const disconnectPeer = async () => {
+    setBusyAction('connect');
+    try {
+      await fetch('/api/peers/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: '' }),
+      });
+      setActiveRemotePeer(null);
+      ui.set('computeMode', 'native');
+      ui.notify('Disconnected remote compute peer; switched back to local host.', 'info');
+    } catch {
+      setActiveRemotePeer(null);
+      ui.set('computeMode', 'wasm');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const testServerHealth = async () => {
     setBusyAction('health');
     const t0 = performance.now();
@@ -3492,6 +3591,9 @@ function McpSetupModal() {
       const resp = await fetch(apiUrl('/api/health'));
       const data = await resp.json();
       const dt = Math.round(performance.now() - t0);
+      if (data?.remote_compute_url) {
+        setActiveRemotePeer(data.remote_compute_url);
+      }
       setHealthOut(JSON.stringify({ latency_ms: dt, ...data }, null, 2));
     } catch (e) {
       setHealthOut(`Connection error: ${e instanceof Error ? e.message : String(e)}`);
@@ -3636,6 +3738,36 @@ function McpSetupModal() {
               <button
                 type="button"
                 class="btn small"
+                data-testid="compute-scan-peers-btn"
+                disabled={busyAction !== null}
+                onClick={scanSubnetForPeers}
+              >
+                {busyAction === 'discover' ? 'Scanning Subnet…' : '🔍 Scan Subnet for Fieldsmith Servers'}
+              </button>
+              <button
+                type="button"
+                class="btn small"
+                data-testid="compute-autoconnect-btn"
+                disabled={busyAction !== null}
+                onClick={() => connectToPeer('auto')}
+                title="Automatically discover and link the highest-thread-count Fieldsmith workstation on the LAN"
+              >
+                {busyAction === 'connect' ? 'Connecting…' : '⚡ Auto-Connect Best Workstation'}
+              </button>
+              {activeRemotePeer && (
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="compute-disconnect-btn"
+                  disabled={busyAction !== null}
+                  onClick={disconnectPeer}
+                >
+                  Disconnect ({activeRemotePeer})
+                </button>
+              )}
+              <button
+                type="button"
+                class="btn small"
                 data-testid="compute-test-health-btn"
                 disabled={busyAction !== null}
                 onClick={testServerHealth}
@@ -3652,6 +3784,79 @@ function McpSetupModal() {
                 {busyAction === 'solve' ? 'Solving on Native Host…' : '⚡ Run Native Multi-Core Solve (/api/mcp)'}
               </button>
             </div>
+            {scanSummary && (
+              <div
+                data-testid="compute-scan-summary"
+                style={{
+                  marginTop: '8px',
+                  fontSize: '11px',
+                  fontFamily: 'var(--mono)',
+                  color: 'var(--text-2)',
+                }}
+              >
+                {scanSummary}
+              </div>
+            )}
+            {peers.length > 0 && (
+              <div
+                data-testid="compute-peer-list"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  marginTop: '8px',
+                }}
+              >
+                {peers.map((p) => {
+                  const isConnected =
+                    activeRemotePeer === p.url ||
+                    (ui.computeMode === 'remote' && ui.computeServerUrl.replace(/\/+$/, '') === p.url);
+                  return (
+                    <div
+                      key={p.url}
+                      data-testid={`compute-peer-card-${p.hostname}`}
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        border: isConnected ? '1px solid var(--accent)' : '1px solid var(--line-strong)',
+                        background: isConnected ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
+                          <strong style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}>{p.hostname}</strong>
+                          <code style={{ fontSize: '11px', color: 'var(--text-2)', wordBreak: 'break-all' }}>{p.url}</code>
+                          <span class="sys-badge">
+                            {p.threads} threads · {p.os}/{p.arch}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
+                            {p.latency_ms} ms ({p.via ?? p.source ?? 'lan'})
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-2)' }}>
+                          Recommended capacity: up to{' '}
+                          <strong>{(p.max_recommended_dofs / 1000).toFixed(0)}k DOFs</strong> · v{p.version}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        class={`btn small ${isConnected ? '' : 'primary'}`}
+                        data-testid={`compute-connect-peer-btn-${p.hostname}`}
+                        disabled={busyAction !== null}
+                        onClick={() => connectToPeer(p.url)}
+                      >
+                        {isConnected ? '✓ Connected' : 'Connect & Offload'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {healthOut && (
               <pre class="tut-mcp-out num" data-testid="compute-health-out" style={{ marginTop: '8px' }}>
                 {healthOut}
@@ -3708,7 +3913,7 @@ curl -s -X POST ${origin}/api/mcp \\
           </div>
 
           <div class="tut-step-card">
-            <strong>3. Available Fieldsmith MCP Tools (18 Tools)</strong>
+            <strong>3. Available Fieldsmith MCP Tools (24 Tools)</strong>
             <pre class="tut-code num" style={{ maxHeight: '220px' }}>{`• new_document(name, material)            — Reset workspace to a clean .fsm document
 • load_fsm(fsm)                           — Load a complete parametric .fsm script (with let variables, CSG & BCs)
 • export_fsm()                            — Return canonical .fsm text of the active workspace
@@ -3729,7 +3934,10 @@ curl -s -X POST ${origin}/api/mcp \\
 • solve_drone_antenna(preset?, spec?, ...)— Evaluate dual-band VNA S₁₁/S₂₁, 50 Ω Smith Chart & 3D radiation lobes
 • optimise_drone_antenna(preset?, ...)    — Auto-optimise CFRP standoff, dielectric dipole lengths, skew & L/C match
 • list_coupled_systems()                  — List registered multi-physics PDE + Adjoint packs
-• optimise_coupled_system(system_id, ...) — Step coupled PDE design levers along exact Adjoint gradients`}</pre>
+• optimise_coupled_system(system_id, ...) — Step coupled PDE design levers along exact Adjoint gradients
+• discover_compute_peers(timeout_ms?)     — Scan LAN / subnet (UDP :18790 + /api/health sweep) for Fieldsmith workstations
+• connect_compute_peer(url, sync_workspace?) — Link remote workstation ("auto" or URL) to offload solve jobs
+• disconnect_compute_peer()               — Disconnect remote compute peer and resume local execution`}</pre>
           </div>
         </div>
       </div>

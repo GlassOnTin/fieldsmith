@@ -100,6 +100,8 @@ pub struct SharedWorkspaceState {
     pub design_p: Option<Vec<f64>>,
     pub epistemic_theta: Option<Vec<f64>>,
     #[serde(default)]
+    pub remote_compute_url: Option<String>,
+    #[serde(default)]
     pub activity_log: Vec<Value>,
 }
 
@@ -109,6 +111,7 @@ pub struct Server {
     coupled_system_id: Option<String>,
     design_p: Option<Vec<f64>>,
     epistemic_theta: Option<Vec<f64>>,
+    remote_compute_url: Option<String>,
 }
 
 impl Server {
@@ -123,6 +126,7 @@ impl Server {
             coupled_system_id: None,
             design_p: None,
             epistemic_theta: None,
+            remote_compute_url: None,
         };
         srv.load_workspace_if_present();
         srv
@@ -135,6 +139,7 @@ impl Server {
             coupled_system_id: None,
             design_p: None,
             epistemic_theta: None,
+            remote_compute_url: None,
         };
         srv.load_workspace_if_present();
         srv
@@ -158,6 +163,7 @@ impl Server {
         self.coupled_system_id = ws.coupled_system_id;
         self.design_p = ws.design_p;
         self.epistemic_theta = ws.epistemic_theta;
+        self.remote_compute_url = ws.remote_compute_url;
     }
 
     fn save_workspace_after_tool(&mut self, tool_name: &str, summary: &str) {
@@ -188,6 +194,7 @@ impl Server {
         if self.epistemic_theta.is_some() {
             ws.epistemic_theta = self.epistemic_theta.clone();
         }
+        ws.remote_compute_url = self.remote_compute_url.clone();
         ws.activity_log.push(json!({
             "revision": ws.revision,
             "timestamp_ms": now_ms,
@@ -299,6 +306,9 @@ impl Server {
             "optimise_coupled_system" => self.optimise_coupled_system(args),
             "solve_drone_antenna" => self.solve_drone_antenna(args),
             "optimise_drone_antenna" => self.optimise_drone_antenna(args),
+            "discover_compute_peers" => self.discover_compute_peers(args),
+            "connect_compute_peer" => self.connect_compute_peer(args),
+            "disconnect_compute_peer" => self.disconnect_compute_peer(args),
             _ => Err(format!("unknown tool: {name}")),
         };
         if res.is_ok() {
@@ -329,6 +339,8 @@ impl Server {
                     | "optimise_coupled_system"
                     | "solve_drone_antenna"
                     | "optimise_drone_antenna"
+                    | "connect_compute_peer"
+                    | "disconnect_compute_peer"
             );
             if is_mutating {
                 self.save_workspace_after_tool(name, &format!("Executed MCP tool `{name}`"));
@@ -772,6 +784,20 @@ impl Server {
         } else {
             json!({"apiv": APIV, "doc": text, "question": spec})
         };
+        if let Some(ref rurl) = self.remote_compute_url {
+            if let Ok((code, val, latency_ms)) =
+                http::http_request_json(rurl, "POST", "/api/solve", Some(&req.to_string()), 60_000)
+            {
+                if code == 200 {
+                    let mut out = val;
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert("offloaded_to".to_string(), json!(rurl));
+                        obj.insert("remote_roundtrip_ms".to_string(), json!(latency_ms));
+                    }
+                    return Ok(out);
+                }
+            }
+        }
         let reply = respond(&req.to_string());
         // A processing error (the one-shot's exit 2) is a failed tool call; ok and
         // refusal envelopes are answers. The envelope travels as parsed JSON — the tool
@@ -1686,6 +1712,119 @@ impl Server {
             "analysis": final_analysis,
         }))
     }
+
+    /// Discover other Fieldsmith compute servers (`fieldsmith-mcp --serve`) on the local subnet,
+    /// loopback, or Tailscale/WireGuard interfaces via UDP broadcast (`:18790`) and parallel
+    /// `/api/health` TCP probes. Returns peers sorted by highest thread count and lowest latency.
+    fn discover_compute_peers(&mut self, args: Value) -> Result<Value, String> {
+        let ports: Vec<u16> = args
+            .get("ports")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_u64)
+                    .filter_map(|p| u16::try_from(p).ok())
+                    .collect()
+            })
+            .filter(|v: &Vec<u16>| !v.is_empty())
+            .unwrap_or_else(|| vec![8080, 18789]);
+        let timeout_ms = args
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(180);
+        let extra_hosts: Vec<String> = args
+            .get("extra_hosts")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let include_subnet = args
+            .get("include_subnet_sweep")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let peers = http::discover_peers(&ports, timeout_ms, &extra_hosts, include_subnet);
+        Ok(json!({
+            "peers": peers,
+            "active_remote_compute_url": self.remote_compute_url,
+            "local_hostname": http::local_hostname(),
+            "local_threads": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        }))
+    }
+
+    /// Connect this Fieldsmith instance to an external Fieldsmith compute server (e.g. a
+    /// workstation running `fieldsmith-mcp --serve 0.0.0.0:8080`) by URL or `"auto"` (which
+    /// selects the discovered peer with the highest thread count), syncing the current `.fsm`
+    /// workspace and routing heavy `solve` calls to the remote peer.
+    fn connect_compute_peer(&mut self, args: Value) -> Result<Value, String> {
+        let url_arg = args
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+            .trim();
+        if url_arg.is_empty() || url_arg == "none" || url_arg == "disconnect" {
+            return self.disconnect_compute_peer(json!({}));
+        }
+        let target_url = if url_arg == "auto" {
+            let extra_hosts: Vec<String> = args
+                .get("extra_hosts")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let peers = http::discover_peers(&[8080, 18789], 180, &extra_hosts, true);
+            peers
+                .into_iter()
+                .next()
+                .map(|p| p.url)
+                .ok_or_else(|| "connect_compute_peer: no Fieldsmith compute peers discovered".to_string())?
+        } else {
+            let (_, _, norm) = http::parse_http_host_port(url_arg)?;
+            norm
+        };
+        let (host, port, norm_url) = http::parse_http_host_port(&target_url)?;
+        let peer_info = http::probe_peer_health(&host, port, 1500, "connect")
+            .ok_or_else(|| format!("connect_compute_peer: failed to reach {norm_url}/api/health"))?;
+        let sync_payload = json!({
+            "actor": http::local_hostname(),
+            "last_tool": "connect_compute_peer",
+            "summary": format!("Synced workspace from {} to compute peer {}", http::local_hostname(), peer_info.hostname),
+            "doc_fsm": self.doc.as_ref().map(fsm::print),
+            "coupled_system_id": self.coupled_system_id,
+            "design_p": self.design_p,
+            "epistemic_theta": self.epistemic_theta,
+        });
+        let _ = http::http_request_json(
+            &norm_url,
+            "POST",
+            "/api/workspace",
+            Some(&sync_payload.to_string()),
+            2000,
+        );
+        self.remote_compute_url = Some(norm_url.clone());
+        Ok(json!({
+            "status": "connected",
+            "remote_compute_url": norm_url,
+            "peer": peer_info,
+        }))
+    }
+
+    /// Disconnect from any attached external Fieldsmith compute server and return to local execution.
+    fn disconnect_compute_peer(&mut self, _args: Value) -> Result<Value, String> {
+        let prev = self.remote_compute_url.take();
+        Ok(json!({
+            "status": "disconnected",
+            "previous_remote_compute_url": prev,
+            "remote_compute_url": null,
+        }))
+    }
 }
 
 fn compute_adjoint_step(
@@ -1949,5 +2088,8 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
  {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
  {"name":"solve_drone_antenna","description":"Solve the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz` ELRS) Antenna VNA frequency sweep (`S11`, `S21`, `VSWR`, 50 Ω Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`, CFRP eddy-current loss) and 3D radiation lobes (`G(theta, phi)`), and sync the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["optimised_default","unoptimised_tucked"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"pod_eps_r":{"type":"number"},"pod_loss_tan":{"type":"number"},"cfrp_conductivity_s_per_m":{"type":"number"},"match_series_nh":{"type":"number"},"match_shunt_pf":{"type":"number"},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_drone_antenna","description":"Optimise the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna geometry (`cfrp_standoff_mm`, `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`, `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance match (`match_series_nh`, `match_shunt_pf`), returning initial vs. optimised VNA/Smith/Lobe reports and syncing the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["unoptimised_tucked","optimised_default"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"iterations":{"type":"integer"},"sync_cad":{"type":"boolean"}}}}
+ {"name":"optimise_drone_antenna","description":"Optimise the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna geometry (`cfrp_standoff_mm`, `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`, `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance match (`match_series_nh`, `match_shunt_pf`), returning initial vs. optimised VNA/Smith/Lobe reports and syncing the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["unoptimised_tucked","optimised_default"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"iterations":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
+ {"name":"discover_compute_peers","description":"Discover Fieldsmith compute servers (`fieldsmith-mcp --serve`) on the local subnet, loopback, or Tailscale/WireGuard interfaces via UDP broadcast (`:18790`) and parallel `/api/health` probes. Returns discovered peers sorted by highest thread count and lowest latency.","inputSchema":{"type":"object","properties":{"ports":{"type":"array","items":{"type":"integer"}},"timeout_ms":{"type":"integer"},"extra_hosts":{"type":"array","items":{"type":"string"}},"include_subnet_sweep":{"type":"boolean"}}}},
+ {"name":"connect_compute_peer","description":"Connect this Fieldsmith instance to an external Fieldsmith compute server (e.g. a workstation running `fieldsmith-mcp --serve 0.0.0.0:8080`) by URL or `\"auto\"` (highest thread count peer), syncing the current `.fsm` workspace and offloading `solve` calls.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"extra_hosts":{"type":"array","items":{"type":"string"}}}}},
+ {"name":"disconnect_compute_peer","description":"Disconnect from any attached external Fieldsmith compute server and return to local execution.","inputSchema":{"type":"object","additionalProperties":false}}
 ]"#;

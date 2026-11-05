@@ -24,6 +24,7 @@ interface WorkspaceState {
   coupled_system_id: string | null;
   design_p: number[] | null;
   epistemic_theta: number[] | null;
+  remote_compute_url?: string | null;
   activity_log: Array<{
     revision: number;
     timestamp_ms: number;
@@ -50,6 +51,7 @@ function readWorkspace(): WorkspaceState {
     coupled_system_id: null,
     design_p: null,
     epistemic_theta: null,
+    remote_compute_url: null,
     activity_log: [],
   };
 }
@@ -86,15 +88,72 @@ function fieldsmithSharedWorkspacePlugin(): Plugin {
           res.end(
             JSON.stringify({
               status: 'ok',
-              server: 'fieldsmith-compute-vite',
-              version: '0.10.1',
+              server: 'fieldsmith-compute',
+              version: '0.13.0',
+              hostname: os.hostname(),
               os: os.platform(),
               arch: os.arch(),
               threads: os.cpus().length,
+              listen_port: 5173,
+              max_recommended_dofs: os.cpus().length >= 16 ? 500000 : 250000,
               workspace_revision: ws.revision,
-              capabilities: ['mcp', 'workspace', 'solve', 'coupled_systems'],
+              remote_compute_url: ws.remote_compute_url ?? null,
+              capabilities: ['mcp', 'workspace', 'solve', 'coupled_systems', 'peer_discovery', 'compute_offload'],
             }),
           );
+          return;
+        }
+        if ((url === '/api/peers/discover' || url === '/api/peers/connect') && (req.method === 'GET' || req.method === 'POST')) {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const args = body.trim() ? JSON.parse(body) : {};
+              const toolName = url === '/api/peers/discover' ? 'discover_compute_peers' : 'connect_compute_peer';
+              const rpcReq = {
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'tools/call',
+                params: {
+                  name: toolName,
+                  arguments: {
+                    ports: [5173, 8080, 18789, 18791],
+                    ...args,
+                  },
+                },
+              };
+              const bin = resolveMcpBinary();
+              const proc = spawnSync(bin, [], {
+                input: JSON.stringify(rpcReq) + '\n',
+                encoding: 'utf-8',
+                env: {
+                  ...process.env,
+                  FIELDSMITH_WORKSPACE: workspaceFile,
+                },
+                timeout: 15000,
+                maxBuffer: 16 * 1024 * 1024,
+              });
+              const outLine = (proc.stdout || '').trim().split('\n').pop() || '{}';
+              const parsed = JSON.parse(outLine);
+              const text = parsed?.result?.content?.[0]?.text;
+              let payload: unknown = parsed;
+              if (typeof text === 'string') {
+                try {
+                  payload = JSON.parse(text);
+                } catch {
+                  payload = { ok: false, error: text };
+                }
+              }
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(payload));
+            } catch (e) {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: String(e) }));
+            }
+          });
           return;
         }
         if (url === '/api/workspace' && req.method === 'GET') {

@@ -132,6 +132,9 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "optimise_coupled_system",
             "solve_drone_antenna",
             "optimise_drone_antenna",
+            "discover_compute_peers",
+            "connect_compute_peer",
+            "disconnect_compute_peer",
         ]
     );
     for t in tools {

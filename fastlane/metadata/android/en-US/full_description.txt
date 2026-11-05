@@ -2,7 +2,7 @@ Fieldsmith is a parametric implicit CAD modeller, 3D quadratic (P2) finite-eleme
 
 Mobile CAD Driven by Haven MCP & External Compute:
 - Local MCP Co-Pilot Server (127.0.0.1:18789/mcp): The Android app runs an embedded Streamable HTTP Model Context Protocol server. Connecting from Haven on the same device (or over SSH/ADB port forwarding) lets an agent build CSG assemblies, place metric fasteners, tune dual-band drone antennas, and run finite-element solves while the 3D WebGL2 viewport updates live on the phone.
-- External Compute Offload (LAN / Tailscale / WireGuard): Point the mobile app at a desktop or server running fieldsmith-mcp --serve to offload heavy 3D P2 tetrahedral meshes, level-set topology runs, and multi-parameter sweeps while keeping touch inspection and 3D sectioning on Android.
+- External Compute Offload & LAN Discovery (LAN / Tailscale / WireGuard): Scan the local subnet (UDP :18790 beacon + /api/health sweep) from the UI or via MCP (discover_compute_peers / connect_compute_peer) to auto-connect the highest-thread-count desktop or server running fieldsmith-mcp --serve and offload heavy 3D P2 tetrahedral meshes, level-set topology runs, and multi-parameter sweeps while keeping touch inspection and 3D sectioning on Android.
 - On-Device Native arm64 & WebAssembly Solvers: Works offline using the embedded Rust JNI solver and WebAssembly workers, with big.LITTLE thread capping so heavy solves do not lock up mobile UI threads.
 
 Workflow stages:

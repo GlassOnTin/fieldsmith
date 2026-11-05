@@ -190,6 +190,29 @@ function StatusBar() {
         </span>
       )}
       <span class="sep">|</span>
+      <button
+        type="button"
+        class="btn small"
+        data-testid="status-compute-pill"
+        title="Click to configure compute backend, scan LAN for Fieldsmith workstations, or connect MCP"
+        onClick={() => ui.set('mcpSetupOpen', true)}
+        style={{
+          padding: '1px 6px',
+          fontSize: '10.5px',
+          height: '18px',
+          lineHeight: '16px',
+          fontFamily: 'var(--mono)',
+          borderColor: ui.computeMode === 'remote' ? 'var(--accent)' : 'var(--line)',
+          color: ui.computeMode === 'remote' ? 'var(--accent)' : 'var(--text-2)',
+        }}
+      >
+        {ui.computeMode === 'remote'
+          ? `⚡ Remote: ${ui.computeServerUrl.replace(/^https?:\/\//, '') || 'LAN'}`
+          : ui.computeMode === 'native'
+            ? '⚡ Native Host'
+            : 'WASM'}
+      </button>
+      <span class="sep">|</span>
       <span class="num" title="Render time of the last frames">
         {ui.frameMs.toFixed(1)} ms{fps ? ` · ${fps} fps max` : ''}
       </span>
