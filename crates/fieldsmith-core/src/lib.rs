@@ -465,6 +465,62 @@ pub fn fixed_mask(
             }
         }
     }
+    // In multi-body assemblies or coarse voxelizations where a sub-volume is either
+    // completely disconnected or attached only by a 1-vertex point hinge or 1-edge pin
+    // hinge (sharing no 3-vertex triangular face with the supported structure), group
+    // tetrahedra into face-connected 3D solid components and pin any component that has
+    // no supported face. This eliminates both floating rigid-body modes and edge/vertex
+    // hinge mechanisms while leaving every face-connected supported solid untouched.
+    if fixed.iter().any(|&m| m != 0) && !mesh.tets.is_empty() {
+        let nt = mesh.tets.len();
+        let mut parent: Vec<usize> = (0..nt).collect();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                let p = parent[x];
+                parent[x] = parent[p];
+                x = p;
+            }
+            x
+        }
+        let mut face_owner: std::collections::HashMap<[u32; 3], usize> =
+            std::collections::HashMap::with_capacity(nt * 2);
+        const TET_FACES: [[usize; 3]; 4] = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]];
+        for (ei, tet) in mesh.tets.iter().enumerate() {
+            for f in TET_FACES {
+                let mut key = [tet[f[0]], tet[f[1]], tet[f[2]]];
+                key.sort_unstable();
+                if let Some(&other) = face_owner.get(&key) {
+                    let r1 = find(&mut parent, ei);
+                    let r2 = find(&mut parent, other);
+                    if r1 != r2 {
+                        parent[r2] = r1;
+                    }
+                } else {
+                    face_owner.insert(key, ei);
+                }
+            }
+        }
+        let mut comp_supported = vec![false; nt];
+        for (ei, tet) in mesh.tets.iter().enumerate() {
+            let has_supported_face = TET_FACES
+                .iter()
+                .any(|f| f.iter().all(|& j| fixed[tet[j] as usize] != 0));
+            if has_supported_face {
+                let r = find(&mut parent, ei);
+                comp_supported[r] = true;
+            }
+        }
+        if comp_supported.iter().any(|&s| s) {
+            for (ei, tet) in mesh.tets.iter().enumerate() {
+                let r = find(&mut parent, ei);
+                if !comp_supported[r] {
+                    for &v in tet {
+                        fixed[v as usize] = 0b111;
+                    }
+                }
+            }
+        }
+    }
     Ok(fixed)
 }
 
@@ -1181,12 +1237,56 @@ struct Prepared {
     mesh_ms: f64,
 }
 
+fn has_non_structural_overlays(nodes: &[fieldsmith_doc::Node]) -> bool {
+    for n in nodes {
+        if !n.suppressed
+            && (n.id.starts_with("rf_3d_")
+                || n.id.starts_with("lobe_")
+                || n.id.starts_with("prop_disc_"))
+        {
+            return true;
+        }
+        if let fieldsmith_doc::NodeKind::Group { children, .. } = &n.kind {
+            if has_non_structural_overlays(children) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn suppress_non_structural_overlays(nodes: &mut [fieldsmith_doc::Node]) {
+    for n in nodes {
+        if n.id.starts_with("rf_3d_")
+            || n.id.starts_with("lobe_")
+            || n.id.starts_with("prop_disc_")
+        {
+            n.suppressed = true;
+            continue;
+        }
+        if let fieldsmith_doc::NodeKind::Group { children, .. } = &mut n.kind {
+            suppress_non_structural_overlays(children);
+        }
+    }
+}
+
+fn structural_doc(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    if !has_non_structural_overlays(&doc.root) {
+        return std::borrow::Cow::Borrowed(doc);
+    }
+    let mut cloned = doc.clone();
+    suppress_non_structural_overlays(&mut cloned.root);
+    std::borrow::Cow::Owned(cloned)
+}
+
 fn prepare(
     doc: &Document,
     res: Resolution,
     clock: Clock,
     need_loads: bool,
 ) -> Result<Prepared, SetupError> {
+    let sdoc = structural_doc(doc);
+    let doc = sdoc.as_ref();
     let t0 = clock();
     let body = expr::compile_body(doc);
     let b = expr::bounds(&body);
@@ -1421,6 +1521,8 @@ pub fn analyse_full(
     modes: Option<usize>,
     equilibrate: bool,
 ) -> Result<Analysis, SetupError> {
+    let sdoc = structural_doc(doc);
+    let doc = sdoc.as_ref();
     let Prepared {
         mesh,
         facets,

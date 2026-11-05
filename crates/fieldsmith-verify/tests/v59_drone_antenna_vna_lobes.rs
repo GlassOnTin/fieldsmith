@@ -115,9 +115,34 @@ fn v59_unoptimised_tucked_vs_optimised_gemini_antenna_vna_and_lobes() {
     assert!(rep_opt.all_targets_met);
 
     // 3. Verify the generated 3D `.fsm` DeadCat drone assembly parses cleanly with 0 validation problems
-    let doc = fsm::parse(&opt.fsm_3d).expect("generated DeadCat drone .fsm must parse");
+    //    AND solves cleanly in the 3D P2 structural FEA pipeline (`Results (3)` lens) even when
+    //    the translucent 3D far-field radiation lobe toroids are present in the document tree.
+    let mut fsm_with_lobes = opt.fsm_3d.clone();
+    fsm_with_lobes.push_str(
+        r##"
+group rf_3d_radiation_lobe_envelope {
+  torus lobe_rear_main_toroid major=38.0 minor=12.4 at=(0, -104.0, 24.0) rotate=(12, 0, 0)
+  torus lobe_forward_diffraction_sector major=24.0 minor=7.5 at=(0, -68.0, 28.0) rotate=(-8, 0, 0)
+}
+color "#10B981" on rf_3d_radiation_lobe_envelope
+"##,
+    );
+    let doc = fsm::parse(&fsm_with_lobes).expect("generated DeadCat drone .fsm must parse");
     assert_eq!(doc.validate(), Vec::<String>::new());
     assert!(doc.node_ids().len() >= 25);
+
+    let analysis = fieldsmith_core::analyse_full(
+        &doc,
+        fieldsmith_core::Resolution::Dofs(12_000),
+        || 0.0,
+        Some(3),
+        false,
+    )
+    .expect("3D P2 structural + modal FEA solve on DeadCat drone + 3D radiation lobe envelope must succeed");
+    assert_eq!(analysis.cases.len(), 1);
+    assert!(analysis.cases[0].solve.converged);
+    assert!(analysis.cases[0].max_von_mises > 0.0 && analysis.cases[0].max_von_mises.is_finite());
+    assert_eq!(analysis.modes.as_ref().unwrap().frequencies.len(), 3);
 }
 
 #[test]

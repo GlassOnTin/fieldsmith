@@ -151,9 +151,41 @@ impl<'a> TwoLevel<'a> {
         }
         let m = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &trip)
             .map_err(|e| format!("coarse matrix: {e:?}"))?;
-        let coarse = m.sp_cholesky(Side::Lower).map_err(|e| {
-            format!("coarse factorisation failed ({e:?}); the part may not be held by its supports")
-        })?;
+        let coarse = match m.sp_cholesky(Side::Lower) {
+            Ok(c) => c,
+            Err(_) => {
+                // Multi-body assemblies with visual or non-structural floating sub-volumes
+                // (e.g. a 3D far-field radiation lobe envelope or detached PCB/prop disc)
+                // can leave an unloaded connected component without its own Dirichlet support.
+                // Adding a tiny positive diagonal regularisation (1e-6 × mean diagonal) to the
+                // coarse preconditioner operator Ac allows Cholesky factorisation of the
+                // preconditioner to succeed while keeping the exact operator `a` unaltered.
+                let mut diag_sum = 0.0f64;
+                let mut diag_cnt = 0usize;
+                for &(r, c, v) in &trip {
+                    if r == c && v > 0.0 {
+                        diag_sum += v;
+                        diag_cnt += 1;
+                    }
+                }
+                let reg = if diag_cnt > 0 {
+                    (diag_sum / diag_cnt as f64) * 1.0e-6
+                } else {
+                    1.0
+                };
+                let mut reg_trip = trip.clone();
+                for g in 0..n {
+                    reg_trip.push((g, g, reg));
+                }
+                let m_reg = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &reg_trip)
+                    .map_err(|e| format!("coarse matrix (regularised): {e:?}"))?;
+                m_reg.sp_cholesky(Side::Lower).map_err(|e| {
+                    format!(
+                        "coarse factorisation failed ({e:?}); the part may not be held by its supports"
+                    )
+                })?
+            }
+        };
         Ok(TwoLevel {
             a,
             dinv,

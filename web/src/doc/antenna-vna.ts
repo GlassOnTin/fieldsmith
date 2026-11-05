@@ -950,24 +950,24 @@ export function buildDeadCatDroneFsmText(
   const rmX = armR * Math.cos(rAng);
   const rmY = -18.0 - (armR - 10.0) * Math.sin(rAng);
 
-  const fArmCx = 0.5 * (14.0 + fmX);
+  const fArmCx = 0.5 * (6.0 + fmX);
   const fArmCy = 0.5 * (20.0 + fmY);
-  const fArmLen = Math.hypot(fmX - 14.0, fmY - 20.0) + 14.0;
-  const fArmRotZ = (Math.atan2(fmY - 20.0, fmX - 14.0) * 180.0) / Math.PI;
+  const fArmLen = Math.hypot(fmX - 6.0, fmY - 20.0) + 18.0;
+  const fArmRotZ = (Math.atan2(fmY - 20.0, fmX - 6.0) * 180.0) / Math.PI;
 
-  const rArmCx = 0.5 * (12.0 + rmX);
+  const rArmCx = 0.5 * (6.0 + rmX);
   const rArmCy = 0.5 * (-18.0 + rmY);
-  const rArmLen = Math.hypot(rmX - 12.0, rmY + 18.0) + 14.0;
-  const rArmRotZ = (Math.atan2(-18.0 - rmY, rmX - 12.0) * 180.0) / Math.PI;
+  const rArmLen = Math.hypot(rmX - 6.0, rmY + 18.0) + 18.0;
+  const rArmRotZ = (Math.atan2(-18.0 - rmY, rmX - 6.0) * 180.0) / Math.PI;
 
   const podY = -58.0 - spec.cfrp_standoff_mm;
   const podZ = 8.0 + spec.elevation_above_plate_mm;
-  const boomLen = spec.cfrp_standoff_mm + 16.0;
-  const boomY = -50.0 - 0.5 * spec.cfrp_standoff_mm;
-  const boomZ = 10.0 + 0.5 * spec.elevation_above_plate_mm;
-  const coaxLen = spec.cfrp_standoff_mm + 20.0;
+  const boomLen = spec.cfrp_standoff_mm + 24.0;
+  const boomY = -48.0 - 0.5 * spec.cfrp_standoff_mm;
+  const boomZ = 5.0 + 0.5 * spec.elevation_above_plate_mm;
+  const coaxLen = spec.cfrp_standoff_mm + 24.0;
   const halfSkew = 0.5 * spec.diversity_skew_deg;
-  const bootR = 1.4 + spec.dielectric_pod_wall_mm;
+  const bootR = 2.0 + spec.dielectric_pod_wall_mm;
   const arm900Half = Math.max(
     0.5 * spec.low_band_arm_length_mm,
     0.5 * spec.high_band_arm_length_mm + 10.0,
@@ -1019,16 +1019,16 @@ let vna_eff_915_pct = ${report.low_band_summary.total_efficiency_pct.toFixed(1)}
 let vna_eff_2440_pct = ${report.high_band_summary.total_efficiency_pct.toFixed(1)}
 
 group cfrp_deadcat_airframe {
-  box cfrp_bottom_plate size=(34, 118, 2.0) round=3 at=(0, 0, 0)
-  box cfrp_top_plate size=(30, 108, 1.5) round=3 at=(0, -2, 20.0)
-  box arm_front_right size=(${fArmLen.toFixed(1)}, 9.5, 3.5) round=1.2 at=(${fArmCx.toFixed(1)}, ${fArmCy.toFixed(1)}, -1.0) rotate=(0, 0, ${fArmRotZ.toFixed(1)})
-  box arm_front_left size=(${fArmLen.toFixed(1)}, 9.5, 3.5) round=1.2 at=(-${fArmCx.toFixed(1)}, ${fArmCy.toFixed(1)}, -1.0) rotate=(0, 0, -${fArmRotZ.toFixed(1)})
-  box arm_rear_right size=(${rArmLen.toFixed(1)}, 9.0, 3.5) round=1.2 at=(${rArmCx.toFixed(1)}, ${rArmCy.toFixed(1)}, -1.0) rotate=(0, 0, -${rArmRotZ.toFixed(1)})
-  box arm_rear_left size=(${rArmLen.toFixed(1)}, 9.0, 3.5) round=1.2 at=(-${rArmCx.toFixed(1)}, ${rArmCy.toFixed(1)}, -1.0) rotate=(0, 0, ${rArmRotZ.toFixed(1)})
-  cylinder standoff_fr r=2.2 h=18.5 at=(12, 34, 10)
-  cylinder standoff_fl r=2.2 h=18.5 at=(-12, 34, 10)
-  cylinder standoff_rr r=2.2 h=18.5 at=(12, -48, 10)
-  cylinder standoff_rl r=2.2 h=18.5 at=(-12, -48, 10)
+  box cfrp_bottom_plate size=(42, 122, 6.8) at=(0, 0, 0)
+  box cfrp_top_plate size=(36, 112, 5.5) at=(0, -2, 20.0)
+  box arm_front_right size=(${fArmLen.toFixed(1)}, 14.0, 6.8) at=(${fArmCx.toFixed(1)}, ${fArmCy.toFixed(1)}, 0.0) rotate=(0, 0, ${fArmRotZ.toFixed(1)})
+  box arm_front_left size=(${fArmLen.toFixed(1)}, 14.0, 6.8) at=(-${fArmCx.toFixed(1)}, ${fArmCy.toFixed(1)}, 0.0) rotate=(0, 0, -${fArmRotZ.toFixed(1)})
+  box arm_rear_right size=(${rArmLen.toFixed(1)}, 13.5, 6.8) at=(${rArmCx.toFixed(1)}, ${rArmCy.toFixed(1)}, 0.0) rotate=(0, 0, -${rArmRotZ.toFixed(1)})
+  box arm_rear_left size=(${rArmLen.toFixed(1)}, 13.5, 6.8) at=(-${rArmCx.toFixed(1)}, ${rArmCy.toFixed(1)}, 0.0) rotate=(0, 0, ${rArmRotZ.toFixed(1)})
+  cylinder standoff_fr r=4.2 h=23.0 at=(12, 34, 10)
+  cylinder standoff_fl r=4.2 h=23.0 at=(-12, 34, 10)
+  cylinder standoff_rr r=4.2 h=23.0 at=(12, -46, 10)
+  cylinder standoff_rl r=4.2 h=23.0 at=(-12, -46, 10)
 }
 color "#1E293B" on cfrp_deadcat_airframe
 color "#334155" on cfrp_top_plate
@@ -1042,10 +1042,10 @@ color "#94A3B8" on standoff_rr
 color "#94A3B8" on standoff_rl
 
 group propulsion_motors_1404 {
-  cylinder motor_fr_bell r=9.2 h=11.5 round=1.0 at=(${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 6.0)
-  cylinder motor_fl_bell r=9.2 h=11.5 round=1.0 at=(-${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 6.0)
-  cylinder motor_rr_bell r=9.2 h=11.5 round=1.0 at=(${rmX.toFixed(1)}, ${rmY.toFixed(1)}, 6.0)
-  cylinder motor_rl_bell r=9.2 h=11.5 round=1.0 at=(-${rmX.toFixed(1)}, ${rmY.toFixed(1)}, 6.0)
+  cylinder motor_fr_bell r=9.5 h=13.5 at=(${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 4.8)
+  cylinder motor_fl_bell r=9.5 h=13.5 at=(-${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 4.8)
+  cylinder motor_rr_bell r=9.5 h=13.5 at=(${rmX.toFixed(1)}, ${rmY.toFixed(1)}, 4.8)
+  cylinder motor_rl_bell r=9.5 h=13.5 at=(-${rmX.toFixed(1)}, ${rmY.toFixed(1)}, 4.8)
   cylinder prop_disc_fr r=50.8 h=1.2 at=(${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 13.0)
   cylinder prop_disc_fl r=50.8 h=1.2 at=(-${fmX.toFixed(1)}, ${fmY.toFixed(1)}, 13.0)
   cylinder prop_disc_rr r=50.8 h=1.2 at=(${rmX.toFixed(1)}, ${rmY.toFixed(1)}, 13.0)
@@ -1065,12 +1065,12 @@ color "#38BDF8" on prop_disc_rr
 color "#38BDF8" on prop_disc_rl
 
 group avionics_and_battery {
-  box esc_board_20x20 size=(26, 26, 1.8) round=1.5 at=(0, -4, 5.5)
-  box fc_board_20x20 size=(25, 25, 1.6) round=1.5 at=(0, -4, 11.0)
-  box elrs_gemini_rx_pcb size=(18, 22, 1.6) round=1.0 at=(0, -32, 8.5)
-  box fpv_cam_cage_al7075 size=(21, 19, 19) round=2.0 at=(0, 48, 10.0)
-  cylinder fpv_cam_lens r=7.0 h=10.0 at=(0, 56, 10.0) rotate=(90, 0, 0)
-  box lipo_4s_850mah size=(30, 58, 24) round=3.0 at=(0, -4, 33.0)
+  box esc_board_20x20 size=(28, 28, 8.0) round=1.5 at=(0, -4, 4.5)
+  box fc_board_20x20 size=(26, 26, 12.0) round=1.5 at=(0, -4, 14.0)
+  box elrs_gemini_rx_pcb size=(22, 26, 18.0) round=1.0 at=(0, -34, 10.0)
+  box fpv_cam_cage_al7075 size=(22, 19, 22) round=2.0 at=(0, 46, 10.0)
+  cylinder fpv_cam_lens r=7.2 h=12.0 at=(0, 53, 10.0) rotate=(90, 0, 0)
+  box lipo_4s_850mah size=(30, 58, 22) round=3.0 at=(0, -4, 30.0)
 }
 color "#059669" on esc_board_20x20
 color "#10B981" on fc_board_20x20
@@ -1082,14 +1082,14 @@ material petg on lipo_4s_850mah
 color "#F59E0B" on lipo_4s_850mah
 
 group gemini_dual_band_antenna_assy {
-  box tpu_standoff_boom size=(14, ${boomLen.toFixed(1)}, 7.0) round=2.5 at=(0, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(-14, 0, 0)
-  box tpu_dipole_crossbar size=(26, 9.0, 9.0) round=3.0 at=(0, ${podY.toFixed(1)}, ${podZ.toFixed(1)})
-  cylinder coax_feed_port1 r=1.3 h=${coaxLen.toFixed(1)} at=(4.5, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(76, 0, 0)
-  cylinder coax_feed_port2 r=1.3 h=${coaxLen.toFixed(1)} at=(-4.5, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(76, 0, 0)
-  cylinder gemini_p1_900mhz_dipole r=1.4 h=${spec.low_band_arm_length_mm.toFixed(1)} round=0.6 at=(6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, ${halfSkew.toFixed(1)}, 0)
-  cylinder gemini_p1_2400mhz_sleeve r=2.3 h=${spec.high_band_arm_length_mm.toFixed(1)} round=0.8 at=(6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, ${halfSkew.toFixed(1)}, 0)
-  cylinder gemini_p2_900mhz_dipole r=1.4 h=${spec.low_band_arm_length_mm.toFixed(1)} round=0.6 at=(-6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, -${halfSkew.toFixed(1)}, 0)
-  cylinder gemini_p2_2400mhz_sleeve r=2.3 h=${spec.high_band_arm_length_mm.toFixed(1)} round=0.8 at=(-6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, -${halfSkew.toFixed(1)}, 0)
+  box tpu_standoff_boom size=(18, ${boomLen.toFixed(1)}, 9.5) round=2.5 at=(0, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(-14, 0, 0)
+  box tpu_dipole_crossbar size=(26, 10.0, 10.0) round=3.0 at=(0, ${podY.toFixed(1)}, ${podZ.toFixed(1)})
+  cylinder coax_feed_port1 r=2.0 h=${coaxLen.toFixed(1)} at=(4.5, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(76, 0, 0)
+  cylinder coax_feed_port2 r=2.0 h=${coaxLen.toFixed(1)} at=(-4.5, ${boomY.toFixed(1)}, ${boomZ.toFixed(1)}) rotate=(76, 0, 0)
+  cylinder gemini_p1_900mhz_dipole r=1.8 h=${spec.low_band_arm_length_mm.toFixed(1)} round=0.6 at=(6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, ${halfSkew.toFixed(1)}, 0)
+  cylinder gemini_p1_2400mhz_sleeve r=2.8 h=${spec.high_band_arm_length_mm.toFixed(1)} round=0.8 at=(6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, ${halfSkew.toFixed(1)}, 0)
+  cylinder gemini_p2_900mhz_dipole r=1.8 h=${spec.low_band_arm_length_mm.toFixed(1)} round=0.6 at=(-6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, -${halfSkew.toFixed(1)}, 0)
+  cylinder gemini_p2_2400mhz_sleeve r=2.8 h=${spec.high_band_arm_length_mm.toFixed(1)} round=0.8 at=(-6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, -${halfSkew.toFixed(1)}, 0)
   cylinder tpu_boot_cap_p1 r=${bootR.toFixed(1)} h=${arm900Half.toFixed(1)} round=1.2 at=(6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, ${halfSkew.toFixed(1)}, 0)
   cylinder tpu_boot_cap_p2 r=${bootR.toFixed(1)} h=${arm900Half.toFixed(1)} round=1.2 at=(-6.0, ${podY.toFixed(1)}, ${podZ.toFixed(1)}) rotate=(-14, -${halfSkew.toFixed(1)}, 0)
 }
@@ -1115,9 +1115,9 @@ color "#38BDF8" on tpu_boot_cap_p1
 color "#38BDF8" on tpu_boot_cap_p2
 ${lobeGroupFsm}
 region rear_standoff_mount = cfrp_bottom_plate.nz
-region top_deck = cfrp_top_plate.pz
+region top_deck = motor_fr_bell.top + motor_fl_bell.top + motor_rr_bell.top + motor_rl_bell.top + arm_front_right.pz + arm_front_left.pz + arm_rear_right.pz + arm_rear_left.pz + cfrp_top_plate.pz
 support bench_fix rear_standoff_mount fixed=xyz
-load prop_thrust top_deck force=(0, 0, 18)
+load prop_thrust top_deck force=(0, 0, 64)
 `;
 }
 

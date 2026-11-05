@@ -85,11 +85,14 @@ impl Bsr {
     }
 }
 
-/// Inverse of a 3×3 matrix (row-major).
+/// Inverse of a 3×3 matrix (row-major). Returns the zero matrix if singular (`det == 0.0`).
 pub fn inv3(m: &[f64; 9]) -> [f64; 9] {
     let [a, b, c, d, e, f, g, h, i] = *m;
     let co = [e * i - f * h, -(d * i - f * g), d * h - e * g];
     let det = a * co[0] + b * co[1] + c * co[2];
+    if det.abs() < 1e-30 || !det.is_finite() {
+        return [0.0; 9];
+    }
     let r = 1.0 / det;
     [
         co[0] * r,
