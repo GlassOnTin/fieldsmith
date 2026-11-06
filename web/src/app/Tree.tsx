@@ -10,6 +10,7 @@ import { ui, useApp } from './ui';
 import { openFixingsCatalogueModal } from './FixingsModal';
 import { openSketchWorkbenchModal } from './SketchWorkbench';
 import { openAntennaWorkbenchModal } from './AntennaWorkbench';
+import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
 
 const OP_GLYPH = { add: '+', subtract: '−', intersect: '∩' } as const;
 const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: 'Keeps only the overlap' } as const;
@@ -263,15 +264,17 @@ export function Tree() {
           >
             <Icon.fixing /> Fixings…
           </button>
-          <button
-            class="btn ghost small"
-            title="Open 4-Inch DeadCat Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench"
-            data-testid="open-antenna-workbench"
-            onClick={() => openAntennaWorkbenchModal()}
-            style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-          >
-            <Icon.antenna /> Antenna…
-          </button>
+          {extractDroneAntennaSpecFromDoc(store.doc) && (
+            <button
+              class="btn ghost small"
+              title="Open RF Antenna VNA / Smith Chart / 3D Lobe Workbench"
+              data-testid="open-antenna-workbench"
+              onClick={() => openAntennaWorkbenchModal()}
+              style={{ fontSize: '11px', padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            >
+              <Icon.antenna /> Antenna…
+            </button>
+          )}
           <button
             class="btn ghost icon small"
             title="Add shape (Shift B, Shift C, …)"

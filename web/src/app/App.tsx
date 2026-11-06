@@ -11,6 +11,7 @@ import { EXAMPLES, addShape, importMeshCommand, newDocument, openFile, openText,
 import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbench';
 import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
 import { AntennaWorkbenchModal, openAntennaWorkbenchModal } from './AntennaWorkbench';
+import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -101,14 +102,16 @@ function ViewTools() {
           >
             <Icon.fixing />
           </button>
-          <button
-            class="btn icon"
-            data-testid="hud-open-antenna-workbench"
-            title="4-Inch DeadCat Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench"
-            onClick={() => openAntennaWorkbenchModal()}
-          >
-            <Icon.antenna />
-          </button>
+          {extractDroneAntennaSpecFromDoc(store.doc) && (
+            <button
+              class="btn icon"
+              data-testid="hud-open-antenna-workbench"
+              title="RF Antenna VNA / Smith Chart / 3D Lobe Workbench"
+              onClick={() => openAntennaWorkbenchModal()}
+            >
+              <Icon.antenna />
+            </button>
+          )}
           <button
             class={`btn icon ${ui.systemsOpen ? 'on' : ''}`}
             data-testid="hud-open-systems-workbench"
