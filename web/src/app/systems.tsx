@@ -4372,7 +4372,7 @@ async function pushWorkspaceState(payload: {
 
 // ---- Main 3-Column Coupled Systems Workbench Modal ----
 
-function preferredCoupledSystemId(): string {
+export function matchedCoupledSystemId(): string | null {
   const sheetId = ui.tutorialSheetId;
   const docName = (store.doc.name || '').toLowerCase();
   const hasLet = (k: string) => store.doc.lets?.some((l) => l.name === k) ?? false;
@@ -4391,7 +4391,22 @@ function preferredCoupledSystemId(): string {
   if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
     return 'deadcat_4in_gemini_antenna_v1';
   }
-  return 'solar_candle_ignition_v1';
+  if (sheetId === 'T9' || docName.includes('induction')) {
+    return 'vacuum_induction_melt_v1';
+  }
+  if (sheetId === 'T10' || docName.includes('czochralski') || docName.includes('crystal')) {
+    return 'czochralski_si_crystal_v1';
+  }
+  if (sheetId === 'T11' || docName.includes('caster') || docName.includes('slab')) {
+    return 'continuous_steel_slab_caster_v1';
+  }
+  if (sheetId === 'T12' || docName.includes('pem') || docName.includes('electroly')) {
+    return 'pem_water_electrolyser_v1';
+  }
+  if (isSwirlCombustorDocument() || docName.includes('swirl') || docName.includes('combustor')) {
+    return 'annular_swirl_spray_combustor_v1';
+  }
+  return null;
 }
 
 /** Extract `design_p` from the active `.fsm` document's `let` variables when present (`Document → CoupledSystem`). */
@@ -4435,10 +4450,10 @@ function extractCoupledDesignPFromDoc(systemId: string, fallbackP: number[]): nu
 export function SystemsWorkbench() {
   useApp();
   const [systems, setSystems] = useState<CoupledSystemSummary[]>([]);
-  const [activeId, setActiveId] = useState<string>(() => preferredCoupledSystemId());
-  const [designP, setDesignP] = useState<number[]>(candleShared.designP);
-  const [epistemicTheta, setEpistemicTheta] = useState<number[]>(candleShared.epistemicTheta);
-  const [bundle, setBundle] = useState<CoupledSolveBundle | null>(candleShared.bundle);
+  const [activeId, setActiveId] = useState<string>(() => matchedCoupledSystemId() ?? '');
+  const [designP, setDesignP] = useState<number[]>([]);
+  const [epistemicTheta, setEpistemicTheta] = useState<number[]>([]);
+  const [bundle, setBundle] = useState<CoupledSolveBundle | null>(null);
   const [bathField, setBathField] = useState<BathFieldMode>('glass_temp');
   const [wsRev, setWsRev] = useState<number>(lastSeenWorkspaceRevision);
   const [wsActor, setWsActor] = useState<string>('ready');
@@ -4508,8 +4523,14 @@ export function SystemsWorkbench() {
     try {
       const cat = listCoupledSystems();
       setSystems(cat);
-      const targetId = preferredCoupledSystemId();
-      const sys = cat.find((s) => s.system_id === targetId) ?? cat.find((s) => s.system_id === activeId) ?? cat[0];
+      const targetId = matchedCoupledSystemId();
+      if (!targetId) {
+        setActiveId('');
+        setBundle(null);
+        setError(null);
+        return;
+      }
+      const sys = cat.find((s) => s.system_id === targetId);
       if (sys) {
         setActiveId(sys.system_id);
         const baseP =
@@ -4545,7 +4566,7 @@ export function SystemsWorkbench() {
 
   if (!ui.systemsOpen) return null;
 
-  const activeSummary = systems.find((s) => s.system_id === activeId) ?? systems[0];
+  const activeSummary = activeId ? (systems.find((s) => s.system_id === activeId) ?? null) : null;
 
   const runSolve = (sysId: string, nextP: number[], nextTheta: number[]) => {
     try {
@@ -4577,6 +4598,12 @@ export function SystemsWorkbench() {
   };
 
   const switchSystem = (sysId: string) => {
+    if (!sysId) {
+      setActiveId('');
+      setBundle(null);
+      setError(null);
+      return;
+    }
     const sys = systems.find((s) => s.system_id === sysId);
     if (!sys) return;
     setActiveId(sysId);
@@ -4681,6 +4708,35 @@ export function SystemsWorkbench() {
 
   const track = bundle?.analysis.causal_tracks[0] ?? null;
 
+  const routeGroups: { title: string; subtitle: string; ids: string[] }[] = [
+    {
+      title: '1. Propulsion & High-Heat-Flux Thermal-Fluids',
+      subtitle: '1D compressible/reacting channel flow coupled to 3D wall conduction & coolant convection',
+      ids: ['regen_nozzle_h2_v1', 'annular_swirl_spray_combustor_v1'],
+    },
+    {
+      title: '2. Mechanical Joints & Structural Preload',
+      subtitle: 'VDI 2230 torque-preload, thread shear & cryogenic Weibull reliability envelopes',
+      ids: ['jwst_fastener_fixing_envelope_v1'],
+    },
+    {
+      title: '3. Electromagnetics, Induction & RF',
+      subtitle: 'Harmonic Maxwell / eddy-current heating and near-field antenna impedance coupling',
+      ids: ['deadcat_4in_gemini_antenna_v1', 'vacuum_induction_melt_v1'],
+    },
+    {
+      title: '4. Process Transport, Electrochemistry & Radiation',
+      subtitle: 'Multi-field industrial transport, solidification, electrolysis & concentrated radiative flux',
+      ids: [
+        'pilkington_float_bath_cvd_coater_v1',
+        'czochralski_si_crystal_v1',
+        'continuous_steel_slab_caster_v1',
+        'pem_water_electrolyser_v1',
+        'solar_candle_ignition_v1',
+      ],
+    },
+  ];
+
   return (
     <div class="sys-scrim" data-testid="systems-workbench">
       <div class="sys-modal">
@@ -4688,6 +4744,16 @@ export function SystemsWorkbench() {
         <div class="sys-header">
           <div class="sys-header-left">
             <span class="sys-badge">MONOLITHIC PDE + ADJOINT + UQ</span>
+            {activeId && (
+              <button
+                class="btn small ghost"
+                data-testid="systems-back-to-router"
+                title="Return to 5S Coupled-Physics Abstraction Directory"
+                onClick={() => switchSystem('')}
+              >
+                ← 5S Route
+              </button>
+            )}
             <select
               key={systems.length}
               class="select sys-select"
@@ -4695,6 +4761,7 @@ export function SystemsWorkbench() {
               data-testid="systems-domain-select"
               onChange={(e) => switchSystem((e.target as HTMLSelectElement).value)}
             >
+              <option value="">— Select Coupled PDE Abstraction (5S Route) —</option>
               {systems.map((s) => (
                 <option key={s.system_id} value={s.system_id}>
                   [{s.industry_sector}] {s.system_title} ({s.num_dofs} DOFs)
@@ -4793,6 +4860,108 @@ export function SystemsWorkbench() {
         )}
 
         {error && <div class="error-box">{error}</div>}
+
+        {/* 5S Coupled-Physics Abstraction Router when no coupled system is bound to the active document */}
+        {(!bundle || !activeSummary) && (
+          <div
+            data-testid="systems-5s-router"
+            style={{
+              padding: '20px 24px',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+            }}
+          >
+            <div
+              style={{
+                padding: '12px 16px',
+                borderRadius: '6px',
+                background: 'rgba(59, 130, 246, 0.08)',
+                border: '1px solid rgba(59, 130, 246, 0.25)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-1)', marginBottom: '3px' }}>
+                  5S Coupled-Physics Abstraction Directory
+                </div>
+                <div style={{ fontSize: '11.5px', color: 'var(--text-2)' }}>
+                  Current document (<code>{store.doc.name || 'Untitled'}</code>) is not bound to a coupled 1D/2D PDE system. Select the specific physical abstraction you want to open below, or stay in standard 3D CAD / P2 FEM.
+                </div>
+              </div>
+              <button class="btn small" onClick={() => ui.set('systemsOpen', false)}>
+                Stay in 3D CAD / FEM
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                gap: '14px',
+              }}
+            >
+              {routeGroups.map((grp) => {
+                const items = grp.ids
+                  .map((id) => systems.find((s) => s.system_id === id))
+                  .filter((s): s is CoupledSystemSummary => !!s);
+                return (
+                  <div
+                    key={grp.title}
+                    style={{
+                      padding: '12px 14px',
+                      borderRadius: '6px',
+                      background: 'var(--bg-2)',
+                      border: '1px solid var(--line)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '12px', color: 'var(--text-1)' }}>{grp.title}</div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-3)', marginTop: '2px' }}>{grp.subtitle}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {items.map((s) => (
+                        <button
+                          key={s.system_id}
+                          class="btn"
+                          data-testid={`route-system-${s.system_id}`}
+                          onClick={() => switchSystem(s.system_id)}
+                          style={{
+                            textAlign: 'left',
+                            padding: '8px 10px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'flex-start',
+                            gap: '3px',
+                            height: 'auto',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', gap: '8px' }}>
+                            <span style={{ fontWeight: 600, fontSize: '11.5px', color: 'var(--text-1)' }}>{s.system_title}</span>
+                            <span class="num" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
+                              {s.num_dofs} DOFs
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-2)' }}>
+                            [{s.industry_sector}] {s.design_parameters.length} design levers · {s.objectives.length} objectives
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* 3-Column Engineering Workbench */}
         {bundle && activeSummary && (
