@@ -102,6 +102,18 @@ export function FixingsCatalogueModal() {
   const [associatedNut, setAssociatedNut] = useState<AssociatedNutKind>('none');
 
   useEffect(() => {
+    if (!fixingsModalOpenState) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeFixingsCatalogueModal();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fixingsModalOpenState]);
+
+  useEffect(() => {
     if (fixingsModalOpenState) {
       setSelectedKind(initialFixingKindState);
       if (initialHostIdState) setHostId(initialHostIdState);
@@ -287,6 +299,11 @@ export function FixingsCatalogueModal() {
             borderBottom: '1px solid var(--line)',
             paddingBottom: '10px',
             marginBottom: '12px',
+            position: 'sticky',
+            top: '-16px',
+            background: 'var(--panel)',
+            paddingTop: '4px',
+            zIndex: 6,
           }}
         >
           <div>
@@ -1330,7 +1347,19 @@ export function FixingsCatalogueModal() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            position: 'sticky',
+            bottom: '-16px',
+            background: 'var(--panel)',
+            padding: '10px 0 4px',
+            borderTop: '1px solid var(--line)',
+            zIndex: 6,
+          }}
+        >
           <button class="btn ghost" onClick={closeFixingsCatalogueModal}>
             Cancel
           </button>

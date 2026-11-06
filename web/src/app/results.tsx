@@ -1317,28 +1317,36 @@ function changePct(cur: LevelResult, prev: LevelResult): { peak: number; defl: n
 function AnalysisBadge() {
   useApp();
   const s = analysis.state;
-  if (s.status === 'idle') return null;
+  if (s.status === 'idle' || store.doc.root.length === 0) return null;
   if (s.status === 'running') {
     return (
-      <span class="num" data-testid="badge-running">
-        analysing{s.levelLabel ? ` · ${s.levelLabel}` : ''}
-      </span>
+      <>
+        <span class="sep">|</span>
+        <span class="num" data-testid="badge-running">
+          analysing{s.levelLabel ? ` · ${s.levelLabel}` : ''}
+        </span>
+      </>
     );
   }
   if (s.status === 'error') {
-    // An incomplete study (no support or no load yet) is a hint, not a failure — show
-    // the message neutrally instead of the red 'analysis failed'.
     if (s.errorKind === 'setup') {
+      if (store.lens === 'shape') return null;
       return (
-        <span class="num" data-testid="setup-block" title={s.error ?? ''}>
-          {s.error}
-        </span>
+        <>
+          <span class="sep">|</span>
+          <span class="num" data-testid="setup-block" title={s.error ?? ''}>
+            {s.error}
+          </span>
+        </>
       );
     }
     return (
-      <span class="num bad" data-testid="badge-error" title={s.error ?? ''}>
-        analysis failed
-      </span>
+      <>
+        <span class="sep">|</span>
+        <span class="num bad" data-testid="badge-error" title={s.error ?? ''}>
+          analysis failed
+        </span>
+      </>
     );
   }
   const lvl = s.levels[s.levels.length - 1];
@@ -1361,9 +1369,12 @@ function AnalysisBadge() {
   }
   const title = lines.join('\n');
   return (
-    <span class="num" data-testid="analysis-badge" title={title}>
-      peak {fmt(peak)} MPa · deflect {fmt(defl)} mm
-    </span>
+    <>
+      <span class="sep">|</span>
+      <span class="num" data-testid="analysis-badge" title={title}>
+        peak {fmt(peak)} MPa · deflect {fmt(defl)} mm
+      </span>
+    </>
   );
 }
 statusItems.push(AnalysisBadge);
@@ -2060,9 +2071,10 @@ function ResultsPanel() {
       </div>
       {!minimized && (
         <>
-          {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
-          {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
-          {!lvl && s.status === 'ready' && <div class="hint">No results yet.</div>}
+          {!store.doc.root.length && <div class="hint">Add shapes to the model first.</div>}
+          {store.doc.root.length > 0 && s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
+          {store.doc.root.length > 0 && s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
+          {store.doc.root.length > 0 && !lvl && s.status === 'ready' && <div class="hint">No results yet.</div>}
           {lvl && (
         <>
           <div class="field-grid">

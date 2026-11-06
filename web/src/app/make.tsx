@@ -155,13 +155,37 @@ function MakePanel() {
   });
 
   const doc = store.doc;
+  const minimized = ui.panelMinimized || ui.vpHudCollapsed;
+  const toggleMinimized = () => {
+    if (minimized) {
+      ui.set('panelMinimized', false);
+      if (ui.vpHudCollapsed) ui.set('vpHudCollapsed', false);
+    } else {
+      ui.set('panelMinimized', true);
+    }
+  };
   if (!doc.root.length) {
     return (
-      <div class="results-panel" data-testid="make-panel">
-        <div class="card-head">
+      <div class={`results-panel${minimized ? ' minimized' : ''}`} data-testid="make-panel">
+        <div
+          class="card-head"
+          style={minimized ? { marginBottom: 0, cursor: 'pointer' } : undefined}
+          onClick={minimized ? toggleMinimized : undefined}
+        >
           <span class="title">Make</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="make-minimize-toggle"
+              title={minimized ? 'Expand Make panel' : 'Minimize Make panel to bottom bar'}
+              onClick={toggleMinimized}
+            >
+              {minimized ? '▴ Expand' : '▾ Min'}
+            </button>
+          </span>
         </div>
-        <div class="hint">Add shapes to the model first.</div>
+        {!minimized && <div class="hint">Add shapes to the model first.</div>}
       </div>
     );
   }
@@ -172,15 +196,6 @@ function MakePanel() {
   const zr = zRange();
   const nLayers = zr ? layerCount(zr[0], zr[1]) : 1;
   const layer = Math.min(Math.max(0, ui.makeLayer), nLayers - 1);
-  const minimized = ui.panelMinimized || ui.vpHudCollapsed;
-  const toggleMinimized = () => {
-    if (minimized) {
-      ui.set('panelMinimized', false);
-      if (ui.vpHudCollapsed) ui.set('vpHudCollapsed', false);
-    } else {
-      ui.set('panelMinimized', true);
-    }
-  };
 
   return (
     <div class={`results-panel${minimized ? ' minimized' : ''}`} data-testid="make-panel">
@@ -281,9 +296,11 @@ function MakePanel() {
         <Seg<string>
           value={String(ui.makeLayerH)}
           options={[
-            { value: '0.5', label: '0.5' },
-            { value: '1', label: '1' },
-            { value: '2', label: '2' },
+            { value: '0.12', label: '0.12', title: '0.12 mm fine FDM layer' },
+            { value: '0.2', label: '0.2', title: '0.20 mm standard FDM layer' },
+            { value: '0.5', label: '0.5', title: '0.50 mm draft layer' },
+            { value: '1', label: '1', title: '1.0 mm section slice' },
+            { value: '2', label: '2', title: '2.0 mm coarse slice' },
           ]}
           onChange={(v) => ui.set('makeLayerH', Number.parseFloat(v))}
           testId="make-layer-h"

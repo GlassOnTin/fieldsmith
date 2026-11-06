@@ -29,10 +29,12 @@ function defaultFill(): Fill {
   };
 }
 
-/** Shape ids in the tree, depth first — `protect` names shapes, not regions. */
+/** Shape ids in the tree, depth first — `protect` names solid shapes (excluding boolean cuts), not regions. */
 function shapeIds(d: Document): string[] {
   const ids: string[] = [];
-  walk(d.root, (n) => ids.push(n.id));
+  walk(d.root, (n) => {
+    if (n.op !== 'subtract') ids.push(n.id);
+  });
   return ids;
 }
 
@@ -101,8 +103,8 @@ function FillPanel() {
 
       {!minimized && (
         <>
-          {s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
-          {s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
+          {doc.root.length > 0 && s.status === 'error' && (s.errorKind === 'setup' ? <div class="hint">{s.error}</div> : <div class="error-box">{s.error}</div>)}
+          {doc.root.length > 0 && s.status === 'running' && <div class="hint">analysing{s.levelLabel ? ` · ${s.levelLabel}` : '…'}</div>}
 
           {!doc.root.length && <div class="hint">Add shapes to the model first.</div>}
 
@@ -414,9 +416,12 @@ function FillBadge() {
   const peak = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem));
   const defl = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement));
   return (
-    <span class="num" data-testid="fill-badge" title={`${fmt(fi.mass_g, 2)} g (solid ${fmt(fi.solid_mass_g, 2)} g)`}>
-      mass {fmt(fi.mass_g, 2)} g · deflect {fmt(defl)} mm · peak {fmt(peak)} MPa
-    </span>
+    <>
+      <span class="sep">|</span>
+      <span class="num" data-testid="fill-badge" title={`${fmt(fi.mass_g, 2)} g (solid ${fmt(fi.solid_mass_g, 2)} g)`}>
+        mass {fmt(fi.mass_g, 2)} g · deflect {fmt(defl)} mm · peak {fmt(peak)} MPa
+      </span>
+    </>
   );
 }
 statusItems.push(FillBadge);

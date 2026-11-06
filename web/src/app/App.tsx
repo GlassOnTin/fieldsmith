@@ -62,28 +62,26 @@ function ViewTools() {
         </button>
       )}
       {store.lens !== 'theory' && (
-        <>
-          <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
-            <Icon.fit />
-          </button>
-          <button
-            class={`btn icon ${clearMode ? 'on' : ''}`}
-            data-testid="toggle-clear-viewport"
-            title={clearMode ? 'Restore sidebars & HUD overlays (\\)' : 'Clear 3D viewport / Toggle sidebars (\\)'}
-            onClick={() => runCommand('view.toggleSidebars')}
-          >
-            <Icon.sidebarsBoth />
-          </button>
-          <button
-            class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
-            data-testid="open-tutorials-drawer"
-            title="Tutorials, Analytic Verification Tests (A1–A14) & Case Studies (T1–T17)"
-            onClick={() => runCommand('tutorials.open')}
-          >
-            <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
-          </button>
-        </>
+        <button class="btn icon" title="Fit model (F)" onClick={() => runCommand('view.fit')}>
+          <Icon.fit />
+        </button>
       )}
+      <button
+        class={`btn icon ${clearMode ? 'on' : ''}`}
+        data-testid="toggle-clear-viewport"
+        title={clearMode ? 'Restore sidebars & HUD overlays (\\)' : 'Clear 3D viewport / Toggle sidebars (\\)'}
+        onClick={() => runCommand('view.toggleSidebars')}
+      >
+        <Icon.sidebarsBoth />
+      </button>
+      <button
+        class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
+        data-testid="open-tutorials-drawer"
+        title="Tutorials, Analytic Verification Tests (A1–A14) & Case Studies (T1–T17)"
+        onClick={() => runCommand('tutorials.open')}
+      >
+        <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
+      </button>
       {store.lens === 'shape' && (
         <>
           <button
@@ -136,7 +134,7 @@ function ViewTools() {
 }
 
 function EmptyState() {
-  if (store.doc.root.length > 0) return null;
+  if (store.doc.root.length > 0 || store.lens !== 'shape') return null;
   return (
     <div class="empty-state">
       <div class="empty-card" data-testid="empty-state">
@@ -231,9 +229,12 @@ function StatusBar() {
         <S key={i} />
       ))}
       {s && (
-        <span title="Deselect with Esc, a right-click in the viewport, or clicking empty space">
-          Selected: {s.id} · Esc / right-click / empty space to deselect
-        </span>
+        <>
+          <span class="sep">|</span>
+          <span title="Deselect with Esc, a right-click in the viewport, or clicking empty space">
+            Selected: {s.id} (Esc)
+          </span>
+        </>
       )}
       <span class="sep">|</span>
       <button

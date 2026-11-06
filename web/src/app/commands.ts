@@ -433,8 +433,8 @@ export function commands(): Command[] {
     })),
     {
       id: 'antenna.open',
-      group: 'Add',
-      label: 'Open RF Antenna VNA / Smith Chart Workbench (T16 / A14)…',
+      group: 'Systems',
+      label: 'Open RF Antenna VNA / Smith Chart Workbench…',
       run: () => openAntennaWorkbenchModal(),
     },
     { id: 'view.fit', group: 'View', label: 'Fit model in view', keys: 'F', run: () => viewApi.fit(true) },

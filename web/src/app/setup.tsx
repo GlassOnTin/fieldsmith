@@ -886,54 +886,60 @@ function addMultiphysicsPresetBc(
 function SetupMultiphysicsSection({ doc }: { doc: Document }) {
   const eqs = evaluateDocumentFieldEquations(doc);
   const activeEqs = eqs.filter((e) => e.active);
+  const hasCoupledRegime = Boolean(detectCoupledPhysicsRegime(doc));
   return (
     <div data-testid="setup-multiphysics-section" style={{ marginTop: '10px', padding: '0 6px 8px' }}>
-      <div class="section-label" style={{ paddingLeft: '2px' }}>
-        <span>Multiphysics BCs &amp; Couplings</span>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginBottom: '8px' }}>
-        <button
-          type="button"
-          class="btn small"
-          data-testid="add-mp-vft-pull"
-          title="Add Viscoelastic / VFT Creep Pull Traction & Thermal BC to selected region"
-          onClick={() => addMultiphysicsPresetBc('vft_pull')}
-          style={{ fontSize: '10px', padding: '4px 6px' }}
+      <details open={hasCoupledRegime} style={{ marginBottom: '8px' }}>
+        <summary
+          class="section-label"
+          style={{ paddingLeft: '2px', cursor: 'pointer', userSelect: 'none' }}
         >
-          + Viscous / Creep Pull
-        </button>
-        <button
-          type="button"
-          class="btn small"
-          data-testid="add-mp-em-lorentz"
-          title="Add Electromagnetic Lorentz Pressure (J × B) & Joule Heating BCs to selected region"
-          onClick={() => addMultiphysicsPresetBc('em_lorentz')}
-          style={{ fontSize: '10px', padding: '4px 6px' }}
-        >
-          + EM Lorentz Force
-        </button>
-        <button
-          type="button"
-          class="btn small"
-          data-testid="add-mp-optical-beam"
-          title="Add Collimated Optical Ray Beam Irradiance & Focal Heat Flux BC to selected region"
-          onClick={() => addMultiphysicsPresetBc('optical_beam')}
-          style={{ fontSize: '10px', padding: '4px 6px' }}
-        >
-          + Optical Ray Beam
-        </button>
-        <button
-          type="button"
-          class="btn small"
-          data-testid="add-mp-combustor-spray"
-          title="Add Swirl / Reactive Thermal Jet BC to selected region"
-          onClick={() => addMultiphysicsPresetBc('combustor_spray')}
-          style={{ fontSize: '10px', padding: '4px 6px' }}
-        >
-          + Swirl / Thermal Jet
-        </button>
-      </div>
-      {(doc.lets?.length ?? 0) > 0 && (
+          <span>Multiphysics BCs &amp; Couplings</span>
+        </summary>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginTop: '6px' }}>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="add-mp-vft-pull"
+            title="Add Viscoelastic / VFT Creep Pull Traction & Thermal BC to selected region"
+            onClick={() => addMultiphysicsPresetBc('vft_pull')}
+            style={{ fontSize: '10px', padding: '4px 6px' }}
+          >
+            + Viscous / Creep Pull
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="add-mp-em-lorentz"
+            title="Add Electromagnetic Lorentz Pressure (J × B) & Joule Heating BCs to selected region"
+            onClick={() => addMultiphysicsPresetBc('em_lorentz')}
+            style={{ fontSize: '10px', padding: '4px 6px' }}
+          >
+            + EM Lorentz Force
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="add-mp-optical-beam"
+            title="Add Collimated Optical Ray Beam Irradiance & Focal Heat Flux BC to selected region"
+            onClick={() => addMultiphysicsPresetBc('optical_beam')}
+            style={{ fontSize: '10px', padding: '4px 6px' }}
+          >
+            + Optical Ray Beam
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="add-mp-combustor-spray"
+            title="Add Swirl / Reactive Thermal Jet BC to selected region"
+            onClick={() => addMultiphysicsPresetBc('combustor_spray')}
+            style={{ fontSize: '10px', padding: '4px 6px' }}
+          >
+            + Swirl / Thermal Jet
+          </button>
+        </div>
+      </details>
+      {hasCoupledRegime && (doc.lets?.length ?? 0) > 0 && (
         <div
           class="card"
           data-testid="setup-mp-params"
@@ -981,7 +987,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
           <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--accent)' }}>
-            Auto-Activated PDEs ({activeEqs.length}/{eqs.length})
+            Active PDEs ({activeEqs.length})
           </span>
           <button
             type="button"
@@ -994,25 +1000,28 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
           </button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-          {eqs.map((eq) => (
-            <div
-              key={eq.id}
-              style={{
-                fontSize: '10.5px',
-                color: eq.active ? 'var(--text)' : 'var(--text-3)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                opacity: eq.active ? 1 : 0.7,
-              }}
-              title={eq.triggerSummary}
-            >
-              <span style={{ color: eq.active ? 'var(--ok)' : 'var(--text-3)', fontWeight: 700 }}>
-                {eq.active ? '●' : '○'}
-              </span>
-              <span>{eq.shortName}</span>
+          {activeEqs.length === 0 ? (
+            <div style={{ fontSize: '10.5px', color: 'var(--text-3)' }}>
+              Add shapes and boundary conditions to activate governing PDEs.
             </div>
-          ))}
+          ) : (
+            activeEqs.map((eq) => (
+              <div
+                key={eq.id}
+                style={{
+                  fontSize: '10.5px',
+                  color: 'var(--text)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                }}
+                title={eq.triggerSummary}
+              >
+                <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span>
+                <span>{eq.shortName}</span>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

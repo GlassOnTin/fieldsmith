@@ -10,10 +10,16 @@ import {
   detectCoupledPhysicsRegime,
   evaluateDocumentFieldEquations,
   generateAppliedMathMarkdownReport,
+  synthesiseVariationalBvpSummary,
   type DesignStageId,
 } from '../doc/continuum';
+import {
+  evaluateLiterateAssertOnLevel,
+  findMatchingLiterateSheet,
+} from '../doc/literate-fsm';
 import { viewOverlays } from './App';
 import { analysis } from './analysis';
+import { fmt } from './fields';
 import { ui, useApp } from './ui';
 
 type StageFilter = 'all' | DesignStageId;
@@ -51,7 +57,7 @@ function slugifyName(name: string): string {
 function TheoryLensView() {
   useApp();
   const [stageFilter, setStageFilter] = useState<StageFilter>('all');
-  const [showStandby, setShowStandby] = useState<boolean>(true);
+  const [showStandby, setShowStandby] = useState<boolean>(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState<boolean>(false);
   const [copiedFlag, setCopiedFlag] = useState<boolean>(false);
 
@@ -79,17 +85,64 @@ function TheoryLensView() {
       }
     : undefined;
 
+  const bvp = synthesiseVariationalBvpSummary(doc, solvedSummary);
+  const litSheet = findMatchingLiterateSheet(doc.name);
+  const liveAsserts =
+    litSheet && lvl
+      ? (litSheet.asserts ?? []).map((a) => evaluateLiterateAssertOnLevel(a, lvl))
+      : [];
+
   const filteredEqs = allEqs.filter((eq) => {
     if (stageFilter !== 'all' && eq.stage !== stageFilter) return false;
     if (!showStandby && !eq.active) return false;
     return true;
   });
 
-  const mdReport = generateAppliedMathMarkdownReport(
+  const baseMdReport = generateAppliedMathMarkdownReport(
     doc,
     stageFilter === 'all' ? 'all stages' : stageFilter,
     solvedSummary,
+    showStandby,
   );
+  const litMdLines: string[] = [];
+  if (litSheet) {
+    litMdLines.push('');
+    litMdLines.push(`## 5. Closed-Form Analytical Reference & Verification (${litSheet.id}: ${litSheet.title})`);
+    litMdLines.push(`**Chapter**: ${litSheet.theoryChapter.chapterTitle} (\`${litSheet.verificationBadge}\`)`);
+    litMdLines.push('');
+    litMdLines.push(litSheet.theoryChapter.summary);
+    litMdLines.push('');
+    for (const sec of litSheet.theoryChapter.sections) {
+      litMdLines.push(`### ${sec.heading}`);
+      litMdLines.push('```text');
+      litMdLines.push(sec.equations.trim());
+      litMdLines.push('```');
+      litMdLines.push(sec.body);
+      litMdLines.push('');
+    }
+    if (litSheet.analyticChecks && litSheet.analyticChecks.length > 0) {
+      litMdLines.push('### Closed-Form Reference vs Fieldsmith P2 FEA');
+      litMdLines.push('| Quantity | Closed-Form Formula | Analytic Reference | Fieldsmith Measured | Difference | Tolerance |');
+      litMdLines.push('|---|---|---|---|---|---|');
+      for (const ck of litSheet.analyticChecks) {
+        litMdLines.push(
+          `| ${ck.quantity} | \`${ck.formula}\` | **${ck.analyticRef}** | **${ck.measuredFea}** | ${ck.relError} | ${ck.tolerance} |`,
+        );
+      }
+      litMdLines.push('');
+    }
+    if (liveAsserts.length > 0) {
+      litMdLines.push('### Live `# @assert` Verification Contracts');
+      for (const ev of liveAsserts) {
+        const u = ev.assert.unit ? ` ${ev.assert.unit}` : '';
+        litMdLines.push(
+          `- **${ev.passed ? 'PASS' : 'FAIL'}** · ${ev.assert.label} (\`${ev.assert.metric}\`): live \`${ev.liveValue != null ? fmt(ev.liveValue, 4) : 'N/A'}${u}\` vs target \`${ev.assert.target}${u}\` (${ev.errorOrMargin})`,
+        );
+      }
+      litMdLines.push('');
+    }
+  }
+  const mdReport = baseMdReport + litMdLines.join('\n');
 
   const handleCopyMd = () => {
     if (navigator.clipboard?.writeText) {
@@ -320,6 +373,68 @@ function TheoryLensView() {
         </pre>
       ) : (
         <>
+          {/* Section 0: Synthesised Variational Boundary-Value Problem & Sobolev Spaces */}
+          <div
+            class="card"
+            data-testid="theory-variational-statement"
+            style={{
+              padding: '12px 14px',
+              background: 'var(--panel)',
+              border: '1.5px solid color-mix(in srgb, var(--accent) 50%, var(--line-strong))',
+              borderRadius: '8px',
+              margin: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '7px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>
+                0. Synthesised Variational Boundary-Value Problem &amp; Sobolev Function Spaces
+              </span>
+              <span style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-2)' }}>
+                Conforming P₂ Lagrange Finite Elements · Keast Degree-2 Quadrature
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '8px' }}>
+              <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: '6px', padding: '7px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '3px' }}>
+                  COMPUTATIONAL DOMAIN &amp; BOUNDARY PARTITION
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text)', wordBreak: 'break-word' }}>
+                  {bvp.domainLine}
+                </div>
+              </div>
+              <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: '6px', padding: '7px 10px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '3px' }}>
+                  SOBOLEV TRIAL &amp; TEST SPACES
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text)', wordBreak: 'break-word' }}>
+                  {bvp.sobolevSpaceLine}
+                </div>
+              </div>
+            </div>
+            <div
+              style={{
+                background: 'var(--panel-2)',
+                border: '1px solid var(--line-strong)',
+                borderLeft: '3px solid var(--accent)',
+                borderRadius: '6px',
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent)', marginBottom: '3px' }}>
+                COUPLED WEAK VARIATIONAL FORMULATION
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '11.5px', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {bvp.weakStatementLine}
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '10.5px', color: 'var(--text-2)', marginTop: '4px' }}>
+                Discrete Operator: {bvp.discreteAlgebraicLine}
+              </div>
+            </div>
+          </div>
+
           {/* Section 1: Shape (1) Subdomain Continuum & Constitutive Table */}
           {(stageFilter === 'all' || stageFilter === 'shape') && (
             <div
@@ -462,7 +577,11 @@ function TheoryLensView() {
                     Neumann Mechanical Loads (Γ_N: σ·n = t̂)
                   </div>
                   {doc.loads.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>None defined (or thermal-driven)</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>
+                      {doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length > 0
+                        ? 'Thermal-driven (zero external mechanical traction)'
+                        : 'None defined'}
+                    </div>
                   ) : (
                     doc.loads.map((l) => (
                       <div key={l.id} style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
@@ -471,7 +590,11 @@ function TheoryLensView() {
                           ? `F = (${l.kind.vector.join(', ')}) N`
                           : l.kind.type === 'pressure'
                             ? `p = ${l.kind.mpa} MPa`
-                            : l.kind.type}
+                            : l.kind.type === 'preload'
+                              ? `F_preload = ${l.kind.newtons} N`
+                              : l.kind.type === 'distributed'
+                                ? `p(x,y,z) = ${l.kind.expr}`
+                                : (l.kind as { type: string }).type}
                       </div>
                     ))
                   )}
@@ -649,6 +772,209 @@ function TheoryLensView() {
               </div>
             ))}
           </div>
+
+          {/* Section 4: Solved Discretization Readout & Closed-Form Literate .fsm Verification */}
+          {(solvedSummary || litSheet) && (
+            <div
+              class="card"
+              data-testid="theory-literate-verification"
+              style={{
+                padding: '12px 14px',
+                background: 'var(--panel)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: '8px',
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>
+                  4. Closed-Form Analytical Reference, Solved Discretization &amp; Verification Contracts
+                </span>
+                {litSheet && (
+                  <button
+                    type="button"
+                    class="btn ghost small"
+                    data-testid="theory-open-sheet-btn"
+                    onClick={() => {
+                      ui.set('tutorialSheetId', litSheet.id);
+                      ui.set('tutorialMinimised', false);
+                      ui.set('tutorialsOpen', true);
+                    }}
+                    style={{ fontSize: '11px' }}
+                  >
+                    Open Sheet {litSheet.id} ({litSheet.verificationBadge}) →
+                  </button>
+                )}
+              </div>
+
+              {solvedSummary && (
+                <div
+                  data-testid="theory-solved-summary"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: '8px',
+                    background: 'var(--panel-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '6px',
+                    padding: '8px 10px',
+                    fontFamily: 'var(--mono)',
+                    fontSize: '11px',
+                  }}
+                >
+                  <div>
+                    Active P₂ DOFs: <strong>{solvedSummary.dofs?.toLocaleString() ?? '—'}</strong> (h = {solvedSummary.hMm?.toFixed(2) ?? '—'} mm)
+                  </div>
+                  {solvedSummary.maxVmMpa != null && (
+                    <div>
+                      Peak σ_vM: <strong>{solvedSummary.maxVmMpa.toFixed(2)} MPa</strong>
+                    </div>
+                  )}
+                  {solvedSummary.maxDispMm != null && (
+                    <div>
+                      Peak ‖u_h‖_∞: <strong>{solvedSummary.maxDispMm.toFixed(4)} mm</strong>
+                    </div>
+                  )}
+                  {solvedSummary.maxTempC != null && (
+                    <div>
+                      Peak T_max: <strong>{solvedSummary.maxTempC.toFixed(1)} °C</strong>
+                    </div>
+                  )}
+                  {solvedSummary.massG != null && (
+                    <div>
+                      Mass: <strong>{solvedSummary.massG.toFixed(2)} g</strong>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {litSheet && (
+                <>
+                  <div style={{ fontSize: '12px', color: 'var(--text-2)', lineHeight: 1.5 }}>
+                    <strong style={{ color: 'var(--text)' }}>{litSheet.theoryChapter.chapterTitle}:</strong>{' '}
+                    {litSheet.theoryChapter.summary}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '8px' }}>
+                    {litSheet.theoryChapter.sections.map((sec, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          background: 'var(--panel-2)',
+                          border: '1px solid var(--line)',
+                          borderLeft: '3px solid var(--ok)',
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '5px',
+                        }}
+                      >
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ok)' }}>
+                          {sec.heading}
+                        </div>
+                        <pre
+                          style={{
+                            margin: 0,
+                            padding: '6px 8px',
+                            background: 'var(--panel)',
+                            border: '1px solid var(--line)',
+                            borderRadius: '4px',
+                            fontFamily: 'var(--mono)',
+                            fontSize: '11px',
+                            color: 'var(--text)',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {sec.equations.trim()}
+                        </pre>
+                        <div style={{ fontSize: '11px', color: 'var(--text-2)', lineHeight: 1.45 }}>
+                          {sec.body}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {litSheet.analyticChecks && litSheet.analyticChecks.length > 0 && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11.5px' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--line-strong)', color: 'var(--text-2)', textAlign: 'left' }}>
+                            <th style={{ padding: '5px 8px' }}>Quantity</th>
+                            <th style={{ padding: '5px 8px' }}>Closed-Form Formula</th>
+                            <th style={{ padding: '5px 8px' }}>Analytic Reference</th>
+                            <th style={{ padding: '5px 8px' }}>Fieldsmith P₂ FEA</th>
+                            <th style={{ padding: '5px 8px' }}>Rel. Error</th>
+                            <th style={{ padding: '5px 8px' }}>Tolerance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {litSheet.analyticChecks.map((ck, idx) => (
+                            <tr key={idx} style={{ borderBottom: '1px solid var(--line)' }}>
+                              <td style={{ padding: '5px 8px', fontWeight: 600 }}>{ck.quantity}</td>
+                              <td style={{ padding: '5px 8px', fontFamily: 'var(--mono)', fontSize: '11px' }}>{ck.formula}</td>
+                              <td style={{ padding: '5px 8px', fontFamily: 'var(--mono)' }}>{ck.analyticRef}</td>
+                              <td style={{ padding: '5px 8px', fontFamily: 'var(--mono)', fontWeight: 600 }}>{ck.measuredFea}</td>
+                              <td style={{ padding: '5px 8px', fontFamily: 'var(--mono)', color: 'var(--ok)' }}>{ck.relError}</td>
+                              <td style={{ padding: '5px 8px', fontFamily: 'var(--mono)', color: 'var(--text-2)' }}>{ck.tolerance}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {liveAsserts.length > 0 && (
+                    <div
+                      data-testid="theory-live-asserts"
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                        padding: '8px 10px',
+                        background: 'var(--panel-2)',
+                        border: '1px solid var(--line-strong)',
+                        borderRadius: '6px',
+                      }}
+                    >
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ok)' }}>
+                        Executable `# @assert` Verification Contracts ({liveAsserts.filter((a) => a.passed).length} / {liveAsserts.length} PASS)
+                      </div>
+                      {liveAsserts.map((ev, idx) => {
+                        const u = ev.assert.unit ? ` ${ev.assert.unit}` : '';
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '8px',
+                              flexWrap: 'wrap',
+                              fontSize: '11px',
+                              fontFamily: 'var(--mono)',
+                            }}
+                          >
+                            <span>
+                              {ev.assert.label} <code style={{ color: 'var(--text-3)' }}>({ev.assert.metric})</code>
+                            </span>
+                            <span style={{ color: ev.passed ? 'var(--ok)' : 'var(--danger)', fontWeight: 700 }}>
+                              live {ev.liveValue != null ? fmt(ev.liveValue, 4) : 'N/A'}
+                              {u} vs {ev.assert.target}
+                              {u} ({ev.errorOrMargin}) · {ev.passed ? 'PASS' : 'FAIL'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

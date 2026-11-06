@@ -948,6 +948,18 @@ export function AntennaWorkbenchModal() {
     closeAntennaWorkbenchModal();
   };
 
+  useEffect(() => {
+    if (!antennaModalOpenState) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        handleCloseModal();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [antennaModalOpenState]);
+
   const updateSpec = (
     patch: Partial<DroneAntennaDesignSpec>,
     syncCad = autoSync3d,

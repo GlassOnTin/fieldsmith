@@ -8,6 +8,7 @@ import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import {
   MODIFIER_LABEL,
   defaultModifier,
+  duplicateNode,
   findCompanionFixingNode,
   groupNode,
   inheritedColor,
@@ -75,11 +76,13 @@ function ContinuumSelectOptions({ doc }: { doc: Document }) {
             {m.name}
           </option>
         ))}
-        {byPhase('solid_elastic').map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name}
-          </option>
-        ))}
+        {byPhase('solid_elastic')
+          .filter((m) => !solidLib.some((s) => s.id === m.id))
+          .map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
       </optgroup>
       <optgroup label="Viscous Melts & Glasses (VFT Extensional Sheet)">
         {byPhase('viscous_melt').map((m) => (
@@ -142,18 +145,29 @@ function ContinuumConstitutiveCard({
   const phaseMeta = CONTINUUM_PHASE_META[spec.phase];
   const accentText = `color-mix(in srgb, ${spec.badgeColor} 65%, var(--text))`;
   return (
-    <div
+    <details
       class="card"
       data-testid={testId}
+      open={spec.phase !== 'solid_elastic'}
       style={{
         marginTop: '8px',
-        padding: '9px 10px',
+        padding: '7px 10px',
         border: `1px solid color-mix(in srgb, ${spec.badgeColor} 38%, var(--line-strong))`,
         background: 'var(--panel-2)',
         borderRadius: '6px',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+      <summary
+        style={{
+          cursor: 'pointer',
+          userSelect: 'none',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '6px',
+          flexWrap: 'wrap',
+        }}
+      >
         <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)' }}>Continuum Phase</span>
         <span
           data-testid={`${testId}-phase`}
@@ -169,8 +183,8 @@ function ContinuumConstitutiveCard({
         >
           {spec.phaseLabel}
         </span>
-      </div>
-      <div style={{ fontSize: '11px', color: 'var(--text-2)', marginBottom: '7px', lineHeight: 1.4 }}>
+      </summary>
+      <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '6px', marginBottom: '7px', lineHeight: 1.4 }}>
         {phaseMeta.summary}
       </div>
       <div
@@ -216,7 +230,7 @@ function ContinuumConstitutiveCard({
           Applied Math in Theory (6) →
         </button>
       </div>
-    </div>
+    </details>
   );
 }
 function nodeIn(d: Document, id: string): Node {
@@ -874,28 +888,30 @@ function SurfaceMateAndTreePanel({ node }: { node: Node }) {
   };
 
   return (
-    <div
+    <details
       class="card"
       data-testid="surface-mate-panel"
+      open={Boolean(companion || parentGroup)}
       style={{
         marginTop: '8px',
-        padding: '8px 10px',
+        padding: '7px 10px',
         background: 'var(--panel-2)',
         border: '1px solid var(--line-strong)',
         borderRadius: '6px',
       }}
     >
-      <div
+      <summary
         style={{
+          cursor: 'pointer',
+          userSelect: 'none',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           gap: '6px',
-          marginBottom: '6px',
         }}
       >
         <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
-          📐 Surface Mate &amp; Object Tree
+          📐 Surface Mate &amp; Object Tree ({parentGroup ? parentGroup.id : 'Root'})
         </span>
         {companion && (
           <span
@@ -912,7 +928,7 @@ function SurfaceMateAndTreePanel({ node }: { node: Node }) {
             🔗 {companion.id}
           </span>
         )}
-      </div>
+      </summary>
 
       {/* Tree Hierarchy Status & Actions */}
       <div
@@ -923,6 +939,7 @@ function SurfaceMateAndTreePanel({ node }: { node: Node }) {
           gap: '6px',
           flexWrap: 'wrap',
           fontSize: '11px',
+          marginTop: '6px',
           marginBottom: '8px',
           paddingBottom: '6px',
           borderBottom: '1px solid var(--line)',
@@ -1220,7 +1237,7 @@ function SurfaceMateAndTreePanel({ node }: { node: Node }) {
           </div>
         </div>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -1251,6 +1268,22 @@ function NodeInspector({ node }: { node: Node }) {
               🔩 Attach Bolt to {id}…
             </button>
           )}
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="inspector-duplicate-node-btn"
+            title={`Duplicate ${id} (Ctrl+D)`}
+            onClick={() => {
+              let copy: Node | null = null;
+              store.transact(`Duplicate ${id}`, (d) => {
+                copy = duplicateNode(d, id);
+              });
+              if (copy) store.select({ kind: 'node', id: (copy as Node).id });
+            }}
+            style={{ fontSize: '10.5px', padding: '2px 7px' }}
+          >
+            ⧉ Duplicate
+          </button>
           {node.kind.type === 'group' && (
             <button
               type="button"
@@ -1379,68 +1412,85 @@ function NodeInspector({ node }: { node: Node }) {
           ))}
         </>
       )}
-      <div class="field-grid" style={{ marginTop: '8px' }}>
-        <label class="plain">Material</label>
-        <select
-          class="select"
-          value={node.material ?? ''}
-          data-testid="node-material"
-          title="Per-volume continuum material & constitutive model (Solid Elastic, VFT Viscous Melt, Liquid Metal MHD, Phase-Change Fuel, Optical Dielectric, or Reactive Gas)"
-          onChange={(e) =>
-            store.transact(`Label ${id}`, (d) => {
-              const v = (e.target as HTMLSelectElement).value;
-              if (v === '') {
-                delete nodeIn(d, id).material;
-              } else {
-                ensureContinuumMaterialInDoc(d, v);
-                nodeIn(d, id).material = v;
-              }
-            })
-          }
+      {node.op === 'subtract' ? (
+        <div
+          class="hint"
+          data-testid="node-subtract-cut-hint"
+          style={{
+            marginTop: '8px',
+            padding: '6px 9px',
+            borderRadius: '5px',
+            background: 'rgba(239, 68, 68, 0.08)',
+            border: '1px dashed rgba(239, 68, 68, 0.45)',
+            color: 'var(--text-2)',
+          }}
         >
-          <option value="">Document default ({store.doc.material})</option>
-          <ContinuumSelectOptions doc={store.doc} />
-        </select>
-        <span />
-        <label class="plain">Colour</label>
-        <div class="chips" data-testid="node-color">
-          {PART_COLORS.map((c) => (
-            <button
-              key={c}
-              class={`swatch ${node.color === c ? 'on' : ''}`}
-              style={{ background: c }}
-              data-color={c}
-              title={`Colour this shape ${c}`}
-              onClick={() =>
-                store.transact(`Colour ${id}`, (d) => {
-                  const n = nodeIn(d, id);
-                  if (n.color === c) delete n.color;
-                  else n.color = c;
-                })
-              }
-            />
-          ))}
-          <button
-            class="mini swatch-clear"
-            data-color=""
-            title="Clear this shape's colour — it inherits the nearest group's colour above"
-            onClick={() =>
-              store.transact(`Colour ${id}`, (d) => {
-                delete nodeIn(d, id).color;
+          <strong>Boolean Cut (−)</strong>: subtracts volume from preceding solid shapes (material and colour are inherited from the cut host).
+        </div>
+      ) : (
+        <div class="field-grid" style={{ marginTop: '8px' }}>
+          <label class="plain">Material</label>
+          <select
+            class="select"
+            value={node.material ?? ''}
+            data-testid="node-material"
+            title="Per-volume continuum material & constitutive model (Solid Elastic, VFT Viscous Melt, Liquid Metal MHD, Phase-Change Fuel, Optical Dielectric, or Reactive Gas)"
+            onChange={(e) =>
+              store.transact(`Label ${id}`, (d) => {
+                const v = (e.target as HTMLSelectElement).value;
+                if (v === '') {
+                  delete nodeIn(d, id).material;
+                } else {
+                  ensureContinuumMaterialInDoc(d, v);
+                  nodeIn(d, id).material = v;
+                }
               })
             }
           >
-            ✕
-          </button>
+            <option value="">Document default ({store.doc.material})</option>
+            <ContinuumSelectOptions doc={store.doc} />
+          </select>
+          <span />
+          <label class="plain">Colour</label>
+          <div class="chips" data-testid="node-color">
+            {PART_COLORS.map((c) => (
+              <button
+                key={c}
+                class={`swatch ${node.color === c ? 'on' : ''}`}
+                style={{ background: c }}
+                data-color={c}
+                title={`Colour this shape ${c}`}
+                onClick={() =>
+                  store.transact(`Colour ${id}`, (d) => {
+                    const n = nodeIn(d, id);
+                    if (n.color === c) delete n.color;
+                    else n.color = c;
+                  })
+                }
+              />
+            ))}
+            <button
+              class="mini swatch-clear"
+              data-color=""
+              title="Clear this shape's colour — it inherits the nearest group's colour above"
+              onClick={() =>
+                store.transact(`Colour ${id}`, (d) => {
+                  delete nodeIn(d, id).color;
+                })
+              }
+            >
+              ✕
+            </button>
+          </div>
+          <span class="hint" data-testid="color-hint">
+            {node.color
+              ? `${node.color} — this shape`
+              : inherited
+                ? `${inherited.color} from ${inherited.from}`
+                : 'document base colour'}
+          </span>
         </div>
-        <span class="hint" data-testid="color-hint">
-          {node.color
-            ? `${node.color} — this shape`
-            : inherited
-              ? `${inherited.color} from ${inherited.from}`
-              : 'document base colour'}
-        </span>
-      </div>
+      )}
       <div class="field-grid" style={{ marginTop: '8px' }}>
         <label class="plain">Faces</label>
         <span class="num" style={{ color: 'var(--text-3)', fontSize: '11px' }} title="Valid face selector names for regions in Setup (2) and MCP add_region">
@@ -1456,11 +1506,13 @@ function NodeInspector({ node }: { node: Node }) {
           <span>Leave out of the model</span>
         </label>
       </div>
-      <ContinuumConstitutiveCard
-        doc={store.doc}
-        matId={node.material || store.doc.material}
-        testId="node-continuum-card"
-      />
+      {node.op !== 'subtract' && (
+        <ContinuumConstitutiveCard
+          doc={store.doc}
+          matId={node.material || store.doc.material}
+          testId="node-continuum-card"
+        />
+      )}
       <DroneAntennaInspectorCard doc={store.doc} />
     </div>
   );

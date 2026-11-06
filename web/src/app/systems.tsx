@@ -5331,7 +5331,7 @@ extraCommands.push(() => [
   {
     id: 'systems.open',
     group: 'Systems',
-    label: 'Open Coupled Engineering Systems Workbench (Float-Bath & Rocket Nozzle)',
+    label: 'Open Coupled Multiphysics Systems Workbench…',
     run: () => ui.set('systemsOpen', true),
   },
 ]);

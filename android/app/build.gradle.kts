@@ -12,8 +12,8 @@ android {
         applicationId = "sh.fieldsmith.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 150
-        versionName = "0.15.0"
+        versionCode = 160
+        versionName = "0.16.0"
     }
 
     // Omit AGP's Play-specific DependencyInfoBlock so F-Droid scanner and

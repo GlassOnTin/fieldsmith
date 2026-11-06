@@ -3256,7 +3256,7 @@ function TutorialsStatusItem() {
       <button
         class="btn ghost small"
         data-testid="footer-analytic-tests"
-        style={{ height: '20px', padding: '0 6px', fontSize: '11px', color: '#22d3ee' }}
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#22d3ee' }}
         title="Open Closed-Form Analytic Verification Benchmarks (A1–A14)"
         onClick={() => {
           ui.set('tutorialMinimised', false);
@@ -3265,26 +3265,27 @@ function TutorialsStatusItem() {
           ui.set('tutorialsOpen', true);
         }}
       >
-        📐 Analytic Tests (A1–A14)
+        📐 A1–A14
       </button>
       <span class="sep">|</span>
       <button
         class="btn ghost small"
         data-testid="footer-tutorials"
-        style={{ height: '20px', padding: '0 6px', fontSize: '11px' }}
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px' }}
+        title="Open Guided Tutorials &amp; Multiphysics Case Studies (T1–T17)"
         onClick={toggleTutorialsDrawer}
       >
-        📘 Tutorials &amp; Case Studies (T1–T17)
+        📘 T1–T17
       </button>
       <span class="sep">|</span>
       <button
         class="btn ghost small"
         data-testid="footer-mcp-setup"
-        style={{ height: '20px', padding: '0 6px', fontSize: '11px', color: 'var(--accent)' }}
-        title="View MCP Server & REST API Co-Pilot Setup Instructions"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: 'var(--accent)' }}
+        title="View MCP Server &amp; REST API Co-Pilot Setup Instructions"
         onClick={() => ui.set('mcpSetupOpen', !ui.mcpSetupOpen)}
       >
-        MCP / API Setup
+        MCP
       </button>
     </>
   );

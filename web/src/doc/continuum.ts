@@ -727,7 +727,19 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       liveParameters: [
         `Base continuum material: ${docMatSpec.name} (E = ${(docMatSpec.fsmMaterial.e / 1000).toFixed(1)} GPa, ν = ${docMatSpec.fsmMaterial.nu})`,
         `Dirichlet supports Γ_D: ${doc.supports.map((s) => `${s.id} on ${s.region} [fixed=${['x', 'y', 'z'].filter((_, i) => s.fixed[i]).join('')}]`).join('; ') || 'none'}`,
-        `Neumann tractions Γ_N: ${doc.loads.map((l) => `${l.id} on ${l.region} (${l.kind.type})`).join('; ') || 'thermal-driven'}`,
+        `Neumann tractions Γ_N: ${
+          doc.loads
+            .map((l) =>
+              l.kind.type === 'force'
+                ? `${l.id} on ${l.region} (F = [${l.kind.vector.join(', ')}] N)`
+                : l.kind.type === 'pressure'
+                  ? `${l.id} on ${l.region} (p = ${l.kind.mpa} MPa)`
+                  : l.kind.type === 'preload'
+                    ? `${l.id} on ${l.region} (F_preload = ${l.kind.newtons} N)`
+                    : `${l.id} on ${l.region} (p(x,y,z) = ${l.kind.expr} MPa)`,
+            )
+            .join('; ') || (hasThermalBcs ? 'thermal-driven' : 'none')
+        }`,
       ],
     },
 
@@ -746,12 +758,14 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
         '−∇ · (k_e ∇T) = 0  in Ω,   T = T_D on Γ_T,   −k_e ∇T · n = h_c (T − T_∞) + q_N on Γ_R ∪ Γ_q,   ε_th = α_e (T − T_ref) I',
       weakOrDiscreteForm:
         '∫_Ω k_e ∇w_h · ∇T_h dΩ + ∫_{Γ_R} h_c w_h T_h dΓ = ∫_{Γ_R} h_c w_h T_∞ dΓ − ∫_{Γ_q} w_h q_N dΓ  →  f_th = ∫_Ω Bᵀ C_e α_e ΔT_h dΩ',
-      liveParameters: [
-        `Reference stress-free temperature T_ref = ${doc.solve.t_ref ?? 20} °C`,
-        `Dirichlet temperatures Γ_T: ${doc.temperatures.map((t) => `${t.id} (${t.region}: ${t.celsius} °C)`).join(', ') || 'none'}`,
-        `Robin convection Γ_R: ${doc.convections.map((c) => `${c.id} (${c.region}: h=${c.h}, T_∞=${c.t_inf} °C)`).join(', ') || 'none'}`,
-        `Neumann heat flux Γ_q: ${doc.heat_fluxes.map((q) => `${q.id} (${q.region}: q=${q.q})`).join(', ') || 'none'}`,
-      ],
+      liveParameters: hasThermalBcs
+        ? [
+            `Reference stress-free temperature T_ref = ${doc.solve.t_ref ?? 20} °C`,
+            `Dirichlet temperatures Γ_T: ${doc.temperatures.map((t) => `${t.id} (${t.region}: ${t.celsius} °C)`).join(', ') || 'none'}`,
+            `Robin convection Γ_R: ${doc.convections.map((c) => `${c.id} (${c.region}: h=${c.h}, T_∞=${c.t_inf} °C)`).join(', ') || 'none'}`,
+            `Neumann heat flux Γ_q: ${doc.heat_fluxes.map((q) => `${q.id} (${q.region}: q=${q.q})`).join(', ') || 'none'}`,
+          ]
+        : ['Standby operator — attach a thermal boundary condition in Setup (2) to bind live parameters.'],
     },
 
     // 4. Viscoelastic / VFT Melt Extension & Creep Rheology
@@ -775,10 +789,12 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
         '∇ · (h η(T) [2 D + tr(D) I]) + τ_traction = 0,   log₁₀ η(T) = −A + B / (T − T₀)',
       weakOrDiscreteForm:
         'u_x ∂h/∂x + ∂(h u_y)/∂y = 0,   D = ½ (∇u + ∇uᵀ)',
-      liveParameters: [
-        `VFT Constants: A = 2.65, B = 4210 K, T₀ = 264 °C (η spans 1.2×10³ Pa·s at 1050 °C → 1.6×10¹⁰ Pa·s at 600 °C)`,
-        `Pull speed u_pull = ${readLetParam(doc, 'u_pull', 0.16).toFixed(2)} m/s`,
-      ],
+      liveParameters: isViscousCreep
+        ? [
+            `VFT Constants: A = 2.65, B = 4210 K, T₀ = 264 °C (η spans 1.2×10³ Pa·s at 1050 °C → 1.6×10¹⁰ Pa·s at 600 °C)`,
+            `Pull speed u_pull = ${readLetParam(doc, 'u_pull', 0.16).toFixed(2)} m/s`,
+          ]
+        : ['Standby operator — assign a VFT viscous melt material in Shape (1) to bind live parameters.'],
     },
 
     // 5. Electromagnetic Lorentz Force (J × B), Eddy-Current MHD & Joule Heating
@@ -806,8 +822,9 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
         regime === 'pilkington_uk5_float_bath'
           ? 'Skew-symmetric Variational Multiscale (VMS) projection + interfacial Navier slip length L_s = (μ_Sn / μ_gas) δ_film(X_H2)'
           : '∫_Ω ε(v_h) : C_e : ε(u_h) dΩ = ∫_Ω v_h · (J × B) dΩ + ∫_{Γ_N} v_h · p_mag n̂ dΓ,   p_mag = B² / (2 μ₀)',
-      liveParameters:
-        regime === 'pilkington_uk5_float_bath'
+      liveParameters: !isEmLorentz
+        ? ['Standby operator — assign a conductive MHD volume or Lorentz BC to bind live parameters.']
+        : regime === 'pilkington_uk5_float_bath'
           ? [
               `Downstream sill depth H_sill = ${readLetParam(doc, 'h_sill', 65).toFixed(1)} mm`,
               `Linear induction motor current I_motor = ${readLetParam(doc, 'i_motor', 260).toFixed(0)} A`,
@@ -829,15 +846,17 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       active: isOptics,
       triggerSummary: isOptics
         ? `Active: Optical lens volume ('nbk7_glass', n = 1.5168) in Shape (1) or Optical Ray Beam BC in Setup (2).`
-        : "Standby: Assign material 'N-BK7 Optical Crown Glass' to a lens shape in Shape (1) or click '+ Optical Ray Beam' in Setup (2).",
+        : "Standby: Assign an optical dielectric material in Shape (1) or click '+ Optical Ray Beam' in Setup (2).",
       strongForm:
         'n₁ (ŝ_i × n̂) = n₂ (ŝ_t × n̂),   1 / f = (n_lens − 1) (1 / R₁ − 1 / R₂),   I_focus(r, z) = τ_lens(t) I₀ (D_lens / 2 w(z))² exp(−2 r² / w(z)²)',
       weakOrDiscreteForm:
         'τ_lens(r, t) = (1 − R_Fresnel)² exp(−κ_abs d_lens) · exp(−K_ext δ_soot(r, t)),   K_ext = 2.4 μm⁻¹',
-      liveParameters: [
-        `Beam irradiance I₀ = ${readLetParam(doc, 'i_beam', readLetParam(doc, 'i_solar', 1000)).toFixed(0)} W/m², Lens aperture D_lens = ${readLetParam(doc, 'd_lens', 44).toFixed(1)} mm`,
-        `Focal length f_lens = ${readLetParam(doc, 'f_lens', 60).toFixed(1)} mm, Refractive index n_d = 1.5168 (Fresnel loss 2×4.22%)`,
-      ],
+      liveParameters: isOptics
+        ? [
+            `Beam irradiance I₀ = ${readLetParam(doc, 'i_beam', readLetParam(doc, 'i_solar', 1000)).toFixed(0)} W/m², Lens aperture D_lens = ${readLetParam(doc, 'd_lens', 44).toFixed(1)} mm`,
+            `Focal length f_lens = ${readLetParam(doc, 'f_lens', 60).toFixed(1)} mm, Refractive index n_d = 1.5168 (Fresnel loss 2×4.22%)`,
+          ]
+        : ['Standby operator — assign an optical refractive volume or ray beam BC to bind live parameters.'],
     },
 
     // 7. Stefan Phase-Change Melting, Darcy Capillary Wick & Buoyant Arrhenius Flame
@@ -845,23 +864,26 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       id: 'buoyant_arrhenius_combustion',
       stage: 'setup',
       stageNumber: 2,
-      title: 'Stefan Wax Melting, Darcy Wick Transport, Buoyant Plume & Arrhenius Soot Kinetics',
-      shortName: 'Stefan Melting + Buoyant Arrhenius Flame + Soot',
+      title: 'Stefan Phase-Change Melting, Darcy Capillary Transport & Buoyant Arrhenius Kinetics',
+      shortName: 'Stefan Phase-Change + Buoyant Arrhenius Reactive Flow',
       active: isPhaseChange || isReactiveFlow,
       triggerSummary:
         isPhaseChange || isReactiveFlow
           ? `Active: Reactive fuel/gas continuum (${Array.from(matIds).filter((m) => ['paraffin_wax', 'cotton_wick', 'air_gas', 'jet_a1_spray'].includes(m)).join(', ') || regime}) in Shape (1) / Setup (2).`
-          : "Standby: Assign 'Paraffin Candle Wax', 'Braided Cotton Wick', or 'Jet-A1 Spray' in Shape (1).",
+          : 'Standby: Assign a phase-change or reactive-gas continuum material in Shape (1).',
       strongForm:
         'ρ ∂u/∂t + ρ(u·∇)u = −∇p + ∇·(μ ∇u) + (ρ_∞ − ρ) g ẑ,   ρ c_p (∂T/∂t + u·∇T) = ∇·(k ∇T) + ΔH_c ω̇_F + q_solar − 4 σ κ_P (T⁴ − T_∞⁴)',
       weakOrDiscreteForm:
         'ω̇_F = A ρ² Y_F Y_O2 exp(−T_a / T),   u_wick = −(K_w / μ_w)(∇p_c − ρ_w g),   ∂δ_soot/∂t = (ρ_g Y_soot / ρ_soot) max(−v_th · n̂_lens, 0)',
-      liveParameters: [
-        isPhaseChange
-          ? `Paraffin T_melt = 58 °C (L_f = 210 kJ/kg), Wick T_pyrolysis = 360 °C, Activation temp T_a = 14500 K`
-          : `Swirl number S_w = ${readLetParam(doc, 'swirl_number', 0.72).toFixed(2)}, Jet-A1 LHV = 43.2 MJ/kg`,
-        `Rosner thermophoretic soot deposition velocity v_th = −0.55 (ν_g / T) ∇T onto overhead optical surface`,
-      ],
+      liveParameters:
+        isPhaseChange || isReactiveFlow
+          ? [
+              isPhaseChange
+                ? `Paraffin T_melt = 58 °C (L_f = 210 kJ/kg), Wick T_pyrolysis = 360 °C, Activation temp T_a = 14500 K`
+                : `Swirl number S_w = ${readLetParam(doc, 'swirl_number', 0.72).toFixed(2)}, Jet-A1 LHV = 43.2 MJ/kg`,
+              `Rosner thermophoretic soot deposition velocity v_th = −0.55 (ν_g / T) ∇T onto overhead optical surface`,
+            ]
+          : ['Standby operator — assign a phase-change or reactive-flow continuum material to bind live parameters.'],
     },
 
     // 8. Results Stage: Prager–Synge Dual Equilibrated Upper Compliance Bound & Modal Analysis
@@ -869,14 +891,21 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       id: 'prager_synge_dual_bounds',
       stage: 'results',
       stageNumber: 3,
-      title: 'Prager–Synge Complementary Energy & Certified Compliance Bracketing',
+      title:
+        hasModal && doc.loads.length === 0 && !hasThermalBcs
+          ? 'Lanczos Generalized Eigenproblem & Modal Natural Frequencies'
+          : 'Prager–Synge Complementary Energy & Certified Compliance Bracketing',
       shortName: 'Certified Dual Compliance Bounds & Modal Eigenvalues',
       active: hasElasticSolve || hasModal,
       triggerSummary: hasElasticSolve
         ? `Active: P2 primal solve + equilibrated dual stress recovery on every solved load case${hasModal ? ` + ${doc.solve.modes} vibration modes` : ''}.`
-        : 'Standby: Run a static or modal analysis in Results (3).',
+        : hasModal
+          ? `Active: Free-vibration Lanczos modal eigenproblem (${doc.solve.modes} modes) on conforming P2 tetrahedral mesh.`
+          : 'Standby: Run a static or modal analysis in Results (3).',
       strongForm:
-        'C_h = fᵀ u_h = ∫_Ω ε(u_h) : C : ε(u_h) dΩ  ≤  C_exact  ≤  C_dual(σ*) = ∫_Ω σ* : C⁻¹ : σ* dΩ,   ∇ · σ* + f_b = 0',
+        hasModal && doc.loads.length === 0 && !hasThermalBcs
+          ? '−∇ · σ(φ_m) = ω_m² ρ φ_m  in Ω,   φ_m = 0 on Γ_D,   σ(φ_m) · n = 0 on ∂Ω \\ Γ_D,   f_m = ω_m / (2π)'
+          : 'C_h = fᵀ u_h = ∫_Ω ε(u_h) : C : ε(u_h) dΩ  ≤  C_exact  ≤  C_dual(σ*) = ∫_Ω σ* : C⁻¹ : σ* dΩ,   ∇ · σ* + f_b = 0',
       weakOrDiscreteForm:
         hasModal
           ? 'Two-level P1-Cholesky / P2-SGS PCG + Lanczos eigenproblem (K − ω_m² M) φ_m = 0  (f_m = ω_m / 2π)'
@@ -942,19 +971,87 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       shortName: 'RF VNA / 50 Ω Smith Chart & CFRP Eddy-Current Lobes',
       active: isDroneAntenna,
       triggerSummary: isDroneAntenna
-        ? 'Active: 4-Inch DeadCat CFRP Airframe + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna VNA & 3D Lobe parameters in Document.'
-        : "Standby: Click 'Antenna…' in the Shapes tree to open the 4-Inch DeadCat Drone & Gemini Dual-Band Antenna VNA Workbench.",
+        ? 'Active: Dual-Band RF Antenna VNA & 3D Lobe parameters in Document.'
+        : 'Standby: Add RF antenna parameters or open the RF VNA Workbench.',
       strongForm:
         '∇ × ∇ × E − k₀² ε_r*(r) E = −j ω μ₀ J_feed,   Z_s(CFRP) = (1 + j) / (σ_cfrp δ_skin),   Γ(f) = (Z_in(f) − Z₀) / (Z_in(f) + Z₀)',
       weakOrDiscreteForm:
         'S₁₁(dB) = 20 log₁₀|Γ(f)|,   VSWR = (1 + |Γ|) / (1 − |Γ|),   η_tot = (1 − |Γ|²) · R_rad / (R_rad + R_cfrp(d_cfrp) + R_diel(ε_r, tan δ))',
-      liveParameters: [
-        `CFRP Standoff d_cfrp = ${readLetParam(doc, 'cfrp_standoff_mm', 24.0).toFixed(1)} mm, Pod Elevation z_pod = ${readLetParam(doc, 'antenna_elev_mm', 16.0).toFixed(1)} mm, Skew α_skew = ${readLetParam(doc, 'gemini_skew_deg', 86.0).toFixed(0)}°`,
-        `Dipole Arms: L_900 = ${readLetParam(doc, 'gemini_l900_mm', 136.5).toFixed(1)} mm, L_2400 = ${readLetParam(doc, 'gemini_l2400_mm', 51.2).toFixed(1)} mm, TPU Boot Wall t_tpu = ${readLetParam(doc, 'tpu_pod_wall_mm', 1.8).toFixed(1)} mm`,
-        `VNA Match: 915 MHz S₁₁ = ${readLetParam(doc, 'vna_s11_915_db', -23.2).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_915_pct', 80.0).toFixed(1)}%), 2.44 GHz S₁₁ = ${readLetParam(doc, 'vna_s11_2440_db', -28.9).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_2440_pct', 91.6)}%)`,
-      ],
+      liveParameters: isDroneAntenna
+        ? [
+            `CFRP Standoff d_cfrp = ${readLetParam(doc, 'cfrp_standoff_mm', 24.0).toFixed(1)} mm, Pod Elevation z_pod = ${readLetParam(doc, 'antenna_elev_mm', 16.0).toFixed(1)} mm, Skew α_skew = ${readLetParam(doc, 'gemini_skew_deg', 86.0).toFixed(0)}°`,
+            `Dipole Arms: L_900 = ${readLetParam(doc, 'gemini_l900_mm', 136.5).toFixed(1)} mm, L_2400 = ${readLetParam(doc, 'gemini_l2400_mm', 51.2).toFixed(1)} mm, TPU Boot Wall t_tpu = ${readLetParam(doc, 'tpu_pod_wall_mm', 1.8).toFixed(1)} mm`,
+            `VNA Match: 915 MHz S₁₁ = ${readLetParam(doc, 'vna_s11_915_db', -23.2).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_915_pct', 80.0).toFixed(1)}%), 2.44 GHz S₁₁ = ${readLetParam(doc, 'vna_s11_2440_db', -28.9).toFixed(1)} dB (η = ${readLetParam(doc, 'vna_eff_2440_pct', 91.6)}%)`,
+          ]
+        : ['Standby operator — add RF antenna parameters to bind live VNA metrics.'],
     },
   ];
+}
+
+export interface VariationalBvpSummary {
+  domainLine: string;
+  sobolevSpaceLine: string;
+  weakStatementLine: string;
+  discreteAlgebraicLine: string;
+}
+
+/** Synthesise the unified Sobolev function spaces & weak variational problem statement
+ * (`Ω, ∂Ω, V_h ⊂ [H¹_D(Ω)]³, a(u_h, v_h) = ℓ(v_h)`) for the active document. */
+export function synthesiseVariationalBvpSummary(
+  doc: Document,
+  solvedSummary?: {
+    dofs?: number;
+    hMm?: number;
+  },
+): VariationalBvpSummary {
+  const vols = collectVolumeContinuumNodes(doc);
+  const solidNodes = vols.filter((v) => v.node.op !== 'subtract');
+  const cutNodes = vols.filter((v) => v.node.op === 'subtract');
+  const gammaD = doc.supports.map((s) => s.region).join(' ∪ ') || '∅';
+  const gammaN = doc.loads.map((l) => l.region).join(' ∪ ') || '∅';
+  const gammaThermal = [
+    ...doc.temperatures.map((t) => t.region),
+    ...doc.convections.map((c) => c.region),
+    ...doc.heat_fluxes.map((q) => q.region),
+  ].join(' ∪ ');
+  const hasThermal = doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length > 0;
+  const hasModal = doc.solve.modes != null && doc.solve.modes > 0;
+  const hasLoads = doc.loads.length > 0;
+
+  const domainLine =
+    vols.length === 0
+      ? 'Ω = ∅ ⊂ ℝ³ (add solid primitives in 1. Shape)'
+      : `Ω = { x ∈ ℝ³ : d_Ω(x) ≤ 0 } (${solidNodes.length} solid${cutNodes.length > 0 ? `, ${cutNodes.length} boolean cut` : ''}),   ∂Ω = Γ_D (${gammaD}) ∪ Γ_N (${gammaN})${hasThermal ? ` ∪ Γ_th (${gammaThermal})` : ''}`;
+
+  const dofTag =
+    solvedSummary?.dofs != null
+      ? ` (dim V_h = ${solvedSummary.dofs.toLocaleString()} DOF, h = ${solvedSummary.hMm?.toFixed(2) ?? 'auto'} mm)`
+      : ' (10-node quadratic Lagrange P₂ tetrahedra + Keast degree-2 quadrature)';
+
+  const sobolevSpaceLine = hasThermal
+    ? `V_h = { v_h ∈ [P₂(𝒯_h)]³ : v_h|_{Γ_D} = 0 } ⊂ [H¹_D(Ω)]³,   W_h = { w_h ∈ P₂(𝒯_h) : w_h|_{Γ_T} = T_D } ⊂ H¹(Ω)${dofTag}`
+    : `V_h = { v_h ∈ [P₂(𝒯_h)]³ : v_h|_{Γ_D} = 0 } ⊂ [H¹_D(Ω)]³${dofTag}`;
+
+  const weakStatementLine =
+    hasModal && !hasLoads && !hasThermal
+      ? `Find eigenpairs (ω_m², φ_m) ∈ ℝ⁺ × V_h (m = 1..${doc.solve.modes}) :   a(φ_m, v_h) = ∫_Ω ε(v_h) : C_e : ε(φ_m) dΩ = ω_m² ∫_Ω ρ φ_m · v_h dΩ   ∀ v_h ∈ V_h`
+      : hasThermal
+        ? `Find (T_h, u_h) ∈ W_h × V_h :   a_th(T_h, w_h) = ℓ_th(w_h)  ∀ w_h ∈ W_h,0   and   a_el(u_h, v_h) = ∫_Ω ε(v_h) : C_e : ε(u_h) dΩ = ∫_{Γ_N} v_h · t̂ dΓ + ∫_Ω ε(v_h) : C_e : α_e (T_h − T_ref) I dΩ   ∀ v_h ∈ V_h`
+        : `Find u_h ∈ V_h :   a(u_h, v_h) = ∫_Ω ε(v_h) : C_e(ρ) : ε(u_h) dΩ = ℓ(v_h) = ∫_{Γ_N} v_h · t̂ dΓ   ∀ v_h ∈ V_h`;
+
+  const discreteAlgebraicLine =
+    hasModal && !hasLoads && !hasThermal
+      ? `(K − ω_m² M) φ_m = 0,   f_m = ω_m / (2π)   (Shift-invert / two-level P1-Cholesky + P2-SGS Lanczos)`
+      : hasThermal
+        ? `K_th T = f_th  ⇒  K u = f_mech + f_th(T)   (Two-level P1-Cholesky + P2 block-SGS PCG, Prager–Synge dual bound C_h ≤ C* ≤ C_dual(σ*))`
+        : `K u = f   (Two-level P1-Cholesky + P2 block-SGS PCG)${hasModal ? `  +  (K − ω_m² M) φ_m = 0 (${doc.solve.modes} modes)` : ''}  +  Prager–Synge dual bound C_h ≤ C* ≤ C_dual(σ*)`;
+
+  return {
+    domainLine,
+    sobolevSpaceLine,
+    weakStatementLine,
+    discreteAlgebraicLine,
+  };
 }
 
 /** Generate a complete, self-contained Markdown report of the active mathematical formulation
@@ -970,11 +1067,14 @@ export function generateAppliedMathMarkdownReport(
     maxTempC?: number;
     massG?: number;
   },
+  includeStandby = false,
 ): string {
   const eqs = evaluateDocumentFieldEquations(doc);
+  const shownEqs = includeStandby ? eqs : eqs.filter((e) => e.active);
   const vols = collectVolumeContinuumNodes(doc);
   const regime = detectCoupledPhysicsRegime(doc);
   const activeCount = eqs.filter((e) => e.active).length;
+  const bvp = synthesiseVariationalBvpSummary(doc, solvedSummary);
 
   const lines: string[] = [];
   lines.push(`# Applied Mathematics & Active Field Equations Report`);
@@ -984,6 +1084,16 @@ export function generateAppliedMathMarkdownReport(
   if (regime) {
     lines.push(`**Coupled Multiphysics Regime**: \`${regime}\` (auto-activated from volume materials & Setup BCs)  `);
   }
+  lines.push('');
+
+  lines.push(`## 0. Synthesised Variational Boundary-Value Problem & Sobolev Spaces`);
+  lines.push(`- **Computational Domain & Boundary Partition**: \`${bvp.domainLine}\``);
+  lines.push(`- **Trial & Test Function Spaces**: \`${bvp.sobolevSpaceLine}\``);
+  lines.push(`- **Weak Variational Formulation**:`);
+  lines.push(`  \`\`\`text`);
+  lines.push(`  ${bvp.weakStatementLine}`);
+  lines.push(`  \`\`\``);
+  lines.push(`- **Discrete Algebraic System & Certified Bounds**: \`${bvp.discreteAlgebraicLine}\``);
   lines.push('');
 
   lines.push(`## 1. Subdomain Continuum & Constitutive Table (\`Shape 1\`)`);
@@ -1015,8 +1125,16 @@ export function generateAppliedMathMarkdownReport(
       lines.push(
         `| Pressure \`${l.id}\` | \`${l.region}\` (\`Γ_N\`) | Normal traction \`σ·n = −${l.kind.mpa} MPa · n\` (Case: ${l.case}) |`,
       );
+    } else if (l.kind.type === 'preload') {
+      lines.push(
+        `| Bolt Preload \`${l.id}\` | \`${l.region}\` (\`Γ_N\`) | Axial fastener clamp force \`F_p = ${l.kind.newtons} N\` (Case: ${l.case}) |`,
+      );
+    } else if (l.kind.type === 'distributed') {
+      lines.push(
+        `| Spatial Traction \`${l.id}\` | \`${l.region}\` (\`Γ_N\`) | Spatially varying traction \`p(x,y,z) = ${l.kind.expr}\` (Case: ${l.case}) |`,
+      );
     } else {
-      lines.push(`| Load \`${l.id}\` | \`${l.region}\` (\`Γ_N\`) | \`${l.kind.type}\` (Case: ${l.case}) |`);
+      lines.push(`| Load \`${l.id}\` | \`${l.region}\` (\`Γ_N\`) | \`${(l.kind as { type: string }).type}\` (Case: ${l.case}) |`);
     }
   }
   for (const t of doc.temperatures) {
@@ -1036,7 +1154,7 @@ export function generateAppliedMathMarkdownReport(
   lines.push('');
 
   lines.push(`## 3. Activated Governing Field Equations Across Design Stages`);
-  for (const eq of eqs) {
+  for (const eq of shownEqs) {
     lines.push(`### [Stage ${eq.stageNumber} · ${eq.stage.toUpperCase()}] ${eq.title} — ${eq.active ? 'ACTIVE' : 'STANDBY'}`);
     lines.push(`- **Activation Status**: ${eq.triggerSummary}`);
     lines.push(`- **Strong Differential Form**:`);

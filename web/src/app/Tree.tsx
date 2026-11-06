@@ -2,9 +2,9 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import { store } from '../doc/store';
-import { kindLabel } from '../doc/types';
-import type { Node } from '../doc/types';
-import { moveNode, renameId, inheritedColor, removeNodeAndCompanion, ungroupNode } from '../doc/ops';
+import { findNode, kindLabel } from '../doc/types';
+import type { Node, Op } from '../doc/types';
+import { duplicateNode, moveNode, renameId, inheritedColor, removeNodeAndCompanion, ungroupNode } from '../doc/ops';
 import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
 import { openFixingsCatalogueModal } from './FixingsModal';
@@ -80,10 +80,16 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
     return y < 0.5 ? 'before' : 'after';
   };
 
+  const NEXT_OP: Record<Op, Op> = { add: 'subtract', subtract: 'intersect', intersect: 'add' };
   const row: JSX.Element = (
     <div
-      class={`row ${selected ? 'selected' : ''} ${node.suppressed ? 'suppressed' : ''} ${drop ? `drop-${drop}` : ''}`}
-      style={{ paddingLeft: `${8 + depth * 14}px` }}
+      class={`row op-row-${node.op} ${selected ? 'selected' : ''} ${node.suppressed ? 'suppressed' : ''} ${drop ? `drop-${drop}` : ''}`}
+      style={{
+        paddingLeft: `${8 + depth * 14}px`,
+        ...(node.op === 'subtract' && !selected
+          ? { background: 'rgba(239, 68, 68, 0.045)', borderLeft: '2px dashed rgba(239, 68, 68, 0.55)' }
+          : {}),
+      }}
       draggable
       role="treeitem"
       aria-selected={selected}
@@ -132,13 +138,35 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       ) : (
         <span class="twisty" />
       )}
-      <span class={`op ${node.op}`} title={OP_TITLE[node.op]}>
+      <button
+        type="button"
+        class={`op ${node.op}`}
+        data-testid={`cycle-op-${node.id}`}
+        title={`${OP_TITLE[node.op]} — click to cycle Add (+) / Cut (−) / Intersect (∩)`}
+        onClick={(e) => {
+          e.stopPropagation();
+          const next = NEXT_OP[node.op];
+          store.transact(`Set ${node.id} to ${next}`, (d) => {
+            const target = findNode(d, node.id);
+            if (target) target.op = next;
+          });
+        }}
+        style={{
+          background: node.op === 'subtract' ? 'rgba(239, 68, 68, 0.16)' : 'transparent',
+          border: 'none',
+          borderRadius: '3px',
+          padding: '0 3px',
+          cursor: 'pointer',
+          fontFamily: 'var(--mono)',
+          fontWeight: 700,
+        }}
+      >
         {OP_GLYPH[node.op]}
-      </span>
+      </button>
       <span class="glyph">
         <ShapeIcon type={node.kind.type} />
       </span>
-      {rowColour && (
+      {rowColour && node.op !== 'subtract' && (
         <span class="swatch" style={{ background: rowColour }} title={node.color ? `Own colour ${node.color}` : `Colour ${rowColour} inherited`} />
       )}
       <span class="row-name">{ui.renaming === node.id ? <RenameInput id={node.id} onDone={() => ui.set('renaming', null)} /> : node.id}</span>
@@ -167,6 +195,21 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
             📂
           </button>
         )}
+        <button
+          class="mini"
+          title={`Duplicate ${node.id} (Ctrl D)`}
+          data-testid={`duplicate-node-${node.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            let copy: Node | null = null;
+            store.transact(`Duplicate ${node.id}`, (d) => {
+              copy = duplicateNode(d, node.id);
+            });
+            if (copy) store.select({ kind: 'node', id: (copy as Node).id });
+          }}
+        >
+          ⧉
+        </button>
         <button
           class="mini"
           title={`Rename ${node.id} (F2)`}
