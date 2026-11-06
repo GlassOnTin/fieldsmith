@@ -108,6 +108,19 @@ export function FixingsCatalogueModal() {
       setHostFace(initialFaceState);
       setDxEdgeInput(null);
       setDyEdgeInput(null);
+      const getLet = (k: string): number | undefined => store.doc.lets?.find((l) => l.name === k)?.value;
+      const docScrewD = getLet('screw_d') ?? getLet('bolt_d');
+      if (docScrewD !== undefined) {
+        const matchedSize = FIXING_SIZES.find((s) => Math.abs(s.major_d - docScrewD) < 0.25);
+        if (matchedSize) setSizeName(matchedSize.name);
+      }
+      const docEngLen = getLet('eng_len') ?? getLet('grip_l');
+      if (docEngLen !== undefined) {
+        setEngagementMm(docEngLen);
+      }
+      if (store.doc.material) {
+        setSubstrateMat(store.doc.material);
+      }
     }
   }, [fixingsModalSeq]);
 
@@ -983,12 +996,13 @@ export function FixingsCatalogueModal() {
             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11.5px' }}>
               <span style={{ fontWeight: 600 }}>Nominal Thread Size</span>
               <select
+                key={sizeName}
                 data-testid="fixing-size-select"
                 value={sizeName}
                 onChange={(e) => setSizeName((e.target as HTMLSelectElement).value)}
               >
                 {FIXING_SIZES.map((s) => (
-                  <option key={s.name} value={s.name}>
+                  <option key={s.name} value={s.name} selected={s.name === sizeName}>
                     {s.name} (⌀{s.major_d.toFixed(1)} × {s.pitch} mm)
                   </option>
                 ))}

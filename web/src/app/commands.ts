@@ -12,14 +12,12 @@ import { analysis } from './analysis';
 import { ui } from './ui';
 import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
 import { openFixingsCatalogueModal } from './FixingsModal';
-import {
-  buildDeadCatDroneFsmText,
-  defaultOptimisedDroneAntennaSpec,
-} from '../doc/antenna-vna';
 import { openAntennaWorkbenchModal } from './AntennaWorkbench';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
 import bracketThermalFsm from '../../../examples/bracket-thermal.fsm?raw';
+import bracketFilledFsm from '../../../examples/bracket-filled.fsm?raw';
 import boxCylFsm from '../../../examples/box-minus-cylinder.fsm?raw';
+import deadcatDroneFsm from '../../../examples/deadcat-drone-antenna.fsm?raw';
 
 export interface Command {
   id: string;
@@ -43,14 +41,31 @@ export const viewApi = {
   gizmoAxis: (): string | null => null,
 };
 
-export const EXAMPLES: { id: string; label: string; text: string }[] = [
-  { id: 'bracket', label: 'L-bracket (the bracket test)', text: bracketFsm },
-  { id: 'bracket-thermal', label: 'L-bracket heated mount (thermal case)', text: bracketThermalFsm },
-  { id: 'box-minus-cylinder', label: 'Box minus cylinder', text: boxCylFsm },
+export const EXAMPLES: { id: string; label: string; text: string; fsmPath: string }[] = [
+  { id: 'bracket', label: 'L-bracket (the bracket test)', text: bracketFsm, fsmPath: 'examples/bracket.fsm' },
+  {
+    id: 'bracket-thermal',
+    label: 'L-bracket heated mount (thermal case)',
+    text: bracketThermalFsm,
+    fsmPath: 'examples/bracket-thermal.fsm',
+  },
+  {
+    id: 'bracket-filled',
+    label: 'L-bracket with stress-graded Gyroid infill',
+    text: bracketFilledFsm,
+    fsmPath: 'examples/bracket-filled.fsm',
+  },
+  {
+    id: 'box-minus-cylinder',
+    label: 'Box minus cylinder',
+    text: boxCylFsm,
+    fsmPath: 'examples/box-minus-cylinder.fsm',
+  },
   {
     id: 'deadcat-drone-antenna',
     label: '4" DeadCat Drone + Gemini Dual-Band Antenna (900 MHz / 2.4 GHz)',
-    text: buildDeadCatDroneFsmText(defaultOptimisedDroneAntennaSpec()),
+    text: deadcatDroneFsm,
+    fsmPath: 'examples/deadcat-drone-antenna.fsm',
   },
 ];
 
@@ -395,7 +410,25 @@ export function commands(): Command[] {
       enabled: hasNode,
       run: () => store.transact('Reorder', (d) => void nudgeNode(d, selectedNodeId()!, 1)),
     },
-    { id: 'edit.deselect', group: 'Edit', label: 'Clear selection', keys: 'Esc', enabled: () => !!store.selection, run: () => store.select(null) },
+    {
+      id: 'edit.deselect',
+      group: 'Edit',
+      label: 'Clear selection / Minimise tutorial overlay',
+      keys: 'Esc',
+      enabled: () => !!store.selection || ui.tutorialsOpen,
+      run: () => {
+        if (ui.tutorialsOpen && !ui.tutorialMinimised) {
+          ui.set('tutorialMinimised', true);
+          return;
+        }
+        if (ui.tutorialsOpen && ui.tutorialMinimised) {
+          ui.set('tutorialsOpen', false);
+          ui.set('tutorialMinimised', false);
+          return;
+        }
+        store.select(null);
+      },
+    },
     ...SHAPE_TYPES.map((s) => ({ id: `add.${s.type}`, group: 'Add', label: `Add ${s.label.toLowerCase()}`, keys: s.key ? `Shift ${s.key}` : undefined, run: () => void addShape(s.type) })),
     ...(['box', 'cylinder'] as const).map((t) => ({ id: `add.cut.${t}`, group: 'Add', label: `Cut with ${t}`, run: () => void addShape(t, { op: 'subtract' }) })),
     ...FIXINGS_CATALOGUE.map((f) => ({
@@ -444,6 +477,9 @@ export function commands(): Command[] {
       label: 'Toggle sidebars (Clear 3D viewport)',
       keys: '\\',
       run: () => {
+        if (ui.tutorialsOpen && !ui.tutorialMinimised) {
+          ui.set('tutorialMinimised', true);
+        }
         if (typeof window !== 'undefined' && window.innerWidth <= 900) {
           const anyOpen = ui.treeOpen || ui.inspOpen;
           ui.set('treeOpen', false);

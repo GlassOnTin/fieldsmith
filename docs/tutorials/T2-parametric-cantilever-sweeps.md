@@ -1,0 +1,100 @@
+# T2 — Named Dimensions (let) & Automated Design Trade-Off Sweeps
+
+> **Category**: Guided Tutorial · **Level**: Beginner · **Verification**: Lesson 2 · Beginner · Parametric Design
+> **Repository Path**: `docs/tutorials/T2-parametric-cantilever-sweeps.md` · **Starter Model**: `t2-parametric-cantilever.fsm` · **Verification Reports**: `docs/verification/V23.md`, `docs/verification/V34.md`, `docs/verification/V35.md`
+
+Drive part dimensions with named variables (like thickness = 10 mm) and automatically sweep a range of thicknesses to see the weight-vs-stiffness trade-off curve.
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+fieldsmith 1
+name "T2 — Parametric Cantilever"
+material petg
+
+let span = 80
+let width = 16
+let thick = 10
+let tip_force = 240
+
+box beam size=(span, width, thick) at=(span / 2, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -tip_force)
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Why Use Named Variables ("let") Instead of Fixed Numbers? *(Lens: `SHAPE`)*
+
+When designing a beam, changing its length ("span = 80 mm") also means moving its centre position ("at = span / 2") so the left end stays anchored at the wall. By defining named variables ("let span = 80", "let thick = 10"), every formula that references them updates together. Open the Inspector panel (right panel on desktop, or the sliders button below ≡ on mobile) with nothing selected. Change "thick" from 10 to 12 mm and watch the 3D beam thicken immediately.
+
+- **Expected Check**: Under "Parameters (let)", editing "thick" updates the 3D beam thickness and keeps all dependent geometry aligned.
+
+### 2. Sweep Thickness Automatically to Plot Weight vs. Bending *(Lens: `RESULTS`)*
+
+Suppose you want the lightest beam that bends less than 1.5 mm. Instead of guessing and re-running by hand, switch to Results (3). Expand "More ▾" if compact, scroll to the "Sweep" section, pick Parameter = "thick" from 8 mm to 14 mm (5 steps), and click "Run". Fieldsmith solves all 5 designs and plots a trade-off chart (called a Pareto frontier) showing weight on one axis and peak stress or deflection on the other.
+
+- **Expected Check**: 5 design points appear on the trade-off chart. Doubling beam thickness cuts bending deflection by 8× (because bending stiffness grows with the cube of thickness, thick³) while only doubling weight.
+
+## 3. Theoretical Manual — Chapter 2 — Dependency Graphs & Bracketing the True Answer from Above and Below
+
+How does Fieldsmith update linked formulas in the right order without circular loops, and how can a computer guarantee how close its finite-element approximation is to the exact continuum physics?
+
+### 2.1 Directed Acyclic Graphs (DAGs) for Parametric Formulas
+
+```text
+span = 80   →   beam.size.x = span,   beam.at.x = span / 2
+```
+
+When one variable or dimension depends on another, Fieldsmith organises those dependencies into a one-way network called a Directed Acyclic Graph (DAG — "directed" because values flow from inputs to outputs, and "acyclic" because circular loops like A = B + 1 and B = A + 1 are caught and refused). Whenever you edit or sweep a let variable, Fieldsmith walks the graph in order and updates every shape and load.
+
+### 2.2 Prager–Synge Dual Energy Bounds (Lower & Upper Brackets)
+
+```text
+C_h = fᵀ u_h  ≤  C_exact  ≤  C*(σ*) = ∫_Ω σ* : D⁻¹ : σ* dΩ
+```
+
+Standard displacement-based finite elements always err slightly on the stiff side, giving a guaranteed lower bound (C_h) on the true deformation energy (C_exact). Fieldsmith can also construct a separate, purely force-balanced stress field σ* that satisfies Newton’s third law (div σ* + f = 0) across every element face. By the Prager–Synge theorem, that dual stress field gives a guaranteed upper bound C*(σ*), bracketing the exact physical answer between two known numbers.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Set Beam Thickness thick = 12.5 mm via API (`set_let`)
+
+Update a named parameter via set_let and watch the 3D viewport recompute all dependent geometry.
+
+```json
+{
+  "tool": "set_let",
+  "arguments": {
+    "name": "thick",
+    "value": 12.5
+  }
+}
+```
+
+### Run a 4-Point Thickness Sweep via API (`solve`)
+
+Evaluate thick = [8, 10, 12, 14] mm in one call and return mass, peak stress, and deflection for each.
+
+```json
+{
+  "tool": "solve",
+  "arguments": {
+    "kind": "sweep",
+    "param": "thick",
+    "values": [
+      8,
+      10,
+      12,
+      14
+    ],
+    "rungs": [
+      15000
+    ]
+  }
+}
+```

@@ -15,8 +15,8 @@ Binaries:
   https://github.com/GlassOnTin/fieldsmith/releases/download/v%v/fieldsmith-v%v-arm64-v8a.apk
 
 Builds:
-  - versionName: 0.13.0
-    versionCode: 1301
+  - versionName: 0.14.0
+    versionCode: 1401
     commit: 5903e0a5d608f7e3f583c8b8793cfa42fd8c3c67
     subdir: android/app
     submodules: true
@@ -75,5 +75,5 @@ AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 VercodeOperation:
   - 10 * %c + 1
-CurrentVersion: 0.13.0
-CurrentVersionCode: 1301
+CurrentVersion: 0.14.0
+CurrentVersionCode: 1401

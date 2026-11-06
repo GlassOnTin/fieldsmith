@@ -525,8 +525,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block;
 }
 .tut-drawer {
-  position: absolute; top: 46px; right: 10px; bottom: 96px; z-index: 7;
-  width: min(440px, calc(100% - 20px));
+  position: absolute; top: 46px; right: 46px; bottom: 96px; z-index: 38;
+  width: min(460px, calc(100% - 58px));
   background: color-mix(in srgb, var(--panel) 97%, transparent);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line-strong); border-radius: 10px;
@@ -534,16 +534,22 @@ button, input, select, textarea { font: inherit; color: inherit; }
   display: flex; flex-direction: column; overflow: hidden;
 }
 .tut-drawer.wide-3col {
-  left: 10px; right: 10px; bottom: 12px; width: auto; z-index: 8;
+  left: 10px; right: 46px; bottom: 12px; width: auto; z-index: 39;
   background: var(--panel);
+}
+.tut-drawer.tut-minimised {
+  top: auto; left: auto; right: 46px; bottom: 12px;
+  width: auto; max-width: min(640px, calc(100% - 58px));
+  height: auto; z-index: 39;
+  background: color-mix(in srgb, var(--panel) 98%, transparent);
 }
 .tut-header {
   display: flex; flex-direction: column;
   border-bottom: 1px solid var(--line); background: var(--panel-2); flex: none;
 }
 .tut-header-top {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 12px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap;
 }
 .tut-sheet-strip {
   display: flex; align-items: center; gap: 4px; padding: 6px 10px;
@@ -561,8 +567,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600;
 }
 .tut-banner {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 8px 12px; background: var(--panel-2); flex: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; background: var(--panel-2); flex: none; flex-wrap: wrap;
 }
 .tut-title { margin: 0 0 2px; font-size: 13px; font-weight: 700; color: var(--text); }
 .tut-subtitle { margin: 0; font-size: 11.5px; color: var(--text-2); line-height: 1.35; }
@@ -595,7 +601,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   flex: 1; min-height: 0; display: grid;
   grid-template-columns: 1fr 1fr 1fr; overflow: hidden;
 }
-.tut-drawer.split-mobile {
+.tut-drawer.split-mobile, .tut-drawer.wide-3col.split-mobile {
   top: 46%;
 }
 .tut-col-head {
@@ -641,12 +647,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 @media (max-width: 900px) {
   .tut-drawer, .tut-drawer.wide-3col {
-    top: 76px; left: 8px; right: 8px; bottom: 8px; width: auto; z-index: 42;
+    top: 44px; left: 8px; right: 44px; bottom: 8px; width: auto; z-index: 42;
   }
   .tut-drawer.split-mobile, .tut-drawer.wide-3col.split-mobile {
-    top: 46%;
+    top: 48%; right: 8px;
   }
-  .tut-header-top { padding: 6px 10px; }
+  .tut-drawer.tut-minimised {
+    top: auto; left: 8px; right: 8px; bottom: 8px; max-width: none; height: auto; z-index: 42;
+  }
+  .tut-header-top { padding: 6px 8px; }
   .tut-header-top [data-testid="tutorial-3col-toggle"] { display: none; }
   .sys-badge { white-space: nowrap; }
   .tut-banner { padding: 6px 10px; }

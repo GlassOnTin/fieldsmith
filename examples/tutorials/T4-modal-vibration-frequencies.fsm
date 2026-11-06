@@ -1,0 +1,48 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T4
+# @code: T4
+# @category: tutorial
+# @level: Intermediate
+# @title: Natural Vibration Frequencies: Why Parts Hum, Shake or Resonate
+# @subtitle: Every structure has natural frequencies (measured in Hertz, cycles per second) where it wants to vibrate like a tuning fork. Find and animate the first 4 vibration modes.
+# @verification_badge: Lesson 4 · Intermediate · Vibration & Resonance
+# @doc_path: docs/tutorials/T4-modal-vibration-frequencies.md
+# @fsm_path: examples/tutorials/T4-modal-vibration-frequencies.fsm
+# @starter_fsm_name: t4-modal-tuning-fork.fsm
+# @verification_refs: docs/verification/V13.md
+# ---
+# @step: 1. What Are Natural Frequencies and Mode Shapes? || shape
+#   If you pluck a ruler held over the edge of a desk, it vibrates back and forth at a specific pitch — its fundamental natural frequency (measured in Hz, or cycles per second). If a motor, fan, or vehicle engine shakes a bracket at that exact frequency, vibrations amplify dramatically (resonance). Here we have a 3D-printed aluminium (AlSi10Mg) optical sensor pedestal. Open the Inspector with nothing selected to see "Modes = On (Count = 4)".
+# @expected:
+#   The pedestal consists of a bolted base flange, a slender cylindrical stem, and a heavy top sensor stage — a classic mass-on-a-spring geometry.
+# @step: 2. Animate & Record Real-Time .webm Video of the 4 Vibration Modes in Results (3) || results
+#   Switch to Results (3). In the "Modes" row of the Results card, tap Mode 1, 2, 3, or 4 and tap "Play". Mode 1 and Mode 2 are side-to-side rocking of the heavy top stage in X and Y; Mode 3 is twisting (torsion) around the vertical stem; Mode 4 is vertical bouncing. Click the 4 Phase Milestone Recap pills (`1. +Peak (0°)`, `2. Node (90°)`, `3. −Peak (180°)`, `4. Full Cycle (360°)`) or click "🎬 Render Video" (`[data-testid="results-render-video"]`) to synthesise a real-time 30 fps `.webm` video of the vibrating mode shape!
+# @expected:
+#   All 4 natural frequencies (in Hz) are listed; tapping Play animates the 3D flexing motion and "🎬 Render Video" records a full harmonic oscillation cycle to `.webm`.
+# ---
+# @theory_title: Chapter 4 — Mass Matrices, Stiffness Matrices & Eigenvalue Vibrations
+# @theory_summary:
+#   For a single weight m on a spring of stiffness k, the natural frequency is ω = √(k / m). For a 3D solid, k becomes the stiffness matrix K and m becomes the mass matrix M.
+# @theory_section: 4.1 The Generalised Eigenvalue Problem (K φ = ω² M φ)
+# @theory_eq:
+#   M ü(t) + K u(t) = 0   ⇒   K φ_k = ω_k² M φ_k,   f_k = ω_k / (2π)  [Hz]
+# @theory_body:
+#   When a structure vibrates harmonically without external damping, Newton’s second law (Force = Mass × Acceleration) balances elastic restoring forces (−K u) against inertial forces (M ü). Substituting a sinusoidal motion u(t) = φ cos(ω t) turns the differential equation into an algebraic eigenvalue problem: each eigenvector φ_k is a 3D mode shape, and each eigenvalue ω_k² gives the natural frequency f_k in Hz.
+# ---
+# @mcp: Compute the First 4 Natural Frequencies via API || solve || {"kind":"modes","n":4,"dofs":30000}
+#   Ask the solver for the lowest 4 natural vibration frequencies (in Hz) of the sensor pedestal.
+# === END LITERATE HEADER ===
+
+name "T4 — Optical Sensor Mount (Modal)"
+material alsi10mg
+
+box flange size=(36, 36, 6) at=(0, 0, 3)
+cylinder stem r=6 h=34 at=(0, 0, 20) blend=3
+box stage size=(28, 28, 8) at=(0, 0, 38) blend=2
+
+region base = flange.nz
+region top = stage.pz
+support fix_base base fixed=xyz
+load gravity_tip top force=(0, 200, -300)
+solve modes=4

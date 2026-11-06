@@ -1858,6 +1858,77 @@ fn print_node(o: &mut String, node: &Node, depth: usize, p: &Printer) {
     }
 }
 
+/// A closed-form analytic verification target embedded in a Literate `.fsm` header (`# @check:`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LiterateCheck {
+    pub quantity: String,
+    pub formula: String,
+    pub analytic_ref: String,
+    pub measured_fea: String,
+    pub rel_error: String,
+    pub tolerance: String,
+}
+
+/// Structured metadata and closed-form verification targets parsed from a Literate `.fsm` header
+/// (`# === FIELDSMITH LITERATE CASE === ... # === END LITERATE HEADER ===`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LiterateHeader {
+    pub id: String,
+    pub slug: String,
+    pub category: String,
+    pub title: String,
+    pub subtitle: String,
+    pub level: String,
+    pub checks: Vec<LiterateCheck>,
+}
+
+/// Parse the `# === FIELDSMITH LITERATE CASE ===` comment header of a `.fsm` file, if present.
+pub fn parse_literate_header(text: &str) -> Option<LiterateHeader> {
+    if !text.contains("# === FIELDSMITH LITERATE CASE ===") {
+        return None;
+    }
+    let mut header = LiterateHeader::default();
+    let mut in_header = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "# === FIELDSMITH LITERATE CASE ===" {
+            in_header = true;
+            continue;
+        }
+        if trimmed == "# === END LITERATE HEADER ===" {
+            break;
+        }
+        if !in_header || !trimmed.starts_with('#') {
+            continue;
+        }
+        let body = trimmed.trim_start_matches('#').trim();
+        if let Some(v) = body.strip_prefix("@id:") {
+            header.id = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@slug:") {
+            header.slug = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@category:") {
+            header.category = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@title:") {
+            header.title = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@subtitle:") {
+            header.subtitle = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@level:") {
+            header.level = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@check:") {
+            let parts: Vec<&str> = v.split(" || ").map(|p| p.trim()).collect();
+            header.checks.push(LiterateCheck {
+                quantity: parts.first().copied().unwrap_or_default().to_string(),
+                formula: parts.get(1).copied().unwrap_or_default().to_string(),
+                analytic_ref: parts.get(2).copied().unwrap_or_default().to_string(),
+                measured_fea: parts.get(3).copied().unwrap_or_default().to_string(),
+                rel_error: parts.get(4).copied().unwrap_or_default().to_string(),
+                tolerance: parts.get(5).copied().unwrap_or_default().to_string(),
+            });
+        }
+    }
+    Some(header)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3140,5 +3211,70 @@ region bottom = mesh1.p1
         // A purely analytic group keeps the exact wrap — nothing named.
         let d = doc("group g {\n  box b size=(1, 2, 3)\n  shell 2 inside\n}\n");
         assert!(d.validate().is_empty(), "{:?}", d.validate());
+    }
+
+    #[test]
+    fn all_examples_and_literate_fsm_files_parse() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples");
+        let subdirs = ["", "analytic", "tutorials", "case-studies"];
+        let mut count = 0usize;
+        let mut errors = Vec::new();
+        for sub in subdirs {
+            let dir = if sub.is_empty() {
+                root.clone()
+            } else {
+                root.join(sub)
+            };
+            let mut entries: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fsm"))
+                .collect();
+            entries.sort_by_key(|e| e.path());
+            for entry in entries {
+                let path = entry.path();
+                let raw = std::fs::read_to_string(&path).unwrap();
+                count += 1;
+                if !sub.is_empty() {
+                    match parse_literate_header(&raw) {
+                        Some(hdr) => {
+                            if hdr.id.is_empty() || hdr.title.is_empty() {
+                                errors.push(format!("{}: literate header missing id/title", path.display()));
+                            }
+                            if sub == "analytic" && hdr.checks.is_empty() {
+                                errors.push(format!("{}: analytic case has 0 @check entries", path.display()));
+                            }
+                        }
+                        None => {
+                            errors.push(format!("{}: missing literate header", path.display()));
+                        }
+                    }
+                }
+                match parse(&raw) {
+                    Ok(doc) => {
+                        let v_errs = doc.validate();
+                        if !v_errs.is_empty() {
+                            errors.push(format!("{}: validate {:?}", path.display(), v_errs));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}:{}: {}", path.display(), e.line, e.message));
+                    }
+                }
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "Failed to parse/validate {} of {} .fsm files:\n{}",
+            errors.len(),
+            count,
+            errors.join("\n")
+        );
+        assert!(count >= 36, "Expected at least 36 .fsm files, found {count}");
     }
 }

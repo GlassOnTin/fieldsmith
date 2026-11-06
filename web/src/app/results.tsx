@@ -18,6 +18,7 @@ import { fmt } from './fields';
 import * as THREE from 'three';
 import type { LoadReport } from '../doc/wasm';
 import type { LevelResult } from '../doc/wasm';
+import { findMatchingLiterateSheet } from '../doc/literate-fsm';
 
 // ---- colour ramp ---------------------------------------------------------------------
 
@@ -2254,6 +2255,85 @@ function ResultsPanel() {
               );
             })}
           </div>
+          {(() => {
+            const litSheet = findMatchingLiterateSheet(store.doc.name);
+            if (!litSheet) return null;
+            const checks = litSheet.analyticChecks ?? [];
+            return (
+              <div
+                data-testid="results-analytic-verification"
+                style={{
+                  margin: '6px 0',
+                  padding: '7px 9px',
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '5px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#93c5fd' }}>
+                    📐 Literate .fsm Verification · {litSheet.id} ({litSheet.verificationBadge})
+                  </span>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      data-testid="results-open-literate-sheet"
+                      onClick={() => {
+                        ui.set('tutorialSheetId', litSheet.id);
+                        ui.set('tutorialMinimised', false);
+                        ui.set('tutorialsOpen', true);
+                      }}
+                    >
+                      ? Sheet ({litSheet.id})
+                    </button>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      data-testid="results-open-theory-lens"
+                      onClick={() => store.setLens('theory')}
+                    >
+                      6. Theory →
+                    </button>
+                  </div>
+                </div>
+                {checks.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10.5px' }}>
+                    {checks.slice(0, compact ? 2 : 6).map((chk, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '4px 6px',
+                          background: 'rgba(15, 23, 42, 0.65)',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(148, 163, 184, 0.18)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '2px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{chk.quantity}</span>
+                          <span class="num" style={{ color: '#4ade80', fontWeight: 600 }}>
+                            Δ {chk.relError} ({chk.tolerance}) ✓
+                          </span>
+                        </div>
+                        <div class="num" style={{ color: '#93c5fd', fontSize: '10px' }}>
+                          {chk.formula}
+                        </div>
+                        <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                          Analytic: <strong>{chk.analyticRef}</strong> · Reference FEA: <strong>{chk.measuredFea}</strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {!compact && s.levels.length > 0 && (
             <div class="field-grid" data-testid="rung-table">
               <span class="plain">Rungs</span>

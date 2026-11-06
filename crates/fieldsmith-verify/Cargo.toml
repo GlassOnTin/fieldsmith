@@ -20,3 +20,4 @@ fieldsmith-api = { workspace = true }
 fieldsmith-mcp = { workspace = true }
 fieldsmith-worker = { workspace = true }
 serde_json = { workspace = true }
+step-io = "0.2.5"

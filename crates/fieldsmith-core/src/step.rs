@@ -122,14 +122,7 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
     if solids.is_empty() {
         return Err("the file contains no solid geometry".into());
     }
-    // Assemblies place solids with transforms this tessellator does not apply;
-    // refuse by name rather than import overlapping local placements.
     let occs = model.next_assembly_usage_occurrence_arena.items.len();
-    if occs > 0 {
-        return Err(format!(
-            "the file is an assembly ({occs} placed occurrences); import is single-solid"
-        ));
-    }
 
     // name map: solid key → owning product name (empty names fall back below)
     let mut names: HashMap<EntityKey, String> = HashMap::new();
@@ -153,7 +146,7 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
     };
 
     let mut cache: HashMap<EntityKey, Result<EdgePoly, String>> = HashMap::new();
-    let mut parts: Vec<StepPart> = Vec::with_capacity(solids.len());
+    let mut base_parts: Vec<(EntityKey, StepPart)> = Vec::with_capacity(solids.len());
     let mut refusals: Vec<String> = Vec::new();
     let mut counter: u32 = 0;
     let t1 = crate::now_ms();
@@ -171,10 +164,15 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
             }
         };
         match tess_solid(&model, s, &name, to_mm, ang, chord, &mut cache) {
-            Ok(part) => parts.push(part),
+            Ok(part) => base_parts.push((s.key(), part)),
             Err(e) => refusals.push(format!("solid '{name}': {e}")),
         }
     }
+    let parts = if occs == 0 {
+        base_parts.into_iter().map(|(_, p)| p).collect()
+    } else {
+        place_assembly_occurrences(&model, &scene, &base_parts, to_mm)?
+    };
     let tess_ms = (crate::now_ms() - t1) as u64;
     if parts.is_empty() {
         let detail = refusals.join("; ");
@@ -191,6 +189,209 @@ pub fn tessellate(bytes: &[u8], chord: Option<f64>) -> Result<StepDoc, String> {
         tess_ms,
         refusals,
     })
+}
+
+const IDENTITY_M4: [[f64; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+fn mul_m4(a: [[f64; 4]; 4], b: [[f64; 4]; 4]) -> [[f64; 4]; 4] {
+    let mut out = [[0.0_f64; 4]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            out[i][j] = (0..4).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    out
+}
+
+fn transform_part(part: &StepPart, m: [[f64; 4]; 4], name_override: Option<String>) -> StepPart {
+    let mut out = part.clone();
+    if let Some(n) = name_override {
+        if !n.trim().is_empty() {
+            out.name = n;
+        }
+    }
+    for v in &mut out.mesh.verts {
+        let [x, y, z] = *v;
+        let nx = m[0][0] * x + m[0][1] * y + m[0][2] * z + m[0][3];
+        let ny = m[1][0] * x + m[1][1] * y + m[1][2] * z + m[1][3];
+        let nz = m[2][0] * x + m[2][1] * y + m[2][2] * z + m[2][3];
+        *v = [nx, ny, nz];
+    }
+    out
+}
+
+/// Check whether `rep_1` of the `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION` associated with `nauo`
+/// is owned by `parent_def`. In STEP AP203/AP242, `ITEM_DEFINED_TRANSFORMATION(item_1, item_2)`
+/// pairs `item_1` with `rep_1` and `item_2` with `rep_2`:
+/// - When `rep_1` is the child representation (`step-io` convention), child-to-parent maps `from -> to`.
+/// - When `rep_1` is the parent representation (SolidWorks / SpaceClaim convention), `item_1` is the
+///   target placement in the parent and `item_2` is the local origin in the child, so child-to-parent
+///   maps `to -> from`.
+fn is_rep1_parent(
+    model: &StepModel,
+    nauo_key: EntityKey,
+    parent_def_key: EntityKey,
+) -> bool {
+    use step_io::generated::model::{
+        CharacterizedDefinitionRef, ProductDefinitionShapeRef, RepresentedDefinitionRef,
+        ShapeRepresentationRelationshipRef, UnitPart,
+    };
+    let mut parent_reps: HashSet<EntityKey> = HashSet::new();
+    for (pds_idx, pds) in model.product_definition_shape_arena.items.iter().enumerate() {
+        let matches_parent = match &pds.definition {
+            CharacterizedDefinitionRef::ProductDefinition(id) => {
+                EntityKey::ProductDefinition(*id) == parent_def_key
+            }
+            CharacterizedDefinitionRef::ProductDefinitionWithAssociatedDocuments(id) => {
+                EntityKey::ProductDefinitionWithAssociatedDocuments(*id) == parent_def_key
+            }
+            _ => false,
+        };
+        if !matches_parent {
+            continue;
+        }
+        for sdr in &model.shape_definition_representation_arena.items {
+            if matches!(
+                &sdr.definition,
+                RepresentedDefinitionRef::ProductDefinitionShape(id) if id.0 == pds_idx
+            ) {
+                parent_reps.insert(sdr.used_representation.entity_key());
+            }
+        }
+    }
+    if parent_reps.is_empty() {
+        return false;
+    }
+    for (pds_idx, pds) in model.product_definition_shape_arena.items.iter().enumerate() {
+        let is_nauo = matches!(
+            &pds.definition,
+            CharacterizedDefinitionRef::NextAssemblyUsageOccurrence(id)
+                if EntityKey::NextAssemblyUsageOccurrence(*id) == nauo_key
+        );
+        if !is_nauo {
+            continue;
+        }
+        for cdsr in &model.context_dependent_shape_representation_arena.items {
+            if !matches!(
+                &cdsr.represented_product_relation,
+                ProductDefinitionShapeRef::ProductDefinitionShape(id) if id.0 == pds_idx
+            ) {
+                continue;
+            }
+            if let ShapeRepresentationRelationshipRef::Complex(cuid) = &cdsr.representation_relation
+            {
+                for part in &model.complex_unit_arena.items[cuid.0].parts {
+                    if let UnitPart::RepresentationRelationship { rep_1, .. } = part {
+                        if parent_reps.contains(&rep_1.entity_key()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn place_assembly_occurrences(
+    model: &StepModel,
+    scene: &step_io::scene::Scene<'_>,
+    base_parts: &[(EntityKey, StepPart)],
+    to_mm: f64,
+) -> Result<Vec<StepPart>, String> {
+    let by_key: HashMap<EntityKey, &StepPart> = base_parts.iter().map(|(k, p)| (*k, p)).collect();
+    let mut placed: Vec<StepPart> = Vec::new();
+    let mut placed_keys: HashSet<EntityKey> = HashSet::new();
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_def(
+        model: &StepModel,
+        def: step_io::scene::product::ProductDef<'_>,
+        world_m: [[f64; 4]; 4],
+        to_mm: f64,
+        by_key: &HashMap<EntityKey, &StepPart>,
+        placed: &mut Vec<StepPart>,
+        placed_keys: &mut HashSet<EntityKey>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 64 {
+            return Err("STEP assembly hierarchy exceeds maximum nesting depth (64)".into());
+        }
+        let pname = def
+            .product()
+            .map(|p| p.name().to_owned())
+            .unwrap_or_default();
+        for s in def.solids() {
+            if let Some(base) = by_key.get(&s.key()) {
+                let name_override = if base.name.starts_with("part") && !pname.is_empty() {
+                    Some(pname.clone())
+                } else {
+                    None
+                };
+                placed.push(transform_part(base, world_m, name_override));
+                placed_keys.insert(s.key());
+            }
+        }
+        for occ in def.occurrences() {
+            let Some(child) = occ.definition() else {
+                continue;
+            };
+            let local_m = if let Some(mut tf) = occ.transform() {
+                if is_rep1_parent(model, occ.key(), def.key()) {
+                    std::mem::swap(&mut tf.from, &mut tf.to);
+                }
+                tf.from.origin = [
+                    tf.from.origin[0] * to_mm,
+                    tf.from.origin[1] * to_mm,
+                    tf.from.origin[2] * to_mm,
+                ];
+                tf.to.origin = [
+                    tf.to.origin[0] * to_mm,
+                    tf.to.origin[1] * to_mm,
+                    tf.to.origin[2] * to_mm,
+                ];
+                tf.matrix()
+                    .ok_or_else(|| "STEP assembly occurrence has a degenerate placement frame".to_owned())?
+            } else {
+                IDENTITY_M4
+            };
+            walk_def(
+                model,
+                child,
+                mul_m4(world_m, local_m),
+                to_mm,
+                by_key,
+                placed,
+                placed_keys,
+                depth + 1,
+            )?;
+        }
+        Ok(())
+    }
+
+    for root in scene.root_definitions() {
+        walk_def(
+            model,
+            root,
+            IDENTITY_M4,
+            to_mm,
+            &by_key,
+            &mut placed,
+            &mut placed_keys,
+            0,
+        )?;
+    }
+    for (k, part) in base_parts {
+        if !placed_keys.contains(k) {
+            placed.push(part.clone());
+        }
+    }
+    Ok(placed)
 }
 
 /// The derived scene chord tolerance: the diagonal of a whole-scene vertex

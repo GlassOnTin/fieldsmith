@@ -4375,16 +4375,61 @@ async function pushWorkspaceState(payload: {
 function preferredCoupledSystemId(): string {
   const sheetId = ui.tutorialSheetId;
   const docName = (store.doc.name || '').toLowerCase();
-  if (sheetId === 'T13' || isSolarCandleDocument()) {
+  const hasLet = (k: string) => store.doc.lets?.some((l) => l.name === k) ?? false;
+  if (sheetId === 'T13' || isSolarCandleDocument() || hasLet('i_solar')) {
     return 'solar_candle_ignition_v1';
   }
-  if (sheetId === 'T8' || isFloatBathDocument()) {
+  if (sheetId === 'T8' || isFloatBathDocument() || hasLet('h_sill')) {
     return 'pilkington_float_bath_cvd_coater_v1';
   }
-  if (docName.includes('nozzle') || docName.includes('rocket')) {
+  if (sheetId === 'T17' || docName.includes('rocket') || docName.includes('regen') || hasLet('throat_ch_mm')) {
     return 'regen_nozzle_h2_v1';
   }
+  if (sheetId === 'T14' || sheetId === 'A13' || docName.includes('fixing') || docName.includes('fastener') || hasLet('torque_nm')) {
+    return 'jwst_fastener_fixing_envelope_v1';
+  }
+  if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
+    return 'deadcat_4in_gemini_antenna_v1';
+  }
   return 'solar_candle_ignition_v1';
+}
+
+/** Extract `design_p` from the active `.fsm` document's `let` variables when present (`Document → CoupledSystem`). */
+function extractCoupledDesignPFromDoc(systemId: string, fallbackP: number[]): number[] {
+  const getLet = (k: string): number | undefined => store.doc.lets?.find((l) => l.name === k)?.value;
+  const p = [...fallbackP];
+  if (systemId === 'pilkington_float_bath_cvd_coater_v1' && p.length >= 6) {
+    if (getLet('h_sill') !== undefined) p[0] = getLet('h_sill')!;
+    if (getLet('q_beam') !== undefined) p[2] = getLet('q_beam')!;
+    if (getLet('p_h2') !== undefined) p[3] = getLet('p_h2')!;
+    if (getLet('i_motor') !== undefined) p[4] = getLet('i_motor')!;
+    if (getLet('roll_cant') !== undefined) p[5] = getLet('roll_cant')!;
+  } else if (systemId === 'regen_nozzle_h2_v1' && p.length >= 4) {
+    if (getLet('throat_ch_mm') !== undefined) p[0] = getLet('throat_ch_mm')!;
+    if (getLet('liner_wall_mm') !== undefined) p[1] = getLet('liner_wall_mm')!;
+    if (getLet('tbc_um') !== undefined) p[2] = getLet('tbc_um')!;
+    if (getLet('coolant_mdot_kg_s') !== undefined) p[3] = getLet('coolant_mdot_kg_s')!;
+  } else if (systemId === 'solar_candle_ignition_v1' && p.length >= 5) {
+    if (getLet('d_lens') !== undefined) p[0] = getLet('d_lens')!;
+    if (getLet('i_solar') !== undefined) p[3] = getLet('i_solar')!;
+    if (getLet('wick_len') !== undefined) p[4] = getLet('wick_len')!;
+  } else if (systemId === 'jwst_fastener_fixing_envelope_v1' && p.length >= 5) {
+    if (getLet('torque_nm') !== undefined) p[0] = getLet('torque_nm')!;
+    if (getLet('screw_d') !== undefined) p[1] = getLet('screw_d')!;
+    if (getLet('screw_pitch') !== undefined) p[2] = getLet('screw_pitch')!;
+    if (getLet('eng_len') !== undefined) p[3] = getLet('eng_len')!;
+    if (getLet('boss_r') !== undefined) p[4] = 2.0 * getLet('boss_r')!;
+  } else if (systemId === 'deadcat_4in_gemini_antenna_v1' && p.length >= 8) {
+    if (getLet('cfrp_standoff_mm') !== undefined) p[0] = getLet('cfrp_standoff_mm')!;
+    if (getLet('gemini_l900_mm') !== undefined) p[1] = getLet('gemini_l900_mm')!;
+    if (getLet('gemini_l2400_mm') !== undefined) p[2] = getLet('gemini_l2400_mm')!;
+    if (getLet('gemini_skew_deg') !== undefined) p[3] = getLet('gemini_skew_deg')!;
+    if (getLet('antenna_elev_mm') !== undefined) p[4] = getLet('antenna_elev_mm')!;
+    if (getLet('tpu_pod_wall_mm') !== undefined) p[5] = getLet('tpu_pod_wall_mm')!;
+    if (getLet('match_series_nh') !== undefined) p[6] = getLet('match_series_nh')!;
+    if (getLet('match_shunt_pf') !== undefined) p[7] = getLet('match_shunt_pf')!;
+  }
+  return p;
 }
 
 export function SystemsWorkbench() {
@@ -4467,10 +4512,11 @@ export function SystemsWorkbench() {
       const sys = cat.find((s) => s.system_id === targetId) ?? cat.find((s) => s.system_id === activeId) ?? cat[0];
       if (sys) {
         setActiveId(sys.system_id);
-        const p0 =
+        const baseP =
           sys.system_id === 'solar_candle_ignition_v1' && candleShared.designP.length === sys.design_parameters.length
             ? [...candleShared.designP]
             : sys.design_parameters.map((p) => p.nominal);
+        const p0 = extractCoupledDesignPFromDoc(sys.system_id, baseP);
         const th0 =
           sys.system_id === 'solar_candle_ignition_v1' && candleShared.epistemicTheta.length === sys.epistemic_parameters.length
             ? [...candleShared.epistemicTheta]
@@ -4534,7 +4580,7 @@ export function SystemsWorkbench() {
     const sys = systems.find((s) => s.system_id === sysId);
     if (!sys) return;
     setActiveId(sysId);
-    const p0 = sys.design_parameters.map((p) => p.nominal);
+    const p0 = extractCoupledDesignPFromDoc(sysId, sys.design_parameters.map((p) => p.nominal));
     const th0 = sys.epistemic_parameters.map((t) => t.nominal);
     setDesignP(p0);
     setEpistemicTheta(th0);
@@ -4591,10 +4637,14 @@ export function SystemsWorkbench() {
     const fsm = bundle.fsm_3d ?? buildFloatBathFsm(designP);
     const filename =
       activeId === 'regen_nozzle_h2_v1'
-        ? 'supercritical-h2-rocket-nozzle.fsm'
+        ? 'T17-regenerative-rocket-nozzle.fsm'
         : activeId === 'solar_candle_ignition_v1'
-          ? 'solar-candle-ignition.fsm'
-          : 'uk5-float-bath-coater.fsm';
+          ? 'T13-solar-parabolic-candle-igniter.fsm'
+          : activeId === 'jwst_fastener_fixing_envelope_v1'
+            ? 'T14-fastener-torque-weibull-preload.fsm'
+            : activeId === 'deadcat_4in_gemini_antenna_v1'
+              ? 'T16-deadcat-fpv-drone-gemini-antenna.fsm'
+              : 'T8-float-bath-cvd-coater.fsm';
     if (activeId === 'pilkington_float_bath_cvd_coater_v1' && bundle.float_bath_visual) {
       coupledShared.designP = [...designP];
       coupledShared.epistemicTheta = [...epistemicTheta];
@@ -4636,6 +4686,7 @@ export function SystemsWorkbench() {
           <div class="sys-header-left">
             <span class="sys-badge">MONOLITHIC PDE + ADJOINT + UQ</span>
             <select
+              key={systems.length}
               class="select sys-select"
               value={activeId}
               data-testid="systems-domain-select"

@@ -438,6 +438,26 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                 }
                 print_load_table(&a.cases);
+                if let Ok(raw) = std::fs::read_to_string(path) {
+                    if let Some(hdr) = fsm::parse_literate_header(&raw) {
+                        if !hdr.checks.is_empty() {
+                            println!("\n## analytic verification — {} ({})\n", hdr.id, hdr.title);
+                            println!("| quantity | governing formula | analytic target | reference FEA | error | tolerance |");
+                            println!("| :-- | :-- | :-- | :-- | :-- | :-- |");
+                            for chk in &hdr.checks {
+                                println!(
+                                    "| {} | `{}` | {} | {} | {} | {} |",
+                                    chk.quantity,
+                                    chk.formula,
+                                    chk.analytic_ref,
+                                    chk.measured_fea,
+                                    chk.rel_error,
+                                    chk.tolerance
+                                );
+                            }
+                        }
+                    }
+                }
             } else {
                 println!(
                     "{}: {} elements (P2), {} DOF, element size {:.2} mm",
@@ -979,7 +999,13 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
             g.fill_ms, g.solve_ms
         );
         println!();
-        print_case_table(&g.cases, "graded");
+        let all_graded: Vec<CaseResult> = g
+            .cases
+            .iter()
+            .chain(g.thermal_cases.iter())
+            .cloned()
+            .collect();
+        print_case_table(&all_graded, "graded");
     } else {
         println!(
             "{}: {} elements (P2), {} DOF, element size {:.2} mm",
@@ -1005,7 +1031,13 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
                 rho.0, rho.1, g.sigma_ref
             );
         }
-        print_case_lines(&g.cases, "graded");
+        let all_graded: Vec<CaseResult> = g
+            .cases
+            .iter()
+            .chain(g.thermal_cases.iter())
+            .cloned()
+            .collect();
+        print_case_lines(&all_graded, "graded");
         println!(
             "grade {:.0} ms, graded re-solve {:.0} ms",
             g.fill_ms, g.solve_ms

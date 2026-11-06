@@ -29,7 +29,12 @@ function Lenses() {
           aria-selected={store.lens === l.id}
           data-lens={l.id}
           title={l.id === 'theory' && store.lens === 'theory' ? 'Close Theory & return to Shape (1)' : `${l.label} (${l.key})`}
-          onClick={() => store.setLens(l.id === 'theory' && store.lens === 'theory' ? 'shape' : l.id)}
+          onClick={() => {
+            if (ui.tutorialsOpen && !ui.tutorialMinimised) {
+              ui.set('tutorialMinimised', true);
+            }
+            store.setLens(l.id === 'theory' && store.lens === 'theory' ? 'shape' : l.id);
+          }}
         >
           {l.label}
           <span class="kbd">{l.key}</span>
@@ -71,7 +76,7 @@ function ViewTools() {
           <button
             class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
             data-testid="open-tutorials-drawer"
-            title="Tutorials & Theory Manual (T1–T16)"
+            title="Tutorials, Analytic Verification Tests (A1–A14) & Case Studies (T1–T17)"
             onClick={() => runCommand('tutorials.open')}
           >
             <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -103,6 +108,14 @@ function ViewTools() {
             onClick={() => openAntennaWorkbenchModal()}
           >
             <Icon.antenna />
+          </button>
+          <button
+            class={`btn icon ${ui.systemsOpen ? 'on' : ''}`}
+            data-testid="hud-open-systems-workbench"
+            title="Coupled Multiphysics Systems Workbench (Monolithic Newton + Adjoint + UQ)"
+            onClick={() => runCommand('systems.open')}
+          >
+            <span style={{ fontWeight: 700, fontSize: '10px', fontFamily: 'var(--mono)' }}>PDE</span>
           </button>
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
             <Icon.move />
@@ -140,20 +153,50 @@ function EmptyState() {
             Open .fsm…
           </button>
         </div>
-        <p style={{ margin: '14px 0 6px', fontSize: '12px' }}>Or open an example / tutorial:</p>
+        <p style={{ margin: '14px 0 6px', fontSize: '12px' }}>Or explore analytic verification benchmarks, guided tutorials &amp; case studies:</p>
         <div class="actions">
+          <button
+            class="btn small primary"
+            onClick={() => {
+              ui.set('tutorialMinimised', false);
+              ui.set('tutorialCategoryFilter', 'analytic');
+              ui.set('tutorialContentsOpen', true);
+              ui.set('tutorialsOpen', true);
+            }}
+            data-testid="empty-open-analytic-tests"
+            style={{ background: '#0891b2', borderColor: '#06b6d4', color: '#fff' }}
+          >
+            📐 Analytic Tests (A1–A14)
+          </button>
+          <button
+            class="btn small primary"
+            onClick={() => {
+              ui.set('tutorialMinimised', false);
+              ui.set('tutorialCategoryFilter', 'tutorial');
+              ui.set('tutorialContentsOpen', true);
+              ui.set('tutorialsOpen', true);
+            }}
+            data-testid="empty-open-tutorials"
+          >
+            📘 Guided Tutorials (T1–T15)
+          </button>
+          <button
+            class="btn small"
+            onClick={() => {
+              ui.set('tutorialMinimised', false);
+              ui.set('tutorialCategoryFilter', 'case-study');
+              ui.set('tutorialContentsOpen', true);
+              ui.set('tutorialsOpen', true);
+            }}
+            data-testid="empty-open-case-studies"
+          >
+            🚀 Case Studies (T8–T17)
+          </button>
           {EXAMPLES.map((e) => (
             <button key={e.id} class="btn small" onClick={() => openText(e.text, `${e.id}.fsm`)} data-testid={`example-${e.id}`}>
               {e.label}
             </button>
           ))}
-          <button
-            class="btn small primary"
-            onClick={() => runCommand('tutorials.open')}
-            data-testid="empty-open-tutorials"
-          >
-            Tutorials &amp; Theory Manual (T1–T16)…
-          </button>
         </div>
       </div>
     </div>

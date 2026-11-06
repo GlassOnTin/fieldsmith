@@ -1,0 +1,102 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T9
+# @code: T9
+# @category: case-study
+# @level: Flagship Multi-Physics
+# @title: Swirl Atomiser Nozzle, Combustor & Heat Exchanger — Predicting NOx
+# @subtitle: Build a multi-part swirl fuel atomiser inside a cooled combustion chamber, and tune nozzle geometry to shrink fuel droplets and cut NOx emissions.
+# @verification_badge: Lesson 9 · Multi-Physics · Swirl Spray, Heat Exchanger & NOx
+# @doc_path: docs/case-studies/T9-swirl-atomiser-low-nox-combustor.md
+# @fsm_path: examples/case-studies/T9-swirl-atomiser-low-nox-combustor.fsm
+# @starter_fsm_name: T9-swirl-atomiser-combustor-hx.fsm
+# @verification_refs: docs/verification/V51.md
+# ---
+# @step: 1. Inside a Swirl Atomiser Nozzle & 3D Volumetric Spray / Flame Cutaway || shape
+#   Liquid fuel cannot burn cleanly as a solid stream — it must first be shattered into a fine mist of microscopic droplets (atomisation) so it evaporates and mixes evenly with air. Look at the 3D cutaway in the viewport alongside the live "3D Volumetric Swirl Spray, Turbulent Flame & NOx Plume" HUD (`[data-testid="coupled-viewport-hud"]`): at the bottom is the bronze CuCrZr Swirl Atomiser ("nozzle_body"). Two angled tangential fuel ports ("swirl_port_pos/neg") spin fuel into a high-speed vortex that shoots out of "exit_orifice" as a 3D hollow spray cone, igniting into 6 nested ParaView volumetric swirl-flame shells quenched by the 4 radial dilution jets ("dilution_jet_x/y") at z = 48 mm.
+# @expected:
+#   In the 3D cutaway, you can see the internal swirl chamber, the 3D hollow-cone fuel spray, the volumetric turbulent flame core, the 4 radial dilution-jet cooling streams, and the 4 vertical heat-exchanger channels.
+# @step: 2. Why Droplet Size Controls Thermal NOx — Tuning the Nozzle & Recording .webm Video || shape
+#   When nitrogen (N₂) and oxygen (O₂) in air are heated above ~1530 °C (1800 K), they react to form Nitrogen Oxides (NOx). In the interactive NOx Predictor card above (or the 3D Viewport HUD), notice that with the wide baseline orifice ("orifice_r = 3.2 mm"), large 54.1 μm droplets (D₃₂) take 3.26 ms to evaporate, burning in hot diffusion pockets and spiking NOx to 44.3 ppm. Click "Apply Low-NOx Fine-Swirl Nozzle (18.5 ppm)" (`[data-testid="t9-preset-low-nox"]`) to watch the 3D spray cone widen, droplets shrink to 29.8 μm, and the flame transition to a lean premixed blue-amber core. Use the 5 Milestone Recap pills (`1. Spray Cone` → `5. Steady HX`) and click "🎬 Render Video" (`[data-testid="render-transient-video"]`) in the HUD to record a real-time 30 fps `.webm` video!
+# @expected:
+#   Tightening orifice_r to 2.1 mm raises Swirl Number S_g from 1.53 to 2.95, shrinks D₃₂ from 54.1 μm to 29.8 μm, drops NOx from 44.3 ppm to 18.5 ppm (PASS ≤ 25 ppm), and synthesises an inline `.webm` video.
+# @step: 3. Setting Up Flame, Pressure & Heat-Exchanger Regions || setup
+#   Surrounding the combustion chamber are 4 axial cooling channels ("hx_chan_px/nx/py/ny") that act as a regenerative heat exchanger: cool fluid ("coolant_temp = 60 °C") flows through the jacket wall to absorb heat from the liner while dilution jets ("dilution_jet_x/y") quench post-flame gases. Tap "Go to Setup →" (tab 2) and inspect the Regions list: "flange_mount" holds the base flange fixed, "hot_combustor_wall" applies both the 1.8 MPa (18 bar) combustion pressure and the flame-side wall temperature ("flame_temp"), and "hx_coolant_walls" applies convective heat extraction into the heat exchanger. Try clicking the pencil icon (✎) on any region row to rename it inline, or click a face on the 3D cutaway to select its region.
+# @expected:
+#   3 named regions (flange_mount, hot_combustor_wall, hx_coolant_walls) connect the 3D combustor geometry to the structural support, 1.8 MPa internal pressure load, and heat-exchanger thermal boundary conditions.
+# @step: 4. Solving 3D Multi-Material Combustor Liner & CuCrZr Nozzle Thermal Stress || results
+#   Notice that "nozzle_body" is assigned CuCrZr copper alloy ("material cucrzr on nozzle_body", E = 128 GPa, α = 17.0×10⁻⁶ /K) inside the 316L stainless steel combustor jacket ("material ss316l", E = 193 GPa, α = 16.0×10⁻⁶ /K). Tap "Go to Results →" (tab 3). In the Results panel on the bottom-left, click "Combustor Thermal & HX" in the Case selector, select "Temperature", switch Colourmap (`[data-testid="results-colormap"]`) to "Flame", and toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to visualise the steep radial temperature drop from the hot inner liner (~650 °C) into the 55–60 °C heat-exchanger channels. Then click "🎬 Render Video" (`[data-testid="results-render-video"]`) to record the transient thermal-stress ramp!
+# @expected:
+#   The 3D solver computes the steady-state temperature field and multi-material thermal stress across the CuCrZr nozzle and SS316L liner, with volumetric iso-shells and `.webm` video export.
+# ---
+# @theory_title: Chapter 9 — Swirl Atomisation Hydrodynamics, D² Droplet Evaporation & Zeldovich Thermal-NOx Kinetics
+# @theory_summary:
+#   How do the geometric dimensions of a swirl atomiser nozzle (r_orifice, r_slot, R_offset) determine hollow-cone droplet diameter D₃₂, evaporation time, and thermal NOx emissions in a cooled combustor?
+# @theory_section: 9.1 Internal Vortex Flow, Air-Core Film Thickness & Sauter Mean Diameter (D₃₂)
+# @theory_eq:
+#   Swirl Number: S_g = (R_offset · r_orifice) / (n_ports · r_slot²),   Spray Half-Angle: tan(θ) ∝ S_g
+#   Film Thickness: t_f ∝ r_orifice^0.62 · ΔP_fuel^(-0.28) · S_g^(-0.42),   Droplet SMD: D₃₂ ∝ t_f^0.38 · ΔP_fuel^(-0.32)
+# @theory_body:
+#   Inside a pressure-swirl atomiser, fuel injected through n_ports tangential slots of radius r_slot at radial offset R_offset conserves angular momentum (r · u_θ = const) as it spirals toward the exit orifice of radius r_orifice. Centrifugal force opens a central air core, pressing the liquid into a thin annular film of thickness t_f against the orifice lip. Exiting into the chamber, tangential velocity fans the sheet into a hollow cone of half-angle θ; aerodynamic Kelvin-Helmholtz waves shred the thinning sheet into ligaments and droplets whose Sauter Mean Diameter D₃₂ (volume-to-surface-area mean diameter) scales directly with film thickness t_f.
+# @theory_section: 9.2 The D² Droplet Evaporation Law & Mixture-Fraction Unmixedness (s_φ)
+# @theory_eq:
+#   D(t)² = D₀² − K_evap · t   ⇒   Evaporation Time: τ_evap = D₃₂² / K_evap
+#   Damköhler Mixing Ratio: Da_evap = τ_evap / τ_mix   ⇒   Equivalence-Ratio Variance: s_φ = f(Da_evap)
+# @theory_body:
+#   By Godsave and Spalding’s D² law, a spherical droplet of initial diameter D₃₂ shrinks at a constant surface-area regression rate K_evap = (8 k_g / ρ_L c_p,g) ln(1 + B_M). Because τ_evap scales with the square of droplet diameter (D₃₂²), cutting droplet diameter in half (from 56 μm to 28 μm) reduces evaporation time by a factor of 4 (from ~3.4 ms to ~0.85 ms). When τ_evap is short compared to turbulent mixing time τ_mix, fuel vapour premixes uniformly with air at the lean primary-zone equivalence ratio φ_pz before ignition; when droplets are large, each droplet trails a stoichiometric diffusion envelope (φ ≈ 1.0) that burns at peak flame temperature T_st.
+# @theory_section: 9.3 Extended Zeldovich Thermal NOx & Conjugate Heat-Exchanger Wall Cooling
+# @theory_eq:
+#   Zeldovich Chain: O + N₂ ⇌ NO + N,   N + O₂ ⇌ NO + O,   N + OH ⇌ NO + H
+#   d[NO]/dt = 1.45×10¹⁷ · T^(-1/2) · exp(−69,460 / T) · [O₂]_eq^(1/2) · [N₂]_eq
+#   Conjugate Liner Balance: q″_flame = (k_wall / liner_wall)·(T_wall,hot − T_wall,cold) = h_HX·(T_wall,cold − T_coolant)
+# @theory_body:
+#   Breaking the triple bond of atmospheric N₂ has a huge activation temperature (E_a / R = 69,460 K), making thermal NOx production double for roughly every 35–40 K increase in local flame temperature above 1850 K. Combining fine swirl atomisation (low D₃₂ → small s_φ → uniform lean flame temperature T_eff) with regenerative heat-exchanger wall cooling and secondary dilution jets quenches hot spots and suppresses NOx formation while preheating the working fluid.
+# ---
+# @mcp: Tune Swirl Atomiser to Low-NOx Orifice Geometry via API || set_param || {"addr":"orifice_r","value":2.1}
+#   Shrink exit orifice radius orifice_r from 3.2 mm to 2.1 mm to thin the swirling fuel film and halve droplet Sauter Mean Diameter D₃₂.
+# @mcp: Increase Tangential Swirl Offset & Update Liner Flame Temperature via API || set_param || {"addr":"swirl_offset","value":7.2}
+#   Increase tangential swirl port lever arm swirl_offset to 7.2 mm (raising Swirl Number S_g to 2.95 and cutting predicted NOx from 52 ppm to 16 ppm).
+# @mcp: Run 3D Combustor & Heat-Exchanger Thermo-Mechanical Solve via API || solve_study || {"include_fine":false}
+#   Solve the 3D heat conduction and thermal-stress field across the swirl nozzle, combustor liner, and 4 regenerative heat-exchanger channels.
+# === END LITERATE HEADER ===
+
+name "T9 — Swirl Atomiser Nozzle, Combustor & Heat Exchanger"
+material ss316l
+
+let orifice_r = 3.2
+let swirl_slot_r = 2.4
+let swirl_offset = 5.5
+let chamber_r = 22
+let liner_wall = 5
+let hx_r = 3.2
+let flame_temp = 665
+let coolant_temp = 60
+
+cylinder injector_flange r=34 h=8 at=(0, 0, 4)
+color "#64748b" on injector_flange
+cylinder combustor_casing r=chamber_r + liner_wall + 8 h=64 at=(0, 0, 38) blend=3
+color "#475569" on combustor_casing
+cylinder chamber_bore r=chamber_r h=58 at=(0, 0, 43) subtract blend=4
+cylinder nozzle_body r=12 h=24 at=(0, 0, 16) blend=2.5
+material cucrzr on nozzle_body
+color "#d97706" on nozzle_body
+cylinder swirl_chamber r=8 h=14 at=(0, 0, 11) subtract blend=1.5
+cylinder exit_orifice r=orifice_r h=16 at=(0, 0, 22) subtract
+cylinder swirl_port_pos r=swirl_slot_r h=22 at=(0, swirl_offset, 12) rotate=(0, 60, 0) subtract
+cylinder swirl_port_neg r=swirl_slot_r h=22 at=(0, -swirl_offset, 12) rotate=(0, -60, 0) subtract
+cylinder dilution_jet_x r=3.5 h=80 at=(0, 0, 48) rotate=(0, 90, 0) subtract
+cylinder dilution_jet_y r=3.5 h=80 at=(0, 0, 48) rotate=(90, 0, 0) subtract
+cylinder hx_chan_px r=hx_r h=56 at=(chamber_r + liner_wall + 3.5, 0, 40) subtract
+cylinder hx_chan_nx r=hx_r h=56 at=(-chamber_r - liner_wall - 3.5, 0, 40) subtract
+cylinder hx_chan_py r=hx_r h=56 at=(0, chamber_r + liner_wall + 3.5, 40) subtract
+cylinder hx_chan_ny r=hx_r h=56 at=(0, -chamber_r - liner_wall - 3.5, 40) subtract
+
+region flange_mount = injector_flange.bottom
+region hot_combustor_wall = chamber_bore.side + exit_orifice.side
+region hx_coolant_walls = hx_chan_px.side + hx_chan_nx.side + hx_chan_py.side + hx_chan_ny.side
+support fix_flange flange_mount fixed=xyz
+load combustion_pressure hot_combustor_wall pressure=1.8 case="Combustor Pressure (18 bar)"
+temperature flame_zone hot_combustor_wall temp=0 + flame_temp case="Combustor Thermal & HX"
+temperature hx_cooling hx_coolant_walls temp=0 + coolant_temp case="Combustor Thermal & HX"
+convection hx_convection hx_coolant_walls h=0.015 tinf=0 + coolant_temp case="Combustor Thermal & HX"
+solve tref=20

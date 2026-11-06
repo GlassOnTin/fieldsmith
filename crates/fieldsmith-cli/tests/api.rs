@@ -258,3 +258,44 @@ fn api_two_runs_with_an_empty_store_agree() {
     );
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
 }
+
+#[test]
+fn solve_graded_reports_thermal_cases() {
+    let dir = std::env::temp_dir().join(format!("fs-graded-therm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let fsm = dir.join("therm_fill.fsm");
+    let doc = "\
+fieldsmith 1
+name \"Thermal Fill\"
+material ti64
+
+box body size=(24, 12, 12) at=(12, 6, 6)
+region left = body.nx
+region right = body.px
+support fix left fixed=xyz
+load pull right force=(100, 0, 0) case=\"Mech\"
+temperature hot right temp=220 case=\"Therm\"
+temperature cold left temp=20 case=\"Therm\"
+fill gyroid sheet cell=6 skin=1.2 rho=(0.25, 0.75) curve=1 wall=0.6
+";
+    std::fs::write(&fsm, doc).expect("write fsm");
+    let out = Command::new(BIN)
+        .args(["solve", fsm.to_str().unwrap(), "--h", "3.0", "--report"])
+        .output()
+        .expect("run solve --report");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (_, after_graded) = stdout
+        .split_once("| graded case |")
+        .expect("graded case table present");
+    assert!(
+        after_graded.contains("| Mech |") && after_graded.contains("| Therm |"),
+        "expected both Mech and Therm in graded table, got:\n{after_graded}"
+    );
+    std::fs::remove_dir_all(dir).ok();
+}

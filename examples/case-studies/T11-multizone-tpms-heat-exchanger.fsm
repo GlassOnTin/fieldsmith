@@ -1,0 +1,70 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T11
+# @code: T11
+# @category: case-study
+# @level: Flagship Multi-Physics
+# @title: Spatially Varying Cell-Size & Multi-Zone Lattice Morphing — V54
+# @subtitle: Design a structural cold-plate manifold whose interior lattice smoothly refines from coarse 8 mm Schwarz-P cells in low-stress flow zones to fine 4 mm Diamond cells in high-stress load paths.
+# @verification_badge: V54 · Multi-Zone TPMS · Cell-Size Grading & Family Morphing
+# @doc_path: docs/case-studies/T11-multizone-tpms-heat-exchanger.md
+# @fsm_path: examples/case-studies/T11-multizone-tpms-heat-exchanger.fsm
+# @starter_fsm_name: T11-multizone-lattice-coldplate.fsm
+# @verification_refs: docs/verification/V36.md, docs/verification/V54.md
+# ---
+# @step: 1. Inspecting a Multi-Zone Lattice: Coarse Primitive → Fine Diamond in Fill (4) || fill
+#   Why settle for a single unit-cell size or a single TPMS family across an entire component? In thermal-structural hardware like an AlSi10Mg cold-plate bracket, lightly loaded regions benefit from a coarse, open "Primitive" (Schwarz-P) cell ("Cell = 8 mm") for low pressure drop and low mass, whereas high-stress bending/shear zones need a fine, shear-stiff "Diamond" cell ("Min cell = 4 mm", "Morph to = Diamond") with a thickened outer shell ("Skin = 1.2 mm → Max skin = 2.2 mm"). Tap "Go to Fill →" (tab 4): notice the cutaway view immediately shows the smooth, seamless transition from large 8 mm Primitive cells to fine 4 mm Diamond cells without any sharp interface!
+# @expected:
+#   In Fill (4), Pattern is set to "Primitive", Morph to (`[data-testid="fill-morph"]`) is set to "Diamond", Cell (`[data-testid="fill-cell"]`) is 8 mm, and Min cell (`[data-testid="fill-cell-min"]`) is 4 mm.
+# @step: 2. Experimenting Live with "Morph to" & "Min cell" in the Fill Card || fill
+#   Try clicking "Gyroid" or "Same" in the "Morph to" row (`[data-testid="fill-morph"]`), or adjusting "Min cell" (`[data-testid="fill-cell-min"]`) between 3.5 mm and 8 mm in the Fill card (and notice "Erode = 0 mm" right below Max skin, which we will use in Lesson T12 to evolve the outer boundary level-set). Notice how the WebGL shader updates the 3D cutaway in real time using a single 3D parameter texture: as local grade t(p) rises from 0 to 1, cell size interpolates linearly a(p) = cell + (cell_min − cell)·t(p), sheet wall thickness scales proportionally w(p) = max(param(p)·a(p)/cell, min_wall), and the TPMS surface blends smoothly via mix(s_family, s_morph, t(p)). Press Undo (Ctrl Z) to restore Morph to = Diamond and Min cell = 4 mm.
+# @expected:
+#   Toggling Morph to and Min cell updates the 3D lattice preview live, and Undo cleanly restores the 8 mm → 4 mm Primitive → Diamond specification.
+# @step: 3. Solving Two-Pass Multi-Zone Mechanics & Inspecting 2D Slices in Results (3) & Make (5) || results
+#   Tap "Go to Results →" (tab 3) to run the two-pass homogenised FEA solve: Pass 1 solves the solid AlSi10Mg bracket under both the 650 N tip load and the 185 °C → 35 °C thermal gradient to map the driving von Mises envelope; Pass 2 builds the 3D grade field, evaluates each element’s local cell size a(c_e) and blended Primitive→Diamond constitutive stiffness, and re-solves every load case. Switch Colourmap (`[data-testid="results-colormap"]`) to "Turbo" or "Flame", toggle "3D Volume" (`[data-testid="results-volume-toggle"]`), and use the Transient Evolution & Video Recap bar (`[data-testid="results-transient-bar"]`) to render a `.webm` load/thermal ramp movie (`[data-testid="results-render-video"]`). Then switch to Make (5) to verify that direct 2D slicing produces clean, closed printer contours across the entire multi-zone transition.
+# @expected:
+#   Results (3) reports the lightweighted mass, graded deflection, thermal conduction, 3D volume iso-shells, and `.webm` video playback across the multi-zone core, and Make (5) slices the variable-cell morphed field with zero open contours.
+# ---
+# @theory_title: Chapter 11 — Spatially Varying Cell-Size Fields & Multi-Zone TPMS Family Morphing (V54)
+# @theory_summary:
+#   How Fieldsmith varies unit-cell wavelength and morphs between distinct TPMS topologies (Gyroid, Schwarz-P, Diamond) across a single continuous implicit field with exact CPU/GPU parity.
+# @theory_section: 11.1 Normalized Grade Coordinate & Proportional Wall Scaling
+# @theory_eq:
+#   t(p) = clamp((param(p) − p_lo) / (p_hi − p_lo), 0, 1)
+#   a(p) = a_max + (a_min − a_max) · t(p),   w(p) = max(param(p) · a(p) / a_max, w_min)
+# @theory_body:
+#   Because the calibration table maps relative density ρ to wall thickness per unit cell q(ρ) = param_ref / a_max, storing the nominal-cell parameter param(p) = q(ρ(p)) · a_max in the 3D texture u_param guarantees that p_hi > p_lo is strictly monotone whenever ρ_max > ρ_min, even when a_min ≪ a_max. At evaluation time, both the CPU evaluator and the WebGL fragment shader recover the normalized grade t(p) ∈ [0, 1], compute the local cell size a(p), and scale the physical sheet wall thickness w(p) by a(p) / a_max (floored at min_wall w_min) so relative density ρ(p) is preserved accurately across all cell sizes.
+# @theory_section: 11.2 Seamless Multi-Zone TPMS Level-Set Morphing & Homogenised Stiffness Blending
+# @theory_eq:
+#   s_blend(p) = (1 − t(p)) · d_TPMS(fam_0, a(p), p) + t(p) · d_TPMS(fam_1, a(p), p)
+#   E*_blend(φ, t) = (1 − t) · E*_(fam_0)(φ, h / a(c_e)) + t · E*_(fam_1)(φ, h / a(c_e))
+# @theory_body:
+#   Joining two separate lattice meshes with different cell sizes or topologies in traditional CAD leaves disconnected struts and stress concentrations at the seam. Because every TPMS family is represented as a normalized signed distance field d_TPMS = g / |∇g|, convex linear interpolation s_blend(p) = (1 − t) d_0 + t d_1 produces a C¹-continuous minimal-surface transition where struts and sheets bifurcate and merge organically across the functional gradient.
+# ---
+# @mcp: Configure Multi-Zone Primitive → Diamond Lattice with 8 → 4 mm Cell Refinement via API || set_fill || {"family":"primitive","morph":"diamond","mode":"sheet","cell":8,"cell_min":4,"skin":1.2,"skin_max":2.2,"rho_min":0.22,"rho_max":0.65}
+#   Set family=primitive, morph=diamond, cell=8.0, cell_min=4.0, skin=1.2, skin_max=2.2 via set_fill.
+# @mcp: Run Two-Pass Multi-Zone Graded FEA Solve via API || solve_study || {"include_fine":false}
+#   Solve the solid driving stress and re-solve the graded Primitive → Diamond cold-plate bracket.
+# === END LITERATE HEADER ===
+
+name "T11 — Multi-Zone Lattice Cold-Plate Bracket (Primitive → Diamond)"
+material alsi10mg
+
+box coldplate_core size=(64, 24, 18) at=(32, 0, 0) round=2
+cylinder mount_boss_lo r=8 h=18 at=(8, 0, 0) blend=2
+cylinder mount_hole_lo r=3.5 h=24 at=(8, 0, 0) subtract
+cylinder load_boss_hi r=8 h=18 at=(56, 0, 0) blend=2
+cylinder load_hole_hi r=3.5 h=24 at=(56, 0, 0) subtract
+
+region mount_wall = mount_hole_lo.side
+region tip_pin = load_hole_hi.side
+region hot_face = coldplate_core.pz
+region cool_face = coldplate_core.nz
+
+support fix_mount mount_wall fixed=xyz
+load actuator_pull tip_pin force=(250, 0, -650) case="1. Structural Bending & Shear"
+temperature power_input hot_face temp=185 case="2. Cold-Plate Thermal Conduction"
+temperature coolant_sink cool_face temp=35 case="2. Cold-Plate Thermal Conduction"
+
+fill primitive sheet cell=8 cell_min=4 morph=diamond skin=1.2 skin_max=2.2 rho=(0.22, 0.65) curve=1 wall=0.6 protect=(mount_hole_lo, load_hole_hi) margin=2.2
+solve tref=20

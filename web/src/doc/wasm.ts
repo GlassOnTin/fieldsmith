@@ -1037,3 +1037,22 @@ export function solveCoupledSystem(
   }
   return res as CoupledSolveBundle;
 }
+
+export function solveDroneAntennaVnaWasm<TReport = unknown>(
+  spec: unknown,
+): { report: TReport; fsm_3d: string } {
+  return JSON.parse(w.solveDroneAntennaVna(JSON.stringify(spec)));
+}
+
+export function optimiseDroneAntennaVnaWasm<TReport = unknown>(
+  spec: unknown,
+  maxIters = 8,
+): {
+  initial_report: TReport;
+  optimised_report: TReport;
+  iterations: number;
+  fsm_3d: string;
+} {
+  return JSON.parse(w.optimiseDroneAntennaVna(JSON.stringify(spec), maxIters));
+}
+

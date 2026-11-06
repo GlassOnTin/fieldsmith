@@ -1,0 +1,126 @@
+fieldsmith 1
+name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"
+material cf_woven_3k
+
+let wheelbase_mm = 172.0
+let cfrp_standoff_mm = 26.00
+let antenna_elev_mm = 18.00
+let gemini_l900_mm = 135.70
+let gemini_l2400_mm = 50.80
+let gemini_skew_deg = 88.0
+let tpu_pod_wall_mm = 1.50
+let match_series_nh = 2.50
+let match_shunt_pf = 0.50
+let vna_s11_915_db = -15.14
+let vna_s11_2440_db = -36.46
+let vna_eff_915_pct = 71.6
+let vna_eff_2440_pct = 89.8
+
+group cfrp_deadcat_airframe {
+  box cfrp_bottom_plate size=(42, 122, 6.8) at=(0, 0, 0)
+  box cfrp_top_plate size=(36, 112, 5.5) at=(0, -2, 20.0)
+  box arm_front_right size=(97.2, 14.0, 6.8) at=(43.9, 31.4, 0.0) rotate=(0, 0, 16.8)
+  box arm_front_left size=(97.2, 14.0, 6.8) at=(-43.9, 31.4, 0.0) rotate=(0, 0, -16.8)
+  box arm_rear_right size=(95.9, 13.5, 6.8) at=(38.6, -39.2, 0.0) rotate=(0, 0, -33.1)
+  box arm_rear_left size=(95.9, 13.5, 6.8) at=(-38.6, -39.2, 0.0) rotate=(0, 0, 33.1)
+  cylinder standoff_fr r=4.2 h=23.0 at=(12, 34, 10)
+  cylinder standoff_fl r=4.2 h=23.0 at=(-12, 34, 10)
+  cylinder standoff_rr r=4.2 h=23.0 at=(12, -46, 10)
+  cylinder standoff_rl r=4.2 h=23.0 at=(-12, -46, 10)
+}
+color "#1E293B" on cfrp_deadcat_airframe
+color "#334155" on cfrp_top_plate
+material ti64 on standoff_fr
+material ti64 on standoff_fl
+material ti64 on standoff_rr
+material ti64 on standoff_rl
+color "#94A3B8" on standoff_fr
+color "#94A3B8" on standoff_fl
+color "#94A3B8" on standoff_rr
+color "#94A3B8" on standoff_rl
+
+group propulsion_motors_1404 {
+  cylinder motor_fr_bell r=9.5 h=13.5 at=(81.8, 42.9, 4.8)
+  cylinder motor_fl_bell r=9.5 h=13.5 at=(-81.8, 42.9, 4.8)
+  cylinder motor_rr_bell r=9.5 h=13.5 at=(71.3, -60.5, 4.8)
+  cylinder motor_rl_bell r=9.5 h=13.5 at=(-71.3, -60.5, 4.8)
+  cylinder prop_disc_fr r=50.8 h=1.2 at=(81.8, 42.9, 13.0)
+  cylinder prop_disc_fl r=50.8 h=1.2 at=(-81.8, 42.9, 13.0)
+  cylinder prop_disc_rr r=50.8 h=1.2 at=(71.3, -60.5, 13.0)
+  cylinder prop_disc_rl r=50.8 h=1.2 at=(-71.3, -60.5, 13.0)
+}
+material ss316l on motor_fr_bell
+material ss316l on motor_fl_bell
+material ss316l on motor_rr_bell
+material ss316l on motor_rl_bell
+color "#475569" on motor_fr_bell
+color "#475569" on motor_fl_bell
+color "#475569" on motor_rr_bell
+color "#475569" on motor_rl_bell
+color "#38BDF8" on prop_disc_fr
+color "#38BDF8" on prop_disc_fl
+color "#38BDF8" on prop_disc_rr
+color "#38BDF8" on prop_disc_rl
+
+group avionics_and_battery {
+  box esc_board_20x20 size=(28, 28, 8.0) round=1.5 at=(0, -4, 4.5)
+  box fc_board_20x20 size=(26, 26, 12.0) round=1.5 at=(0, -4, 14.0)
+  box elrs_gemini_rx_pcb size=(22, 26, 18.0) round=1.0 at=(0, -34, 10.0)
+  box fpv_cam_cage_al7075 size=(22, 19, 22) round=2.0 at=(0, 46, 10.0)
+  cylinder fpv_cam_lens r=7.2 h=12.0 at=(0, 53, 10.0) rotate=(90, 0, 0)
+  box lipo_4s_850mah size=(30, 58, 22) round=3.0 at=(0, -4, 30.0)
+}
+color "#059669" on esc_board_20x20
+color "#10B981" on fc_board_20x20
+color "#2563EB" on elrs_gemini_rx_pcb
+material alsi10mg on fpv_cam_cage_al7075
+color "#94A3B8" on fpv_cam_cage_al7075
+color "#0284C7" on fpv_cam_lens
+material petg on lipo_4s_850mah
+color "#F59E0B" on lipo_4s_850mah
+
+group gemini_dual_band_antenna_assy {
+  box tpu_standoff_boom size=(18, 50.0, 9.5) round=2.5 at=(0, -61.0, 14.0) rotate=(-14, 0, 0)
+  box tpu_dipole_crossbar size=(26, 10.0, 10.0) round=3.0 at=(0, -84.0, 26.0)
+  cylinder coax_feed_port1 r=2.0 h=50.0 at=(4.5, -61.0, 14.0) rotate=(76, 0, 0)
+  cylinder coax_feed_port2 r=2.0 h=50.0 at=(-4.5, -61.0, 14.0) rotate=(76, 0, 0)
+  cylinder gemini_p1_900mhz_dipole r=1.8 h=135.7 round=0.6 at=(6.0, -84.0, 26.0) rotate=(-14, 44.0, 0)
+  cylinder gemini_p1_2400mhz_sleeve r=2.8 h=50.8 round=0.8 at=(6.0, -84.0, 26.0) rotate=(-14, 44.0, 0)
+  cylinder gemini_p2_900mhz_dipole r=1.8 h=135.7 round=0.6 at=(-6.0, -84.0, 26.0) rotate=(-14, -44.0, 0)
+  cylinder gemini_p2_2400mhz_sleeve r=2.8 h=50.8 round=0.8 at=(-6.0, -84.0, 26.0) rotate=(-14, -44.0, 0)
+  cylinder tpu_boot_cap_p1 r=3.5 h=67.8 round=1.2 at=(6.0, -84.0, 26.0) rotate=(-14, 44.0, 0)
+  cylinder tpu_boot_cap_p2 r=3.5 h=67.8 round=1.2 at=(-6.0, -84.0, 26.0) rotate=(-14, -44.0, 0)
+}
+material pa12 on tpu_standoff_boom
+material pa12 on tpu_dipole_crossbar
+material pa12 on tpu_boot_cap_p1
+material pa12 on tpu_boot_cap_p2
+material cucrzr on coax_feed_port1
+material cucrzr on coax_feed_port2
+material cucrzr on gemini_p1_900mhz_dipole
+material cucrzr on gemini_p1_2400mhz_sleeve
+material cucrzr on gemini_p2_900mhz_dipole
+material cucrzr on gemini_p2_2400mhz_sleeve
+color "#0EA5E9" on tpu_standoff_boom
+color "#0284C7" on tpu_dipole_crossbar
+color "#D97706" on coax_feed_port1
+color "#D97706" on coax_feed_port2
+color "#F59E0B" on gemini_p1_900mhz_dipole
+color "#FDE047" on gemini_p1_2400mhz_sleeve
+color "#F59E0B" on gemini_p2_900mhz_dipole
+color "#34D399" on gemini_p2_2400mhz_sleeve
+color "#38BDF8" on tpu_boot_cap_p1
+color "#38BDF8" on tpu_boot_cap_p2
+
+group rf_3d_radiation_lobe_envelope {
+  torus lobe_rear_main_toroid major=37.0 minor=10.7 at=(0, -95.3, 26.0) rotate=(12, 0, 0)
+  torus lobe_forward_diffraction_sector major=17.8 minor=5.5 at=(0, -73.3, 30.0) rotate=(-8, 0, 0)
+}
+color "#10B981" on rf_3d_radiation_lobe_envelope
+color "#10B981" on lobe_rear_main_toroid
+color "#10B981" on lobe_forward_diffraction_sector
+
+region rear_standoff_mount = cfrp_bottom_plate.nz
+region top_deck = motor_fr_bell.top + motor_fl_bell.top + motor_rr_bell.top + motor_rl_bell.top + arm_front_right.pz + arm_front_left.pz + arm_rear_right.pz + arm_rear_left.pz + cfrp_top_plate.pz
+support bench_fix rear_standoff_mount fixed=xyz
+load prop_thrust top_deck force=(0, 0, 64)

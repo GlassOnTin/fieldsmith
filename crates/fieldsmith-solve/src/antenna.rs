@@ -1118,14 +1118,14 @@ name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"
 material cf_woven_3k
 
 let wheelbase_mm = {wb:.1}
-let cfrp_standoff_mm = {standoff:.2}
-let antenna_elev_mm = {elev:.2}
-let gemini_l900_mm = {l900:.2}
-let gemini_l2400_mm = {l2400:.2}
-let gemini_skew_deg = {skew:.1}
-let tpu_pod_wall_mm = {wall:.2}
-let match_series_nh = {l_nh:.2}
-let match_shunt_pf = {c_pf:.2}
+let cfrp_standoff_mm = {standoff:.4}
+let antenna_elev_mm = {elev:.4}
+let gemini_l900_mm = {l900:.4}
+let gemini_l2400_mm = {l2400:.4}
+let gemini_skew_deg = {skew:.4}
+let tpu_pod_wall_mm = {wall:.4}
+let match_series_nh = {l_nh:.4}
+let match_shunt_pf = {c_pf:.4}
 let vna_s11_915_db = {s11_915:.2}
 let vna_s11_2440_db = {s11_2440:.2}
 let vna_eff_915_pct = {eff_915:.1}

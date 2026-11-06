@@ -1,0 +1,53 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T7
+# @code: T7
+# @category: tutorial
+# @level: Advanced
+# @title: Human + AI Co-Design: Repairing a Weak Part Together in Real Time
+# @subtitle: Start with an under-sized arm that both bends past yield and splits between 3D-printed layers, then watch an AI co-pilot repair its thickness, print orientation, and internal lattice live.
+# @verification_badge: Lesson 7 · Advanced · Human + AI Co-Pilot
+# @doc_path: docs/tutorials/T7-human-ai-codesign-mcp.md
+# @fsm_path: examples/tutorials/T7-human-ai-codesign-mcp.fsm
+# @starter_fsm_name: t7-underdesigned-arm.fsm
+# @verification_refs: docs/verification/V22-MCP.md, docs/verification/V51.md
+# ---
+# @step: 1. Diagnose Why the Initial Design Fails || results
+#   This starter part is an 8 mm thin PETG arm carrying a heavy 450 N tip load, and it is set to print standing on end at (90°, 0°). Tap "Go to Results →" to inspect the damage: the Peak von Mises stress exceeds PETG’s 47 MPa yield strength, and the inter-layer peel utilization is well over 1.0× (meaning the printed layers will split apart before the plastic even yields).
+# @expected:
+#   The initial 8 mm arm fails both solid yield stress and 3D-printed layer peel.
+# @step: 2. Run the 3 AI Co-Pilot Repair Steps in Tab 3 ("3. MCP / REST API") || fill
+#   Fieldsmith lets an AI assistant connect to your live workspace through the Model Context Protocol (MCP — an open standard that lets AI tools read and edit engineering models safely). Switch to the "3. MCP / REST API" tab above (or look at the 3rd column on desktop) and click the blue "▶ Run" button on Step 1 (thicken h_root from 8 mm to 16 mm), Step 2 (rotate print orientation to 0°, 0°), and Step 3 (carve a stress-graded Gyroid interior with thickened top/bottom skins). Then tap "Go to Fill →" to see the repaired, lightweighted beam inside!
+# @expected:
+#   Each click executes a live API call and updates your 3D viewport automatically: the arm doubles in height to 16 mm, rotates its print layers flat, and hollows its core with a Gyroid lattice to save 44% weight.
+# ---
+# @theory_title: Chapter 7 — Shared Human–AI Workspace & Three-Stage Mechanical Synthesis
+# @theory_summary:
+#   Because Fieldsmith represents every part as a readable text script (.fsm) backed by a fast, deterministic physics solver, a human engineer and an AI agent can collaborate on the exact same model without losing precision.
+# @theory_section: 7.1 Decomposing Structural Co-Design into Three Clear Decisions
+# @theory_eq:
+#   Minimise Mass(p, ρ)   subject to:
+#   1) Yield Stress ≤ 85%   2) Layer Peel ≤ 60%   3) Lattice Buckling ≤ 50%
+# @theory_body:
+#   Rather than treating design as a black box, a systematic synthesis workflow solves three physical problems in order: (1) size the outer load-bearing dimensions (h_root) so bending stress is safe; (2) align the additive manufacturing layer normal (θ, φ) so tension runs along filaments; and (3) hollow out lightly stressed interior material with a graded lattice while keeping thick outer skins where bending tension and compression peak.
+# ---
+# @mcp: Step 1: Thicken Root Depth h_root to 16 mm || set_let || {"name":"h_root","value":16}
+#   Doubling beam height increases its bending resistance by 4× (section modulus scales with height²).
+# @mcp: Step 2: Align 3D-Printed Layers Flat (0°, 0°) || set_build || {"theta":0,"phi":0,"size":3.5}
+#   Rotate the build orientation so continuous filament strands carry the horizontal bending tension.
+# @mcp: Step 3: Carve a Stress-Graded Gyroid Core + Thick Bending Skins || set_fill || {"family":"gyroid","mode":"sheet","cell":8,"skin":1,"skin_max":2.6,"rho_min":0.18,"rho_max":0.55,"curve":1.4,"min_wall":0.7}
+#   Replace the low-stress neutral axis inside the beam with a lightweight Gyroid lattice while thickening outer skins up to 2.6 mm.
+# === END LITERATE HEADER ===
+
+name "T7 — Under-Designed Arm (Pre-Synthesis)"
+material petg
+
+let h_root = 8
+box beam size=(60, 16, h_root) at=(30, 0, 0)
+
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load tip_load tip force=(0, 0, -450) case="Peak"
+
+solve size=3.5 build=(90, 0)

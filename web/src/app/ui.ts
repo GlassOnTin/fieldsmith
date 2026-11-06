@@ -22,11 +22,15 @@ class Ui {
   paletteOpen = false;
   /** Coupled Engineering Systems Workbench modal/overlay (V52). */
   systemsOpen = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('systems');
-  /** Interactive 3-Column Tutorials & Theoretical Manual Drawer (T1–T13). */
+  /** Interactive 3-Column Tutorials, Analytic Verification Tests & Case Studies Drawer (T1–T17, A1–A14). */
   tutorialsOpen = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('tutorials');
   tutorialSheetId = 'T1';
   /** Whether the Tutorials drawer is showing the full Contents & Examples directory (true) or a specific lesson (false). */
   tutorialContentsOpen = true;
+  /** Whether the Tutorials drawer is collapsed to a compact bottom floating bar so the 3D viewport is unobstructed. */
+  tutorialMinimised = false;
+  /** Active top-level category filter in the Tutorials & Analytic Tests directory. */
+  tutorialCategoryFilter: 'all' | 'tutorial' | 'analytic' | 'case-study' | 'example' = 'all';
   /** MCP & REST API Co-Pilot Setup guide modal from the footer. */
   mcpSetupOpen = false;
   /** Compute engine mode: 'wasm' (in-browser WebAssembly), 'native' (local native server / Android JNI host), or 'remote' (external compute server over LAN / Tailscale / SSH). */

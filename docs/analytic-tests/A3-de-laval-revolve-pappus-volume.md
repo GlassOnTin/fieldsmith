@@ -1,0 +1,72 @@
+# A3 — Analytic Benchmark A3: De Laval Converging–Diverging Nozzle Shell Volume vs Pappus & Conical Frusta (V4 / V60a)
+
+> **Category**: Analytic Verification Test · **Level**: Analytic Verification · **Verification**: Verified by V4 & V60(a) · Exact Pappus / Frusta Volume · PASS (0.27%)
+> **Repository Path**: `docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md` · **Starter Model**: `a3-de-laval-revolve-volume.fsm` · **Verification Reports**: `docs/verification/V4.md`, `docs/verification/V60.md`
+
+Verify Fieldsmith’s axisymmetric revolve SDF primitive and sub-voxel occupancy volume integrator against the exact closed-form conical frusta sum and Pappus’s second centroid theorem.
+
+## Closed-Form Analytic Reference vs Fieldsmith P2 FEA
+
+| Quantity | Closed-Form Formula | Analytic Reference | Fieldsmith Measured | Difference | Tolerance |
+| :--- | :--- | ---: | ---: | ---: | :--- |
+| Cylindrical Chamber Section Volume (z ∈ [0, 80] mm, r ∈ [18, 26] mm) | `V₁ = π · 80 · (26² − 18²) = 28,160 π mm³` | **88,467.25 mm³** | **Exact Algebraic Anchor** | 0.000% | Pappus Identity |
+| Converging + Diverging Conical Frusta Volume (z ∈ [80, 140] mm) | `V₂ + V₃ = 2π r̄₂ A₂ + 2π r̄₃ A₃ = 15,360 π mm³` | **48,254.86 mm³** | **Exact Algebraic Anchor** | 0.000% | Pappus Identity |
+| Total De Laval Shell SDF Integrated Volume (V₁ + V₂ + V₃) | `V_exact = 43,520 π mm³;  m_CuCrZr = ρ · V = 8.90 g/cm³ × 136.722 cm³ = 1,216.83 g` | **136,722.11 mm³ (1,216.8 g)** | **136,358.73 mm³ (1,213.6 g)** | 0.266% | ≤ 0.50% |
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+fieldsmith 1
+name "A3 — De Laval Revolve Shell Volume Benchmark (V60a)"
+material cucrzr
+
+revolve outer_wall profile=[(0, 0), (26, 0), (26, 80), (15.5, 110), (23, 140), (0, 140)]
+revolve gas_bore profile=[(0, -1), (18, -1), (18, 80), (7.5, 110), (15, 140), (15, 141), (0, 141)] subtract
+region flange = outer_wall.bottom
+region chamber = gas_bore.side
+support hold flange fixed=xyz
+load test_p chamber pressure=2.0
+solve
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Inspect the 3-Stage De Laval Revolve Profile in Shape (1) *(Lens: `SHAPE`)*
+
+Open Shape (1). The shell is defined by subtracting two 2D meridional polygon profiles revolved 360° around the Z axis: (1) a cylindrical combustion chamber z ∈ [0, 80] mm with r_i = 18 mm, r_o = 26 mm; (2) a converging conical section z ∈ [80, 110] mm tapering to r_i = 7.5 mm, r_o = 15.5 mm at the sonic throat; and (3) a diverging bell cone z ∈ [110, 140] mm expanding to r_i = 15 mm, r_o = 23 mm.
+
+- **Expected Check**: Both revolve primitives have a constant radial wall thickness t_r = R_o(z) − R_i(z) = 8.0 mm across all three axial stations.
+
+### 2. Verify Volume & Mass Readout Against Pappus’s Second Centroid Theorem *(Lens: `RESULTS`)*
+
+By Pappus’s second theorem, the volume swept by revolving a meridional lamina of area A_k = t_r Δz_k about the Z axis is V_k = 2π r̄_k A_k: V₁ = 2π(22)(640) = 28,160π mm³, V₂ = 2π(16.75)(240) = 8,040π mm³, and V₃ = 2π(15.25)(240) = 7,320π mm³, giving V_exact = 43,520π = 136,722.11 mm³ (mass = 1,216.8 g at ρ = 8.90 g/cm³ for CuCrZr). Switch to Results (3) to compare the integrated mass/volume readout.
+
+- **Expected Check**: Fieldsmith’s sub-voxel SDF integrator matches the exact 43,520π mm³ analytical volume within 0.27%.
+
+## 3. Theoretical Manual — Analytic Verification A3 — Axisymmetric Revolve SDF & Sub-Voxel Occupancy Integration (V4 / V60a)
+
+Shows how Fieldsmith evaluates exact Euclidean signed distance d(x, y, z) to a 2D polygon in the (r = √(x²+y²), z) meridional half-plane and integrates volume with linear sub-voxel gradient occupancy.
+
+### A3.1 Meridional Reduction & Pappus–Conical Frustum Equivalence
+
+```text
+r = √(x² + y²),     d_revolve(x, y, z) = d_polygon2D(r, z)
+V_frustum = (π h / 3)[(R_o1² + R_o1 R_o2 + R_o2²) − (R_i1² + R_i1 R_i2 + R_i2²)] = 2π r̄ A_meridional
+```
+
+Because Euclidean distance is invariant under orthogonal rotation around Z, the 3D signed distance to any surface of revolution equals the 2D signed distance to its generating polygon in the (r, z) plane.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Inspect De Laval Shell Geometry & Mass via API (`inspect`)
+
+Query the document’s shapes and solved mass/volume telemetry.
+
+```json
+{
+  "tool": "inspect",
+  "arguments": {}
+}
+```

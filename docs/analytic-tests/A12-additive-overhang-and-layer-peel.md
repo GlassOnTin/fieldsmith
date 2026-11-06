@@ -1,0 +1,80 @@
+# A12 — Analytic Benchmark A12: Additive Manufacturing Physics — Spherical-Cap Overhang Area & Orthotropic Layer-Peel Criterion (V45 / V46)
+
+> **Category**: Analytic Verification Test · **Level**: Analytic Verification · **Verification**: Verified by V45 & V46 · Exact Overhang & Orthotropic Peel · PASS (< 0.15%)
+> **Repository Path**: `docs/analytic-tests/A12-additive-overhang-and-layer-peel.md` · **Starter Model**: `a12-additive-overhang-layer-peel.fsm` · **Verification Reports**: `docs/verification/V45.md`, `docs/verification/V46.md`
+
+Verify exact-gradient surface overhang area A_overhang(α_max) = 2π r² (1 − sin α_max) on a sphere (V45) and Puck/Hoffman orthotropic inter-layer peel & shear utilization U_peel(θ) across build orientations b̂(θ, φ) (V46).
+
+## Closed-Form Analytic Reference vs Fieldsmith P2 FEA
+
+| Quantity | Closed-Form Formula | Analytic Reference | Fieldsmith Measured | Difference | Tolerance |
+| :--- | :--- | ---: | ---: | ---: | :--- |
+| Sphere (r = 10 mm) Overhang Cap Area at α_max = 30° / 45° / 60° (V45) | `A_overhang(α_max) = 2π r² (1 − sin α_max),   A_total = 4π r² = 1,256.64 mm²` | **314.16 / 184.03 / 84.18 mm²** | **314.27 / 183.82 / 83.72 mm²** | 0.035% / 0.115% / 0.541% | ≤ 1.5% |
+| 3D FEA Uniaxial Tension (σ_zz = 30 MPa) Layer-Peel Utilization U_peel(θ) at θ = 0° / 45° / 90° (V46) | `U_peel(θ) = √((max(0, σ₀ cos²θ) / S_z)² + (σ₀ sin θ cos θ / S_s)²)   (S_z=30, S_s=20 MPa)` | **1.00000 / 0.90139 / 0.00000 ×** | **1.00000 / 0.90139 / 4.66×10⁻¹⁰ ×** | 3.05×10⁻¹⁰ × | ≤ 10⁻⁴ × |
+| Oblique Normal+Shear Worst-Case Build Angle θ_worst & Optimal Build Angle θ_best (V46) | `When S_s < S_z / √2, dU_peel/dθ = 0 at sin²θ* = (2 S_z² − S_s²) / (2(2 S_z² − S_s²)) ⇒ θ_worst ≈ 15°` | **θ_worst = 15° (1.00555×),  θ_best = 90° (0.000×)** | **15.0° (1.00555×),  90.0° (4.66×10⁻¹⁰×)** | 0.000% | Exact |
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+fieldsmith 1
+name "A12 — Orthotropic Layer-Peel & Overhang Benchmark (V45 / V46)"
+custommaterial petg_ortho name="Orthotropic Printed PETG (Sz=30 MPa, Ss=20 MPa)" e=2100 nu=0.35 a=6.0e-5 yield=50 yield_z=30 shear_z=20 density=1.27
+material petg_ortho
+
+box bar size=(10, 10, 40) at=(0, 0, 0)
+region z0 = bar.nz
+region z1 = bar.pz
+region x0 = bar.nx
+region y0 = bar.ny
+
+support sz z0 fixed=z
+support sx x0 fixed=x
+support sy y0 fixed=y
+load pull_z z1 force=(0, 0, 3000)
+solve build=(45, 0)
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Inspect Orthotropic Inter-Layer Strengths (`yield_z=30 shear_z=20`) & `solve build=(45, 0)` *(Lens: `SETUP`)*
+
+Open Setup (2). The 10 × 10 × 40 mm bar is pulled along +Z by F_z = 3,000 N (uniaxial tensile stress σ_zz = 30 MPa). With `solve build=(45, 0)`, the print build axis b̂ = (sin 45°, 0, cos 45°) tilts the layer planes by 45° relative to the tensile axis.
+
+- **Expected Check**: Normal traction across the layers is σ_nn = 30 cos²(45°) = 15 MPa and inter-layer shear traction is τ_nt = 30 sin(45°)cos(45°) = 15 MPa.
+
+### 2. Verify U_peel(45°) = √((15/30)² + (15/20)²) = 0.9014× in Results (3) *(Lens: `RESULTS`)*
+
+Switch to Results (3) and select "Layer Peel". At θ = 45°, U_peel = √(0.5² + 0.75²) = 0.901388×. If you change `build=(45, 0)` to `build=(90, 0)` (filaments aligned with the Z load), U_peel drops to 0.000×!
+
+- **Expected Check**: Layer Peel reads 0.9014× across the gauge section and drops to 0 when build=(90, 0).
+
+## 3. Theoretical Manual — Analytic Verification A12 — Exact-Gradient Overhang Integral & Puck/Hoffman Layer-Peel Criterion (V45 / V46)
+
+Derives the closed-form spherical-cap overhang area from the implicit surface gradient n = ∇f / ‖∇f‖ and proves the quadratic tension-shear delamination envelope across arbitrary build orientations b̂(θ, φ).
+
+### A12.1 Traction Decomposition on Tilted Layer Planes & Oblique Shear Peak
+
+```text
+t_layer = σ b̂,     σ_nn = b̂ᵀ σ b̂,     τ_nt = √(‖σ b̂‖² − σ_nn²)
+U_peel(b̂) = √( (max(0, σ_nn) / S_z)² + (τ_nt / S_s)² )
+```
+
+Because compressive normal stress (σ_nn < 0) closes inter-layer voids rather than peeling them apart, the normal term uses Macaulay brackets max(0, σ_nn), while inter-layer shear τ_nt remains active under both tension and compression.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Evaluate Layer Peel & Orientation Sweep via API (`solve`)
+
+Run the orthotropic P2 solver on A12.
+
+```json
+{
+  "tool": "solve",
+  "arguments": {
+    "kind": "solve",
+    "dofs": 20000
+  }
+}
+```

@@ -1,0 +1,4 @@
+v0.14.0:
+- 31 self-defining Literate .fsm sheets across Guided Tutorials (T1-T7, T14-T15), Analytic Verification Benchmarks (A1-A14), and Multiphysics Case Studies (T8-T13, T16-T17).
+- Regeneratively cooled GOX/Ethanol De Laval rocket chamber (T17) with Bartz sonic-throat heat flux, Robin-Neumann coolant convection, and stress-graded TPMS Gyroid cooling jacket (V60).
+- In-stage Results (3) analytic verification table, 1-click 3D View drawer collapse, and single-file .fsm export.

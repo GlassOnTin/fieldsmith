@@ -33,15 +33,16 @@ class MainActivity : Activity() {
 
         val webDir = File(filesDir, "web")
         val versionStampFile = File(filesDir, "web-version.txt")
-        val pkgVersion = try {
+        val expectedStamp = try {
+            val pkgInfo = packageManager.getPackageInfo(packageName, 0)
             @Suppress("DEPRECATION")
-            packageManager.getPackageInfo(packageName, 0).versionCode.toString()
+            "${pkgInfo.versionCode}-${pkgInfo.lastUpdateTime}-debug=$isDebuggable"
         } catch (_: Exception) {
-            "0"
+            "0-debug=$isDebuggable"
         }
-        val expectedStamp = "$pkgVersion-debug=$isDebuggable"
         val currentStamp = if (versionStampFile.exists()) versionStampFile.readText().trim() else ""
-        if (isDebuggable || currentStamp != expectedStamp || !File(webDir, "index.html").exists()) {
+        val assetsUpdated = isDebuggable || currentStamp != expectedStamp || !File(webDir, "index.html").exists()
+        if (assetsUpdated) {
             webDir.deleteRecursively()
             extractBundledAssetsIfNeeded("web", webDir)
             versionStampFile.writeText(expectedStamp)
@@ -123,6 +124,9 @@ class MainActivity : Activity() {
         }
 
         setContentView(rootContainer)
+        if (assetsUpdated) {
+            webView.clearCache(true)
+        }
         if (boundPort > 0) {
             webView.loadUrl("http://127.0.0.1:$boundPort/")
         }

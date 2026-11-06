@@ -1,0 +1,65 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: A4
+# @code: A4
+# @category: analytic
+# @level: Analytic Verification
+# @title: Analytic Benchmark A4: Thick-Walled Lamé Pressurized Rocket Chamber & Coolant Jacket (V20 / V60b)
+# @subtitle: Verify radial displacement u_r(r), invariant stress sum σ_rr + σ_θθ = 2A, shear τ_xy(r), von Mises σ_vm(r), and Galerkin compliance on a CuCrZr cylinder under internal chamber pressure (15 MPa) and external coolant pressure (3 MPa).
+# @verification_badge: Verified by V60(b) · Exact Lamé (1852) Bicylinder · PASS (< 1.2%)
+# @doc_path: docs/analytic-tests/A4-lame-pressurized-bicylinder.md
+# @fsm_path: examples/analytic/A4-lame-pressurized-bicylinder.fsm
+# @starter_fsm_name: a4-lame-pressurized-bicylinder.fsm
+# @verification_refs: docs/verification/V20.md, docs/verification/V60.md
+# ---
+# @check: Radial Displacement u_r(r) at r = 11 / 15 / 19 mm (θ = 45° Ray) || u_r(r) = ((1+ν)/E) [(1−2ν) A r + B / r],  A = 1.0 MPa, B = 1,600 MPa·mm² || 1.560 / 1.167 / 0.945 µm || 1.568 / 1.178 / 0.956 µm || 0.56% / 0.94% / 1.16% || ≤ 2.5%
+# @check: Lamé First Stress Invariant σ_xx + σ_yy = σ_rr + σ_θθ = 2A || 2A = 2 (p_i r_i² − p_o r_o²) / (r_o² − r_i²) = 2(1500 − 1200)/300 = 2.000 MPa || 2.000 MPa (Constant ∀ r) || 1.997 / 2.143 / 2.125 MPa || Δ ≤ 0.143 MPa || ≤ 0.60 MPa
+# @check: Von Mises Equivalent Stress σ_vm(r) at r = 11 / 15 / 19 mm || σ_rr(r) = A − B/r²,  σ_θθ(r) = A + B/r²,  σ_zz = 2νA = 0.680 MPa || 22.905 / 12.321 / 7.683 MPa || 23.035 / 12.422 / 7.778 MPa || 0.57% / 0.82% / 1.23% || ≤ 3.5%
+# ---
+# @step: 1. Exact Plane-Strain Octant Symmetry (Zero Saint-Venant End Decay) || setup
+#   Open Setup (2). An octant of a thick-walled CuCrZr thrust chamber (r_i = 10 mm, r_o = 20 mm, L = 60 mm) carries internal hot-gas pressure p_i = 15.0 MPa on skin_in and external regenerative coolant pressure p_o = 3.0 MPa on skin_out. Single-component supports on x = 0 (fixed=x), y = 0 (fixed=y), z = 0 (fixed=z), and z = 60 mm (fixed=z) enforce exact plane strain (ε_zz = 0 everywhere), eliminating all 3D axial end-boundary layers.
+# @expected:
+#   Both inner and outer curved cylindrical walls display opposing normal pressure arrows (15 MPa outward vs 3 MPa inward).
+# @step: 2. Verify the 1/r² Stress Decay & Constant Hydrostatic Trace 2A in Results (3) || results
+#   Switch to Results (3). Gabriel Lamé’s 1852 solution gives A = (p_i r_i² − p_o r_o²)/(r_o² − r_i²) = 1.0 MPa and B = (p_i − p_o) r_i² r_o²/(r_o² − r_i²) = 1,600 MPa·mm². At the bore (r = 10 mm), σ_rr = −15 MPa and σ_θθ = +17 MPa (von Mises = 27.72 MPa); at r = 11 mm along the θ = 45° ray, σ_vm = 22.91 MPa vs Fieldsmith P2 FEA 23.04 MPa (0.57% error).
+# @expected:
+#   Peak von Mises stress concentrates on the inner bore wall (~27.7 MPa) and decays smoothly as 1/r² toward the outer jacket (~6.9 MPa).
+# ---
+# @theory_title: Analytic Verification A4 — Gabriel Lamé’s Pressurized Thick-Walled Cylinder Theory (V20 / V60b)
+# @theory_summary:
+#   Derives the exact Navier–Cauchy radial equilibrium solution for a thick-walled cylinder subjected to simultaneous internal and external pressures under plane strain.
+# @theory_section: A4.1 Navier–Cauchy Radial Equilibrium & Lamé Constants (A, B)
+# @theory_eq:
+#   dσ_rr/dr + (σ_rr − σ_θθ)/r = 0   ⇒   u_r(r) = C₁ r + C₂ / r
+#   A = (p_i r_i² − p_o r_o²) / (r_o² − r_i²),     B = (p_i − p_o) r_i² r_o² / (r_o² − r_i²)
+#   σ_rr(r) = A − B/r²,     σ_θθ(r) = A + B/r²,     σ_zz(r) = 2νA
+# @theory_body:
+#   Notice that the in-plane stress sum σ_rr(r) + σ_θθ(r) = 2A is spatially constant throughout the entire wall thickness, meaning pressure-driven radial expansion produces a uniform volumetric strain ε_rr + ε_θθ = 2(1+ν)(1−2ν)A/E.
+# ---
+# @mcp: Solve Lamé Bicylinder via API || solve || {"kind":"solve","dofs":35000}
+#   Run the P2 elasticity solver on the pressurized CuCrZr chamber octant.
+# === END LITERATE HEADER ===
+
+name "A4 — Lame Pressurized Chamber & Coolant Jacket (V60b)"
+custommaterial cucrzr_ref name="CuCrZr (E=128 GPa, nu=0.34)" e=128000 nu=0.34 a=1.7e-5 yield=380 density=8.9
+material cucrzr_ref
+
+cylinder outer r=20 h=60 at=(0, 0, 30)
+cylinder bore r=10 h=60 at=(0, 0, 30) subtract
+box cutx size=(90, 45, 160) at=(-45, 0, 0) subtract
+box cuty size=(45, 90, 160) at=(0, -45, 0) subtract
+
+region skin_in = bore.side
+region skin_out = outer.side
+region xplane = cutx.px
+region yplane = cuty.py
+region zbot = outer.bottom
+region ztop = outer.top
+
+support kx xplane fixed=x
+support ky yplane fixed=y
+support kz_bot zbot fixed=z
+support kz_top ztop fixed=z
+load hot_gas skin_in pressure=15.0 case="Bicylinder"
+load coolant_jacket skin_out pressure=3.0 case="Bicylinder"
+solve

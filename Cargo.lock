@@ -600,6 +600,7 @@ dependencies = [
  "fieldsmith-worker",
  "miniz_oxide",
  "serde_json",
+ "step-io",
 ]
 
 [[package]]
