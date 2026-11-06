@@ -4632,7 +4632,7 @@ export function SystemsWorkbench() {
     runSolve(activeId, nextP, epistemicTheta);
   };
 
-  const syncTo3DViewport = () => {
+  const syncTo3DViewport = (jumpToResults = false) => {
     if (!bundle) return;
     const fsm = bundle.fsm_3d ?? buildFloatBathFsm(designP);
     const filename =
@@ -4662,6 +4662,9 @@ export function SystemsWorkbench() {
     if (openText(fsm, filename)) {
       ui.set('resultsCase', 0);
       ui.set('systemsOpen', false);
+      if (jumpToResults) {
+        store.setLens('results');
+      }
       viewApi.fit(false);
       if (liveViewport) syncCoupledViewportOverlay(liveViewport);
       void pushWorkspaceState({
@@ -4731,18 +4734,29 @@ export function SystemsWorkbench() {
               MCP Workspace rev #{wsRev} ({wsActor})
             </span>
             {bundle && (
-              <button
-                class="btn small primary"
-                data-testid="sync-3d-bath"
-                onClick={syncTo3DViewport}
-                title="Generate a 3D parametric .fsm CAD twin + thermo-mechanical FEA setup in the main 3D viewport"
-              >
-                {activeId === 'regen_nozzle_h2_v1'
-                  ? 'Load 3D Nozzle into Viewport'
-                  : activeId === 'solar_candle_ignition_v1'
-                    ? 'Load 3D Solar Candle & Flame into Viewport'
-                    : 'Load 3D Bath into Viewport'}
-              </button>
+              <>
+                <button
+                  class="btn small primary"
+                  data-testid="sync-3d-bath"
+                  onClick={() => syncTo3DViewport(false)}
+                  title="Generate a 3D parametric .fsm CAD twin + thermo-mechanical FEA setup in the main 3D viewport"
+                >
+                  {activeId === 'regen_nozzle_h2_v1'
+                    ? 'Load 3D Nozzle into Viewport'
+                    : activeId === 'solar_candle_ignition_v1'
+                      ? 'Load 3D Solar Candle & Flame into Viewport'
+                      : 'Load 3D Bath into Viewport'}
+                </button>
+                <button
+                  class="btn small"
+                  data-testid="sync-3d-and-solve"
+                  onClick={() => syncTo3DViewport(true)}
+                  style={{ borderColor: 'rgba(16, 185, 129, 0.45)', color: '#6ee7b7' }}
+                  title="Project solved 1D/2D boundary profiles onto the 3D .fsm twin and jump directly to 3. Results"
+                >
+                  🚀 Sync 3D & Solve Results →
+                </button>
+              </>
             )}
             <button class="btn small" data-testid="close-systems-workbench" onClick={() => ui.set('systemsOpen', false)}>
               Close (Esc)
@@ -4760,6 +4774,21 @@ export function SystemsWorkbench() {
             <span>Adjoint vs Tangent max err: {bundle.analysis.adjoint_vs_tangent_max_rel_err.toExponential(2)}</span>
             <span>Constraints: {bundle.constraints_pass_robust_p90 ? 'PASS (Robust p90)' : bundle.constraints_pass_p50 ? 'PASS (Nominal p50)' : 'VIOLATED'}</span>
             <span>Solve + Adjoint + UQ: {bundle.wall_ms.toFixed(1)} ms</span>
+            {bundle.fsm_3d && (() => {
+              const qThroat = bundle.fsm_3d.match(/heatflux\s+throat_q\s+\S+\s+q=([0-9.]+)/)?.[1];
+              const qChamber = bundle.fsm_3d.match(/heatflux\s+chamber_q\s+\S+\s+q=([0-9.]+)/)?.[1];
+              const hCool = bundle.fsm_3d.match(/convection\s+ethanol_cool\s+\S+\s+h=([0-9.]+)\s+tinf=([0-9.]+)/);
+              if (!qThroat && !hCool) return null;
+              return (
+                <span
+                  data-testid="systems-1d-3d-projection-summary"
+                  style={{ color: '#6ee7b7', fontWeight: 600 }}
+                  title="Live 1D channel state projected onto 3D .fsm surface regions"
+                >
+                  1D→3D Projection: q_throat={qThroat ?? '—'} · q_chamber={qChamber ?? '—'} MW/m² · h_cool={hCool?.[1] ?? '—'} W/(mm²·K) @ T_∞={hCool?.[2] ?? '—'} °C
+                </span>
+              );
+            })()}
           </div>
         )}
 

@@ -2249,9 +2249,14 @@ function ResultsPanel() {
                     {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
                     {uf != null ? ` · yield ×${fmt(uf, 2)}` : ''}
                     {bf != null ? ` · buckling ×${fmt(bf, 2)}` : ''}
-                    {lvl.meta.fill?.lattice_adjoint_sensitivity_sum?.[i] != null
-                      ? ` · Σ(−∂C/∂ρ_e) ${fmt(lvl.meta.fill.lattice_adjoint_sensitivity_sum[i], 2)} N·mm`
-                      : ''}
+                    {lvl.meta.fill?.lattice_adjoint_sensitivity_sum?.[i] != null && (
+                      <span
+                        title="Exact 3D P2 self-adjoint compliance sensitivity ∂C/∂ρ_e = −u_eᵀ (∂K_e/∂ρ_e) u_e: total stiffness gain (N·mm compliance reduction) per unit relative density increase ρ_e across lattice elements"
+                        style={{ cursor: 'help', borderBottom: '1px dotted rgba(148,163,184,0.5)' }}
+                      >
+                        {` · Σ(−∂C/∂ρ_e) ${fmt(lvl.meta.fill.lattice_adjoint_sensitivity_sum[i], 2)} N·mm`}
+                      </span>
+                    )}
                     {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
                   </span>
                 </Fragment>
@@ -2305,7 +2310,9 @@ function ResultsPanel() {
                     </button>
                   </div>
                 </div>
-                {liveAsserts.length > 0 && (
+                {liveAsserts.length > 0 && (() => {
+                  const allPass = passCount === liveAsserts.length;
+                  return (
                   <div
                     data-testid="results-live-asserts"
                     style={{
@@ -2313,22 +2320,27 @@ function ResultsPanel() {
                       flexDirection: 'column',
                       gap: '3px',
                       padding: '5px 7px',
-                      background: 'rgba(16, 185, 129, 0.07)',
-                      border: '1px solid rgba(16, 185, 129, 0.32)',
+                      background: allPass ? 'rgba(16, 185, 129, 0.07)' : 'rgba(239, 68, 68, 0.09)',
+                      border: allPass ? '1px solid rgba(16, 185, 129, 0.32)' : '1px solid rgba(239, 68, 68, 0.42)',
                       borderRadius: '5px',
                       fontSize: '10.5px',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontWeight: 700, color: '#6ee7b7' }}>
-                        ✓ Live @assert Contracts ({passCount} / {liveAsserts.length} PASS on {lvl.label})
+                      <span style={{ fontWeight: 700, color: allPass ? '#6ee7b7' : '#fca5a5' }}>
+                        {allPass ? '✓' : '✗'} Live @assert Contracts ({passCount} / {liveAsserts.length} PASS on {lvl.label})
                       </span>
-                      <span class="num" style={{ color: '#a7f3d0', fontSize: '9.5px' }}>
+                      <span class="num" style={{ color: allPass ? '#a7f3d0' : '#fecaca', fontSize: '9.5px' }}>
                         fieldsmith solve --verify
                       </span>
                     </div>
                     {liveAsserts.map((ev, idx) => {
                       const u = ev.assert.unit ? ` ${ev.assert.unit}` : '';
+                      const isBoundTarget = /^(<=|>=|≤|≥|<|>)/.test(ev.assert.target.trim());
+                      const cleanTol = ev.assert.tolerance.trim().replace(/^(<=|≤)\s*/, '');
+                      const parenDetail = isBoundTarget
+                        ? `margin ${ev.errorOrMargin}${u}`
+                        : `${ev.errorOrMargin}${cleanTol ? ` ≤ ${cleanTol}` : ''}`;
                       return (
                         <div
                           key={idx}
@@ -2356,16 +2368,19 @@ function ResultsPanel() {
                           >
                             live {ev.liveValue != null ? fmt(ev.liveValue, 4) : 'N/A'}
                             {u} vs {ev.assert.target}
-                            {u} ({ev.errorOrMargin}
-                            {ev.assert.tolerance ? ` ≤ ${ev.assert.tolerance}` : ''}) {ev.passed ? 'PASS' : 'FAIL'}
+                            {u} ({parenDetail}) {ev.passed ? 'PASS' : 'FAIL'}
                           </span>
                         </div>
                       );
                     })}
                   </div>
-                )}
+                  );
+                })()}
                 {checks.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10.5px' }}>
+                    <span style={{ fontSize: '9.5px', fontWeight: 600, color: '#94a3b8' }}>
+                      Published Baseline Reference (@check)
+                    </span>
                     {checks.slice(0, compact ? 2 : 6).map((chk, idx) => (
                       <div
                         key={idx}
@@ -2516,6 +2531,19 @@ function ResultsPanel() {
               <span class="num">
                 {fmt(lvl.meta.fill.mass_g, 2)} g · solid {fmt(lvl.meta.fill.solid_mass_g, 2)} g (−{fmt(100 * (1 - lvl.meta.fill.mass_g / lvl.meta.fill.solid_mass_g), 0)}%)
               </span>
+              {lvl.meta.fill.lattice_adjoint_sensitivity_sum?.[0] != null && (
+                <>
+                  <span
+                    class="plain"
+                    title="Exact 3D P2 self-adjoint compliance sensitivity ∂C/∂ρ_e = −u_eᵀ (∂K_e/∂ρ_e) u_e = −(2 U_e)(∂E_e/∂ρ_e)/E_e: total stiffness gain (N·mm compliance reduction) per unit relative density increase ρ_e across lattice elements."
+                  >
+                    3D Adjoint Σ(−∂C/∂ρ_e)
+                  </span>
+                  <span class="num" data-testid="results-fill-adjoint-sensitivity">
+                    {lvl.meta.fill.lattice_adjoint_sensitivity_sum.map((v) => `${fmt(v, 2)} N·mm`).join(' · ')}
+                  </span>
+                </>
+              )}
               {(lvl.meta.solid_cases ?? []).map((sc, i) => {
                 const gc = lvl.meta.cases[i];
                 if (!gc || i >= 4) return null;

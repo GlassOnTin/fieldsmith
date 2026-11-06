@@ -346,11 +346,13 @@ function VnaSweepSvg({
   highSweep,
   targetLowGhz,
   targetHighGhz,
+  benchSweep,
 }: {
   lowSweep: VnaSamplePoint[];
   highSweep: VnaSamplePoint[];
   targetLowGhz: number;
   targetHighGhz: number;
+  benchSweep?: VnaSamplePoint[];
 }) {
   const W = 360;
   const H = 225;
@@ -509,6 +511,37 @@ function VnaSweepSvg({
         stroke="#38BDF8"
         stroke-width="2.2"
       />
+      {/* Optional imported bench VNA Touchstone (.s1p / .s2p) return loss overlay */}
+      {benchSweep && benchSweep.length > 1 && (
+        <>
+          <path
+            d={buildBandCurve(
+              benchSweep.filter((p) => p.freq_ghz >= 0.82 && p.freq_ghz <= 0.98),
+              xLow0,
+              0.82,
+              0.98,
+              's11_db',
+            )}
+            fill="none"
+            stroke="#34D399"
+            stroke-width="1.9"
+            stroke-dasharray="4 2"
+          />
+          <path
+            d={buildBandCurve(
+              benchSweep.filter((p) => p.freq_ghz >= 2.3 && p.freq_ghz <= 2.58),
+              xHigh0,
+              2.3,
+              2.58,
+              's11_db',
+            )}
+            fill="none"
+            stroke="#34D399"
+            stroke-width="1.9"
+            stroke-dasharray="4 2"
+          />
+        </>
+      )}
 
       {/* Panel headers */}
       <text
@@ -1045,10 +1078,30 @@ export function AntennaWorkbenchModal() {
       }
       setBenchSweep(pts);
       setBenchFileName(file.name);
-      ui.notify(`Overlaid ${pts.length} bench VNA points from ${file.name} on Smith Chart`, 'info', 5000);
+      ui.notify(`Overlaid ${pts.length} bench VNA points from ${file.name} on Smith Chart & VNA Plot`, 'info', 5000);
     } catch (e) {
       ui.notify(`Failed to import Touchstone file: ${e instanceof Error ? e.message : String(e)}`, 'error', 5000);
     }
+  };
+
+  const handleLoadSampleBenchVna = () => {
+    const baseS2p = formatTouchstoneS2p(report);
+    const lines = baseS2p.split('\n').map((line, idx) => {
+      const t = line.trim();
+      if (!t || t.startsWith('!') || t.startsWith('#')) return line;
+      const cols = t.split(/\s+/).map(Number);
+      if (cols.length < 3 || cols.some(Number.isNaN)) return line;
+      const f = cols[0];
+      const s11Db = Math.min(-0.4, cols[1] + 1.6 + 0.7 * Math.sin(idx * 0.45));
+      const s11Ang = cols[2] + (f < 1.5 ? 9.5 : 14.0);
+      const s21Db = cols[3] != null ? cols[3] + 0.8 : -18.0;
+      const s21Ang = cols[4] != null ? cols[4] - 6.0 : -45.0;
+      return `${f.toFixed(6)}  ${s11Db.toFixed(4)}  ${s11Ang.toFixed(3)}  ${s21Db.toFixed(4)}  ${s21Ang.toFixed(3)}  ${s21Db.toFixed(4)}  ${s21Ang.toFixed(3)}  ${s11Db.toFixed(4)}  ${s11Ang.toFixed(3)}`;
+    });
+    const pts = parseTouchstoneVna(lines.join('\n'));
+    setBenchSweep(pts);
+    setBenchFileName('sample-nanovna-bench.s2p');
+    ui.notify(`Loaded sample NanoVNA bench trace (${pts.length} pts) onto Smith Chart & VNA Plot`, 'info', 4000);
   };
 
   const activeBandSummary =
@@ -1208,9 +1261,17 @@ export function AntennaWorkbenchModal() {
               class="btn small"
               data-testid="antenna-import-touchstone-btn"
               onClick={() => touchstoneInputRef.current?.click()}
-              title="Import a measured bench VNA Touchstone (.s1p / .s2p) file to overlay directly on the 50 Ω Smith Chart"
+              title="Import a measured bench VNA Touchstone (.s1p / .s2p) file to overlay directly on the 50 Ω Smith Chart & VNA Sweep"
             >
               📂 Overlay Bench VNA (.s1p/.s2p)
+            </button>
+            <button
+              class="btn small"
+              data-testid="antenna-load-sample-bench-btn"
+              onClick={handleLoadSampleBenchVna}
+              title="Load a sample NanoVNA bench trace (.s2p) with pigtail/TPU detuning to inspect sim-vs-bench Smith & VNA overlay"
+            >
+              🧪 Sample NanoVNA (.s2p)
             </button>
             {benchSweep.length > 0 && (
               <span
@@ -1483,6 +1544,7 @@ export function AntennaWorkbenchModal() {
                 highSweep={report.high_band_sweep}
                 targetLowGhz={spec.target_low_freq_ghz}
                 targetHighGhz={spec.target_high_freq_ghz}
+                benchSweep={benchSweep}
               />
 
               {/* Engineering diagnostic notes */}

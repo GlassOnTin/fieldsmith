@@ -1368,6 +1368,9 @@ function SubmitExampleBuilderCard() {
   const [subFormula, setSubFormula] = useState<string>('τ_max = 2 T / (π R³),   u_θ(L) = T L R / (G J)');
   const [subAnalyticRef, setSubAnalyticRef] = useState<string>('30.00 MPa / 0.1994 mm');
   const [subTolerance, setSubTolerance] = useState<string>('≤ 2.0%');
+  const [subAssertMetric, setSubAssertMetric] = useState<string>('max_vm_elem');
+  const [subAssertTarget, setSubAssertTarget] = useState<string>('<= 35.0');
+  const [subAssertUnit, setSubAssertUnit] = useState<string>('MPa');
 
   const liveFsm = (store.doc.root.length > 0 ? printFsm(store.doc) : TUTORIAL_SHEETS[0].starterFsm).trim();
   const liveMeasuredSummary = 'Run Solve to auto-fill measured FEA';
@@ -1429,6 +1432,15 @@ function SubmitExampleBuilderCard() {
             },
           ]
         : undefined,
+    asserts: [
+      {
+        label: subQuantity,
+        metric: subAssertMetric,
+        target: subAssertTarget,
+        tolerance: subTolerance.replace(/^≤\s*/, '<= '),
+        unit: subAssertUnit,
+      },
+    ],
     userSteps: [
       {
         title: '1. Inspect Geometry, Continuum Material & Boundary Conditions in Setup (2)',
@@ -1642,6 +1654,39 @@ fn ${cleanCode.toLowerCase()}_${cleanSlug.replace(/-/g, '_')}() {
                 class="text-input"
                 value={subTolerance}
                 onInput={(e) => setSubTolerance((e.target as HTMLInputElement).value)}
+                style={{ padding: '4px 7px', fontSize: '11px', fontFamily: 'var(--mono)' }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '10.5px' }}>
+              <span style={{ fontWeight: 700 }}>@assert Metric</span>
+              <input
+                type="text"
+                class="text-input"
+                data-testid="submit-assert-metric"
+                value={subAssertMetric}
+                onInput={(e) => setSubAssertMetric((e.target as HTMLInputElement).value)}
+                style={{ padding: '4px 7px', fontSize: '11px', fontFamily: 'var(--mono)' }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '10.5px' }}>
+              <span style={{ fontWeight: 700 }}>@assert Target / Bound</span>
+              <input
+                type="text"
+                class="text-input"
+                data-testid="submit-assert-target"
+                value={subAssertTarget}
+                onInput={(e) => setSubAssertTarget((e.target as HTMLInputElement).value)}
+                style={{ padding: '4px 7px', fontSize: '11px', fontFamily: 'var(--mono)' }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '10.5px' }}>
+              <span style={{ fontWeight: 700 }}>@assert Unit</span>
+              <input
+                type="text"
+                class="text-input"
+                data-testid="submit-assert-unit"
+                value={subAssertUnit}
+                onInput={(e) => setSubAssertUnit((e.target as HTMLInputElement).value)}
                 style={{ padding: '4px 7px', fontSize: '11px', fontFamily: 'var(--mono)' }}
               />
             </label>
@@ -2042,6 +2087,49 @@ function TutorialsDrawer() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+      {sheet.asserts && sheet.asserts.length > 0 && (
+        <div
+          class="tut-step-card"
+          data-testid="tutorial-assert-contracts-card"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--ok) 45%, var(--line))',
+            background: 'color-mix(in srgb, var(--ok) 6%, var(--panel))',
+          }}
+        >
+          <div class="tut-step-top" style={{ marginBottom: '6px' }}>
+            <strong style={{ color: 'var(--ok)' }}>
+              ✓ Executable @assert Contracts (fieldsmith solve --verify)
+            </strong>
+            <span class="num" style={{ fontSize: '10px', color: 'var(--text-2)' }}>
+              {sheet.asserts.length} contract{sheet.asserts.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '11px' }}>
+            {sheet.asserts.map((asrt, idx) => (
+              <div
+                key={idx}
+                class="num"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  flexWrap: 'wrap',
+                  padding: '3px 6px',
+                  background: 'var(--bg-2)',
+                  borderRadius: '4px',
+                }}
+              >
+                <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                  {asrt.label} <code style={{ fontSize: '10px', color: 'var(--text-2)' }}>({asrt.metric})</code>
+                </span>
+                <span style={{ color: 'var(--ok)', fontWeight: 700 }}>
+                  target {asrt.target} {asrt.unit} (tol {asrt.tolerance})
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}

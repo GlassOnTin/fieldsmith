@@ -359,6 +359,19 @@ function FillPanel() {
               <span class="num">{fmt(fi.rho_design[0], 3)}…{fmt(fi.rho_design[1], 3)}</span>
               <span class="plain" title="Grading normalisation: 90th percentile of the driving stress over lattice-region elements. Protection changes it, since it shrinks that region.">σ ref</span>
               <span class="num">{fmt(fi.sigma_ref, 2)} MPa</span>
+              {fi.lattice_adjoint_sensitivity_sum?.[0] != null && (
+                <>
+                  <span
+                    class="plain"
+                    title="Exact 3D P2 self-adjoint compliance sensitivity ∂C/∂ρ_e = −u_eᵀ (∂K_e/∂ρ_e) u_e = −(2 U_e)(∂E_e/∂ρ_e)/E_e: total stiffness gain (N·mm compliance reduction) per unit relative density increase ρ_e across lattice elements."
+                  >
+                    3D Adjoint Σ(−∂C/∂ρ_e)
+                  </span>
+                  <span class="num" data-testid="fill-adjoint-sensitivity">
+                    {fi.lattice_adjoint_sensitivity_sum.map((v) => `${fmt(v, 2)} N·mm`).join(' · ')}
+                  </span>
+                </>
+              )}
               {(lvl?.meta.solid_cases ?? []).map((sc, i) => {
                 const gc = lvl?.meta.cases[i];
                 if (!lvl || !gc || i >= 4) return null;
