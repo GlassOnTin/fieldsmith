@@ -16,6 +16,10 @@ fieldsmith 1
 # @check: Mid-Span Fiber Bending Stress σ_xx(x=50 mm, z=10 mm) || σ_xx(x, z) = M(x) · (z - z₀) / I = F (L - x) c / I || 30.00 MPa || 29.96 MPa || 0.13% || ≤ 1.5%
 # @check: External Work Compliance C = fᵀ u || C_Timo = F · δ_Timo = 20.156 N·mm (Galerkin lower bound C_h ≤ C_exact) || 20.156 N·mm || 19.940 N·mm || 1.07% || ≤ 2.0%
 # ---
+# @assert: Timoshenko Tip Deflection δ_tip || max_displacement || 0.2016 || 2.5% || mm
+# @assert: External Work Compliance C = fᵀ u || compliance || 20.156 || 2.5% || N·mm
+# @assert: Tip Shear Resultant |R| || resultant_mag || 100.0 || 0.5% || N
+# ---
 # @step: 1. Inspect the Canonical 100 × 10 × 10 mm Cantilever Geometry & Boundary Conditions || setup
 #   Open Setup (2). The beam has length L = 100 mm along X and a square b × h = 10 × 10 mm cross-section (area A = 100 mm², second moment of area I = b h³ / 12 = 833.333 mm⁴) with Young’s modulus E = 200,000 MPa and Poisson’s ratio ν = 0.30. The root face x = 0 ("root") is clamped (fixed=xyz) and the free tip x = 100 mm ("tip") carries a downward shear force F = 100 N.
 # @expected:

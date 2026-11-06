@@ -16,6 +16,10 @@ fieldsmith 1
 # @check: Off-Span Cubic Field (T2) Primal Lower Bound C_h ≤ C_true (24 → 192 tets) || C_true − C_h = a(u* − u_h, u* − u_h) ≥ 0   (Strict Galerkin Orthogonality) || 18,432.00 N·mm || 18,430.86 → 18,431.93 N·mm || 0.006% → 0.0004% || C_h ≤ C_true
 # @check: Off-Span Cubic Field (T2) Equilibrated Stress Certificate C(σ*) & Witnesses || J(σ*) = ∫ σ* : S : σ* dV  s.t.  div σ* + b = 0,  ⟦σ* n⟧ = 0,  σ* n|_ΓN = t̄ || 18,432.00 N·mm (Witnesses = 0 N) || 18,431.99 N·mm (Equil 1.04×10⁻⁸ N) || 0.00003% || ≤ 0.01%
 # ---
+# @assert: Exact Primal Compliance C_h = F² L / (E A) || compliance || 0.0266667 || 0.5% || N·mm
+# @assert: Uniaxial Tensile Stress σ_xx = F / A || max_vm_elem || 0.1000 || 0.5% || MPa
+# @assert: Tip Axial Extension u_x(L) || max_displacement || 0.0026667 || 5.0% || mm
+# ---
 # @step: 1. Inspect the Pure-Tension Bar with Exact Kinematic Supports in Setup (2) || setup
 #   Open Setup (2). A 40 × 10 × 10 mm bar (A = 100 mm², V = 4,000 mm³, E = 1,500 MPa) is supported by single-component rollers on x = 0, y = 0, z = 0 and pulled by F_x = 10 N on x = 40 mm (traction c = 0.1 MPa).
 # @expected:

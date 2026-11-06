@@ -40,10 +40,10 @@ pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{solve, SolveReport, SolverOptions};
 pub use stress::{
-    element_stress, element_stress_cubic, element_stress_mat, element_stress_thermal,
-    layer_peel_quadratic, layer_peel_utilization, layer_tractions, min_compressive, nodal_stress,
-    nodal_stress_mat, nodal_stress_thermal, nodal_stress_thermal_multi, principal_stresses,
-    von_mises, Stress,
+    element_strain_energy_2u, element_stress, element_stress_cubic, element_stress_mat,
+    element_stress_thermal, layer_peel_quadratic, layer_peel_utilization, layer_tractions,
+    min_compressive, nodal_stress, nodal_stress_mat, nodal_stress_thermal,
+    nodal_stress_thermal_multi, principal_stresses, von_mises, Stress,
 };
 pub use thermal::{
     assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,

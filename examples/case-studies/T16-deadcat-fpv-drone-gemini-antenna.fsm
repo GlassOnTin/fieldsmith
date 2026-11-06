@@ -71,6 +71,11 @@ fieldsmith 1
 #   Optimises CFRP standoff `d_cfrp`, elevation `z_pod`, dielectric-compensated dipole lengths `L_900` & `L_2400`, orthogonal diversity skew `α_skew`, and conjugate L-network matching (`L_ser`, `C_sh`), then updates the 3D `.fsm` DeadCat drone in the viewport.
 # @mcp: Step 3: Solve 3D P2 Structural Stress on the 4-Inch DeadCat CFRP Frame (`solve_study`) || solve_study || {"include_fine":false}
 #   Runs the 3D quadratic (P2) tetrahedral finite-element solver on the optimised 4-inch DeadCat carbon-fibre airframe under the 18 N prop-thrust load.
+# ---
+# @assert: 4-Motor Prop Thrust Resultant || resultant_mag:1 || 64.00 || <= 1.0% || N
+# @assert: DeadCat CFRP Frame Peak von Mises Stress || max_vm_elem:1 || <= 8.0 || <= 8.0 || MPa
+# @assert: DeadCat CFRP Frame Tip Deflection || max_displacement:1 || <= 0.04 || <= 0.04 || mm
+# @assert: CFRP / TPU Inter-Laminar Peel Utilisation || max_layer_peel:1 || <= 0.15 || <= 0.15 || ×
 # === END LITERATE HEADER ===
 
 name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"

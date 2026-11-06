@@ -90,6 +90,43 @@ pub fn layer_peel_utilization(s: &Stress, b_hat: [f64; 3], yield_z: f64, shear_z
     layer_peel_quadratic(s, b_hat, yield_z, shear_z).sqrt()
 }
 
+/// Elastic strain energy `2 U_e = u_eᵀ K_e u_e = ∫_{Ω_e} σ : ε dV` (N·mm) in element `e`
+/// evaluated at centroid `[0.25; 3]` (`|Ω_e| · (σ : ε)`), routed by [`crate::Material`].
+/// Used by exact 3D P2 self-adjoint lattice-grading sensitivities `∂C / ∂ρ_e = -u_eᵀ (∂K_e/∂ρ_e) u_e`
+/// (`VISION.md §5.2 Pillar III`).
+pub fn element_strain_energy_2u(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    mat: &crate::Material,
+) -> f64 {
+    let xi = [0.25; 3];
+    let map = element_map(mesh, e);
+    let g = P2Tetrahedron.evaluate_gradients(&xi);
+    let t = &mesh.tets[e];
+    let mut h = [[0.0f64; 3]; 3];
+    for a in 0..10 {
+        let gp = map.transform_gradient(&g[a]);
+        let n = t[a] as usize;
+        for i in 0..3 {
+            for j in 0..3 {
+                h[i][j] += u[3 * n + i] * gp[j];
+            }
+        }
+    }
+    let ev = [
+        h[0][0],
+        h[1][1],
+        h[2][2],
+        h[0][1] + h[1][0],
+        h[1][2] + h[2][1],
+        h[0][2] + h[2][0],
+    ];
+    let s = element_stress_mat(mesh, u, e, mat, xi);
+    let dot: f64 = s.iter().zip(ev.iter()).map(|(si, ei)| si * ei).sum();
+    dot.max(0.0) * mesh.tet_volume(e).abs()
+}
+
 /// Stress in element `e` at reference point `xi`.
 pub fn element_stress(
     mesh: &P2Mesh,

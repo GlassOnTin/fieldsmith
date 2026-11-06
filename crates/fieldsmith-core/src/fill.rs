@@ -255,6 +255,31 @@ fn law_extended(family: Family, mode: FillMode, phi: f64) -> f64 {
     s_hi + (phi - RHO_HI) / (1.0 - RHO_HI) * (1.0 - s_hi)
 }
 
+/// Differentiate [`law_extended`] with respect to element material fraction `φ`:
+/// `∂(E*/E_solid) / ∂φ`.
+fn d_law_extended_dphi(family: Family, mode: FillMode, phi: f64) -> f64 {
+    if phi <= 0.0 {
+        return 0.0;
+    }
+    let l = law(family, mode);
+    if phi < RHO_LO {
+        return l.at(RHO_LO) / RHO_LO;
+    }
+    if phi <= RHO_HI {
+        return (l.c / COUPON_E) * l.n * phi.powf(l.n - 1.0);
+    }
+    let s_hi = l.at(RHO_HI);
+    (1.0 - s_hi) / (1.0 - RHO_HI)
+}
+
+/// Derivative `∂(E_e / E_solid) / ∂φ_e` of [`element_stiffness`] with respect to element
+/// material fraction `φ_e`. Used by the exact 3D P2 self-adjoint compliance sensitivity
+/// `∂C / ∂ρ_e = -u_eᵀ (∂K_e / ∂ρ_e) u_e` (`VISION.md §5.2 Pillar III`).
+pub fn d_element_stiffness_dphi(family: Family, mode: FillMode, phi: f64, h_over_cell: f64) -> f64 {
+    let w = ((h_over_cell - 1.0) / 0.5).clamp(0.0, 1.0);
+    (1.0 - w) + w * d_law_extended_dphi(family, mode, phi)
+}
+
 /// Coupon-measured initial-yield strength law `σ_y*(ρ) / σ_ys = c_y · ρ^{n_y}` per family and
 /// mode (V48), fitted in log-log space to the 18 resolved-FE unit-cell compression coupons in
 /// `fieldsmith_verify::coupon` across `ρ ∈ {0.2, 0.3, 0.4}` (`N = 3` cells per side). Each
@@ -443,6 +468,11 @@ pub struct Graded {
     pub mass_g: f64,
     /// Mass of the same part without the fill (g), integrated the same way.
     pub solid_mass_g: f64,
+    /// Exact 3D P2 self-adjoint compliance sensitivity `∂C / ∂ρ_e = -u_eᵀ (∂K_e / ∂ρ_e) u_e` (N·mm)
+    /// per element (envelope most negative over mechanical cases; `VISION.md §5.2 Pillar III`).
+    pub dc_drho_elem: Vec<f64>,
+    /// Per-mechanical-case sum `Σ_e (-∂C_c / ∂ρ_e)` over `CLASS_LATTICE` elements (N·mm).
+    pub lattice_adjoint_sensitivity_sum: Vec<f64>,
     pub fill_ms: f64,
     pub solve_ms: f64,
 }
@@ -1018,6 +1048,33 @@ pub fn graded_of(
         })
         .collect();
 
+    // Exact 3D P2 self-adjoint compliance sensitivity `∂C / ∂ρ_e = -u_eᵀ (∂K_e / ∂ρ_e) u_e`
+    // (`VISION.md §5.2 Pillar III`):
+    let mut dc_drho_elem = vec![0.0f64; base.mesh.tets.len()];
+    let mut lattice_adjoint_sensitivity_sum = Vec::with_capacity(cases.len());
+    for c in &cases {
+        let mut case_sum = 0.0f64;
+        for e in 0..base.mesh.tets.len() {
+            let phi = rho_elem[e];
+            let c_pt = centroid(&base.mesh, e);
+            let pv = fill.param.sample(c_pt);
+            let a_loc = fill.cell_at_param(pv).max(1e-6);
+            let h_over_cell = base.provenance.element_size / a_loc;
+            let rel_e = element_stiffness(spec.family, spec.mode, phi, h_over_cell).max(VOID_SCALE);
+            let d_rel_dphi = d_element_stiffness_dphi(spec.family, spec.mode, phi, h_over_cell);
+            let energy_2u =
+                fieldsmith_solve::element_strain_energy_2u(&base.mesh, &c.u, e, &graded_material);
+            let dc_drho = -energy_2u * (d_rel_dphi / rel_e);
+            if dc_drho < dc_drho_elem[e] {
+                dc_drho_elem[e] = dc_drho;
+            }
+            if class[e] == CLASS_LATTICE {
+                case_sum += -dc_drho;
+            }
+        }
+        lattice_adjoint_sensitivity_sum.push(case_sum);
+    }
+
     Ok(Graded {
         spec,
         fill,
@@ -1039,6 +1096,8 @@ pub fn graded_of(
         sigma_ref,
         mass_g,
         solid_mass_g,
+        dc_drho_elem,
+        lattice_adjoint_sensitivity_sum,
         fill_ms: t_fill - t0,
         solve_ms: clock() - t_solved,
     })
@@ -1403,6 +1462,20 @@ fill gyroid sheet cell=4 skin=1 rho=(0.2, 0.6)
 
         assert!(g.sigma_ref > 0.0, "sigma_ref = {}", g.sigma_ref);
         assert!(g.fill_ms >= 0.0 && g.solve_ms >= 0.0);
+
+        // Verify 3D P2 self-adjoint lattice compliance sensitivities `∂C / ∂ρ_e <= 0`
+        // (`VISION.md §5.2 Pillar III`):
+        assert_eq!(g.dc_drho_elem.len(), base.mesh.tets.len());
+        assert_eq!(g.lattice_adjoint_sensitivity_sum.len(), g.cases.len());
+        assert!(
+            g.dc_drho_elem.iter().all(|&dc| dc <= 0.0),
+            "self-adjoint compliance sensitivity dC/drho_e must be non-positive everywhere"
+        );
+        assert!(
+            g.lattice_adjoint_sensitivity_sum[0] > 0.0,
+            "integrated lattice compliance sensitivity must be strictly positive, got {}",
+            g.lattice_adjoint_sensitivity_sum[0]
+        );
 
         // The graded readout must also carry a real stress field: the envelope over the graded
         // cases matches the single case's.

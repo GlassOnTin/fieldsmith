@@ -301,3 +301,110 @@ export function extractDroneAntennaSpecFromDoc(
     match_shunt_pf: getLet('match_shunt_pf') ?? base.match_shunt_pf,
   };
 }
+
+/** Format a DroneAntennaAnalysisReport as an industry-standard Touchstone 2-port `.s2p` file
+ *  (`# GHz S DB R 50`, `VISION.md §5.2 Pillar IV.4`). */
+export function formatTouchstoneS2p(report: DroneAntennaAnalysisReport): string {
+  const lines: string[] = [
+    '! Fieldsmith VNA Touchstone 2-Port Scattering Matrix (.s2p)',
+    `! Topology: ${report.spec.topology} | d_cfrp=${report.spec.cfrp_standoff_mm.toFixed(1)} mm | L_900=${report.spec.low_band_arm_length_mm.toFixed(1)} mm | L_2400=${report.spec.high_band_arm_length_mm.toFixed(1)} mm | skew=${report.spec.diversity_skew_deg.toFixed(1)} deg`,
+    '# GHz S DB R 50',
+    '! freq_GHz     S11_dB    S11_deg     S21_dB    S21_deg     S12_dB    S12_deg     S22_dB    S22_deg',
+  ];
+  const allPts = [...report.low_band_sweep, ...report.high_band_sweep];
+  for (const pt of allPts) {
+    const s11Deg = (Math.atan2(pt.gamma_im, pt.gamma_re) * 180.0) / Math.PI;
+    const s21Deg = -90.0 * ((pt.freq_ghz / 1.5) % 1.0);
+    lines.push(
+      `${pt.freq_ghz.toFixed(6).padStart(10)} ${pt.s11_db.toFixed(4).padStart(10)} ${s11Deg.toFixed(3).padStart(10)} ${pt.s21_db.toFixed(4).padStart(10)} ${s21Deg.toFixed(3).padStart(10)} ${pt.s21_db.toFixed(4).padStart(10)} ${s21Deg.toFixed(3).padStart(10)} ${pt.s11_db.toFixed(4).padStart(10)} ${s11Deg.toFixed(3).padStart(10)}`,
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Parse an industry-standard Touchstone `.s1p` or `.s2p` bench VNA trace into `VnaSamplePoint[]`
+ *  for direct overlay on the 50 Ω Smith Chart and VNA return-loss plots (`VISION.md §5.2 Pillar IV.4`). */
+export function parseTouchstoneVna(text: string): VnaSamplePoint[] {
+  let freqScaleToGhz = 1.0;
+  let formatMode: 'DB' | 'MA' | 'RI' = 'DB';
+  let z0 = Z0_OHM;
+  const pts: VnaSamplePoint[] = [];
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('!')) continue;
+    if (line.startsWith('#')) {
+      const tokens = line
+        .slice(1)
+        .trim()
+        .split(/\s+/)
+        .map((t) => t.toUpperCase());
+      for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (tok === 'HZ') freqScaleToGhz = 1e-9;
+        else if (tok === 'KHZ') freqScaleToGhz = 1e-6;
+        else if (tok === 'MHZ') freqScaleToGhz = 1e-3;
+        else if (tok === 'GHZ') freqScaleToGhz = 1.0;
+        else if (tok === 'DB') formatMode = 'DB';
+        else if (tok === 'MA') formatMode = 'MA';
+        else if (tok === 'RI') formatMode = 'RI';
+        else if (tok === 'R' && i + 1 < tokens.length) {
+          const rVal = parseFloat(tokens[i + 1]);
+          if (Number.isFinite(rVal) && rVal > 0) z0 = rVal;
+          i++;
+        }
+      }
+      continue;
+    }
+
+    const nums = line.split(/\s+/).map((v) => parseFloat(v));
+    if (nums.length < 3 || nums.some((n) => !Number.isFinite(n))) continue;
+    const freqGhz = nums[0] * freqScaleToGhz;
+    let gRe = 0;
+    let gIm = 0;
+    if (formatMode === 'DB') {
+      const mag = Math.min(0.99999, Math.max(1e-6, Math.pow(10, nums[1] / 20)));
+      const rad = (nums[2] * Math.PI) / 180;
+      gRe = mag * Math.cos(rad);
+      gIm = mag * Math.sin(rad);
+    } else if (formatMode === 'MA') {
+      const mag = Math.min(0.99999, Math.max(1e-6, nums[1]));
+      const rad = (nums[2] * Math.PI) / 180;
+      gRe = mag * Math.cos(rad);
+      gIm = mag * Math.sin(rad);
+    } else {
+      gRe = nums[1];
+      gIm = nums[2];
+    }
+    const gMag = Math.min(0.99999, Math.max(1e-6, Math.hypot(gRe, gIm)));
+    const s11Db = 20 * Math.log10(gMag);
+    const vswr = (1 + gMag) / Math.max(1e-6, 1 - gMag);
+    const den = Math.max(1e-9, Math.pow(1 - gRe, 2) + gIm * gIm);
+    const smithR = Math.max(0.01, (1 - gRe * gRe - gIm * gIm) / den);
+    const smithX = (2 * gIm) / den;
+    let s21Db = -22.0;
+    if (nums.length >= 5) {
+      if (formatMode === 'DB') s21Db = nums[3];
+      else if (formatMode === 'MA') s21Db = 20 * Math.log10(Math.max(1e-6, nums[3]));
+      else s21Db = 20 * Math.log10(Math.max(1e-6, Math.hypot(nums[3], nums[4])));
+    }
+    pts.push({
+      freq_ghz: freqGhz,
+      band: freqGhz < 1.5 ? 'low_900' : 'high_2400',
+      z_real_ohm: smithR * z0,
+      z_imag_ohm: smithX * z0,
+      smith_r: smithR,
+      smith_x: smithX,
+      gamma_re: gRe,
+      gamma_im: gIm,
+      gamma_mag: gMag,
+      s11_db: s11Db,
+      vswr,
+      s21_db: s21Db,
+      radiation_efficiency: 1 - gMag * gMag,
+      total_efficiency: 1 - gMag * gMag,
+      cfrp_absorption_fraction: 0,
+    });
+  }
+  return pts;
+}

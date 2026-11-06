@@ -16,6 +16,10 @@ fieldsmith 1
 # @check: 3D Affine Patch Stress Recovery vs Σ n ⊗ n ([100] & [110] Cubic Directions) || u(x) = (S : σ) x,   σ = Σ (n ⊗ n)   (Σ = 10 MPa) || 0.000 relative error || 5.33×10⁻¹⁵ / 4.00×10⁻¹⁵ rel || 0.000% || ≤ 10⁻⁶
 # @check: Hill–Mandel Gyroid Sheet vs Network Yield & Elastic Buckling Power Laws (ρ ∈ [0.2, 0.4]) || Gyroid Sheet: σ_y*/σ_ys = 0.3976 ρ^1.064,  σ_el*/E_s = 0.9212 ρ^3.263 (Stretch > Bend: 1.313×) || 0.0710 / 0.1084 / 0.1501 (ρ=0.2/0.3/0.4) || 0.0708 / 0.1090 / 0.1496 || 0.21% / 0.59% / 0.31% || ≤ 2.0%
 # ---
+# @assert: Graded TPMS Gyroid Mass Reduction Δm / m_solid || mass_saved_pct || >= 25.0 || >= 25% || %
+# @assert: Graded TPMS Gyroid Tip Deflection δ_graded || graded.max_displacement || 0.4275 || 8.0% || mm
+# @assert: Solid Reference Tip Deflection δ_solid || solid.max_displacement || 0.3179 || 6.0% || mm
+# ---
 # @step: 1. Inspect the Two-Pass Stress-Graded TPMS Specification (`fill` + `build`) in Make (4) || make
 #   Open Make (4). Every TPMS unit cell (`gyroid`, `primitive`, `diamond` in `sheet` or `network` mode) has cubic symmetry (O_h point group) characterised by three independent compliance constants (S₁₁, S₁₂, S₄₄) and Zener anisotropy ratio A_Z = 2(S₁₁ − S₁₂)/S₄₄ (A_Z = 1.219 for gyroid sheet, 4.384 for primitive sheet, 0.734 for diamond sheet).
 # @expected:

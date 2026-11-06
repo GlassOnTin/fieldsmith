@@ -16,6 +16,9 @@ fieldsmith 1
 # @check: Converging + Diverging Conical Frusta Volume (z ∈ [80, 140] mm) || V₂ + V₃ = 2π r̄₂ A₂ + 2π r̄₃ A₃ = 15,360 π mm³ || 48,254.86 mm³ || Exact Algebraic Anchor || 0.000% || Pappus Identity
 # @check: Total De Laval Shell SDF Integrated Volume (V₁ + V₂ + V₃) || V_exact = 43,520 π mm³;  m_CuCrZr = ρ · V = 8.90 g/cm³ × 136.722 cm³ = 1,216.83 g || 136,722.11 mm³ (1,216.8 g) || 136,358.73 mm³ (1,213.6 g) || 0.266% || ≤ 0.50%
 # ---
+# @assert: Pappus De Laval Shell Mass m_CuCrZr || mass_g || 1216.83 || 1.0% || g
+# @assert: Test Pressure Peak Stress Bound || max_vm_elem || <= 15.0 || <= 15.0 || MPa
+# ---
 # @step: 1. Inspect the 3-Stage De Laval Revolve Profile in Shape (1) || shape
 #   Open Shape (1). The shell is defined by subtracting two 2D meridional polygon profiles revolved 360° around the Z axis: (1) a cylindrical combustion chamber z ∈ [0, 80] mm with r_i = 18 mm, r_o = 26 mm; (2) a converging conical section z ∈ [80, 110] mm tapering to r_i = 7.5 mm, r_o = 15.5 mm at the sonic throat; and (3) a diverging bell cone z ∈ [110, 140] mm expanding to r_i = 15 mm, r_o = 23 mm.
 # @expected:

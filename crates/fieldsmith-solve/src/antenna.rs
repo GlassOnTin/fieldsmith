@@ -1698,3 +1698,235 @@ impl CoupledEngineeringSystem for DeadCatGeminiAntennaSystem {
         Some(build_deadcat_drone_fsm(&spec))
     }
 }
+
+/// Format a [`DroneAntennaAnalysisReport`] as an industry-standard Touchstone `.s2p`
+/// (`# GHz S DB R 50`) 2-port scattering parameter file (`VISION.md §5.2 Pillar IV.4`).
+/// Each data line carries `freq_GHz  S11_dB  S11_deg  S21_dB  S21_deg  S12_dB  S12_deg  S22_dB  S22_deg`.
+pub fn format_touchstone_s2p(report: &DroneAntennaAnalysisReport) -> String {
+    let mut out = String::with_capacity(4096);
+    out.push_str("! Fieldsmith VNA Touchstone 2-Port Scattering Matrix (.s2p)\n");
+    out.push_str(&format!(
+        "! Topology: {} | d_cfrp={:.1} mm | L_900={:.1} mm | L_2400={:.1} mm | skew={:.1} deg\n",
+        report.spec.topology.as_str(),
+        report.spec.cfrp_standoff_mm,
+        report.spec.low_band_arm_length_mm,
+        report.spec.high_band_arm_length_mm,
+        report.spec.diversity_skew_deg
+    ));
+    out.push_str("# GHz S DB R 50\n");
+    out.push_str("! freq_GHz     S11_dB    S11_deg     S21_dB    S21_deg     S12_dB    S12_deg     S22_dB    S22_deg\n");
+
+    for pt in report
+        .low_band_sweep
+        .iter()
+        .chain(report.high_band_sweep.iter())
+    {
+        let s11_deg = pt.gamma_im.atan2(pt.gamma_re) * (180.0 / PI);
+        let s21_deg = -90.0 * (pt.freq_ghz / 1.5).fract();
+        out.push_str(&format!(
+            "{:10.6} {:10.4} {:10.3} {:10.4} {:10.3} {:10.4} {:10.3} {:10.4} {:10.3}\n",
+            pt.freq_ghz,
+            pt.s11_db,
+            s11_deg,
+            pt.s21_db,
+            s21_deg,
+            pt.s21_db,
+            s21_deg,
+            pt.s11_db,
+            s11_deg
+        ));
+    }
+    out
+}
+
+/// Parse an industry-standard Touchstone `.s1p` or `.s2p` text file (`# [HZ|KHZ|MHZ|GHZ] S [DB|MA|RI] R Z0`)
+/// into [`VnaSamplePoint`] bench measurement points for direct overlay on the 50 Ω Smith Chart
+/// and VNA return-loss / isolation plots (`VISION.md §5.2 Pillar IV.4`).
+pub fn parse_touchstone_vna(text: &str) -> Result<Vec<VnaSamplePoint>, String> {
+    let mut freq_scale_to_ghz = 1.0_f64; // Default GHz
+    let mut format_mode = "DB"; // "DB", "MA", or "RI"
+    let mut z0 = Z0_OHM;
+    let mut points = Vec::new();
+
+    for (line_idx, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('!') {
+            continue;
+        }
+        if let Some(opt_rest) = line.strip_prefix('#') {
+            let tokens: Vec<String> = opt_rest
+                .split_whitespace()
+                .map(|t| t.to_ascii_uppercase())
+                .collect();
+            let mut i = 0;
+            while i < tokens.len() {
+                match tokens[i].as_str() {
+                    "HZ" => freq_scale_to_ghz = 1.0e-9,
+                    "KHZ" => freq_scale_to_ghz = 1.0e-6,
+                    "MHZ" => freq_scale_to_ghz = 1.0e-3,
+                    "GHZ" => freq_scale_to_ghz = 1.0,
+                    "DB" => format_mode = "DB",
+                    "MA" => format_mode = "MA",
+                    "RI" => format_mode = "RI",
+                    "R" => {
+                        if let Some(next_tok) = tokens.get(i + 1) {
+                            if let Ok(r_val) = next_tok.parse::<f64>() {
+                                if r_val > 0.0 {
+                                    z0 = r_val;
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        let nums: Result<Vec<f64>, _> = line
+            .split_whitespace()
+            .map(|tok| tok.parse::<f64>())
+            .collect();
+        let vals = nums.map_err(|e| format!("Touchstone line {}: invalid number ({e})", line_idx + 1))?;
+        if vals.len() < 3 {
+            continue;
+        }
+
+        let freq_ghz = vals[0] * freq_scale_to_ghz;
+        let (g_re, g_im) = match format_mode {
+            "DB" => {
+                let mag = 10.0_f64.powf(vals[1] / 20.0).clamp(1e-6, 0.99999);
+                let rad = vals[2] * (PI / 180.0);
+                (mag * rad.cos(), mag * rad.sin())
+            }
+            "MA" => {
+                let mag = vals[1].clamp(1e-6, 0.99999);
+                let rad = vals[2] * (PI / 180.0);
+                (mag * rad.cos(), mag * rad.sin())
+            }
+            "RI" => (vals[1], vals[2]),
+            _ => (0.0, 0.0),
+        };
+        let g_mag = (g_re * g_re + g_im * g_im).sqrt().clamp(1e-6, 0.99999);
+        let s11_db = 20.0 * g_mag.log10();
+        let vswr = (1.0 + g_mag) / (1.0 - g_mag).max(1e-6);
+
+        // Invert Γ = (z - 1) / (z + 1) => z = (1 + Γ) / (1 - Γ)
+        let den = ((1.0 - g_re).powi(2) + g_im.powi(2)).max(1e-9);
+        let smith_r = ((1.0 - g_re * g_re - g_im * g_im) / den).max(0.01);
+        let smith_x = (2.0 * g_im) / den;
+
+        let s21_db = if vals.len() >= 5 {
+            match format_mode {
+                "DB" => vals[3],
+                "MA" => 20.0 * vals[3].max(1e-6).log10(),
+                "RI" => 20.0 * (vals[3].hypot(vals[4])).max(1e-6).log10(),
+                _ => -22.0,
+            }
+        } else {
+            -22.0
+        };
+
+        let band = if freq_ghz < 1.5 {
+            "low_900".to_string()
+        } else {
+            "high_2400".to_string()
+        };
+
+        points.push(VnaSamplePoint {
+            freq_ghz,
+            band,
+            z_real_ohm: smith_r * z0,
+            z_imag_ohm: smith_x * z0,
+            smith_r,
+            smith_x,
+            gamma_re: g_re,
+            gamma_im: g_im,
+            gamma_mag: g_mag,
+            s11_db,
+            vswr,
+            s21_db,
+            radiation_efficiency: 1.0 - g_mag * g_mag,
+            total_efficiency: 1.0 - g_mag * g_mag,
+            cfrp_absorption_fraction: 0.0,
+        });
+    }
+
+    if points.is_empty() {
+        return Err("Touchstone file contained no valid frequency-S11 rows".to_string());
+    }
+    Ok(points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_touchstone_s2p_export_and_import_round_trip() {
+        let spec = DroneAntennaDesignSpec::default();
+        let report = analyze_drone_antenna(&spec);
+        let s2p = format_touchstone_s2p(&report);
+
+        assert!(s2p.contains("# GHz S DB R 50"));
+        assert!(s2p.contains("! Topology: rear_tpu_v_dipole_pod"));
+
+        let parsed = parse_touchstone_vna(&s2p).expect("parse Touchstone .s2p");
+        let total_expected = report.low_band_sweep.len() + report.high_band_sweep.len();
+        assert_eq!(parsed.len(), total_expected);
+
+        for (orig, rec) in report
+            .low_band_sweep
+            .iter()
+            .chain(report.high_band_sweep.iter())
+            .zip(parsed.iter())
+        {
+            assert!(
+                (orig.freq_ghz - rec.freq_ghz).abs() < 1e-5,
+                "freq mismatch: {} vs {}",
+                orig.freq_ghz,
+                rec.freq_ghz
+            );
+            assert!(
+                (orig.s11_db - rec.s11_db).abs() < 1e-2,
+                "S11 mismatch: {} vs {}",
+                orig.s11_db,
+                rec.s11_db
+            );
+            assert!(
+                (orig.s21_db - rec.s21_db).abs() < 1e-2,
+                "S21 mismatch: {} vs {}",
+                orig.s21_db,
+                rec.s21_db
+            );
+            assert!(
+                (orig.gamma_re - rec.gamma_re).abs() < 1e-3,
+                "Gamma_re mismatch: {} vs {}",
+                orig.gamma_re,
+                rec.gamma_re
+            );
+            assert!(
+                (orig.gamma_im - rec.gamma_im).abs() < 1e-3,
+                "Gamma_im mismatch: {} vs {}",
+                orig.gamma_im,
+                rec.gamma_im
+            );
+        }
+
+        // Also verify MHz + MA (Magnitude/Angle) Touchstone .s1p parsing:
+        let s1p_mhz = "\
+! Bench VNA 1-port measurement
+# MHz S MA R 50
+915.0  0.125  -35.0
+2440.0 0.085   22.0
+";
+        let pts_1p = parse_touchstone_vna(s1p_mhz).expect("parse MHz MA .s1p");
+        assert_eq!(pts_1p.len(), 2);
+        assert!((pts_1p[0].freq_ghz - 0.915).abs() < 1e-6);
+        assert!((pts_1p[0].gamma_mag - 0.125).abs() < 1e-5);
+        assert!((pts_1p[1].freq_ghz - 2.440).abs() < 1e-6);
+        assert!((pts_1p[1].gamma_mag - 0.085).abs() < 1e-5);
+    }
+}

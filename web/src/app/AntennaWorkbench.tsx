@@ -9,7 +9,9 @@ import {
   buildDeadCatDroneFsmText,
   defaultOptimisedDroneAntennaSpec,
   extractDroneAntennaSpecFromDoc,
+  formatTouchstoneS2p,
   optimiseDroneAntenna,
+  parseTouchstoneVna,
   suggestLNetworkMatching,
   unoptimisedTuckedDroneAntennaSpec,
   type DroneAntennaAnalysisReport,
@@ -68,11 +70,13 @@ function SmithChartSvg({
   highSweep,
   targetLowGhz,
   targetHighGhz,
+  benchSweep,
 }: {
   lowSweep: VnaSamplePoint[];
   highSweep: VnaSamplePoint[];
   targetLowGhz: number;
   targetHighGhz: number;
+  benchSweep?: VnaSamplePoint[];
 }) {
   const cx = 145;
   const cy = 140;
@@ -254,6 +258,28 @@ function SmithChartSvg({
         stroke-width="2.2"
         stroke-linecap="round"
       />
+
+      {/* Imported Bench Touchstone (.s1p / .s2p) Overlay Locus */}
+      {benchSweep && benchSweep.length > 0 && (
+        <>
+          <path
+            d={buildSweepPath(benchSweep.filter((p) => p.freq_ghz < 1.5))}
+            fill="none"
+            stroke="#34D399"
+            stroke-width="2.0"
+            stroke-dasharray="4 2"
+            stroke-linecap="round"
+          />
+          <path
+            d={buildSweepPath(benchSweep.filter((p) => p.freq_ghz >= 1.5))}
+            fill="none"
+            stroke="#A855F7"
+            stroke-width="2.0"
+            stroke-dasharray="4 2"
+            stroke-linecap="round"
+          />
+        </>
+      )}
 
       {/* 50 Ω Bullseye */}
       <circle cx={cx} cy={cy} r="3" fill="#10B981" />
@@ -834,6 +860,9 @@ export function AntennaWorkbenchModal() {
   const [cutPlane, setCutPlane] = useState<'yaw' | 'pitch' | 'roll'>('yaw');
   const [lobeBand, setLobeBand] = useState<'low_900' | 'high_2400'>('high_2400');
   const [autoSync3d, setAutoSync3d] = useState<boolean>(true);
+  const [benchSweep, setBenchSweep] = useState<VnaSamplePoint[]>([]);
+  const [benchFileName, setBenchFileName] = useState<string>('');
+  const touchstoneInputRef = useRef<HTMLInputElement | null>(null);
   const cadSyncTimerRef = useRef<number>(0);
   const pendingSpecRef = useRef<DroneAntennaDesignSpec | null>(null);
   const [lastOptDelta, setLastOptDelta] = useState<{
@@ -994,6 +1023,34 @@ export function AntennaWorkbenchModal() {
     ui.notify(`Applied conjugate L-network match: L_ser = ${lNh.toFixed(2)} nH, C_sh = ${cPf.toFixed(2)} pF`);
   };
 
+  const handleExportTouchstoneS2p = () => {
+    const s2pText = formatTouchstoneS2p(report);
+    const blob = new Blob([s2pText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fieldsmith-deadcat-gemini-${spec.topology}.s2p`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ui.notify(`Exported Touchstone 2-port VNA sweep (${a.download})`, 'info', 4000);
+  };
+
+  const handleImportTouchstoneFile = async (file: File) => {
+    try {
+      const text = await file.text();
+      const pts = parseTouchstoneVna(text);
+      if (pts.length === 0) {
+        ui.notify(`Touchstone file ${file.name} contained no valid VNA frequency rows`, 'error', 5000);
+        return;
+      }
+      setBenchSweep(pts);
+      setBenchFileName(file.name);
+      ui.notify(`Overlaid ${pts.length} bench VNA points from ${file.name} on Smith Chart`, 'info', 5000);
+    } catch (e) {
+      ui.notify(`Failed to import Touchstone file: ${e instanceof Error ? e.message : String(e)}`, 'error', 5000);
+    }
+  };
+
   const activeBandSummary =
     lobeBand === 'low_900' ? report.low_band_summary : report.high_band_summary;
   const activeCutSamples =
@@ -1139,6 +1196,57 @@ export function AntennaWorkbenchModal() {
             >
               ⚡ Auto-Optimise Geometry &amp; L/C Match
             </button>
+            <button
+              class="btn small"
+              data-testid="antenna-export-touchstone-btn"
+              onClick={handleExportTouchstoneS2p}
+              title="Export dual-band VNA S-parameters (S11, S21, S12, S22) as an industry-standard Touchstone .s2p file"
+            >
+              ⬇ Export Touchstone (.s2p)
+            </button>
+            <button
+              class="btn small"
+              data-testid="antenna-import-touchstone-btn"
+              onClick={() => touchstoneInputRef.current?.click()}
+              title="Import a measured bench VNA Touchstone (.s1p / .s2p) file to overlay directly on the 50 Ω Smith Chart"
+            >
+              📂 Overlay Bench VNA (.s1p/.s2p)
+            </button>
+            {benchSweep.length > 0 && (
+              <span
+                data-testid="antenna-bench-overlay-badge"
+                style={{
+                  fontSize: '10.5px',
+                  fontFamily: 'var(--mono)',
+                  color: '#34D399',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                ✓ Bench: {benchFileName} ({benchSweep.length} pts)
+                <button
+                  type="button"
+                  class="mini-btn"
+                  onClick={() => {
+                    setBenchSweep([]);
+                    setBenchFileName('');
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+            <input
+              ref={touchstoneInputRef}
+              type="file"
+              accept=".s1p,.s2p,.txt"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = (e.target as HTMLInputElement).files?.[0];
+                if (f) void handleImportTouchstoneFile(f);
+              }}
+            />
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', fontSize: '11px', color: '#E2E8F0' }}>
@@ -1340,6 +1448,7 @@ export function AntennaWorkbenchModal() {
                 highSweep={report.high_band_sweep}
                 targetLowGhz={spec.target_low_freq_ghz}
                 targetHighGhz={spec.target_high_freq_ghz}
+                benchSweep={benchSweep}
               />
             </div>
 

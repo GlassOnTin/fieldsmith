@@ -246,6 +246,7 @@ pub struct GradedSummary {
     pub strength_exp: f64,
     pub buckling_coef: f64,
     pub buckling_exp: f64,
+    pub lattice_adjoint_sensitivity_sum: Vec<f64>,
     pub fill_ms: f64,
     pub solve_ms: f64,
 }

@@ -16,6 +16,10 @@ fieldsmith 1
 # @check: Triangular Ramp Resultant Force R_z & Centroidal Moment M_y || R_z = −½ q₀ b L = −200.0 N,   M_y = |R_z| (2L/3) = 13,333.33 N·mm || -200.00 N / 13,333.33 N·mm || -200.00 N / 13,332.89 N·mm || 0.000% / 0.003% || ≤ 1.0%
 # @check: Piecewise Step Load Tip Deflection & Moment (w = 2 N/mm on [0,75], 4 N/mm on (75,100]) || δ_tip = ∫₀^L M(u) u du / (E I) = 38,574,219 / (E I);   R_z = −250 N, M_y = 14,375 N·mm || 0.231445 mm / 14,375.0 N·mm || 0.230546 mm / 14,299.7 N·mm || 0.389% / 0.524% || ≤ 2.0%
 # ---
+# @assert: Triangular Ramp Tip Deflection δ_tip || max_displacement:Triangle || 0.2200 || 2.0% || mm
+# @assert: Triangular Ramp Resultant Force |R_z| || resultant_mag:Triangle || 200.0 || 1.0% || N
+# @assert: Piecewise Step Tip Deflection δ_tip || max_displacement:Piecewise || 0.2314 || 2.0% || mm
+# ---
 # @step: 1. Inspect Face-Local Coordinate Frame & Symbolic fn="..." Traction Profiles || setup
 #   Open Setup (2). On the top face z = 10 mm (centroid at x = 50 mm, y = 5 mm), local x runs from −50 mm at the root to +50 mm at the free tip. Case "Triangle" applies local=(0, 0, -0.4) scaled by fn="(x + 50) / 100" (linear ramp from 0 at the root to 0.4 MPa at the tip), while Case "Piecewise" applies a step profile fn="x <= 25 ? 0.2 : 0.4".
 # @expected:
@@ -48,6 +52,6 @@ region root = beam.nx
 region top_face = beam.pz
 support clamp root fixed=xyz
 
-load ramp top_face local=(0, 0, -0.4) fn="(x + 50) / 100" case="Triangle"
-load step_profile top_face local=(0, 0, -1) fn="-50 < x < 0 -> 0.2; 0 < x < 50 -> 0.4" case="Piecewise"
+load ramp top_face local=(0, 0, -1) fn="0.4 * (x + 50) / 100" case="Triangle"
+load step_profile top_face local=(0, 0, -1) fn="-50 < x < 25 -> 0.2; 25 < x < 50 -> 0.4" case="Piecewise"
 solve

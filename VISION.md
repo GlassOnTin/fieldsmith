@@ -206,6 +206,11 @@ Across versions `v0.1` through `v0.14` ([`README.md`](README.md), [`docs/README.
   (`T8`–`T13`, `T16`–`T17`) live as self-defining `.fsm` files in [`examples/`](examples/), bind
   their `let` parameters directly into the coupled PDE/adjoint/UQ workbenches, and render in-stage
   verification tables in `3. Results` and `fieldsmith solve --report`.
+- **Executable `@assert` contracts, 1D→3D surface projection, 3D adjoint lattice sensitivities & Touchstone VNA bench overlay (`v0.15`)**:
+  - **Pillar I (Shipped)**: `# @assert:` directives (`<label> || <metric> || <target_or_op> || <tolerance> || <unit>`) across `A1`–`A14` (`38` assertions), `T16` (`4` assertions), and `T17` (`3` assertions), evaluated live in `fieldsmith solve --verify` (exit code `0`/`3`), `cargo test -p fieldsmith-cli verify_all_analytic_fsm_assert_contracts`, and `3. Results` (`[data-testid="results-live-asserts"]`).
+  - **Pillar II (Shipped for `T17` / `regen_nozzle_h2_v1`)**: `CoupledEngineeringSystem::build_3d_fsm_from_state` projects the solved 1D supercritical-H₂ / CuCrZr / YSZ axial profiles (`q_hot`, `h_cool`, `T_∞,cool`) and `let` geometry parameters (`throat_ch_mm`, `liner_wall_mm`, `tbc_um`, `coolant_mdot_kg_s`) directly onto the 3D axisymmetric De Laval TPMS Gyroid `.fsm` twin via `solve_coupled_system` and `optimise_coupled_system` (`sync_to_document: true`).
+  - **Pillar III (Shipped for 3D P2 Lattice Grading)**: exact element-wise self-adjoint compliance sensitivity `∂C/∂ρ_e = -u_eᵀ (∂K_e/∂ρ_e) u_e = -(2 U_e)(∂E_e/∂ρ_e)/E_e` (`dc_drho_elem` and `lattice_adjoint_sensitivity_sum` across isotropic and cubic-anisotropic TPMS homogenisation laws) surfaced in `Graded`, `GradedSummary`, WASM, and `3. Results`.
+  - **Pillar IV (Shipped for `T16` / `A14` Touchstone VNA)**: `format_touchstone_s2p` (`# GHz S DB R 50`) and `parse_touchstone_vna` (`.s1p`/`.s2p` `HZ`/`KHZ`/`MHZ`/`GHZ`, `DB`/`MA`/`RI`) with live Smith Chart bench overlay in `AntennaWorkbench.tsx`.
 
 ---
 

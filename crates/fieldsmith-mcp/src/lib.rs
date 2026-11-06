@@ -1397,7 +1397,7 @@ impl Server {
             let obj_descs = sys.objective_descriptors();
             let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
             let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-            let fsm_3d = sys.build_3d_fsm(&p);
+            let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
             if sync_cad {
                 if let Some(ref text) = fsm_3d {
                     let d = fsm::parse(text).map_err(|e| e.to_string())?;
@@ -1427,7 +1427,7 @@ impl Server {
             let obj_descs = sys.objective_descriptors();
             let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
             let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-            let fsm_3d = sys.build_3d_fsm(&p);
+            let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
             if sync_cad {
                 if let Some(ref text) = fsm_3d {
                     let d = fsm::parse(text).map_err(|e| e.to_string())?;
@@ -1458,7 +1458,7 @@ impl Server {
             let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
             let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
             let candle_flame_visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
-            let fsm_3d = sys.build_3d_fsm(&p);
+            let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
             if sync_cad {
                 if let Some(ref text) = fsm_3d {
                     let d = fsm::parse(text).map_err(|e| e.to_string())?;
@@ -1489,7 +1489,7 @@ impl Server {
             let obj_descs = sys.objective_descriptors();
             let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
             let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-            let fsm_3d = sys.build_3d_fsm(&p);
+            let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
             if sync_cad {
                 if let Some(ref text) = fsm_3d {
                     let d = fsm::parse(text).map_err(|e| e.to_string())?;
@@ -1686,7 +1686,7 @@ impl Server {
         let final_analysis = MonolithicSystemEngine::solve_and_analyze(sys, cfg, &p, &theta)?;
         let pass_p50 = final_analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = final_analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-        let fsm_3d = sys.build_3d_fsm(&p);
+        let fsm_3d = sys.build_3d_fsm_from_state(&final_analysis.state, &p, &theta);
         if sync_cad {
             if let Some(ref text) = fsm_3d {
                 let d = fsm::parse(text).map_err(|e| e.to_string())?;

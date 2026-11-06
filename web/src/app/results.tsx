@@ -18,7 +18,7 @@ import { fmt } from './fields';
 import * as THREE from 'three';
 import type { LoadReport } from '../doc/wasm';
 import type { LevelResult } from '../doc/wasm';
-import { findMatchingLiterateSheet } from '../doc/literate-fsm';
+import { findMatchingLiterateSheet, evaluateLiterateAssertOnLevel } from '../doc/literate-fsm';
 
 // ---- colour ramp ---------------------------------------------------------------------
 
@@ -2249,6 +2249,9 @@ function ResultsPanel() {
                     {fmt(c.max_vm_elem)} MPa · {fmt(c.max_displacement)} mm
                     {uf != null ? ` · yield ×${fmt(uf, 2)}` : ''}
                     {bf != null ? ` · buckling ×${fmt(bf, 2)}` : ''}
+                    {lvl.meta.fill?.lattice_adjoint_sensitivity_sum?.[i] != null
+                      ? ` · Σ(−∂C/∂ρ_e) ${fmt(lvl.meta.fill.lattice_adjoint_sensitivity_sum[i], 2)} N·mm`
+                      : ''}
                     {c.conduction ? ` · conduction ${c.conduction.iterations} iters` : ''}
                   </span>
                 </Fragment>
@@ -2259,6 +2262,8 @@ function ResultsPanel() {
             const litSheet = findMatchingLiterateSheet(store.doc.name);
             if (!litSheet) return null;
             const checks = litSheet.analyticChecks ?? [];
+            const liveAsserts = (litSheet.asserts ?? []).map((a) => evaluateLiterateAssertOnLevel(a, lvl));
+            const passCount = liveAsserts.filter((r) => r.passed).length;
             return (
               <div
                 data-testid="results-analytic-verification"
@@ -2300,6 +2305,65 @@ function ResultsPanel() {
                     </button>
                   </div>
                 </div>
+                {liveAsserts.length > 0 && (
+                  <div
+                    data-testid="results-live-asserts"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '3px',
+                      padding: '5px 7px',
+                      background: 'rgba(16, 185, 129, 0.07)',
+                      border: '1px solid rgba(16, 185, 129, 0.32)',
+                      borderRadius: '5px',
+                      fontSize: '10.5px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontWeight: 700, color: '#6ee7b7' }}>
+                        ✓ Live @assert Contracts ({passCount} / {liveAsserts.length} PASS on {lvl.label})
+                      </span>
+                      <span class="num" style={{ color: '#a7f3d0', fontSize: '9.5px' }}>
+                        fieldsmith solve --verify
+                      </span>
+                    </div>
+                    {liveAsserts.map((ev, idx) => {
+                      const u = ev.assert.unit ? ` ${ev.assert.unit}` : '';
+                      return (
+                        <div
+                          key={idx}
+                          data-testid={`live-assert-row-${idx}`}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '6px',
+                            flexWrap: 'wrap',
+                            padding: '2px 4px',
+                            background: 'rgba(15, 23, 42, 0.55)',
+                            borderRadius: '3px',
+                          }}
+                        >
+                          <span style={{ color: '#e2e8f0', fontWeight: 500 }}>
+                            {ev.assert.label} <code style={{ color: '#94a3b8', fontSize: '9.5px' }}>({ev.assert.metric})</code>
+                          </span>
+                          <span
+                            class="num"
+                            style={{
+                              color: ev.passed ? '#4ade80' : '#f87171',
+                              fontWeight: 600,
+                            }}
+                          >
+                            live {ev.liveValue != null ? fmt(ev.liveValue, 4) : 'N/A'}
+                            {u} vs {ev.assert.target}
+                            {u} ({ev.errorOrMargin}
+                            {ev.assert.tolerance ? ` ≤ ${ev.assert.tolerance}` : ''}) {ev.passed ? 'PASS' : 'FAIL'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {checks.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10.5px' }}>
                     {checks.slice(0, compact ? 2 : 6).map((chk, idx) => (

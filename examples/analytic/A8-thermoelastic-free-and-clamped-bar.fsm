@@ -16,6 +16,9 @@ fieldsmith 1
 # @check: Leg (b) End-Clamped Uniaxial Thermal Stress σ_xx (u_x(0) = u_x(L) = 0) || σ_xx = −E α ΔT = −2300 × (7.0×10⁻⁵) × 40 = −6.44 MPa  (or −64.40 MPa at E=23 GPa) || -64.40000 MPa || -64.40000 MPa || 0.000% || ≤ 0.1%
 # @check: Leg (b) Transverse Free-Poisson Expansion u_y(y), u_z(z) & Transverse Stress || u_y = (1 + ν) α ΔT y,   u_z = (1 + ν) α ΔT z,   σ_yy = σ_zz = 0 MPa || 0.00000 MPa || -1.59×10⁻⁸ / -1.13×10⁻⁷ MPa || 0.000% || ≤ 0.1 MPa
 # ---
+# @assert: End-Clamped Uniaxial Thermal Stress |σ_xx| = E α ΔT || max_vm_elem || 6.4400 || 0.5% || MPa
+# @assert: Uniform Nodal Temperature T = 60 °C || max_temp || 60.000 || 0.1% || °C
+# ---
 # @step: 1. Inspect the Kinematic Sliding + End-Clamped Supports in Setup (2) || setup
 #   Open Setup (2). Fixing u_x = 0 on both ends (x = 0 and x = 40 mm) while fixing only u_y = 0 on y = 0 and u_z = 0 on z = 0 removes all 6 rigid-body modes while leaving the bar completely free to Poisson-expand laterally in Y and Z when heated from T_ref = 20 °C to T = 60 °C (ΔT = 40 K).
 # @expected:
@@ -40,7 +43,8 @@ fieldsmith 1
 # === END LITERATE HEADER ===
 
 name "A8 — End-Clamped Thermo-Elastic Bar (V19)"
-material pla
+custommaterial ref_pla name="Reference Thermo-Elastic Polymer (E=2300 MPa, alpha=7e-5 /K)" e=2300 nu=0.35 a=7.0e-5 yield=50 density=1.24
+material ref_pla
 
 box bar size=(40, 10, 10) at=(0, 0, 0)
 region x0 = bar.nx

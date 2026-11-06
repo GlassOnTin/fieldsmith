@@ -194,9 +194,28 @@ fn run(args: &[String]) -> Result<(), String> {
     if args.first().map(|c| c.as_str()) == Some("worker") {
         return worker_cmd(args);
     }
-    let (cmd, path) = match (args.first(), args.get(1)) {
-        (Some(c), Some(p)) => (c.as_str(), p.as_str()),
-        _ => return Err(USAGE.into()),
+    let cmd = match args.first() {
+        Some(c) => c.as_str(),
+        None => return Err(USAGE.into()),
+    };
+    let path = {
+        let mut found = None;
+        let mut i = 1;
+        while i < args.len() {
+            let a = args[i].as_str();
+            if a == "--verify" || a == "--converge" || a == "--overhang" || a == "--json" {
+                i += 1;
+            } else if a.starts_with("--") {
+                i += 2;
+            } else {
+                found = Some(a);
+                break;
+            }
+        }
+        match found {
+            Some(p) => p,
+            None => return Err(USAGE.into()),
+        }
     };
     if cmd == "import" {
         return import_cmd(path, args);
@@ -347,6 +366,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 Resolution::Dofs(150_000)
             };
             let report = args.iter().any(|a| a == "--report");
+            let verify = args.iter().any(|a| a == "--verify");
+            let raw_header = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|raw| fsm::parse_literate_header(&raw));
             for w in doc.material_warnings() {
                 eprintln!("warning: {w}");
             }
@@ -363,11 +386,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 return modal_cmd(&doc, &res, count, report);
             }
             if doc.fill.is_some() {
-                return solve_graded(&doc, &res, report);
+                return solve_graded(&doc, &res, report || verify, verify, raw_header.as_ref());
             }
             let a = analyse(&doc, res, clock).map_err(|e| e.0)?;
             let p = &a.provenance;
-            if report {
+            if report || verify {
                 println!("## solve report — {}\n", doc.name);
                 println!(
                     "P2 tetrahedra, element size {:.2} mm, {:.0} elements, {} DOF. Mesh {:.0} ms, \
@@ -438,25 +461,10 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                 }
                 print_load_table(&a.cases);
-                if let Ok(raw) = std::fs::read_to_string(path) {
-                    if let Some(hdr) = fsm::parse_literate_header(&raw) {
-                        if !hdr.checks.is_empty() {
-                            println!("\n## analytic verification — {} ({})\n", hdr.id, hdr.title);
-                            println!("| quantity | governing formula | analytic target | reference FEA | error | tolerance |");
-                            println!("| :-- | :-- | :-- | :-- | :-- | :-- |");
-                            for chk in &hdr.checks {
-                                println!(
-                                    "| {} | `{}` | {} | {} | {} | {} |",
-                                    chk.quantity,
-                                    chk.formula,
-                                    chk.analytic_ref,
-                                    chk.measured_fea,
-                                    chk.rel_error,
-                                    chk.tolerance
-                                );
-                            }
-                        }
-                    }
+                if let Some(hdr) = raw_header.as_ref() {
+                    print_literate_verification(hdr, &a, None, verify)?;
+                } else if verify {
+                    return Err(format!("{path}: no `# === FIELDSMITH LITERATE CASE ===` header found for --verify"));
                 }
             } else {
                 println!(
@@ -889,6 +897,297 @@ fn print_load_table(cases: &[CaseResult]) {
     }
 }
 
+fn find_case<'a>(cases: &'a [CaseResult], selector: &str) -> Option<&'a CaseResult> {
+    if selector.is_empty() {
+        return cases.first();
+    }
+    if let Ok(idx1) = selector.parse::<usize>() {
+        if idx1 >= 1 && idx1 <= cases.len() {
+            return cases.get(idx1 - 1);
+        }
+    }
+    cases
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(selector) || c.name.contains(selector))
+}
+
+fn resolve_assert_metric(
+    metric: &str,
+    a: &fieldsmith_core::Analysis,
+    g: Option<&fieldsmith_core::fill::Graded>,
+) -> Result<f64, String> {
+    let m = metric.trim();
+    if m == "mode_split_12_pct" {
+        let freqs = &a
+            .modes
+            .as_ref()
+            .ok_or_else(|| format!("metric '{m}' requires a modal solve (`solve modes=...`)"))?
+            .frequencies;
+        if freqs.len() < 2 {
+            return Err("mode_split_12_pct requires at least 2 modes".into());
+        }
+        let mean = 0.5 * (freqs[0] + freqs[1]).max(1e-12);
+        return Ok(100.0 * (freqs[1] - freqs[0]).abs() / mean);
+    }
+    if let Some(rest) = m.strip_prefix("mode_") {
+        let idx1: usize = rest
+            .parse()
+            .map_err(|_| format!("invalid mode metric '{m}'"))?;
+        let freqs = &a
+            .modes
+            .as_ref()
+            .ok_or_else(|| format!("metric '{m}' requires a modal solve (`solve modes=...`)"))?
+            .frequencies;
+        return freqs
+            .get(idx1.saturating_sub(1))
+            .copied()
+            .ok_or_else(|| format!("metric '{m}' out of range ({} modes solved)", freqs.len()));
+    }
+    match m {
+        "mass_g" => return Ok(g.map(|gr| gr.mass_g).unwrap_or(a.mass_g)),
+        "solid_mass_g" => return Ok(g.map(|gr| gr.solid_mass_g).unwrap_or(a.mass_g)),
+        "graded_mass_g" => {
+            return g
+                .map(|gr| gr.mass_g)
+                .ok_or_else(|| "graded_mass_g requires a fill statement".into())
+        }
+        "mass_saved_pct" => {
+            let gr = g.ok_or_else(|| "mass_saved_pct requires a fill statement".to_string())?;
+            if gr.solid_mass_g <= 0.0 {
+                return Ok(0.0);
+            }
+            return Ok(100.0 * (1.0 - gr.mass_g / gr.solid_mass_g));
+        }
+        "min_peak_peel" => return Ok(a.min_peak_peel),
+        "max_peak_peel" => return Ok(a.max_peak_peel),
+        _ => {}
+    }
+
+    let (use_graded, rest) = if let Some(r) = m.strip_prefix("graded.") {
+        (true, r)
+    } else if let Some(r) = m.strip_prefix("solid.") {
+        (false, r)
+    } else {
+        (false, m)
+    };
+
+    let (field, case_sel) = match rest.split_once(':') {
+        Some((f, cs)) => (f.trim(), cs.trim()),
+        None => (rest.trim(), ""),
+    };
+
+    let graded_cases_vec: Vec<CaseResult> = g
+        .map(|gr| {
+            gr.cases
+                .iter()
+                .chain(gr.thermal_cases.iter())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let pool: &[CaseResult] = if use_graded {
+        if graded_cases_vec.is_empty() {
+            return Err(format!("metric '{m}' requires a graded fill solve"));
+        }
+        &graded_cases_vec
+    } else {
+        &a.cases
+    };
+
+    let case = find_case(pool, case_sel)
+        .ok_or_else(|| format!("metric '{m}': no solved case matching '{case_sel}'"))?;
+
+    match field {
+        "max_displacement" | "max_disp" | "deflection" => Ok(case.max_displacement),
+        "max_vm_elem" | "vm" => Ok(case.max_vm_elem),
+        "max_von_mises" => Ok(case.max_von_mises),
+        "max_layer_peel" | "peel" => Ok(case.max_layer_peel),
+        "compliance" => Ok(case.compliance),
+        "max_temp" => {
+            let t = case
+                .temperature
+                .as_deref()
+                .ok_or_else(|| format!("case '{}' has no thermal field", case.name))?;
+            Ok(t.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+        }
+        "min_temp" => {
+            let t = case
+                .temperature
+                .as_deref()
+                .ok_or_else(|| format!("case '{}' has no thermal field", case.name))?;
+            Ok(t.iter().copied().fold(f64::INFINITY, f64::min))
+        }
+        "resultant_mag" => {
+            let r = case
+                .load_reports
+                .first()
+                .ok_or_else(|| format!("case '{}' has no load report", case.name))?
+                .resultant;
+            Ok((r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt())
+        }
+        _ => Err(format!("unknown @assert metric '{m}'")),
+    }
+}
+
+fn evaluate_literate_assert(
+    asrt: &fsm::LiterateAssert,
+    a: &fieldsmith_core::Analysis,
+    g: Option<&fieldsmith_core::fill::Graded>,
+) -> Result<(f64, String, bool), String> {
+    let val = resolve_assert_metric(&asrt.metric, a, g)?;
+    let tgt = asrt.target.trim();
+    let tol_raw = asrt.tolerance.trim();
+
+    if let Some(rhs) = tgt.strip_prefix("<=").or_else(|| tgt.strip_prefix("≤")) {
+        let bound: f64 = rhs
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
+        let ok = val <= bound;
+        let margin = format!("{:+.4}", val - bound);
+        return Ok((val, margin, ok));
+    }
+    if let Some(rhs) = tgt.strip_prefix(">=").or_else(|| tgt.strip_prefix("≥")) {
+        let bound: f64 = rhs
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
+        let ok = val >= bound;
+        let margin = format!("{:+.4}", val - bound);
+        return Ok((val, margin, ok));
+    }
+    if let Some(rhs) = tgt.strip_prefix('<') {
+        let bound: f64 = rhs
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
+        let ok = val < bound;
+        let margin = format!("{:+.4}", val - bound);
+        return Ok((val, margin, ok));
+    }
+    if let Some(rhs) = tgt.strip_prefix('>') {
+        let bound: f64 = rhs
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
+        let ok = val > bound;
+        let margin = format!("{:+.4}", val - bound);
+        return Ok((val, margin, ok));
+    }
+
+    let expected: f64 = tgt
+        .parse()
+        .map_err(|_| format!("bad @assert target '{tgt}'"))?;
+    let abs_err = (val - expected).abs();
+    if let Some(pct_str) = tol_raw.strip_suffix('%') {
+        let tol_pct: f64 = pct_str
+            .trim()
+            .trim_start_matches("<=")
+            .trim_start_matches('≤')
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad @assert percentage tolerance '{tol_raw}'"))?;
+        let denom = expected.abs().max(1e-12);
+        let rel_pct = 100.0 * abs_err / denom;
+        let ok = rel_pct <= tol_pct;
+        return Ok((val, format!("{rel_pct:.2}%"), ok));
+    }
+    let tol_abs: f64 = tol_raw
+        .trim_start_matches("<=")
+        .trim_start_matches('≤')
+        .trim_start_matches("±")
+        .trim()
+        .parse()
+        .unwrap_or(1e-3);
+    let ok = abs_err <= tol_abs;
+    Ok((val, format!("±{abs_err:.4}"), ok))
+}
+
+fn print_literate_verification(
+    hdr: &fsm::LiterateHeader,
+    a: &fieldsmith_core::Analysis,
+    g: Option<&fieldsmith_core::fill::Graded>,
+    verify: bool,
+) -> Result<(), String> {
+    if !hdr.checks.is_empty() {
+        println!("\n## analytic verification — {} ({})\n", hdr.id, hdr.title);
+        println!(
+            "| quantity | governing formula | analytic target | reference FEA | error | tolerance |"
+        );
+        println!("| :-- | :-- | :-- | :-- | :-- | :-- |");
+        for chk in &hdr.checks {
+            println!(
+                "| {} | `{}` | {} | {} | {} | {} |",
+                chk.quantity,
+                chk.formula,
+                chk.analytic_ref,
+                chk.measured_fea,
+                chk.rel_error,
+                chk.tolerance
+            );
+        }
+    }
+    if !hdr.asserts.is_empty() {
+        println!("\n## live @assert contracts — {}\n", hdr.id);
+        println!("| assertion | metric | target | live FEA | error / margin | tol | status |");
+        println!("| :-- | :-- | --: | --: | --: | --: | :-- |");
+        let mut failed = 0usize;
+        for asrt in &hdr.asserts {
+            match evaluate_literate_assert(asrt, a, g) {
+                Ok((val, err_str, ok)) => {
+                    let status = if ok { "PASS" } else { "FAIL" };
+                    if !ok {
+                        failed += 1;
+                    }
+                    let unit_sfx = if asrt.unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", asrt.unit)
+                    };
+                    println!(
+                        "| {} | `{}` | {}{} | {:.4}{} | {} | {} | {} |",
+                        asrt.label,
+                        asrt.metric,
+                        asrt.target,
+                        unit_sfx,
+                        val,
+                        unit_sfx,
+                        err_str,
+                        if asrt.tolerance.is_empty() {
+                            "—"
+                        } else {
+                            &asrt.tolerance
+                        },
+                        status
+                    );
+                }
+                Err(e) => {
+                    failed += 1;
+                    println!(
+                        "| {} | `{}` | {} | ERROR | {} | {} | FAIL |",
+                        asrt.label, asrt.metric, asrt.target, e, asrt.tolerance
+                    );
+                }
+            }
+        }
+        if verify && failed > 0 {
+            return Err(format!(
+                "{}: {} of {} live @assert contract(s) failed",
+                hdr.id,
+                failed,
+                hdr.asserts.len()
+            ));
+        }
+    } else if verify && hdr.checks.is_empty() {
+        return Err(format!(
+            "{}: --verify requested but document has no @assert or @check contracts",
+            hdr.id
+        ));
+    }
+    Ok(())
+}
+
 /// `solve --modes <n>`: the first n natural frequencies (M8), modal-only — loads are
 /// ignored (frequencies need the part held, not pushed; the supports still apply), and a
 /// fill document is refused (the modal path meshes the solid reference at one modulus).
@@ -954,7 +1253,13 @@ fn modal_cmd(doc: &Document, res: &Resolution, count: usize, report: bool) -> Re
 
 /// `solve` on a document with a fill statement: the solid reference solve first, then the
 /// graded re-solve with mass and class summary.
-fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), String> {
+fn solve_graded(
+    doc: &Document,
+    res: &Resolution,
+    report: bool,
+    verify: bool,
+    raw_header: Option<&fsm::LiterateHeader>,
+) -> Result<(), String> {
     let (a, g) = graded(doc, *res, clock).map_err(|e| e.0)?;
     let p = &a.provenance;
     let fill = &g.spec;
@@ -1006,6 +1311,11 @@ fn solve_graded(doc: &Document, res: &Resolution, report: bool) -> Result<(), St
             .cloned()
             .collect();
         print_case_table(&all_graded, "graded");
+        if let Some(hdr) = raw_header {
+            print_literate_verification(hdr, &a, Some(&g), verify)?;
+        } else if verify {
+            return Err("no `# === FIELDSMITH LITERATE CASE ===` header found for --verify".into());
+        }
     } else {
         println!(
             "{}: {} elements (P2), {} DOF, element size {:.2} mm",
@@ -1741,5 +2051,71 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_all_analytic_fsm_assert_contracts() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join("analytic");
+        let mut entries: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fsm"))
+            .collect();
+        entries.sort_by_key(|e| e.path());
+        assert_eq!(entries.len(), 14, "expected 14 analytic .fsm benchmarks (A1-A14)");
+
+        let mut total_asserts = 0usize;
+        for entry in entries {
+            let path = entry.path();
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let hdr = fsm::parse_literate_header(&raw)
+                .unwrap_or_else(|| panic!("{}: missing literate header", path.display()));
+            assert!(
+                !hdr.asserts.is_empty(),
+                "{}: expected at least 1 @assert contract",
+                path.display()
+            );
+            total_asserts += hdr.asserts.len();
+            let doc = fsm::parse(&raw).unwrap();
+            let res = Resolution::Dofs(8_000);
+            if doc.fill.is_some() {
+                let (a, g) = graded(&doc, res, clock).expect("graded solve");
+                for asrt in &hdr.asserts {
+                    let (val, err_str, ok) =
+                        evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
+                    assert!(
+                        ok,
+                        "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                        hdr.id, asrt.label, asrt.metric, asrt.target
+                    );
+                }
+            } else {
+                let a = analyse(&doc, res, clock).expect("solid solve");
+                for asrt in &hdr.asserts {
+                    let (val, err_str, ok) =
+                        evaluate_literate_assert(asrt, &a, None).expect("eval assert");
+                    assert!(
+                        ok,
+                        "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                        hdr.id, asrt.label, asrt.metric, asrt.target
+                    );
+                }
+            }
+        }
+        assert!(
+            total_asserts >= 35,
+            "expected at least 35 live @assert contracts across A1-A14, got {total_asserts}"
+        );
     }
 }

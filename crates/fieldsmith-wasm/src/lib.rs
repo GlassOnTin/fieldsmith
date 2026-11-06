@@ -843,6 +843,7 @@ struct FillInfo {
     strength_exp: f64,
     buckling_coef: f64,
     buckling_exp: f64,
+    lattice_adjoint_sensitivity_sum: Vec<f64>,
     mass_g: f64,
     solid_mass_g: f64,
     fill_ms: f64,
@@ -968,6 +969,10 @@ impl GradedOut {
                     strength_exp,
                     buckling_coef,
                     buckling_exp,
+                    lattice_adjoint_sensitivity_sum: self
+                        .g
+                        .lattice_adjoint_sensitivity_sum
+                        .clone(),
                     mass_g: self.g.mass_g,
                     solid_mass_g: self.g.solid_mass_g,
                     fill_ms: self.g.fill_ms,
@@ -1149,6 +1154,13 @@ impl GradedOut {
     #[wasm_bindgen(js_name = rhoElem)]
     pub fn rho_elem(&self) -> Float64Array {
         Float64Array::from(&self.g.rho_elem[..])
+    }
+
+    /// Exact 3D P2 self-adjoint compliance sensitivity `∂C / ∂ρ_e = -u_eᵀ (∂K_e / ∂ρ_e) u_e` (N·mm)
+    /// per element (`VISION.md §5.2 Pillar III`).
+    #[wasm_bindgen(js_name = dcDrhoElem)]
+    pub fn dc_drho_elem(&self) -> Float64Array {
+        Float64Array::from(&self.g.dc_drho_elem[..])
     }
 
     /// Graded fill parameter grid spec `[ox, oy, oz, spacing]` (mm).
@@ -1706,7 +1718,7 @@ pub fn solve_coupled_system(
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
         let visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
-        let fsm_3d = sys.build_3d_fsm(&p);
+        let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
         let wall_ms = clock() - t0;
 
         to_json(&serde_json::json!({
@@ -1736,7 +1748,7 @@ pub fn solve_coupled_system(
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-        let fsm_3d = sys.build_3d_fsm(&p);
+        let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
         let wall_ms = clock() - t0;
 
         to_json(&serde_json::json!({
@@ -1767,7 +1779,7 @@ pub fn solve_coupled_system(
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
         let visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
-        let fsm_3d = sys.build_3d_fsm(&p);
+        let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
         let wall_ms = clock() - t0;
 
         to_json(&serde_json::json!({
@@ -1797,7 +1809,7 @@ pub fn solve_coupled_system(
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
-        let fsm_3d = sys.build_3d_fsm(&p);
+        let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
         let wall_ms = clock() - t0;
 
         to_json(&serde_json::json!({
@@ -1883,4 +1895,30 @@ pub fn optimise_drone_antenna_vna(spec_json: &str, max_iters: usize) -> Result<S
     };
     let result = optimise_drone_antenna(&spec, max_iters.clamp(1, 25));
     to_json(&result)
+}
+
+/// Export a 4-inch DeadCat FPV Drone + Gemini Dual-Band Antenna VNA sweep as an
+/// industry-standard Touchstone `.s2p` file (`VISION.md §5.2 Pillar IV.4`).
+#[wasm_bindgen(js_name = exportDroneTouchstoneS2p)]
+pub fn export_drone_touchstone_s2p(spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_solve::antenna::{
+        analyze_drone_antenna, format_touchstone_s2p, DroneAntennaDesignSpec,
+    };
+    let spec: DroneAntennaDesignSpec = if spec_json.trim().is_empty() {
+        DroneAntennaDesignSpec::default()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid DroneAntennaDesignSpec JSON: {e}")))?
+    };
+    let report = analyze_drone_antenna(&spec);
+    Ok(format_touchstone_s2p(&report))
+}
+
+/// Parse an industry-standard Touchstone `.s1p` or `.s2p` bench VNA trace into
+/// `VnaSamplePoint` rows for overlay on the 50 Ω Smith Chart (`VISION.md §5.2 Pillar IV.4`).
+#[wasm_bindgen(js_name = parseTouchstoneVna)]
+pub fn parse_touchstone_vna_wasm(touchstone_text: &str) -> Result<String, JsValue> {
+    use fieldsmith_solve::antenna::parse_touchstone_vna;
+    let pts = parse_touchstone_vna(touchstone_text).map_err(js_err)?;
+    to_json(&pts)
 }

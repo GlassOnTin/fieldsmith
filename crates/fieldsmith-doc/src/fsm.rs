@@ -1869,6 +1869,17 @@ pub struct LiterateCheck {
     pub tolerance: String,
 }
 
+/// An executable live-solve verification assertion embedded in a Literate `.fsm` header (`# @assert:`).
+/// Syntax: `# @assert: <label> || <metric> || <target_or_op> || <tolerance> || <unit>`
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LiterateAssert {
+    pub label: String,
+    pub metric: String,
+    pub target: String,
+    pub tolerance: String,
+    pub unit: String,
+}
+
 /// Structured metadata and closed-form verification targets parsed from a Literate `.fsm` header
 /// (`# === FIELDSMITH LITERATE CASE === ... # === END LITERATE HEADER ===`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1880,6 +1891,7 @@ pub struct LiterateHeader {
     pub subtitle: String,
     pub level: String,
     pub checks: Vec<LiterateCheck>,
+    pub asserts: Vec<LiterateAssert>,
 }
 
 /// Parse the `# === FIELDSMITH LITERATE CASE ===` comment header of a `.fsm` file, if present.
@@ -1923,6 +1935,15 @@ pub fn parse_literate_header(text: &str) -> Option<LiterateHeader> {
                 measured_fea: parts.get(3).copied().unwrap_or_default().to_string(),
                 rel_error: parts.get(4).copied().unwrap_or_default().to_string(),
                 tolerance: parts.get(5).copied().unwrap_or_default().to_string(),
+            });
+        } else if let Some(v) = body.strip_prefix("@assert:") {
+            let parts: Vec<&str> = v.split(" || ").map(|p| p.trim()).collect();
+            header.asserts.push(LiterateAssert {
+                label: parts.first().copied().unwrap_or_default().to_string(),
+                metric: parts.get(1).copied().unwrap_or_default().to_string(),
+                target: parts.get(2).copied().unwrap_or_default().to_string(),
+                tolerance: parts.get(3).copied().unwrap_or_default().to_string(),
+                unit: parts.get(4).copied().unwrap_or_default().to_string(),
             });
         }
     }
@@ -3248,6 +3269,9 @@ region bottom = mesh1.p1
                             }
                             if sub == "analytic" && hdr.checks.is_empty() {
                                 errors.push(format!("{}: analytic case has 0 @check entries", path.display()));
+                            }
+                            if sub == "analytic" && hdr.asserts.is_empty() {
+                                errors.push(format!("{}: analytic case has 0 @assert entries", path.display()));
                             }
                         }
                         None => {

@@ -51,6 +51,193 @@ export interface AnalyticCheckRow {
   tolerance: string;
 }
 
+export interface LiterateAssertRow {
+  label: string;
+  metric: string;
+  target: string;
+  tolerance: string;
+  unit: string;
+}
+
+export interface EvaluatedLiterateAssert {
+  assert: LiterateAssertRow;
+  liveValue: number | null;
+  errorOrMargin: string;
+  passed: boolean;
+}
+
+/** Evaluate a `LiterateAssertRow` against a solved `LevelResult` in the browser. */
+export function evaluateLiterateAssertOnLevel(
+  asrt: LiterateAssertRow,
+  lvl: {
+    meta: {
+      cases: {
+        name: string;
+        max_displacement: number;
+        max_vm_elem: number;
+        max_von_mises: number;
+        compliance: number;
+        load_reports?: { resultant: [number, number, number] }[];
+      }[];
+      max_layer_peel?: number[];
+      mass_g?: number;
+      min_peak_peel?: number;
+      max_peak_peel?: number;
+      solid_cases?: { name: string; max_vm_elem: number; max_displacement: number }[];
+      fill?: { mass_g: number; solid_mass_g: number };
+      modes?: { frequencies: number[] };
+    };
+    temperature?: (Float64Array | null)[];
+  },
+): EvaluatedLiterateAssert {
+  const m = asrt.metric.trim();
+  let val: number | null = null;
+
+  if (m.startsWith('mode_')) {
+    const rest = m.slice('mode_'.length);
+    if (rest === 'split_12_pct') {
+      const freqs = lvl.meta.modes?.frequencies ?? [];
+      if (freqs.length >= 2) {
+        const mean = Math.max(1e-12, 0.5 * (freqs[0] + freqs[1]));
+        val = (100 * Math.abs(freqs[1] - freqs[0])) / mean;
+      }
+    } else {
+      const idx1 = Number.parseInt(rest, 10);
+      const freqs = lvl.meta.modes?.frequencies ?? [];
+      if (Number.isFinite(idx1) && idx1 >= 1 && idx1 <= freqs.length) {
+        val = freqs[idx1 - 1];
+      }
+    }
+  } else if (m === 'mass_g') {
+    val = lvl.meta.fill?.mass_g ?? lvl.meta.mass_g ?? null;
+  } else if (m === 'solid_mass_g') {
+    val = lvl.meta.fill?.solid_mass_g ?? lvl.meta.mass_g ?? null;
+  } else if (m === 'graded_mass_g') {
+    val = lvl.meta.fill?.mass_g ?? null;
+  } else if (m === 'mass_saved_pct') {
+    const f = lvl.meta.fill;
+    if (f && f.solid_mass_g > 0) {
+      val = 100 * (1 - f.mass_g / f.solid_mass_g);
+    }
+  } else if (m === 'min_peak_peel') {
+    val = lvl.meta.min_peak_peel ?? null;
+  } else if (m === 'max_peak_peel') {
+    val = lvl.meta.max_peak_peel ?? null;
+  } else {
+    let useSolidRef = false;
+    let rest = m;
+    if (rest.startsWith('graded.')) {
+      rest = rest.slice('graded.'.length);
+    } else if (rest.startsWith('solid.')) {
+      useSolidRef = true;
+      rest = rest.slice('solid.'.length);
+    }
+    const colonIdx = rest.indexOf(':');
+    const field = colonIdx >= 0 ? rest.slice(0, colonIdx).trim() : rest.trim();
+    const caseSel = colonIdx >= 0 ? rest.slice(colonIdx + 1).trim() : '';
+
+    const findCaseIdx = (names: { name: string }[]): number => {
+      if (!caseSel) return names.length > 0 ? 0 : -1;
+      const idx1 = Number.parseInt(caseSel, 10);
+      if (String(idx1) === caseSel && idx1 >= 1 && idx1 <= names.length) {
+        return idx1 - 1;
+      }
+      const lower = caseSel.toLowerCase();
+      return names.findIndex((c) => c.name.toLowerCase() === lower || c.name.includes(caseSel));
+    };
+
+    if (useSolidRef && lvl.meta.solid_cases && lvl.meta.solid_cases.length > 0) {
+      const ci = findCaseIdx(lvl.meta.solid_cases);
+      if (ci >= 0) {
+        const sc = lvl.meta.solid_cases[ci];
+        if (field === 'max_displacement' || field === 'deflection') val = sc.max_displacement;
+        else if (field === 'max_vm_elem' || field === 'vm') val = sc.max_vm_elem;
+      }
+    } else {
+      const ci = findCaseIdx(lvl.meta.cases);
+      if (ci >= 0) {
+        const c = lvl.meta.cases[ci];
+        if (field === 'max_displacement' || field === 'deflection') val = c.max_displacement;
+        else if (field === 'max_vm_elem' || field === 'vm') val = c.max_vm_elem;
+        else if (field === 'max_von_mises') val = c.max_von_mises;
+        else if (field === 'max_layer_peel' || field === 'peel') val = lvl.meta.max_layer_peel?.[ci] ?? null;
+        else if (field === 'compliance') val = c.compliance;
+        else if (field === 'max_temp') {
+          const tf = lvl.temperature?.[ci];
+          if (tf && tf.length > 0) {
+            let hi = -Infinity;
+            for (let i = 0; i < tf.length; i++) if (tf[i] > hi) hi = tf[i];
+            val = hi;
+          }
+        } else if (field === 'min_temp') {
+          const tf = lvl.temperature?.[ci];
+          if (tf && tf.length > 0) {
+            let lo = Infinity;
+            for (let i = 0; i < tf.length; i++) if (tf[i] < lo) lo = tf[i];
+            val = lo;
+          }
+        } else if (field === 'resultant_mag') {
+          const r = c.load_reports?.[0]?.resultant;
+          if (r) val = Math.hypot(r[0], r[1], r[2]);
+        }
+      }
+    }
+  }
+
+  if (val === null || !Number.isFinite(val)) {
+    return { assert: asrt, liveValue: null, errorOrMargin: 'N/A', passed: false };
+  }
+
+  const tgt = asrt.target.trim();
+  const tolRaw = asrt.tolerance.trim();
+  const fmtSigned = (d: number) => `${d >= 0 ? '+' : ''}${d.toFixed(4)}`;
+
+  if (tgt.startsWith('<=') || tgt.startsWith('≤')) {
+    const b = Number.parseFloat(tgt.replace(/^(<=|≤)\s*/, ''));
+    const ok = val <= b;
+    return { assert: asrt, liveValue: val, errorOrMargin: fmtSigned(val - b), passed: ok };
+  }
+  if (tgt.startsWith('>=') || tgt.startsWith('≥')) {
+    const b = Number.parseFloat(tgt.replace(/^(>=|≥)\s*/, ''));
+    const ok = val >= b;
+    return { assert: asrt, liveValue: val, errorOrMargin: fmtSigned(val - b), passed: ok };
+  }
+  if (tgt.startsWith('<')) {
+    const b = Number.parseFloat(tgt.slice(1).trim());
+    const ok = val < b;
+    return { assert: asrt, liveValue: val, errorOrMargin: fmtSigned(val - b), passed: ok };
+  }
+  if (tgt.startsWith('>')) {
+    const b = Number.parseFloat(tgt.slice(1).trim());
+    const ok = val > b;
+    return { assert: asrt, liveValue: val, errorOrMargin: fmtSigned(val - b), passed: ok };
+  }
+
+  const expected = Number.parseFloat(tgt);
+  if (!Number.isFinite(expected)) {
+    return { assert: asrt, liveValue: val, errorOrMargin: 'bad target', passed: false };
+  }
+  const absErr = Math.abs(val - expected);
+  if (tolRaw.endsWith('%')) {
+    const tolPct = Number.parseFloat(tolRaw.slice(0, -1).replace(/^(<=|≤)\s*/, '').trim());
+    const denom = Math.max(1e-12, Math.abs(expected));
+    const relPct = (100 * absErr) / denom;
+    return {
+      assert: asrt,
+      liveValue: val,
+      errorOrMargin: `${relPct.toFixed(2)}%`,
+      passed: relPct <= tolPct,
+    };
+  }
+  const tolAbs = Number.parseFloat(tolRaw.replace(/^(<=|≤|±)\s*/, '').trim()) || 1e-3;
+  return {
+    assert: asrt,
+    liveValue: val,
+    errorOrMargin: `±${absErr.toFixed(4)}`,
+    passed: absErr <= tolAbs,
+  };
+}
+
 export interface TutorialSheet {
   id: string;
   code: string;
@@ -59,6 +246,7 @@ export interface TutorialSheet {
   fsmPath?: string;
   verificationRefs?: string[];
   analyticChecks?: AnalyticCheckRow[];
+  asserts?: LiterateAssertRow[];
   level: TutorialLevel;
   title: string;
   subtitle: string;
@@ -287,6 +475,13 @@ export function formatLiterateFsm(sheet: TutorialSheet): string {
     }
   }
 
+  if (sheet.asserts && sheet.asserts.length > 0) {
+    out.push('# ---');
+    for (const a of sheet.asserts) {
+      out.push(`# @assert: ${a.label} || ${a.metric} || ${a.target} || ${a.tolerance} || ${a.unit}`);
+    }
+  }
+
   if (sheet.userSteps.length > 0) {
     out.push('# ---');
     for (const st of sheet.userSteps) {
@@ -364,6 +559,7 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
   let fsmPath: string | undefined = fallbackFsmPath;
   let verificationRefs: string[] | undefined;
   const analyticChecks: AnalyticCheckRow[] = [];
+  const asserts: LiterateAssertRow[] = [];
   let level: TutorialLevel = 'Intermediate';
   let title = 'Untitled Fieldsmith Case';
   let subtitle = '';
@@ -483,6 +679,18 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
               measuredFea: parts[3] ?? '',
               relError: parts[4] ?? '',
               tolerance: parts[5] ?? '',
+            });
+            mode = 'none';
+            break;
+          }
+          case 'assert': {
+            const parts = val.split(' || ').map((p) => p.trim());
+            asserts.push({
+              label: parts[0] ?? '',
+              metric: parts[1] ?? '',
+              target: parts[2] ?? '',
+              tolerance: parts[3] ?? '',
+              unit: parts[4] ?? '',
             });
             mode = 'none';
             break;
@@ -612,6 +820,7 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
     ...(fsmPath ? { fsmPath } : {}),
     ...(verificationRefs ? { verificationRefs } : {}),
     ...(analyticChecks.length > 0 ? { analyticChecks } : {}),
+    ...(asserts.length > 0 ? { asserts } : {}),
     level,
     title,
     subtitle,

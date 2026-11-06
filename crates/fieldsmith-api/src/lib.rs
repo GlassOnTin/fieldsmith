@@ -290,6 +290,8 @@ pub fn respond(input: &str) -> Reply {
                                             strength_exp,
                                             buckling_coef,
                                             buckling_exp,
+                                            lattice_adjoint_sensitivity_sum: g
+                                                .lattice_adjoint_sensitivity_sum,
                                             fill_ms: g.fill_ms,
                                             solve_ms: g.solve_ms,
                                         }),

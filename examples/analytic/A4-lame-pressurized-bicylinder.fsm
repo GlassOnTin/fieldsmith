@@ -16,6 +16,9 @@ fieldsmith 1
 # @check: Lamé First Stress Invariant σ_xx + σ_yy = σ_rr + σ_θθ = 2A || 2A = 2 (p_i r_i² − p_o r_o²) / (r_o² − r_i²) = 2(1500 − 1200)/300 = 2.000 MPa || 2.000 MPa (Constant ∀ r) || 1.997 / 2.143 / 2.125 MPa || Δ ≤ 0.143 MPa || ≤ 0.60 MPa
 # @check: Von Mises Equivalent Stress σ_vm(r) at r = 11 / 15 / 19 mm || σ_rr(r) = A − B/r²,  σ_θθ(r) = A + B/r²,  σ_zz = 2νA = 0.680 MPa || 22.905 / 12.321 / 7.683 MPa || 23.035 / 12.422 / 7.778 MPa || 0.57% / 0.82% / 1.23% || ≤ 3.5%
 # ---
+# @assert: Lamé Bore Peak von Mises Stress σ_vm(r_i) || max_vm_elem || 27.72 || 5.0% || MPa
+# @assert: Lamé Bore Radial Expansion u_r(r_i) || max_displacement || 0.00172 || 6.0% || mm
+# ---
 # @step: 1. Exact Plane-Strain Octant Symmetry (Zero Saint-Venant End Decay) || setup
 #   Open Setup (2). An octant of a thick-walled CuCrZr thrust chamber (r_i = 10 mm, r_o = 20 mm, L = 60 mm) carries internal hot-gas pressure p_i = 15.0 MPa on skin_in and external regenerative coolant pressure p_o = 3.0 MPa on skin_out. Single-component supports on x = 0 (fixed=x), y = 0 (fixed=y), z = 0 (fixed=z), and z = 60 mm (fixed=z) enforce exact plane strain (ε_zz = 0 everywhere), eliminating all 3D axial end-boundary layers.
 # @expected:

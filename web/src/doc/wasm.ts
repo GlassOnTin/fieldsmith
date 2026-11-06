@@ -523,6 +523,7 @@ export interface FillInfo {
   strength_exp?: number;
   buckling_coef?: number;
   buckling_exp?: number;
+  lattice_adjoint_sensitivity_sum?: number[];
   mass_g: number;
   solid_mass_g: number;
   fill_ms: number;
@@ -553,6 +554,8 @@ export interface GradedHandle extends AnalysisHandle {
   class(): Uint8Array;
   /** Per-element material fraction of the fill (1 solid, 0 void; the modulus input). */
   rhoElem(): Float64Array;
+  /** Exact 3D P2 self-adjoint compliance sensitivity ∂C/∂ρ_e (N·mm) per element. */
+  dcDrhoElem?(): Float64Array;
   /** Graded density parameter grid `[ox, oy, oz, spacing]` (mm). */
   fillParamSpec(): Float64Array;
   /** Graded density parameter grid dims `[nx, ny, nz]`. */

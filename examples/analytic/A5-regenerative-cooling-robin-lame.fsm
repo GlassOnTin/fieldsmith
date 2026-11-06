@@ -16,6 +16,10 @@ fieldsmith 1
 # @check: Thermo-Elastic Radial Expansion u_r(r) at r = 11 / 15 / 19 mm || u_r(r) = C₁ r + (C₂ + γ α ∫ s ΔT(s) ds) / r || 6.493 / 9.410 / 10.580 µm || 6.402 / 9.290 / 10.430 µm || 1.41% / 1.28% / 1.42% || ≤ 2.5%
 # @check: Thermo-Elastic Axial Stress σ_zz(r) & In-Plane Sum σ_rr + σ_θθ || σ_zz(r) = 2λ C₁ − 2μ γ α ΔT(r)  (at r = 11 / 15 / 19 mm) || -105.24 / -54.11 / -15.14 MPa || -103.73 / -52.21 / -12.71 MPa || 1.24% / 1.57% / 2.01% (of bore scale) || ≤ 3.0%
 # ---
+# @assert: Robin–Neumann Bore Peak Temperature T(r_i) || max_temp || 64.657 || 2.5% || °C
+# @assert: Robin–Neumann Jacket Outer Temperature T(r_o) || min_temp || 30.000 || 6.0% || °C
+# @assert: Thermo-Elastic Bore Peak von Mises Stress || max_vm_elem || 118.0 || 6.0% || MPa
+# ---
 # @step: 1. Coupled Neumann Hot-Gas Heat Flux + Robin Coolant Convection Boundary Conditions || setup
 #   Open Setup (2). In a regeneratively cooled rocket chamber, the wall temperatures are not known a priori: instead, hot combustion gas injects a surface heat flux q_in = 5.0 into the inner bore (r_i = 10 mm) while liquid coolant flowing through the outer jacket (r_o = 20 mm) extracts heat by forced convection q_out = h_c (T(r_o) − T_∞) with h_c = 0.25 and T_∞ = 20.0 °C.
 # @expected:

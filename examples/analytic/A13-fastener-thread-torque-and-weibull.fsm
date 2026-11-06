@@ -16,6 +16,9 @@ fieldsmith 1
 # @check: Open-Standard Qualification Benchmarks (NASA-STD-5020B M6 / ECSS M4 / Bossard M3) || F_proof = A_t (0.75 σ_y) = 14,472 N (A286 M6×1.0);   T_max > T_min Safe Window || 4 / 4 Open Standards PASS (NASA, ECSS, VDI 2230, Bossard) || 4 / 4 PASS (T_rec within [T_min, T_max]) || 0.000% || Exact
 # @check: 2-Parameter Weibull Failure Distribution Linear Regression (β, η, B10, B01) || ln(−ln(1 − F(T))) = β ln T − β ln η,   T_B10 = η (−ln 0.90)^{1/β} || R² > 0.98,  T_B01 < T_B10 < η || R² = 0.996,  Exact Quantile Ordering || < 0.1% || R² ≥ 0.98
 # ---
+# @assert: Applied Washer-Seat Preload Resultant |F_preload| || resultant_mag || 1250.0 || 0.5% || N
+# @assert: Boss Bearing von Mises Stress σ_vm || max_vm_elem || >= 15.0 || >= 15.0 || MPa
+# ---
 # @step: 1. Inspect the Drilled Boss & Washer Seat Preload in Setup (2) || setup
 #   Open Setup (2). A Ti-6Al-4V M4 fixing clamps a PA12 enclosure boss (`boss_plate`) with `preload=1250` N on the counterbore washer seat (`washer_seat`).
 # @expected:
@@ -42,14 +45,16 @@ fieldsmith 1
 name "A13 — Fastener Thread Torque & Preload Benchmark (V57)"
 material pa12
 
-box boss_plate size=(32, 24, 10) at=(0, 0, 0) round=1
-cylinder pilot_hole r=1.6 h=8.5 at=(0, 0, 1.5) subtract
-cylinder counterbore r=3.5 h=2 at=(0, 0, 8) subtract
-cylinder screw_head r=3.2 h=2.2 at=(0, 0, 9.1)
+box boss_plate size=(32, 24, 10) at=(0, 0, 5) round=1
+cylinder pilot_hole r=2.0 h=8.5 at=(0, 0, 4.25) subtract
+cylinder counterbore r=5.0 h=2.5 at=(0, 0, 9.25) subtract
+cylinder screw_shank r=2.0 h=6.0 at=(0, 0, 6.0)
+cylinder screw_head r=4.5 h=2.2 at=(0, 0, 9.8)
+material ti64 on screw_shank
 material ti64 on screw_head
 
 region base_mount = boss_plate.nz
-region washer_seat = counterbore.bottom
+region washer_seat = counterbore.bottom + screw_head.top
 support mount_fix base_mount fixed=xyz
 load clamp_preload washer_seat preload=1250 axis=(0, 0, -1)
 solve

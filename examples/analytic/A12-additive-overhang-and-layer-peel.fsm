@@ -16,6 +16,11 @@ fieldsmith 1
 # @check: 3D FEA Uniaxial Tension (σ_zz = 30 MPa) Layer-Peel Utilization U_peel(θ) at θ = 0° / 45° / 90° (V46) || U_peel(θ) = √((max(0, σ₀ cos²θ) / S_z)² + (σ₀ sin θ cos θ / S_s)²)   (S_z=30, S_s=20 MPa) || 1.00000 / 0.90139 / 0.00000 × || 1.00000 / 0.90139 / 4.66×10⁻¹⁰ × || 3.05×10⁻¹⁰ × || ≤ 10⁻⁴ ×
 # @check: Oblique Normal+Shear Worst-Case Build Angle θ_worst & Optimal Build Angle θ_best (V46) || When S_s < S_z / √2, dU_peel/dθ = 0 at sin²θ* = (2 S_z² − S_s²) / (2(2 S_z² − S_s²)) ⇒ θ_worst ≈ 15° || θ_worst = 15° (1.00555×),  θ_best = 90° (0.000×) || 15.0° (1.00555×),  90.0° (4.66×10⁻¹⁰×) || 0.000% || Exact
 # ---
+# @assert: Uniaxial Tensile Stress σ_zz = 30 MPa || max_vm_elem || 30.000 || 0.5% || MPa
+# @assert: Layer-Peel Utilization U_peel(θ=45°) || max_layer_peel || 0.90139 || 0.5% || ×
+# @assert: Worst-Case Oblique Build Peel U_peel(θ=15°) || max_peak_peel || 1.00555 || 0.5% || ×
+# @assert: Optimal Horizontal Build Peel U_peel(θ=90°) || min_peak_peel || <= 0.001 || <= 0.001 || ×
+# ---
 # @step: 1. Inspect Orthotropic Inter-Layer Strengths (`yield_z=30 shear_z=20`) & `solve build=(45, 0)` || setup
 #   Open Setup (2). The 10 × 10 × 40 mm bar is pulled along +Z by F_z = 3,000 N (uniaxial tensile stress σ_zz = 30 MPa). With `solve build=(45, 0)`, the print build axis b̂ = (sin 45°, 0, cos 45°) tilts the layer planes by 45° relative to the tensile axis.
 # @expected:

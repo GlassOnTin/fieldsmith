@@ -481,5 +481,22 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
         .as_str()
         .unwrap()
         .contains("Supercritical-H2 Rocket Nozzle"));
-    assert_eq!(shapes_after["shapes"].as_array().unwrap().len(), 9);
+    assert_eq!(shapes_after["shapes"].as_array().unwrap().len(), 8);
+
+    // Solve the 1D->3D projected rocket nozzle `.fsm` twin in 3D thermo-mechanical FEA
+    let solved_nozzle = c.tool_ok(
+        77,
+        "solve",
+        json!({
+            "kind": "solve",
+            "dofs": 8000
+        }),
+    );
+    assert_eq!(solved_nozzle["status"], "ok");
+    let cases = solved_nozzle["single"]["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 2);
+    assert!(cases[0]["max_vm_elem"].as_f64().unwrap() > 1.0);
+    let graded = &solved_nozzle["single"]["graded"];
+    assert!(graded["mass_g"].as_f64().unwrap() < graded["solid_mass_g"].as_f64().unwrap() * 0.70);
+    assert!(graded["max_layer_peel"].as_array().unwrap()[1].as_f64().unwrap() < 0.60);
 }
