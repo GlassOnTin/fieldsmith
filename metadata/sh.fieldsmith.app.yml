@@ -11,13 +11,13 @@ AutoName: Fieldsmith
 
 RepoType: git
 Repo: https://github.com/GlassOnTin/fieldsmith.git
-Binaries: 
+Binaries:
   https://github.com/GlassOnTin/fieldsmith/releases/download/v%v/fieldsmith-v%v-arm64-v8a.apk
 
 Builds:
-  - versionName: 0.14.0
-    versionCode: 1401
-    commit: 5ff39a766014d12363d289ffeaf2567d84303f6b
+  - versionName: 0.15.0
+    versionCode: 1501
+    commit: 4e5370b6f4f536f5789ba06a41a06c7a05ca6af6
     subdir: android/app
     submodules: true
     sudo:
@@ -75,5 +75,5 @@ AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 VercodeOperation:
   - 10 * %c + 1
-CurrentVersion: 0.14.0
-CurrentVersionCode: 1401
+CurrentVersion: 0.15.0
+CurrentVersionCode: 1501
