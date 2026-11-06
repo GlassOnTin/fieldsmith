@@ -89,7 +89,7 @@ function fieldsmithSharedWorkspacePlugin(): Plugin {
             JSON.stringify({
               status: 'ok',
               server: 'fieldsmith-compute',
-              version: '0.14.0',
+              version: '0.15.0',
               hostname: os.hostname(),
               os: os.platform(),
               arch: os.arch(),

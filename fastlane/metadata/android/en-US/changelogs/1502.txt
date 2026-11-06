@@ -1,0 +1,5 @@
+v0.15.0:
+- Executable Literate # @assert contracts evaluated live against solved FEM fields in 3. Results and via fieldsmith solve --verify.
+- Coupled 1D-to-3D regenerative rocket nozzle projection (Systems -> Build 3D T17 Nozzle) mapping converged Bartz heat flux and coolant convection onto 3D CuCrZr + Gyroid chambers.
+- Exact 3D P2 self-adjoint lattice compliance sensitivities (dc/drho_e) for TPMS grading.
+- Touchstone .s1p/.s2p VNA bench import/export with Smith Chart overlay.
