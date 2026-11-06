@@ -30,33 +30,37 @@ every stage composes with every other: grading is a field feeding a field, a kee
 boolean, and an analysis result drives geometry.
 
 The document is a **directed acyclic graph of field operations**, stored as a small text file
-(`*.fsm`, or `.fsmz` when bundled with imported mesh assets). The browser UI, a text editor, a
-script, and an AI agent all operate on the same representation.
+(`*.fsm`, or `.fsmz` when bundled with imported mesh assets). Following the literate verification
+style of Gerris and Basilisk, a single `.fsm` file can also carry structured `# @check:`,
+`# @step:`, `# @theory_*`, and `# @mcp:` header directives alongside executable geometry and
+boundary conditions. The browser UI, the CLI (`fieldsmith solve --report`), the Android app, and
+an MCP agent all operate on that same single-file representation.
 
 ---
 
 ## 2. Architecture
 
 ```
-┌─────────────────────────── Browser main thread ───────────────────────────┐
-│  web/ (TypeScript + WebGL2)                                               │
-│   ├─ Document store   (*.fsm / *.fsmz round-trip, undo/redo, validation)  │
+┌────────────────── Browser / Android WebView main thread ──────────────────┐
+│  web/ (TypeScript + Preact + WebGL2)                                      │
+│   ├─ Document store   (*.fsm / *.fsmz round-trip, Literate .fsm parser)   │
 │   ├─ Viewport         (GPU field raymarcher, compiled GLSL, overlays)     │
 │   ├─ Picking          (ray → field hit → face / region selection)         │
-│   └─ Lenses           (Shape · Setup · Results · Fill · Make · Tutorials) │
+│   ├─ Workbenches      (2D Sketch · Fixings/Weibull · Antenna VNA · PDE)   │
+│   └─ Lenses           (Shape · Setup · Results · Fill · Build · Theory)   │
 └──────────────────┬────────────────────────────────────────▲───────────────┘
-                   │ serialised document / job request      │ transferable buffers
-┌──────────────────▼────────── Web Worker / Native ─────────┴───────────────┐
+                   │ serialised .fsm / let params / jobs    │ transferable buffers
+┌──────────────────▼──── Web Worker / JNI / LAN Peer ───────┴───────────────┐
 │  Rust workspace (`crates/*`, backed by `fenics-rs` submodule)             │
-│   ├─ fieldsmith-doc     *.fsm parser, printer, AST, address grammar       │
+│   ├─ fieldsmith-doc     *.fsm + Literate header parser, printer, AST      │
 │   ├─ fieldsmith-field   SDF / expression IR, interval bounds, GLSL codegen│
 │   ├─ fieldsmith-mesh    isosurface stuffing (P2 tets), adaptive DC, slices│
-│   ├─ fieldsmith-solve   elasticity, modal, steady heat, coupled systems   │
+│   ├─ fieldsmith-solve   elasticity, modal, heat, RF VNA, coupled adjoints │
 │   ├─ fieldsmith-core    regions, grading, STEP/3MF/STL/OBJ/GLB, rungs     │
 │   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
-│   ├─ fieldsmith-mcp     stdio & HTTP MCP server over fieldsmith-api       │
+│   ├─ fieldsmith-mcp     stdio & HTTP MCP server + LAN peer discovery      │
 │   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
-│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (docs/verif.*)  │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V60)        │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,8 +72,18 @@ Key technical choices:
 - **Quality tetrahedra from implicit fields.** `fieldsmith-mesh` implements isosurface stuffing
   (Labelle & Shewchuk, 2007) with boundary-claim warping to generate graded P2 tetrahedral
   meshes directly from signed distance fields without a B-rep kernel.
-- **Headless and AI-native by construction.** Every capability in the browser runs identically
-  through `fieldsmith-cli`, the JSON `fieldsmith api` verb, and `fieldsmith-mcp`.
+- **Single-source physics in Rust/WASM.** Domain solvers (3D P2 FEA, coupled Newton + sparse
+  adjoint PDEs, 900 MHz / 2.4 GHz dipole VNA and Smith Chart impedance matching, fastener
+  torque/Weibull envelopes) live once in Rust (`fieldsmith-solve`) and run identically in the
+  browser via WebAssembly, on Android via JNI/WASM, and on headless Linux servers via CLI/MCP.
+- **Literate, self-verifying documents.** Every tutorial (`T1`–`T7`, `T14`–`T15`), analytic
+  benchmark (`A1`–`A14`), and multiphysics case study (`T8`–`T13`, `T16`–`T17`) is a standalone
+  `.fsm` file under [`examples/`](examples/) whose `# @check:` header table is parsed by both
+  `fieldsmith-doc` (`fieldsmith solve --report`) and the browser `3. Results` stage.
+- **Mobile-first agentic CAD with LAN compute offload.** The Android app (`sh.fieldsmith.app`,
+  packaged reproducibly for F-Droid) embeds `fieldsmith-mcp` on `127.0.0.1:18789/mcp` so on-device
+  agents (such as Haven) can drive CAD and physics live on a phone while discovering workstation
+  peers over LAN/Tailscale/WireGuard (`:18790` UDP beacon + `/api/health`) for heavy solves.
 
 ---
 
@@ -147,27 +161,58 @@ Every feature or verification case (`V#`) added to the repository must satisfy f
 - **Vendor-hosted SaaS.** All collaboration and compute stay on git repositories and machines
   the user owns.
 
-### Next priorities
+### Delivered breakthroughs (`v0.8` – `v0.14`)
 
-For what Fieldsmith already does and verifies today, see [`README.md`](README.md) and
-[`docs/verification/`](docs/verification/). In priority order, the next milestones are:
+For full details and verification tables, see [`README.md`](README.md), [`docs/README.md`](docs/README.md),
+and [`docs/verification/`](docs/verification/):
 
-1. **Multi-body assembly mechanics & bolt preload (`V53`, `T10` — done)** — per-volume material
-   stiffness, density, and thermal expansion (`material <id> on <node>`) plus axial bolt preload
-   clamping (`load <id> <region> preload=<N> [axis=(...)]`). Next extension: nonlinear penalty
-   gasket separation across unbonded contact interfaces.
-2. **Spatially varying cell-size and multi-zone lattice fields (`V54`, `T11` — done)** — smooth
-   transitions between lattice cell sizes (`cell_min=<mm>`) and TPMS families (`morph=<family>`)
-   driven by the 3D field grade with exact CPU/GLSL parity and two-pass homogenised FEA.
-3. **Topology optimization / level-set field evolution (`V55`, `T12` — done)** — stress- and
-   compliance-driven outer boundary evolution (`erode=<mm>`) directly on the implicit field grid,
-   preserving protected interfaces (`protect`) and wrapping the evolved boundary in a conformal
-   skin (`skin` → `skin_max`) and graded TPMS infill.
-4. **Volumetric results visualisation, transient simulation recap, and real-time video synthesis (`V56`, `T13` — done)** —
-   ParaView-style transfer functions (`Flame` blackbody, `Turbo`, `Coolwarm`, `Viridis`), 3D
-   translucent volumetric iso-shells, coupled optical caustic + combustion chemistry + buoyant
-   smoke plume simulation (`solar_candle_ignition_v1`), automated milestone recap cards for
-   long-running transient runs, and 30 fps `.webm` video synthesis with embedded telemetry.
+- **Multi-body assembly mechanics, fastener qualification & Weibull brittle fracture (`V53`, `V57`, `A10`, `A13`, `T10`, `T14`)** —
+  per-volume materials (`material <id> on <node>`), axial bolt preload (`load <id> <region> preload=<N>`),
+  VDI 2230 / Kellermann–Klein / NASA-STD-5020B 3-surface torque-preload envelopes (`T_min`, `T_rec`, `T_max`),
+  Junker vibration self-loosening, and 2-parameter Weibull ceramic survival (`P_f ≤ 10⁻⁶`), with auto-tapped
+  pilot bores and spotfaces on CSG host surfaces.
+- **Spatially varying multi-zone lattices & level-set boundary evolution (`V54`, `V55`, `T11`, `T12`)** —
+  smooth cell-size grading (`cell_min`), TPMS family morphing (`morph`), and stress-driven outer
+  boundary erosion (`erode`) wrapped in watertight conformal skins (`skin` → `skin_max`).
+- **2D constraint-solved parametric sketcher (`V58`, `T15`)** — Levenberg–Marquardt + rank-revealing
+  QR Jacobian solver with DOF and over-constraint diagnostics feeding `extrude` and `revolve`.
+- **Electromagnetics & dual-band drone antenna VNA workbench (`V59`, `A14`, `T16`)** — 900 MHz and
+  2.4 GHz dipole impedance, 50 Ω Möbius Smith Chart trajectories, CFRP airframe eddy-current image
+  loss, 3D radiation lobes, and L-network matching consolidated in `fieldsmith-solve::antenna`.
+- **Regeneratively cooled rocket propulsion & multi-solid STEP assemblies (`V60`, `A3`–`A6`, `T17`)** —
+  exact De Laval chamber/nozzle `revolve` contours from RPA configs, multi-solid STEP assembly placement
+  (`NEXT_ASSEMBLY_USAGE_OCCURRENCE`), Bartz sonic-throat heat flux + forced coolant Robin–Neumann
+  thermo-elasticity, and stress-graded TPMS Gyroid cooling jackets.
+- **Single-file Literate `.fsm` architecture & `Document → CoupledSystem` `let` binding (`v0.14.0`)** —
+  all 31 tutorials, analytic verification benchmarks (`A1`–`A14`), and multiphysics case studies
+  (`T8`–`T13`, `T16`–`T17`) live as self-defining `.fsm` files in [`examples/`](examples/), bind
+  their `let` parameters directly into the coupled PDE/adjoint/UQ workbenches, and render in-stage
+  verification tables in `3. Results` and `fieldsmith solve --report`.
+
+### Next priorities (`v0.15+`)
+
+1. **Executable `@check` / `@assert` expressions in `fieldsmith solve --verify`** —
+   Evaluate closed-form formulas in Literate `.fsm` headers directly against live solved probe and
+   summary fields (for example, checking `abs(probe(tip).uz - (-F*L^3/(3*E*I))) / abs(...) < 0.015`
+   automatically at the end of a solve), turning every `.fsm` file into a self-checking test case in
+   both `fieldsmith-cli` and the browser `3. Results` card.
+2. **Nonlinear unilateral contact & flange gasket separation** —
+   Extend multi-body bolted assemblies (`V53`, `T10`, `T14`) with penalty / augmented-Lagrangian
+   non-penetration contact across unbonded mating faces so heel separation, prying factor, and gasket
+   unloading under internal pressure are solved directly on 3D P2 surface patches.
+3. **Transient 3D thermo-elastic time-stepping (`ρ c_p ∂T/∂t = ∇·(k ∇T)`)** —
+   Add implicit BDF2 / Crank–Nicolson transient heat conduction and coupled thermal stress on 3D P2
+   tetrahedral meshes so thermal shock during rocket ignition (`T17`), solar focal heating (`T13`),
+   and power-electronics load steps can be stepped in time with adaptive Δt control.
+4. **3D FEA adjoint shape & lattice-grading sensitivities (`dJ/d(let)`, `dJ/dρ_e`)** —
+   Differentiate the 3D P2 stiffness and thermal residual with respect to `.fsm` `let` dimensions
+   and element-wise TPMS density `ρ_e` so users and MCP agents can step 3D part dimensions and
+   lattice grading along exact compliance, mass, and temperature gradients without finite-difference
+   sweeps.
+5. **Direct 1D/2D coupled-channel to 3D field boundary mapping** —
+   Project axial temperature, pressure, and heat-transfer coefficient profiles `T_cool(z), h_cool(z), p(z)`
+   solved in the 1D/2D monolithic coupled workbenches (`regen_nozzle_h2_v1`, `pilkington_float_bath_cvd_coater_v1`)
+   directly onto 3D `.fsm` surface regions as spatially varying `convection` and `heatflux` bands.
 
 ---
 
