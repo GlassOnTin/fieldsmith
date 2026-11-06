@@ -17,7 +17,7 @@ Binaries:
 Builds:
   - versionName: 0.16.0
     versionCode: 1601
-    commit: eb1a295bfcae3231c64a54004bc5f39bc70a0138
+    commit: cd0b33ae44f32d7b8dc9ac245285ab7774f9d41e
     subdir: android/app
     submodules: true
     sudo:
