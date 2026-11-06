@@ -17,7 +17,7 @@ Binaries:
 Builds:
   - versionName: 0.14.0
     versionCode: 1401
-    commit: 5903e0a5d608f7e3f583c8b8793cfa42fd8c3c67
+    commit: 5ff39a766014d12363d289ffeaf2567d84303f6b
     subdir: android/app
     submodules: true
     sudo:
