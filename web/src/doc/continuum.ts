@@ -1184,3 +1184,58 @@ export function generateAppliedMathMarkdownReport(
 
   return lines.join('\n');
 }
+
+/**
+ * Return the coupled 1D/2D system ID bound to `doc` (or `null` when `doc` is a standard
+ * 3D CAD / P2 FEM document or empty canvas). Kept in `doc/continuum.ts` so `App.tsx` can
+ * query it without creating a circular import with `app/systems.tsx`.
+ */
+export function matchedCoupledSystemIdForDoc(doc: Document, sheetId?: string | null): string | null {
+  const docName = (doc.name || '').toLowerCase();
+  const hasLet = (k: string) => doc.lets?.some((l) => l.name === k) ?? false;
+  const regime = detectCoupledPhysicsRegime(doc);
+  if (sheetId === 'T13' || regime === 'solar_candle' || hasLet('i_solar')) {
+    return 'solar_candle_ignition_v1';
+  }
+  if (sheetId === 'T8' || regime === 'float_bath' || hasLet('h_sill')) {
+    return 'pilkington_float_bath_cvd_coater_v1';
+  }
+  if (
+    sheetId === 'T17' ||
+    docName.includes('rocket') ||
+    docName.includes('regen') ||
+    hasLet('throat_ch_mm') ||
+    ((doc.convections?.length ?? 0) > 0 && (doc.heat_fluxes?.length ?? 0) > 0)
+  ) {
+    return 'regen_nozzle_h2_v1';
+  }
+  if (
+    sheetId === 'T14' ||
+    sheetId === 'A13' ||
+    docName.includes('fixing') ||
+    docName.includes('fastener') ||
+    hasLet('torque_nm') ||
+    doc.loads?.some((l) => l.kind.type === 'preload')
+  ) {
+    return 'jwst_fastener_fixing_envelope_v1';
+  }
+  if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
+    return 'deadcat_4in_gemini_antenna_v1';
+  }
+  if (sheetId === 'T9' || docName.includes('induction')) {
+    return 'vacuum_induction_melt_v1';
+  }
+  if (sheetId === 'T10' || docName.includes('czochralski') || docName.includes('crystal')) {
+    return 'czochralski_si_crystal_v1';
+  }
+  if (sheetId === 'T11' || docName.includes('caster') || docName.includes('slab')) {
+    return 'continuous_steel_slab_caster_v1';
+  }
+  if (sheetId === 'T12' || docName.includes('pem') || docName.includes('electroly')) {
+    return 'pem_water_electrolyser_v1';
+  }
+  if (regime === 'swirl_combustor' || docName.includes('swirl') || docName.includes('combustor')) {
+    return 'annular_swirl_spray_combustor_v1';
+  }
+  return null;
+}

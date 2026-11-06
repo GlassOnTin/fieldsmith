@@ -12,7 +12,7 @@ import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbenc
 import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
 import { AntennaWorkbenchModal, openAntennaWorkbenchModal } from './AntennaWorkbench';
 import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
-import { matchedCoupledSystemId } from './systems';
+import { matchedCoupledSystemIdForDoc } from '../doc/continuum';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -111,7 +111,7 @@ function ViewTools() {
               <Icon.antenna />
             </button>
           )}
-          {matchedCoupledSystemId() && (
+          {matchedCoupledSystemIdForDoc(store.doc, ui.tutorialSheetId) && (
             <button
               class={`btn icon ${ui.systemsOpen ? 'on' : ''}`}
               data-testid="hud-open-systems-workbench"

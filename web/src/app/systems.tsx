@@ -17,7 +17,7 @@ import {
   type SimulationRecapEvent,
 } from '../doc/wasm';
 import { store } from '../doc/store';
-import { detectCoupledPhysicsRegime } from '../doc/continuum';
+import { detectCoupledPhysicsRegime, matchedCoupledSystemIdForDoc } from '../doc/continuum';
 import { viewOverlays } from './App';
 import { extraCommands, openText, viewApi } from './commands';
 import { apiUrl, ui, useApp } from './ui';
@@ -4373,54 +4373,7 @@ async function pushWorkspaceState(payload: {
 // ---- Main 3-Column Coupled Systems Workbench Modal ----
 
 export function matchedCoupledSystemId(): string | null {
-  const sheetId = ui.tutorialSheetId;
-  const docName = (store.doc.name || '').toLowerCase();
-  const hasLet = (k: string) => store.doc.lets?.some((l) => l.name === k) ?? false;
-  if (sheetId === 'T13' || isSolarCandleDocument() || hasLet('i_solar')) {
-    return 'solar_candle_ignition_v1';
-  }
-  if (sheetId === 'T8' || isFloatBathDocument() || hasLet('h_sill')) {
-    return 'pilkington_float_bath_cvd_coater_v1';
-  }
-  if (
-    sheetId === 'T17' ||
-    docName.includes('rocket') ||
-    docName.includes('regen') ||
-    hasLet('throat_ch_mm') ||
-    (store.doc.temperatures?.some((t) => t.kind.type === 'convection') &&
-      store.doc.temperatures?.some((t) => t.kind.type === 'heatflux'))
-  ) {
-    return 'regen_nozzle_h2_v1';
-  }
-  if (
-    sheetId === 'T14' ||
-    sheetId === 'A13' ||
-    docName.includes('fixing') ||
-    docName.includes('fastener') ||
-    hasLet('torque_nm') ||
-    store.doc.loads?.some((l) => l.kind.type === 'preload')
-  ) {
-    return 'jwst_fastener_fixing_envelope_v1';
-  }
-  if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
-    return 'deadcat_4in_gemini_antenna_v1';
-  }
-  if (sheetId === 'T9' || docName.includes('induction')) {
-    return 'vacuum_induction_melt_v1';
-  }
-  if (sheetId === 'T10' || docName.includes('czochralski') || docName.includes('crystal')) {
-    return 'czochralski_si_crystal_v1';
-  }
-  if (sheetId === 'T11' || docName.includes('caster') || docName.includes('slab')) {
-    return 'continuous_steel_slab_caster_v1';
-  }
-  if (sheetId === 'T12' || docName.includes('pem') || docName.includes('electroly')) {
-    return 'pem_water_electrolyser_v1';
-  }
-  if (isSwirlCombustorDocument() || docName.includes('swirl') || docName.includes('combustor')) {
-    return 'annular_swirl_spray_combustor_v1';
-  }
-  return null;
+  return matchedCoupledSystemIdForDoc(store.doc, ui.tutorialSheetId);
 }
 
 /** Extract `design_p` from the active `.fsm` document's `let` variables when present (`Document → CoupledSystem`). */
