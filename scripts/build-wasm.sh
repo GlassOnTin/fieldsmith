@@ -15,9 +15,10 @@ wasm-bindgen target/wasm32-unknown-unknown/release/fieldsmith_wasm.wasm \
 echo "wasm (single thread): $(du -h web/src/pkg/fieldsmith_wasm_bg.wasm | cut -f1)"
 
 if [[ "${FIELDSMITH_WASM_ST_ONLY:-}" == 1 ]]; then
-  rm -rf web/src/pkg-mt
-  mkdir -p web/src/pkg-mt
-  cp -r web/src/pkg/* web/src/pkg-mt/
+  if [[ ! -f web/src/pkg-mt/fieldsmith_wasm.js ]]; then
+    mkdir -p web/src/pkg-mt
+    cp -r web/src/pkg/* web/src/pkg-mt/
+  fi
   exit 0
 fi
 

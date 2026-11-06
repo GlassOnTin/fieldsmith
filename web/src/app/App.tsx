@@ -12,6 +12,7 @@ import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbenc
 import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
 import { AntennaWorkbenchModal, openAntennaWorkbenchModal } from './AntennaWorkbench';
 import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
+import { matchedCoupledSystemId } from './systems';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -110,14 +111,16 @@ function ViewTools() {
               <Icon.antenna />
             </button>
           )}
-          <button
-            class={`btn icon ${ui.systemsOpen ? 'on' : ''}`}
-            data-testid="hud-open-systems-workbench"
-            title="Coupled Multiphysics Systems Workbench (Monolithic Newton + Adjoint + UQ)"
-            onClick={() => runCommand('systems.open')}
-          >
-            <span style={{ fontWeight: 700, fontSize: '10px', fontFamily: 'var(--mono)' }}>PDE</span>
-          </button>
+          {matchedCoupledSystemId() && (
+            <button
+              class={`btn icon ${ui.systemsOpen ? 'on' : ''}`}
+              data-testid="hud-open-systems-workbench"
+              title="Coupled 1D/2D System Solver for this Model"
+              onClick={() => runCommand('systems.open')}
+            >
+              <span style={{ fontWeight: 700, fontSize: '10px', fontFamily: 'var(--mono)' }}>PDE</span>
+            </button>
+          )}
           <button class={`btn icon ${ui.gizmo === 'translate' ? 'on' : ''}`} title="Move (W)" onClick={() => runCommand('tool.move')}>
             <Icon.move />
           </button>

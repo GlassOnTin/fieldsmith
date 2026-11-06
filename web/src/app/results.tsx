@@ -2052,7 +2052,7 @@ function ResultsPanel() {
               type="button"
               class="mini-btn"
               data-testid="results-compact-toggle"
-              title="Toggle 5S Compact Summary vs Full Rungs & Sweep View"
+              title="Toggle Compact Summary vs Full Rungs & Sweep View"
               onClick={() => setCompact(!compact)}
             >
               {compact ? 'More ▾' : 'Compact ▴'}

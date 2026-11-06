@@ -4382,10 +4382,24 @@ export function matchedCoupledSystemId(): string | null {
   if (sheetId === 'T8' || isFloatBathDocument() || hasLet('h_sill')) {
     return 'pilkington_float_bath_cvd_coater_v1';
   }
-  if (sheetId === 'T17' || docName.includes('rocket') || docName.includes('regen') || hasLet('throat_ch_mm')) {
+  if (
+    sheetId === 'T17' ||
+    docName.includes('rocket') ||
+    docName.includes('regen') ||
+    hasLet('throat_ch_mm') ||
+    (store.doc.temperatures?.some((t) => t.kind.type === 'convection') &&
+      store.doc.temperatures?.some((t) => t.kind.type === 'heatflux'))
+  ) {
     return 'regen_nozzle_h2_v1';
   }
-  if (sheetId === 'T14' || sheetId === 'A13' || docName.includes('fixing') || docName.includes('fastener') || hasLet('torque_nm')) {
+  if (
+    sheetId === 'T14' ||
+    sheetId === 'A13' ||
+    docName.includes('fixing') ||
+    docName.includes('fastener') ||
+    hasLet('torque_nm') ||
+    store.doc.loads?.some((l) => l.kind.type === 'preload')
+  ) {
     return 'jwst_fastener_fixing_envelope_v1';
   }
   if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
@@ -4748,10 +4762,10 @@ export function SystemsWorkbench() {
               <button
                 class="btn small ghost"
                 data-testid="systems-back-to-router"
-                title="Return to 5S Coupled-Physics Abstraction Directory"
+                title="View all coupled 1D/2D system models"
                 onClick={() => switchSystem('')}
               >
-                ← 5S Route
+                ← All Models
               </button>
             )}
             <select
@@ -4761,7 +4775,7 @@ export function SystemsWorkbench() {
               data-testid="systems-domain-select"
               onChange={(e) => switchSystem((e.target as HTMLSelectElement).value)}
             >
-              <option value="">— Select Coupled PDE Abstraction (5S Route) —</option>
+              <option value="">— Select 1D/2D Coupled Model —</option>
               {systems.map((s) => (
                 <option key={s.system_id} value={s.system_id}>
                   [{s.industry_sector}] {s.system_title} ({s.num_dofs} DOFs)
@@ -4888,14 +4902,14 @@ export function SystemsWorkbench() {
             >
               <div>
                 <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-1)', marginBottom: '3px' }}>
-                  5S Coupled-Physics Abstraction Directory
+                  Coupled 1D/2D System Models
                 </div>
                 <div style={{ fontSize: '11.5px', color: 'var(--text-2)' }}>
-                  Current document (<code>{store.doc.name || 'Untitled'}</code>) is not bound to a coupled 1D/2D PDE system. Select the specific physical abstraction you want to open below, or stay in standard 3D CAD / P2 FEM.
+                  Select a reduced-order 1D/2D physical model below to solve boundary profiles (heat flux, convective film coefficient, bolt preload, or RF impedance) and project them onto a 3D part.
                 </div>
               </div>
               <button class="btn small" onClick={() => ui.set('systemsOpen', false)}>
-                Stay in 3D CAD / FEM
+                Close
               </button>
             </div>
 

@@ -1,3 +1,3 @@
 v0.16.0:
-- 5S UI pass across all 6 stages: zero-overflow shape inspector, 1-click duplicate and boolean op cycling (+ / - / intersect), subtract cut filtering in 4. Fill, 0.12/0.20 mm FDM layer presets, sticky fastener modal confirm footer, and Escape key modal close.
+- UI tidyness pass across all 6 stages: zero-overflow shape inspector, 1-click duplicate and boolean op cycling (+ / - / intersect), subtract cut filtering in 4. Fill, 0.12/0.20 mm FDM layer presets, sticky fastener modal confirm footer, and Escape key modal close.
 - 6. Theory postgraduate applied-math view: Synthesised Variational BVP & Sobolev function space statement, live closed-form # @assert verification cards, and standby PDE filtering by default.
