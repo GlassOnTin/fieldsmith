@@ -72,11 +72,12 @@ fieldsmith 1
 #   Calls `insert_fixing` on the live workspace to automatically subtract the pilot bore, spotface, and thread-bite groove on the fixed object, add the Ti-6Al-4V screw head, and compute the [T_min, T_max] torque envelope.
 # @mcp: Step 2: Solve 72-DOF Monolithic Fastener PDE & Sparse Adjoint (`solve_coupled_system`) || solve_coupled_system || {"system_id":"jwst_fastener_fixing_envelope_v1","design_p":[1.45,4,0.7,8,10,1.65,12,-20],"sync_cad":true}
 #   Solves `jwst_fastener_fixing_envelope_v1` (12 axial stations × 6 fields: Sopwith hyperbolic thread load concentration q_th(z), Lamé hoop stress σ_θ(z), root principal stress σ₁(z), viscoplastic creep, and Weibull hazard density) with exact Sparse Adjoint sensitivities dΦ/dp.
-# @mcp: Step 3: Solve 3D P2 Tetrahedral FEA under Clamping Preload (`solve_study`) || solve_study || {"include_fine":false}
+# @mcp: Step 3: Solve 3D P2 Tetrahedral FEA under Clamping Preload (`solve`) || solve || {"kind":"solve","dofs":20000}
 #   Runs the 3D quadratic (P2) finite-element solver on the auto-tapped boss assembly to verify peak von Mises and principal stress under the recommended clamping preload.
 # === END LITERATE HEADER ===
 
 name "T14 Self-Tapping Screw & Hook-Clip Fixing Qualification"
+coupled jwst_fastener_fixing_envelope_v1
 material petg
 
 let screw_d = 4.0

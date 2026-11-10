@@ -46,7 +46,7 @@ fieldsmith 1
 # ---
 # @mcp: Configure Level-Set Outer Boundary Evolution (erode=3.0 mm) via API || set_fill || {"family":"gyroid","morph":"diamond","mode":"sheet","cell":8,"cell_min":4,"skin":1.2,"skin_max":2,"erode":3,"rho_min":0.2,"rho_max":0.65}
 #   Set family=gyroid, morph=diamond, cell=8.0, cell_min=4.0, skin=1.2, skin_max=2.0, erode=3.0 via set_fill.
-# @mcp: Run Two-Pass Level-Set Topology + Lattice FEA Solve via API || solve_study || {"include_fine":false}
+# @mcp: Run Two-Pass Level-Set Topology + Lattice FEA Solve via API || solve || {"kind":"solve","dofs":20000}
 #   Solve Pass 1 driving stress envelope and Pass 2 level-set evolved + multi-zone lattice mechanics.
 # === END LITERATE HEADER ===
 

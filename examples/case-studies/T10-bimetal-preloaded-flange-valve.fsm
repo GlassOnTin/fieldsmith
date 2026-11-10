@@ -46,9 +46,9 @@ fieldsmith 1
 # ---
 # @mcp: Assign CuCrZr Alloy to Upper Spool Volume via API || set_material || {"node":"upper_spool","material":"cucrzr"}
 #   Set per-volume material cucrzr on the upper_spool node while keeping the lower housing on ss316l.
-# @mcp: Increase Bolt Preload Clamping Force to 22 kN via API || set_param || {"addr":"bolt_preload","value":22000}
+# @mcp: Increase Bolt Preload Clamping Force to 22 kN via API || set_let || {"name":"bolt_preload","value":22000}
 #   Update the bolt_preload parameter from 16,000 N to 22,000 N to increase flange clamping compression.
-# @mcp: Run Multi-Material Assembly & Bolt Preload FEA Solve via API || solve_study || {"include_fine":false}
+# @mcp: Run Multi-Material Assembly & Bolt Preload FEA Solve via API || solve || {"kind":"solve","dofs":25000}
 #   Solve both the cold bolt-preload case and the hot bi-metallic thermal mismatch case.
 # === END LITERATE HEADER ===
 

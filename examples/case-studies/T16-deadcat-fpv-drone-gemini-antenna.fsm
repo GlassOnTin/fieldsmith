@@ -65,11 +65,11 @@ fieldsmith 1
 # @theory_body:
 #   In flight, a 4-inch DeadCat quadcopter pitches and banks through all attitudes (θ, φ). While a single dipole has deep axial nulls (−18 dBi) along its wire axis and a forward shadow cast by the conductive carbon frame and LiPo battery, an elevated orthogonal V-tail Gemini pod (α_skew ≈ 88°, z_pod ≥ 16 mm) fills each port’s axial null with the orthogonal port’s peak lobe, raising the 10th-percentile (p10) spherical blind-spot floor above 0 dBi.
 # ---
-# @mcp: Step 1: Evaluate VNA Sweep, 50 Ω Smith Chart & 3D Lobes on Unoptimised Tucked Build (`solve_drone_antenna`) || solve_drone_antenna || {"preset":"unoptimised_tucked","sync_to_document":true}
+# @mcp: Step 1: Evaluate VNA Sweep, 50 Ω Smith Chart & 3D Lobes on Unoptimised Tucked Build (`solve_drone_antenna`) || solve_drone_antenna || {"preset":"unoptimised_tucked","sync_cad":true}
 #   Runs the coupled electromagnetic VNA & 3D radiation lobe solver on the unoptimised tucked preset (`cfrp_standoff_mm = 6.5`, detuned `3.2 mm` TPU boot, `38°` skew) and syncs the 3D DeadCat assembly into the workspace.
-# @mcp: Step 2: Run Automated Multi-Objective Geometry & L/C Matching Optimiser (`optimise_drone_antenna`) || optimise_drone_antenna || {"preset":"unoptimised_tucked","max_iters":8,"sync_to_document":true}
+# @mcp: Step 2: Run Automated Multi-Objective Geometry & L/C Matching Optimiser (`optimise_drone_antenna`) || optimise_drone_antenna || {"preset":"unoptimised_tucked","iterations":8,"sync_cad":true}
 #   Optimises CFRP standoff `d_cfrp`, elevation `z_pod`, dielectric-compensated dipole lengths `L_900` & `L_2400`, orthogonal diversity skew `α_skew`, and conjugate L-network matching (`L_ser`, `C_sh`), then updates the 3D `.fsm` DeadCat drone in the viewport.
-# @mcp: Step 3: Solve 3D P2 Structural Stress on the 4-Inch DeadCat CFRP Frame (`solve_study`) || solve_study || {"include_fine":false}
+# @mcp: Step 3: Solve 3D P2 Structural Stress on the 4-Inch DeadCat CFRP Frame (`solve`) || solve || {"kind":"solve","dofs":20000}
 #   Runs the 3D quadratic (P2) tetrahedral finite-element solver on the optimised 4-inch DeadCat carbon-fibre airframe under the 18 N prop-thrust load.
 # ---
 # @assert: 4-Motor Prop Thrust Resultant || resultant_mag:1 || 64.00 || <= 1.0% || N
@@ -79,6 +79,7 @@ fieldsmith 1
 # === END LITERATE HEADER ===
 
 name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"
+coupled deadcat_4in_gemini_antenna_v1
 material cf_woven_3k
 
 let wheelbase_mm = 172.0

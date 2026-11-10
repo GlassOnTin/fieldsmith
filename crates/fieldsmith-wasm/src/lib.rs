@@ -59,9 +59,9 @@ pub fn validate(doc_json: &str) -> Result<String, JsValue> {
     to_json(&doc_from(doc_json)?.validate())
 }
 
-/// Validation with material-labelling warnings: `{"errors": […], "warnings": […]}`. The
-/// errors are `validate`'s; the warnings are the per-volume material labels' solve caveat
-/// (analysis stays single-material).
+/// Validation with multi-material assembly notes: `{"errors": […], "warnings": […]}`. The
+/// errors are `validate`'s; the warnings are [`Document::material_warnings`] naming volumes
+/// whose assigned material differs from the base document material.
 #[wasm_bindgen(js_name = validateWithWarnings)]
 pub fn validate_with_warnings(doc_json: &str) -> Result<String, JsValue> {
     let d = doc_from(doc_json)?;
@@ -1625,7 +1625,8 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     };
     use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
     use fieldsmith_solve::coupled_system::{
-        CoupledEngineeringSystem, NamedScenario, RegenerativeCooledNozzleSystem,
+        AnnularSwirlSprayCombustorSystem, CoupledEngineeringSystem, NamedScenario,
+        RegenerativeCooledNozzleSystem,
     };
     use fieldsmith_solve::fixings::FastenerFixingSystem;
     use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
@@ -1636,6 +1637,7 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     let candle_sys = SolarCandleIgnitionSystem;
     let fixing_sys = FastenerFixingSystem::new();
     let drone_sys = DeadCatGeminiAntennaSystem::new();
+    let swirl_sys = AnnularSwirlSprayCombustorSystem::default();
     let _ = (analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna, DroneAntennaDesignSpec::default);
 
     let bath_scenarios = vec![
@@ -1766,6 +1768,17 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
             "epistemic_parameters": drone_sys.epistemic_parameters(),
             "objectives": drone_sys.objective_descriptors(),
             "scenarios": drone_scenarios,
+        },
+        {
+            "system_id": swirl_sys.system_id(),
+            "system_title": swirl_sys.system_title(),
+            "industry_sector": swirl_sys.industry_sector(),
+            "num_dofs": swirl_sys.num_dofs(),
+            "fields": swirl_sys.field_descriptors(),
+            "design_parameters": swirl_sys.design_parameters(),
+            "epistemic_parameters": swirl_sys.epistemic_parameters(),
+            "objectives": swirl_sys.objective_descriptors(),
+            "scenarios": swirl_sys.named_scenarios(),
         }
     ]))
 }
@@ -1957,6 +1970,44 @@ pub fn solve_coupled_system(
             "fsm_3d": fsm_3d,
             "wall_ms": wall_ms,
         }))
+    } else if system_id == "annular_swirl_spray_combustor_v1" {
+        use fieldsmith_solve::coupled_system::{
+            solve_annular_swirl_spray_combustor, AnnularSwirlSprayCombustorSystem,
+            SwirlSprayCombustorParams,
+        };
+        let sys = AnnularSwirlSprayCombustorSystem::default();
+        let p = if design_p.len() == sys.design_parameters().len() {
+            design_p
+        } else {
+            sys.nominal_design_vector()
+        };
+        let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+            epistemic_theta
+        } else {
+            sys.nominal_epistemic_vector()
+        };
+        let cfg = EngineConfig::default();
+        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+            .map_err(js_err)?;
+        let obj_descs = sys.objective_descriptors();
+        let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+        let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+        let swirl_report = solve_annular_swirl_spray_combustor(
+            &SwirlSprayCombustorParams::from_vectors(&p, &theta),
+        );
+        let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
+        let wall_ms = clock() - t0;
+
+        to_json(&serde_json::json!({
+            "analysis": analysis,
+            "constraints_pass_p50": pass_p50,
+            "constraints_pass_robust_p90": pass_p90,
+            "float_bath_visual": serde_json::Value::Null,
+            "candle_flame_visual": serde_json::Value::Null,
+            "swirl_combustor": swirl_report,
+            "fsm_3d": fsm_3d,
+            "wall_ms": wall_ms,
+        }))
     } else {
         Err(js_err(format!("unknown coupled system_id: {system_id}")))
     }
@@ -2098,4 +2149,120 @@ pub fn run_spurious_eddy_benchmark_wasm(spec_json: &str) -> Result<String, JsVal
     };
     let report = run_spurious_eddy_geometry_benchmark(&spec);
     to_json(&report)
+}
+
+fn doc_from_json_or_fsm(input: &str) -> Result<Document, JsValue> {
+    let trimmed = input.trim_start();
+    if trimmed.starts_with('{') {
+        doc_from(trimmed)
+    } else {
+        fsm::parse(input).map_err(|e| js_err(format!("line {}: {}", e.line, e.message)))
+    }
+}
+
+/// Evaluate all `assert` / `# @assert:` engineering contracts on a `.fsm` or JSON `Document`.
+#[wasm_bindgen(js_name = verifyFsmContracts)]
+pub fn verify_fsm_contracts(doc_or_fsm: &str, dofs: Option<usize>) -> Result<String, JsValue> {
+    use fieldsmith_core::contracts::verify_document;
+    let doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let raw_fsm = if doc_or_fsm.trim_start().starts_with('{') {
+        None
+    } else {
+        Some(doc_or_fsm)
+    };
+    let res = match dofs {
+        Some(n) => Resolution::Dofs(n.max(1500)),
+        None => doc
+            .solve
+            .size
+            .map(Resolution::Size)
+            .unwrap_or(Resolution::Dofs(25_000)),
+    };
+    let (_analysis, _graded, report) = verify_document(&doc, raw_fsm, res, clock).map_err(js_err)?;
+    to_json(&report)
+}
+
+/// Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`
+/// and dimensionless elasticities) across `params_json` (a JSON array of param names, or
+/// empty/`[]` for all non-derived `let` variables).
+#[wasm_bindgen(js_name = computeFsmSensitivities)]
+pub fn compute_fsm_sensitivities(
+    doc_or_fsm: &str,
+    params_json: Option<String>,
+    dofs: Option<usize>,
+) -> Result<String, JsValue> {
+    use fieldsmith_core::sensitivity::compute_sensitivities;
+    let doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let params: Vec<String> = match params_json.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => serde_json::from_str(s)
+            .map_err(|e| js_err(format!("invalid params JSON array: {e}")))?,
+        _ => Vec::new(),
+    };
+    let res = match dofs {
+        Some(n) => Resolution::Dofs(n.max(1500)),
+        None => doc
+            .solve
+            .size
+            .map(Resolution::Size)
+            .unwrap_or(Resolution::Dofs(15_000)),
+    };
+    let report = compute_sensitivities(&doc, &params, res, clock).map_err(js_err)?;
+    to_json(&report)
+}
+
+/// Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`)
+/// directly from a `.fsm` or JSON `Document` SDF along `axis`, march 1D Darcy–Weisbach +
+/// Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto
+/// `bind_region` (returning both `report` and updated `doc` when bound).
+#[wasm_bindgen(js_name = analyzeFsmChannel)]
+pub fn analyze_fsm_channel_wasm(doc_or_fsm: &str, spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_core::channel::{
+        analyze_sdf_channel, bind_channel_bcs_to_region, ChannelFlowSpec,
+    };
+    #[derive(serde::Deserialize, Default)]
+    struct WasmChannelReq {
+        #[serde(flatten)]
+        spec: ChannelFlowSpec,
+        #[serde(default)]
+        bind_region: Option<String>,
+        #[serde(default)]
+        thermal_case: Option<String>,
+        #[serde(default)]
+        pressure_case: Option<String>,
+    }
+
+    let mut doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let req: WasmChannelReq = if spec_json.trim().is_empty() {
+        WasmChannelReq::default()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid ChannelFlowSpec JSON: {e}")))?
+    };
+    let report = analyze_sdf_channel(&doc, &req.spec).map_err(js_err)?;
+    let bound = if let Some(ref reg_id) = req.bind_region {
+        let reg_trimmed = reg_id.trim();
+        if !reg_trimmed.is_empty() {
+            bind_channel_bcs_to_region(
+                &mut doc,
+                &report,
+                reg_trimmed,
+                req.thermal_case
+                    .as_deref()
+                    .unwrap_or("Channel Thermal"),
+                req.pressure_case.as_deref(),
+            )
+            .map_err(js_err)?;
+            Some(reg_trimmed.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    to_json(&serde_json::json!({
+        "report": report,
+        "bound_region": bound,
+        "doc": if bound.is_some() { Some(&doc) } else { None },
+    }))
 }

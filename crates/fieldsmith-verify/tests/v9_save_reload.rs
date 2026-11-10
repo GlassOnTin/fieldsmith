@@ -212,6 +212,7 @@ fn save_reload_resolve_is_bit_identical() {
         yield_z: Some(30.0),
         shear_z: Some(25.0),
         source: "test".into(),
+        ..Default::default()
     });
     ortho.material = "petg_ortho".into();
     ortho.solve.build = Some([30.0, 15.0]);

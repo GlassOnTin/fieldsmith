@@ -41,6 +41,14 @@ pub struct Document {
     pub custom_materials: Vec<crate::materials::Material>,
     pub fill: Option<Fill>,
     pub solve: SolveSettings,
+    /// Optional explicit reduced-order coupled system ID bound to this document
+    /// (`coupled <system_id>`). Replaces filename/let heuristics with a typed declaration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_system: Option<String>,
+    /// Executable verification assertions (`assert ...` or `# @assert:`), preserved across
+    /// `.fsm` parse/print round-trips and evaluated by `QuestionSpec::Verify`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asserts: Vec<crate::fsm::LiterateAssert>,
 }
 
 impl Default for Document {
@@ -60,6 +68,8 @@ impl Default for Document {
             custom_materials: Vec::new(),
             fill: None,
             solve: SolveSettings::default(),
+            coupled_system: None,
+            asserts: Vec::new(),
         }
     }
 }
@@ -122,9 +132,10 @@ pub struct Node {
     pub suppressed: bool,
     pub transform: Transform,
     /// This volume's material id when the document assigns it one (`material <id> on
-    /// <node>`); `None` takes the document material. Labelling only: the solver evaluates
-    /// every volume with the document material (analysis stays single-material), and the
-    /// labels ride the 3MF export to the slicer. `validate` refuses unknown ids.
+    /// <node>`); `None` takes the document material. Structural additive volumes with an
+    /// explicit material evaluate with their per-volume properties (`E`, `yield`, `α`, `k`,
+    /// `density`) in `fieldsmith-core`, `role=fluid` volumes are excluded from the solid
+    /// structural mesh, and labels travel with the 3MF export. `validate` refuses unknown ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
     /// This volume's render colour as canonical `#RRGGBB` or `#RRGGBBAA` (`color <hex> on
@@ -588,6 +599,13 @@ impl Default for Fill {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlasticityLaw {
+    /// 3D Hencky–Ilyushin J2 secant elasto-plasticity with Hollomon power-law hardening.
+    J2,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SolveSettings {
     /// Target element size for the finest analysis level (mm). `None` = automatic.
@@ -605,6 +623,12 @@ pub struct SolveSettings {
     /// azimuth in XY from `+X` toward `+Y`). `None` defaults to `+Z` (`(0, 0)`). M24.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<[f64; 2]>,
+    /// Optional nonlinear constitutive law for 3D static stress solves (`solve plasticity=j2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plasticity: Option<PlasticityLaw>,
+    /// Optional solver-level J2 Hollomon strain-hardening exponent override `n ∈ (0, 1]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardening_n: Option<f64>,
 }
 
 impl Document {
@@ -1128,6 +1152,26 @@ impl Document {
                 errs.push("solve build= angles must be finite numbers".into());
             }
         }
+        if let Some(hn) = self.solve.hardening_n {
+            if !(hn.is_finite() && hn > 0.0 && hn <= 1.0) {
+                errs.push("solve hardening_n= must satisfy 0 < hardening_n <= 1".into());
+            }
+        }
+        if let Some(cs) = &self.coupled_system {
+            if !crate::fsm::is_ident(cs) {
+                errs.push(format!(
+                    "coupled system '{cs}' is not a valid identifier"
+                ));
+            }
+        }
+        for a in &self.asserts {
+            if a.label.trim().is_empty() || a.metric.trim().is_empty() || a.target.trim().is_empty() {
+                errs.push(format!(
+                    "assert '{}' must state non-empty label, metric, and target",
+                    a.label
+                ));
+            }
+        }
         for m in &self.custom_materials {
             if let Some(k) = m.k {
                 if !(k.is_finite() && k > 0.0) {
@@ -1153,8 +1197,32 @@ impl Document {
                     ));
                 }
             }
+            if let Some(hn) = m.hardening_n {
+                if !(hn.is_finite() && hn > 0.0 && hn <= 1.0) {
+                    errs.push(format!(
+                        "Custom material '{}' hardening_n must satisfy 0 < hardening_n <= 1",
+                        m.id
+                    ));
+                }
+            }
+            if let Some(hk) = m.hardening_k {
+                if !(hk.is_finite() && hk > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' hardening_k must be a positive finite number",
+                        m.id
+                    ));
+                }
+            }
+            if let Some(wm) = m.weibull_m {
+                if !(wm.is_finite() && wm > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' weibull_m must be a positive finite number",
+                        m.id
+                    ));
+                }
+            }
         }
-        // The thermal flow refuses a material with no sourced expansion coefficient
+        // The thermal flow refuses a structural material with no sourced expansion coefficient
         // rather than solving with an assumed one — convection bands and heat fluxes
         // drive the same expansion recovery, so they open the gate too.
         if !self.temperatures.is_empty()
@@ -1162,7 +1230,7 @@ impl Document {
             || !self.heat_fluxes.is_empty()
         {
             if let Some(m) = crate::materials::find(self, &self.material) {
-                if m.alpha.is_none() {
+                if m.role.is_structural() && m.alpha.is_none() {
                     errs.push(format!(
                         "The thermal flow needs a thermal-expansion coefficient and material \
                          '{}' states none — pick a material whose sheet states a CTE, or \
@@ -1174,7 +1242,7 @@ impl Document {
             Self::for_each_labelled(&self.root, &mut |n, mid| {
                 if !n.suppressed {
                     if let Some(m) = crate::materials::find(self, mid) {
-                        if m.alpha.is_none() {
+                        if m.role.is_structural() && m.alpha.is_none() {
                             errs.push(format!(
                                 "The thermal flow needs a thermal-expansion coefficient and material \
                                  '{mid}' on '{}' states none — pick a material whose sheet states a CTE, or \

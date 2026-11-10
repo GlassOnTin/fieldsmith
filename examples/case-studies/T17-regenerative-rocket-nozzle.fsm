@@ -52,13 +52,14 @@ fieldsmith 1
 # @theory_body:
 #   In a conventional thick-walled monolithic chamber, the cold outer wall rigidly restrains the hot inner liner, generating compressive thermal stress σ ≈ −EαΔT/(1−ν) that exceeds yield. Grading the regenerative jacket with a TPMS Gyroid Sheet (ρ ∈ [0.22, 0.75]) provides continuous tortuous coolant wet area while lowering the jacket’s radial/axial stiffness E_eff(ρ), relieving liner thermal stress and LPBF inter-layer peel.
 # ---
-# @mcp: Solve Both Mechanical & Bartz Hot-Fire Cases via API || solve_study || {"include_fine":false}
+# @mcp: Solve Both Mechanical & Bartz Hot-Fire Cases via API || solve || {"kind":"solve","dofs":25000}
 #   Run the two-pass homogenised P2 thermo-structural solver on the Ti-6Al-4V TPMS Gyroid rocket chamber.
 # @mcp: Switch Chamber Alloy to CuCrZr Copper via API || set_material || {"material":"cucrzr"}
 #   Switch the chamber material from Ti-6Al-4V to CuCrZr (E = 128 GPa, α = 1.7e-5 /K) to compare copper vs titanium thermal stress.
 # === END LITERATE HEADER ===
 
 name "T17 — GOX/Ethanol Regenerative Rocket Chamber (Ti-6Al-4V TPMS Gyroid)"
+coupled regen_nozzle_h2_v1
 material ti64
 
 let throat_ch_mm = 1.55

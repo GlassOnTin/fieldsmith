@@ -5,8 +5,10 @@
 //! serde limitation, stated here and in the V22 notes, so the gap is contract rather
 //! than accident.
 
+use fieldsmith_core::contracts::VerificationReport;
 use fieldsmith_core::overhang::OverhangReport;
 use fieldsmith_core::rung::RungRecord;
+use fieldsmith_core::sensitivity::SensitivityReport;
 use fieldsmith_core::{CaseResult, Provenance};
 
 use crate::question::{Met, Projection, Unmet};
@@ -71,6 +73,7 @@ pub enum QuestionSpec {
     /// `n` natural frequencies at the stated resolution (no load solving: loads are
     /// ignored the same way the CLI says, supports still apply).
     Modes {
+        #[serde(alias = "modes")]
         n: usize,
         #[serde(default)]
         dofs: Option<usize>,
@@ -106,6 +109,25 @@ pub enum QuestionSpec {
         build: Option<[f64; 3]>,
         #[serde(default)]
         threshold_deg: Option<f64>,
+    },
+    /// Unified `@assert` / `assert` contract verification on the document: returns
+    /// `status: ok` when every contract passes and `status: refusal` when one or more
+    /// contracts fail.
+    Verify {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
+    },
+    /// General 3D parameter sensitivity derivatives (`∂C/∂p`, `∂m/∂p`, `∂u_max/∂p`,
+    /// `∂σ_vM/∂p`) across `params` (or all non-derived `let` variables when omitted).
+    Sensitivity {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        params: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
     },
 }
 
@@ -149,6 +171,12 @@ pub struct Response {
     /// Present for the overhang question (`M23`, `V45`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overhang: Option<OverhangReport>,
+    /// Present for the verify question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerificationReport>,
+    /// Present for the sensitivity question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sensitivity: Option<SensitivityReport>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

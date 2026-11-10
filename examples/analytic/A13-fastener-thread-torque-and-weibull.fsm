@@ -43,6 +43,7 @@ fieldsmith 1
 # === END LITERATE HEADER ===
 
 name "A13 — Fastener Thread Torque & Preload Benchmark (V57)"
+coupled jwst_fastener_fixing_envelope_v1
 material pa12
 
 box boss_plate size=(32, 24, 10) at=(0, 0, 5) round=1

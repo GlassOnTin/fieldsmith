@@ -26,7 +26,7 @@ fieldsmith 1
 # @expected:
 #   The 3D CSG model resolves the punch pit cavity, thinned neck wall at r ≈ R_p, compressed bottom coin X, and lower die anvil ring.
 # @step: 2. Compare 1D Lee–Kim Analytic Hat-Curve vs. 3D Nonlinear J2 Plasticity in Results (3) || results
-#   Switch to Results (3). Inspect the Sheet Metal Clinching Process-Window Explorer card, toggle between 3D Nonlinear J2 Plasticity (`nonlinear_plastic = 1`) and Linear Hookean Elasticity (`nonlinear_plastic = 0`), and click `🧬 Plastic Strain ε_p` to view plastic strain localization in the clinch neck.
+#   Switch to Results (3). Inspect the Sheet Metal Clinching Process-Window Explorer card, toggle between 3D Nonlinear J2 Plasticity (`solve plasticity=j2`) and Linear Hookean Elasticity, and click `🧬 Plastic Strain ε_p` to view plastic strain localization in the clinch neck.
 # @expected:
 #   All 3 live @assert contracts pass, and the interactive hat-curve shows how X < 0.75 mm fails by neck fracture while X > 1.00 mm fails by button pull-out (unbuttoning).
 # ---
@@ -48,8 +48,8 @@ fieldsmith 1
 # @theory_body:
 #   The 1D Lee–Kim model assumes uniform hoop/axial stress around the 2πR_p neck cylinder and rigid-plastic unbending of t_u. A 3D nonlinear elasto-plastic FEM solver goes beyond the 1D analytic range in four critical ways: (1) resolving 3D notch stress triaxiality K_t at the tight punch corner radius r_p, (2) redistributing the elastic notch peak via J2 strain hardening (K_σ = K_t^{2n/(n+1)}), (3) accounting for radial elastic springback Δt_u after tool retraction, and (4) capturing non-axisymmetric peel localization where only a 60°–90° arc of the neck carries peak tension.
 # ---
-# @mcp: Load & Verify A19 Clinching Benchmark via API || load_fsm || {"fsm":"@SELF"}
-#   Load the A19 Sheet Metal Clinching S-Lock benchmark into the active workspace.
+# @mcp: Verify A19 Clinching Benchmark Contracts via API || verify || {"dofs":15000}
+#   Run live @assert contract verification on the A19 Sheet Metal Clinching S-Lock benchmark.
 # === END LITERATE HEADER ===
 
 name "A19 — Sheet Metal Clinching S-Lock Benchmark (Lee–Kim & Breda)"
@@ -60,14 +60,12 @@ let r_fillet = 0.30
 let t1 = 1.5
 let t2 = 1.5
 let F_pull = 2400
-let nonlinear_plastic = 1
-let hardening_n = 0.20
 let K_hollomon = 390
 let sigma_uts = 240
 let mu_clinch = 0.18
 let load_angle_deg = 0
 
-custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67
+custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67 hardening_n=0.20 hardening_k=390
 material al5754_clinch
 
 # Overlapping clinched flange Coupon (distinct lower die sheet + upper punch sheet + S-Lock button & annular die groove)
@@ -82,4 +80,4 @@ region lower_clamp = lower_sheet.nx + lower_sheet.px
 region upper_pull_ring = upper_boss.top + upper_boss.side
 support die_fixture lower_clamp fixed=xyz
 load cross_tension upper_pull_ring force=(0, 0, F_pull) case="Cross-Tension Pull-Out"
-solve
+solve plasticity=j2 hardening_n=0.20

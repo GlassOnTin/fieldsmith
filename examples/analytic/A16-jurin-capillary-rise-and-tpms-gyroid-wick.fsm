@@ -42,7 +42,7 @@ fieldsmith 1
 # @theory_body:
 #   At early times t ≪ τ_W, gravity is negligible and the meniscus advances diffusively as z(t) ≈ √((r_eff γ cos θ_e / 2μ) t) (Lucas 1918; Washburn 1921), before asymptotically approaching Jurin's equilibrium height h_Jurin.
 # ---
-# @mcp: Solve A16 Graded TPMS Capillary Wick via MCP / REST API || solve_study || {"include_fine":false}
+# @mcp: Solve A16 Graded TPMS Capillary Wick via MCP / REST API || solve || {"kind":"solve","dofs":20000}
 #   Execute the solid + graded TPMS Gyroid P2 solver on the A16 capillary wick column.
 # === END LITERATE HEADER ===
 

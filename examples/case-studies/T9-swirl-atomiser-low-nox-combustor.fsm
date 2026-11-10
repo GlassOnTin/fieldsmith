@@ -55,15 +55,16 @@ fieldsmith 1
 # @theory_body:
 #   Breaking the triple bond of atmospheric N₂ has a huge activation temperature (E_a / R = 69,460 K), making thermal NOx production double for roughly every 35–40 K increase in local flame temperature above 1850 K. Combining fine swirl atomisation (low D₃₂ → small s_φ → uniform lean flame temperature T_eff) with regenerative heat-exchanger wall cooling and secondary dilution jets quenches hot spots and suppresses NOx formation while preheating the working fluid.
 # ---
-# @mcp: Tune Swirl Atomiser to Low-NOx Orifice Geometry via API || set_param || {"addr":"orifice_r","value":2.1}
+# @mcp: Tune Swirl Atomiser to Low-NOx Orifice Geometry via API || set_let || {"name":"orifice_r","value":2.1}
 #   Shrink exit orifice radius orifice_r from 3.2 mm to 2.1 mm to thin the swirling fuel film and halve droplet Sauter Mean Diameter D₃₂.
-# @mcp: Increase Tangential Swirl Offset & Update Liner Flame Temperature via API || set_param || {"addr":"swirl_offset","value":7.2}
+# @mcp: Increase Tangential Swirl Offset & Update Liner Flame Temperature via API || set_let || {"name":"swirl_offset","value":7.2}
 #   Increase tangential swirl port lever arm swirl_offset to 7.2 mm (raising Swirl Number S_g to 2.95 and cutting predicted NOx from 52 ppm to 16 ppm).
-# @mcp: Run 3D Combustor & Heat-Exchanger Thermo-Mechanical Solve via API || solve_study || {"include_fine":false}
+# @mcp: Run 3D Combustor & Heat-Exchanger Thermo-Mechanical Solve via API || solve || {"kind":"solve","dofs":25000}
 #   Solve the 3D heat conduction and thermal-stress field across the swirl nozzle, combustor liner, and 4 regenerative heat-exchanger channels.
 # === END LITERATE HEADER ===
 
 name "T9 — Swirl Atomiser Nozzle, Combustor & Heat Exchanger"
+coupled annular_swirl_spray_combustor_v1
 material ss316l
 
 let orifice_r = 3.2

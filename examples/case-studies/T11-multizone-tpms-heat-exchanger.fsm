@@ -46,7 +46,7 @@ fieldsmith 1
 # ---
 # @mcp: Configure Multi-Zone Primitive → Diamond Lattice with 8 → 4 mm Cell Refinement via API || set_fill || {"family":"primitive","morph":"diamond","mode":"sheet","cell":8,"cell_min":4,"skin":1.2,"skin_max":2.2,"rho_min":0.22,"rho_max":0.65}
 #   Set family=primitive, morph=diamond, cell=8.0, cell_min=4.0, skin=1.2, skin_max=2.2 via set_fill.
-# @mcp: Run Two-Pass Multi-Zone Graded FEA Solve via API || solve_study || {"include_fine":false}
+# @mcp: Run Two-Pass Multi-Zone Graded FEA Solve via API || solve || {"kind":"solve","dofs":20000}
 #   Solve the solid driving stress and re-solve the graded Primitive → Diamond cold-plate bracket.
 # === END LITERATE HEADER ===
 

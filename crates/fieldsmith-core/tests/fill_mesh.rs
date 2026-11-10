@@ -142,6 +142,7 @@ fn mesh_bar_doc() -> Document {
         yield_z: None,
         shear_z: None,
         source: "test".into(),
+        ..Default::default()
     });
     doc.fill = Some(fieldsmith_doc::Fill {
         family: fieldsmith_doc::Family::Gyroid,

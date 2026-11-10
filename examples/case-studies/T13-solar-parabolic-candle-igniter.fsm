@@ -61,6 +61,7 @@ fieldsmith 1
 # === END LITERATE HEADER ===
 
 name "T13 — Solar-Focused Optical Lens Candle Ignition & Buoyant Flame"
+coupled solar_candle_ignition_v1
 material alsi10mg
 custommaterial nbk7_glass name="N-BK7 Optical Crown Glass (n=1.517)" e=82000 nu=0.206 yield=70 density=2.51 wall=0.8 a=0.0000071 source="Schott N-BK7 optical borosilicate crown glass (n_d=1.5168, V_d=64.17)"
 custommaterial paraffin_wax name="Paraffin Candle Wax C25H52" e=450 nu=0.38 yield=12 density=0.90 wall=0.8 a=0.00011 source="Paraffin wax C25H52 (T_melt=58 C, L_f=210 kJ/kg, LHV=42 MJ/kg)"

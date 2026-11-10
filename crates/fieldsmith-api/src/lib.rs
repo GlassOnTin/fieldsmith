@@ -18,8 +18,10 @@ pub mod schema;
 pub mod store;
 pub mod sweep_csv;
 
+use fieldsmith_core::contracts::verify_document;
 use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
 use fieldsmith_core::rung::Tolerance;
+use fieldsmith_core::sensitivity::compute_sensitivities;
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
 use fieldsmith_doc::{fsm, param, Document, NodeKind};
 use fieldsmith_field::expr;
@@ -218,6 +220,8 @@ pub fn respond(input: &str) -> Reply {
                         single: None,
                         sweep: None,
                         overhang: None,
+                        verification: None,
+                        sensitivity: None,
                         error: None,
                     })
                 }
@@ -298,6 +302,8 @@ pub fn respond(input: &str) -> Reply {
                                     }),
                                     sweep: None,
                                     overhang: None,
+                                    verification: None,
+                                    sensitivity: None,
                                     error: None,
                                 })
                             }
@@ -338,6 +344,8 @@ pub fn respond(input: &str) -> Reply {
                             }),
                             sweep: None,
                             overhang: None,
+                            verification: None,
+                            sensitivity: None,
                             error: None,
                         })
                     }
@@ -397,6 +405,8 @@ pub fn respond(input: &str) -> Reply {
                         }),
                         sweep: None,
                         overhang: None,
+                        verification: None,
+                        sensitivity: None,
                         error: None,
                     })
                 }
@@ -534,6 +544,8 @@ pub fn respond(input: &str) -> Reply {
                     points,
                 }),
                 overhang: None,
+                verification: None,
+                sensitivity: None,
                 error: None,
             })
         }
@@ -556,9 +568,68 @@ pub fn respond(input: &str) -> Reply {
                     single: None,
                     sweep: None,
                     overhang: Some(rep),
+                    verification: None,
+                    sensitivity: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
+        }
+        QuestionSpec::Verify { dofs, h } => {
+            let res = match (dofs, h) {
+                (Some(n), _) => Resolution::Dofs(n),
+                (None, Some(h)) => Resolution::Size(h),
+                (None, None) => Resolution::Dofs(35_000),
+            };
+            match verify_document(&doc, req.doc.as_deref(), res, question::clock) {
+                Ok((_a, _g, rep)) => {
+                    let status = if rep.all_passed {
+                        Status::Ok
+                    } else {
+                        Status::Refusal
+                    };
+                    ok_reply(schema::Response {
+                        apiv: APIV,
+                        engine: store::engine_identity(),
+                        status,
+                        name: Some(name),
+                        question: Some(echo),
+                        warnings,
+                        outcome: None,
+                        single: None,
+                        sweep: None,
+                        overhang: None,
+                        verification: Some(rep),
+                        sensitivity: None,
+                        error: None,
+                    })
+                }
+                Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
+        }
+        QuestionSpec::Sensitivity { params, dofs, h } => {
+            let res = match (dofs, h) {
+                (Some(n), _) => Resolution::Dofs(n),
+                (None, Some(h)) => Resolution::Size(h),
+                (None, None) => Resolution::Dofs(25_000),
+            };
+            match compute_sensitivities(&doc, &params, res, question::clock) {
+                Ok(rep) => ok_reply(schema::Response {
+                    apiv: APIV,
+                    engine: store::engine_identity(),
+                    status: Status::Ok,
+                    name: Some(name),
+                    question: Some(echo),
+                    warnings,
+                    outcome: None,
+                    single: None,
+                    sweep: None,
+                    overhang: None,
+                    verification: None,
+                    sensitivity: Some(rep),
+                    error: None,
+                }),
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
     }
@@ -606,6 +677,8 @@ fn error_reply(
             single: None,
             sweep: None,
             overhang: None,
+            verification: None,
+            sensitivity: None,
             error: Some(message.into()),
         },
         true,

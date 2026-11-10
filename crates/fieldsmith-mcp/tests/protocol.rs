@@ -109,6 +109,7 @@ fn tools_list_is_an_array_of_the_ten_tools() {
         names,
         vec![
             "open",
+            "new_document",
             "inspect",
             "list_shapes",
             "upsert_shape",
@@ -120,12 +121,18 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "add_support",
             "add_load",
             "add_temperature",
+            "add_convection",
+            "add_heatflux",
             "set_material",
+            "upsert_custom_material",
             "set_let",
             "set_fill",
             "set_build",
             "doc_text",
             "solve",
+            "verify",
+            "sensitivity",
+            "analyze_sdf_channel",
             "export",
             "list_coupled_systems",
             "solve_coupled_system",
@@ -452,12 +459,13 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
 
     let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
     let systems = catalog["systems"].as_array().unwrap();
-    assert_eq!(systems.len(), 5);
+    assert_eq!(systems.len(), 6);
     assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
     assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
     assert_eq!(systems[2]["system_id"], "solar_candle_ignition_v1");
     assert_eq!(systems[3]["system_id"], "jwst_fastener_fixing_envelope_v1");
     assert_eq!(systems[4]["system_id"], "deadcat_4in_gemini_antenna_v1");
+    assert_eq!(systems[5]["system_id"], "annular_swirl_spray_combustor_v1");
 
     // Optimise the Regenerative Cooled Rocket Nozzle system via Sparse Adjoint steps
     // and verify that its 3D `.fsm` twin is automatically synced into the open CAD document.

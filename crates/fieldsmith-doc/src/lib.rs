@@ -8,5 +8,5 @@ pub mod model;
 pub mod param;
 pub mod sketch;
 
-pub use materials::Material;
+pub use materials::{Material, MaterialRole};
 pub use model::*;

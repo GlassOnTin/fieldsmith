@@ -38,11 +38,12 @@ fieldsmith 1
 # @theory_body:
 #   Because Re(z_L) ≥ 0 for any passive load, the Möbius map w = (z − 1)/(z + 1) bijectively maps the right half of the complex impedance plane onto the closed unit disk |Γ| ≤ 1.
 # ---
-# @mcp: Evaluate Dual-Band VNA & 50 Ω Smith Chart via API || solve_drone_antenna || {"preset":"optimised"}
+# @mcp: Evaluate Dual-Band VNA & 50 Ω Smith Chart via API || solve_drone_antenna || {"preset":"optimised_default"}
 #   Run solve_drone_antenna on the optimised Gemini preset.
 # === END LITERATE HEADER ===
 
 name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"
+coupled deadcat_4in_gemini_antenna_v1
 material cf_woven_3k
 
 let wheelbase_mm = 172.0

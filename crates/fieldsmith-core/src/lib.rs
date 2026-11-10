@@ -1,6 +1,8 @@
 //! The analysis pipeline: document → field → tetrahedral mesh → boundary conditions → P2 solve →
 //! nodal results. Runs identically natively (CLI, verification tests) and in a Web Worker.
 
+pub mod channel;
+pub mod contracts;
 pub mod fill;
 pub mod fsmz;
 pub mod import;
@@ -8,6 +10,7 @@ pub mod overhang;
 pub mod probe;
 pub mod regions;
 pub mod rung;
+pub mod sensitivity;
 pub mod step;
 pub mod steptess;
 pub mod voxel;
@@ -1412,17 +1415,70 @@ struct Prepared {
     mesh_ms: f64,
 }
 
-fn has_non_structural_overlays(nodes: &[fieldsmith_doc::Node]) -> bool {
+fn is_display_overlay_id(id: &str) -> bool {
+    id.starts_with("rf_3d_") || id.starts_with("lobe_") || id.starts_with("prop_disc_")
+}
+
+fn is_fluid_volume_node(
+    doc: &Document,
+    n: &fieldsmith_doc::Node,
+    region_shapes: &std::collections::HashSet<&str>,
+) -> bool {
+    if n.suppressed || n.op == fieldsmith_doc::Op::Subtract || region_shapes.contains(n.id.as_str()) {
+        return false;
+    }
+    let Some(mid) = n.material.as_deref() else {
+        return false;
+    };
+    materials::find(doc, mid)
+        .is_some_and(|m| !m.role.is_structural())
+}
+
+fn collect_region_shapes(doc: &Document) -> std::collections::HashSet<&str> {
+    let mut set = std::collections::HashSet::new();
+    for r in &doc.regions {
+        for item in &r.selectors {
+            set.insert(item.shape.as_str());
+        }
+    }
+    set
+}
+
+fn has_any_structural_additive_node(
+    doc: &Document,
+    nodes: &[fieldsmith_doc::Node],
+    region_shapes: &std::collections::HashSet<&str>,
+) -> bool {
+    for n in nodes {
+        if n.suppressed || n.op == fieldsmith_doc::Op::Subtract || is_display_overlay_id(&n.id) {
+            continue;
+        }
+        if let fieldsmith_doc::NodeKind::Group { children, .. } = &n.kind {
+            if has_any_structural_additive_node(doc, children, region_shapes) {
+                return true;
+            }
+        } else if !is_fluid_volume_node(doc, n, region_shapes) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_non_structural_overlays(
+    doc: &Document,
+    nodes: &[fieldsmith_doc::Node],
+    region_shapes: &std::collections::HashSet<&str>,
+    suppress_fluids: bool,
+) -> bool {
     for n in nodes {
         if !n.suppressed
-            && (n.id.starts_with("rf_3d_")
-                || n.id.starts_with("lobe_")
-                || n.id.starts_with("prop_disc_"))
+            && (is_display_overlay_id(&n.id)
+                || (suppress_fluids && is_fluid_volume_node(doc, n, region_shapes)))
         {
             return true;
         }
         if let fieldsmith_doc::NodeKind::Group { children, .. } = &n.kind {
-            if has_non_structural_overlays(children) {
+            if has_non_structural_overlays(doc, children, region_shapes, suppress_fluids) {
                 return true;
             }
         }
@@ -1430,27 +1486,33 @@ fn has_non_structural_overlays(nodes: &[fieldsmith_doc::Node]) -> bool {
     false
 }
 
-fn suppress_non_structural_overlays(nodes: &mut [fieldsmith_doc::Node]) {
+fn suppress_non_structural_overlays(
+    doc_ref: &Document,
+    nodes: &mut [fieldsmith_doc::Node],
+    region_shapes: &std::collections::HashSet<&str>,
+    suppress_fluids: bool,
+) {
     for n in nodes {
-        if n.id.starts_with("rf_3d_")
-            || n.id.starts_with("lobe_")
-            || n.id.starts_with("prop_disc_")
+        if is_display_overlay_id(&n.id)
+            || (suppress_fluids && is_fluid_volume_node(doc_ref, n, region_shapes))
         {
             n.suppressed = true;
             continue;
         }
         if let fieldsmith_doc::NodeKind::Group { children, .. } = &mut n.kind {
-            suppress_non_structural_overlays(children);
+            suppress_non_structural_overlays(doc_ref, children, region_shapes, suppress_fluids);
         }
     }
 }
 
-fn structural_doc(doc: &Document) -> std::borrow::Cow<'_, Document> {
-    if !has_non_structural_overlays(&doc.root) {
+pub fn structural_doc(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    let region_shapes = collect_region_shapes(doc);
+    let suppress_fluids = has_any_structural_additive_node(doc, &doc.root, &region_shapes);
+    if !has_non_structural_overlays(doc, &doc.root, &region_shapes, suppress_fluids) {
         return std::borrow::Cow::Borrowed(doc);
     }
     let mut cloned = doc.clone();
-    suppress_non_structural_overlays(&mut cloned.root);
+    suppress_non_structural_overlays(doc, &mut cloned.root, &region_shapes, suppress_fluids);
     std::borrow::Cow::Owned(cloned)
 }
 
@@ -1733,18 +1795,11 @@ pub fn analyse_full(
     let nn = mesh.nodes.len();
     let mut cases = Vec::new();
     let mut iterations = 0;
-    let nl_plastic = doc
-        .lets
-        .iter()
-        .find(|l| l.name == "nonlinear_plastic")
-        .map(|l| l.value)
-        .unwrap_or(0.0)
-        > 0.5;
+    let nl_plastic = doc.solve.plasticity == Some(fieldsmith_doc::PlasticityLaw::J2);
     let hardening_n = doc
-        .lets
-        .iter()
-        .find(|l| l.name == "hardening_n")
-        .map(|l| l.value)
+        .solve
+        .hardening_n
+        .or(mat.hardening_n)
         .unwrap_or(0.18);
     for name in case_names(doc) {
         let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
@@ -2493,8 +2548,7 @@ convection bath ghost h=1e-5 tinf=50
     fn elastoplastic_secant_redistributes_notch_stress_and_increases_deflection() {
         let linear_fsm = "\
 name \"Notched Clinch Neck Strip\"
-let nonlinear_plastic = 0
-let hardening_n = 0.18
+let nonlinear_plastic = 1
 custommaterial al5754 e=70000 nu=0.33 yield=110 density=2.67
 material al5754
 group g {
@@ -2506,6 +2560,8 @@ region tip_face = strip.px
 support clamp root_face fixed=xyz
 load pull tip_face force=(4200, 0, 0)
 ";
+        // `let nonlinear_plastic = 1` without `solve plasticity=j2` must NOT silently switch
+        // constitutive laws — only the typed `solve plasticity=j2` statement activates J2.
         let d_lin = parse(linear_fsm);
         let a_lin = analyse(&d_lin, Resolution::Size(2.0), now).expect("linear analyse");
         let c_lin = &a_lin.cases[0];
@@ -2515,7 +2571,7 @@ load pull tip_face force=(4200, 0, 0)
             c_lin.max_vm_elem
         );
 
-        let nl_fsm = linear_fsm.replace("let nonlinear_plastic = 0", "let nonlinear_plastic = 1");
+        let nl_fsm = format!("{linear_fsm}solve plasticity=j2 hardening_n=0.18\n");
         let d_nl = parse(&nl_fsm);
         let a_nl = analyse(&d_nl, Resolution::Size(2.0), now).expect("nonlinear analyse");
         let c_nl = &a_nl.cases[0];
@@ -2580,5 +2636,76 @@ load cross_tension upper_pull_ring force=(0, 0, 2400)
             assert!(res_med.cases[0].solve.converged, "{label} medium converged");
             assert!(res_med.cases[0].max_vm_elem > 10.0, "{label} medium vm > 10 MPa");
         }
+    }
+
+    #[test]
+    fn typed_j2_plasticity_statement_drives_elastoplastic_solver_without_magic_lets() {
+        let base_fsm = "\
+fieldsmith 1
+name \"Typed J2 Strip\"
+custommaterial al5754 e=70000 nu=0.33 yield=95 density=2.67 hardening_n=0.20 hardening_k=390
+material al5754
+group g {
+  box strip size=(24, 8, 4) at=(12, 4, 2)
+  cylinder notch r=2.2 h=8 at=(12, 0, 2) subtract
+}
+region root_face = strip.nx
+region tip_face = strip.px
+support clamp root_face fixed=xyz
+load pull tip_face force=(4200, 0, 0)
+";
+        let d_lin = fsm::parse(base_fsm).expect("parse linear");
+        let a_lin = analyse(&d_lin, Resolution::Size(2.0), now).expect("linear");
+
+        let j2_fsm = format!("{base_fsm}solve plasticity=j2\n");
+        let d_j2 = fsm::parse(&j2_fsm).expect("parse j2");
+        assert!(d_j2.lets.is_empty(), "must not rely on any magic let variables");
+        let a_j2 = analyse(&d_j2, Resolution::Size(2.0), now).expect("j2 solve");
+
+        assert!(a_j2.cases[0].max_displacement > a_lin.cases[0].max_displacement);
+        assert!(
+            a_j2.cases[0]
+                .plastic_strain_elem
+                .iter()
+                .any(|&ep| ep > 0.0),
+            "typed solve plasticity=j2 must populate plastic_strain_elem"
+        );
+    }
+
+    #[test]
+    fn fluid_role_material_volumes_are_excluded_from_solid_fea_mesh_and_mass() {
+        let with_fake_solid_tin = "\
+fieldsmith 1
+name \"Refractory Trough + Tin Pool\"
+material ss316l
+custommaterial molten_tin e=1200 nu=0.45 yield=18 density=6.50 a=0.00009
+box trough size=(40, 20, 10) at=(0, 0, 5)
+box cavity size=(32, 14, 6) at=(0, 0, 8) subtract
+box tin_pool size=(30, 12, 4) at=(0, 0, 7)
+material molten_tin on tin_pool
+region base = trough.nz
+region rim = trough.pz
+support fix_base base fixed=xyz
+load rim_load rim force=(0, 0, -2000)
+";
+        let with_fluid_tin = with_fake_solid_tin.replace(
+            "custommaterial molten_tin e=1200 nu=0.45 yield=18 density=6.50 a=0.00009",
+            "custommaterial molten_tin e=1200 nu=0.45 yield=18 density=6.50 role=fluid",
+        );
+
+        let d_fake = fsm::parse(with_fake_solid_tin).expect("parse fake");
+        let d_fluid = fsm::parse(&with_fluid_tin).expect("parse fluid");
+        assert!(d_fluid.validate().is_empty(), "{:?}", d_fluid.validate());
+
+        let a_fake = analyse(&d_fake, Resolution::Size(2.5), now).expect("solve fake");
+        let a_fluid = analyse(&d_fluid, Resolution::Size(2.5), now).expect("solve fluid");
+
+        // Excluding the 30*12*4 = 1440 mm^3 @ 6.50 g/cm^3 (~9.36 g) molten_tin pool reduces solid structural mass!
+        assert!(
+            a_fluid.mass_g + 8.0 < a_fake.mass_g,
+            "expected fluid-excluded solid mass ({:.2} g) to drop by ~9.36 g vs fake solid ({:.2} g)",
+            a_fluid.mass_g,
+            a_fake.mass_g
+        );
     }
 }

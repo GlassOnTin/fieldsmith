@@ -23,7 +23,7 @@
 //!
 //! [`print`] produces a canonical form; `print(parse(print(d))) == print(d)` always holds.
 
-use crate::materials::Material;
+use crate::materials::{Material, MaterialRole};
 use crate::model::*;
 use std::fmt::Write as _;
 
@@ -770,6 +770,12 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
         name: "Untitled".into(),
         ..Document::default()
     };
+    if let Some(hdr) = parse_literate_header(text) {
+        doc.asserts = hdr.asserts;
+        if let Some(cs) = hdr.coupled_system {
+            doc.coupled_system = Some(cs);
+        }
+    }
     // Stack of open groups: (header node, children, modifiers).
     let mut stack: Vec<(Node, Vec<Node>, Vec<Modifier>)> = Vec::new();
     let mut saw_header = false;
@@ -841,6 +847,53 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     pending_labels.push((id, target));
                 } else {
                     doc.material = id;
+                }
+            }
+            "coupled" => {
+                let sys_id = match c.next() {
+                    Some(Tok::Ident(s) | Tok::Str(s)) if is_ident(&s) => s,
+                    Some(Tok::Ident(s) | Tok::Str(s)) => {
+                        return Err(err(format!(
+                            "coupled system '{s}' is not a valid identifier"
+                        )))
+                    }
+                    _ => return Err(err("coupled needs a system id, e.g. coupled regen_nozzle_h2_v1".into())),
+                };
+                doc.coupled_system = Some(sys_id);
+            }
+            "assert" => {
+                let label = match c.next() {
+                    Some(Tok::Str(s) | Tok::Ident(s)) => s,
+                    _ => return Err(err("assert needs a quoted label, e.g. assert \"Tip deflection\" metric=\"max_displacement\" target=\"0.45\"".into())),
+                };
+                let mut a = c.attrs("", &let_scope(&doc))?;
+                let metric = a
+                    .string("metric")?
+                    .ok_or_else(|| err("assert needs metric=\"...\"".into()))?;
+                let target = match a.take("target") {
+                    Some(Some(Val::Str(s))) => s,
+                    Some(Some(Val::Num(v))) => n(v),
+                    Some(Some(Val::Ident(s))) => s,
+                    Some(Some(Val::Expr { txt })) => txt,
+                    _ => return Err(err("assert needs target=\"...\" or target=<number>".into())),
+                };
+                let tolerance = a
+                    .string("tol")?
+                    .or(a.string("tolerance")?)
+                    .unwrap_or_default();
+                let unit = a.string("unit")?.unwrap_or_default();
+                a.finish()?;
+                let item = LiterateAssert {
+                    label,
+                    metric,
+                    target,
+                    tolerance,
+                    unit,
+                };
+                if !doc.asserts.iter().any(|x| {
+                    x.label == item.label && x.metric == item.metric && x.target == item.target
+                }) {
+                    doc.asserts.push(item);
                 }
             }
             "color" => {
@@ -1324,11 +1377,30 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     Some(Some(_)) => return Err(err("tref must be a number, e.g. tref=20".into())),
                 };
                 doc.solve.build = a.pair("build")?.map(|(th, ph)| [th, ph]);
+                doc.solve.plasticity = match a.string("plasticity")?.as_deref() {
+                    None | Some("none") | Some("linear") => None,
+                    Some("j2") | Some("j2_secant") => Some(PlasticityLaw::J2),
+                    Some(other) => {
+                        return Err(err(format!(
+                            "unknown plasticity law '{other}' (expected j2 or linear)"
+                        )))
+                    }
+                };
+                doc.solve.hardening_n = a.num("hardening_n")?;
                 a.finish()?;
             }
             "custommaterial" => {
                 let id = c.ident("a material id")?;
                 let mut a = c.attrs(&id, &let_scope(&doc))?;
+                let role = match a.string("role")?.as_deref() {
+                    None | Some("structural") | Some("solid") => MaterialRole::Structural,
+                    Some("fluid") | Some("non_structural") => MaterialRole::Fluid,
+                    Some(other) => {
+                        return Err(err(format!(
+                            "unknown material role '{other}' (expected structural or fluid)"
+                        )))
+                    }
+                };
                 let mat = Material {
                     name: a.string("name")?.unwrap_or_else(|| id.clone()),
                     id,
@@ -1338,11 +1410,15 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     density: a.req_num("density")?,
                     min_wall: a.num_or("wall", 0.8)?,
                     // Thermal expansion 1/°C (e.g. 2e-5 for an aluminium class); optional,
-                    // and a thermal document refuses a material without one.
+                    // and a thermal document refuses a structural material without one.
                     alpha: a.num("a")?,
                     k: a.num("k")?,
                     yield_z: a.num("yield_z")?,
                     shear_z: a.num("shear_z")?,
+                    hardening_n: a.num("hardening_n")?,
+                    hardening_k: a.num("hardening_k")?,
+                    weibull_m: a.num("weibull_m")?,
+                    role,
                     source: a
                         .string("source")?
                         .unwrap_or_else(|| "User supplied".into()),
@@ -1546,6 +1622,9 @@ pub fn print(doc: &Document) -> String {
     let _ = writeln!(o, "fieldsmith {FORMAT_VERSION}");
     let _ = writeln!(o, "name {}", q(&doc.name));
     let _ = writeln!(o, "material {}", doc.material);
+    if let Some(cs) = &doc.coupled_system {
+        let _ = writeln!(o, "coupled {cs}");
+    }
     for l in &doc.lets {
         let _ = writeln!(o, "let {} = {}", l.name, l.expr);
     }
@@ -1571,6 +1650,18 @@ pub fn print(doc: &Document) -> String {
         }
         if let Some(sz) = m.shear_z {
             line += &format!(" shear_z={}", n(sz));
+        }
+        if let Some(hn) = m.hardening_n {
+            line += &format!(" hardening_n={}", n(hn));
+        }
+        if let Some(hk) = m.hardening_k {
+            line += &format!(" hardening_k={}", n(hk));
+        }
+        if let Some(wm) = m.weibull_m {
+            line += &format!(" weibull_m={}", n(wm));
+        }
+        if m.role == MaterialRole::Fluid {
+            line += " role=fluid";
         }
         line += &format!(" source={}", q(&m.source));
         let _ = writeln!(o, "{line}");
@@ -1713,6 +1804,21 @@ pub fn print(doc: &Document) -> String {
         }
         let _ = writeln!(o, "{line}");
     }
+    for a in &doc.asserts {
+        let mut line = format!(
+            "assert {} metric={} target={}",
+            q(&a.label),
+            q(&a.metric),
+            q(&a.target)
+        );
+        if !a.tolerance.is_empty() {
+            line += &format!(" tol={}", q(&a.tolerance));
+        }
+        if !a.unit.is_empty() {
+            line += &format!(" unit={}", q(&a.unit));
+        }
+        let _ = writeln!(o, "{line}");
+    }
     let mut solve_line = String::from("solve");
     if let Some(s) = doc.solve.size {
         solve_line += &format!(" size={}", n(s));
@@ -1725,6 +1831,12 @@ pub fn print(doc: &Document) -> String {
     }
     if let Some([th, ph]) = doc.solve.build {
         solve_line += &format!(" build=({}, {})", n(th), n(ph));
+    }
+    if let Some(PlasticityLaw::J2) = doc.solve.plasticity {
+        solve_line += " plasticity=j2";
+    }
+    if let Some(hn) = doc.solve.hardening_n {
+        solve_line += &format!(" hardening_n={}", n(hn));
     }
     if solve_line.len() > "solve".len() {
         let _ = writeln!(o, "{solve_line}");
@@ -1981,6 +2093,15 @@ pub struct LiterateAssert {
     pub unit: String,
 }
 
+/// An executable MCP step declared in a Literate `.fsm` header (`# @mcp:`).
+/// Syntax: `# @mcp: <label> || <tool_name> || <arguments_json>`
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LiterateMcpStep {
+    pub label: String,
+    pub tool: String,
+    pub arguments_json: String,
+}
+
 /// Structured metadata and closed-form verification targets parsed from a Literate `.fsm` header
 /// (`# === FIELDSMITH LITERATE CASE === ... # === END LITERATE HEADER ===`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1991,8 +2112,12 @@ pub struct LiterateHeader {
     pub title: String,
     pub subtitle: String,
     pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_system: Option<String>,
     pub checks: Vec<LiterateCheck>,
     pub asserts: Vec<LiterateAssert>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_steps: Vec<LiterateMcpStep>,
 }
 
 /// Parse the `# === FIELDSMITH LITERATE CASE ===` comment header of a `.fsm` file, if present.
@@ -2027,6 +2152,11 @@ pub fn parse_literate_header(text: &str) -> Option<LiterateHeader> {
             header.subtitle = v.trim().to_string();
         } else if let Some(v) = body.strip_prefix("@level:") {
             header.level = v.trim().to_string();
+        } else if let Some(v) = body.strip_prefix("@coupled:") {
+            let cs = v.trim();
+            if !cs.is_empty() {
+                header.coupled_system = Some(cs.to_string());
+            }
         } else if let Some(v) = body.strip_prefix("@check:") {
             let parts: Vec<&str> = v.split(" || ").map(|p| p.trim()).collect();
             header.checks.push(LiterateCheck {
@@ -2046,6 +2176,15 @@ pub fn parse_literate_header(text: &str) -> Option<LiterateHeader> {
                 tolerance: parts.get(3).copied().unwrap_or_default().to_string(),
                 unit: parts.get(4).copied().unwrap_or_default().to_string(),
             });
+        } else if let Some(v) = body.strip_prefix("@mcp:") {
+            let parts: Vec<&str> = v.split(" || ").map(|p| p.trim()).collect();
+            if parts.len() >= 2 {
+                header.mcp_steps.push(LiterateMcpStep {
+                    label: parts[0].to_string(),
+                    tool: parts[1].to_string(),
+                    arguments_json: parts.get(2).copied().unwrap_or("{}").to_string(),
+                });
+            }
         }
     }
     Some(header)
@@ -3428,5 +3567,81 @@ load press top fn=\"0 < x < a -> b * 0.1\" dir=(0, 0, -1)
         assert!(printed.contains("k=320"), "printed: {printed}");
         let reparsed = parse(&printed).expect("reparse");
         assert_eq!(reparsed.custom_materials[0].k, Some(320.0));
+    }
+
+    #[test]
+    fn typed_constitutive_fluid_role_coupled_and_assert_round_trip() {
+        let src = "\
+fieldsmith 1
+name \"Typed Constitutive & Coupled Spec\"
+material sheet_al
+coupled regen_nozzle_h2_v1
+custommaterial sheet_al name=\"Al 5754\" e=70000 nu=0.33 yield=65 density=2.67 wall=0.4 a=0.000023 k=150 hardening_n=0.2 hardening_k=390 source=\"EN AW-5754\"
+custommaterial bath_gas name=\"Forming Gas\" e=100 nu=0.3 yield=5 density=0.15 wall=0.8 role=\"fluid\" source=\"Non-structural headspace\"
+
+box plate size=(30, 20, 2)
+box gas_pocket size=(10, 10, 4) at=(0, 0, 3)
+material bath_gas on gas_pocket
+
+region clamp = plate.nx
+region tip = plate.px
+support s1 clamp
+load f1 tip force=(0, 0, -50) case=\"Load 1\"
+temperature t1 tip temp=120 case=\"Thermal 1\"
+assert \"Tip deflection positive\" metric=\"max_displacement\" target=\">= 0.001\" tol=\">= 0.001\" unit=\"mm\"
+solve tref=20 plasticity=\"j2\" hardening_n=0.2
+";
+        let doc = parse(src).expect("parse typed constitutive fsm");
+        assert_eq!(doc.coupled_system.as_deref(), Some("regen_nozzle_h2_v1"));
+        assert_eq!(doc.solve.plasticity, Some(PlasticityLaw::J2));
+        assert_eq!(doc.solve.hardening_n, Some(0.2));
+        assert_eq!(doc.custom_materials[0].hardening_n, Some(0.2));
+        assert_eq!(doc.custom_materials[0].hardening_k, Some(390.0));
+        assert_eq!(doc.custom_materials[1].role, MaterialRole::Fluid);
+        // Note: bath_gas has role=fluid and omits a= (CTE), yet thermal validate passes!
+        assert!(doc.validate().is_empty(), "validate: {:?}", doc.validate());
+
+        let printed = print(&doc);
+        let reparsed = parse(&printed).expect("reparse printed");
+        assert_eq!(reparsed, doc);
+        assert_eq!(print(&reparsed), printed);
+    }
+
+    #[test]
+    fn constitutive_validation_rejects_invalid_bounds() {
+        let mut doc = parse("fieldsmith 1\nname \"Bad\"\nmaterial bad_m\ncustommaterial bad_m e=70000 nu=0.3 yield=100 density=2.7 hardening_n=1.4 weibull_m=-3\nsolve hardening_n=0\n").unwrap();
+        doc.coupled_system = Some("123 bad".into());
+        let errs = doc.validate();
+        assert!(errs.iter().any(|e| e.contains("Custom material 'bad_m' hardening_n")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("Custom material 'bad_m' weibull_m")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("solve hardening_n=")), "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("coupled system")), "{errs:?}");
+    }
+
+    #[test]
+    fn literate_header_asserts_and_mcp_survive_print_reparse() {
+        let raw = "\
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: TEST1
+# @title: Literate Preservation
+# @coupled: regen_nozzle_h2_v1
+# @assert: Beam Deflection || max_displacement || 0.45 || 2.0% || mm
+# @mcp: Run Solve || solve || {\"kind\":\"solve\",\"dofs\":5000}
+# === END LITERATE HEADER ===
+name \"Literate Test\"
+material pla
+box b size=(20, 10, 10)
+";
+        let hdr = parse_literate_header(raw).expect("literate header");
+        assert_eq!(hdr.mcp_steps.len(), 1);
+        assert_eq!(hdr.mcp_steps[0].tool, "solve");
+        let doc = parse(raw).expect("parse literate fsm");
+        assert_eq!(doc.coupled_system.as_deref(), Some("regen_nozzle_h2_v1"));
+        assert_eq!(doc.asserts.len(), 1);
+        let printed = print(&doc);
+        let reparsed = parse(&printed).expect("reparse printed");
+        assert_eq!(reparsed.asserts, doc.asserts);
+        assert_eq!(reparsed.coupled_system, doc.coupled_system);
     }
 }

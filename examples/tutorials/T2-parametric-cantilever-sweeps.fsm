@@ -41,7 +41,7 @@ fieldsmith 1
 # ---
 # @mcp: Set Beam Thickness thick = 12.5 mm via API || set_let || {"name":"thick","value":12.5}
 #   Update a named parameter via set_let and watch the 3D viewport recompute all dependent geometry.
-# @mcp: Run a 4-Point Thickness Sweep via API || solve || {"kind":"sweep","param":"thick","values":[8,10,12,14],"rungs":[15000]}
+# @mcp: Run a 4-Point Thickness Sweep via API || solve || {"kind":"sweep","param":"thick","values":[8,10,12,14],"rungs":[6000,18000]}
 #   Evaluate thick = [8, 10, 12, 14] mm in one call and return mass, peak stress, and deflection for each.
 # === END LITERATE HEADER ===
 

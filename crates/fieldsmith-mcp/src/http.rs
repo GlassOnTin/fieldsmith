@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fieldsmith_api::respond;
@@ -76,8 +76,27 @@ pub fn local_hostname() -> String {
     format!("fieldsmith-{}", std::env::consts::ARCH)
 }
 
+fn cached_local_gpu_json() -> &'static [Value] {
+    static GPUS: OnceLock<Vec<Value>> = OnceLock::new();
+    GPUS.get_or_init(|| {
+        fieldsmith_solve::discover_local_gpus()
+            .into_iter()
+            .map(|g| {
+                json!({
+                    "index": g.index,
+                    "name": g.name,
+                    "total_memory_mib": g.total_memory_mib,
+                    "free_memory_mib": g.free_memory_mib,
+                    "compute_capability": format!("{}.{}", g.compute_capability.0, g.compute_capability.1),
+                    "multiprocessor_count": g.multiprocessor_count,
+                })
+            })
+            .collect()
+    })
+}
+
 pub fn max_recommended_dofs_for_host() -> usize {
-    let gpus = fieldsmith_solve::discover_local_gpus();
+    let gpus = cached_local_gpu_json();
     if !gpus.is_empty() {
         return 2_000_000;
     }
@@ -99,19 +118,7 @@ pub fn build_health_payload(ws: &SharedWorkspaceState, listen_port: Option<u16>)
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let gpus: Vec<Value> = fieldsmith_solve::discover_local_gpus()
-        .into_iter()
-        .map(|g| {
-            json!({
-                "index": g.index,
-                "name": g.name,
-                "total_memory_mib": g.total_memory_mib,
-                "free_memory_mib": g.free_memory_mib,
-                "compute_capability": format!("{}.{}", g.compute_capability.0, g.compute_capability.1),
-                "multiprocessor_count": g.multiprocessor_count,
-            })
-        })
-        .collect();
+    let gpus: Vec<Value> = cached_local_gpu_json().to_vec();
     json!({
         "status": "ok",
         "server": "fieldsmith-compute",
@@ -528,12 +535,18 @@ pub fn discover_peers(
         }
     }
 
-    let tcp_probe_timeout_ms = timeout_ms.min(90);
+    let subnet_timeout_ms = timeout_ms.min(90);
+    let direct_timeout_ms = timeout_ms.clamp(40, 1000);
     for chunk in unique.chunks(128) {
         let mut handles = Vec::with_capacity(chunk.len());
         for (host, port, via) in chunk.iter().cloned() {
+            let t_ms = if via == "subnet-scan" {
+                subnet_timeout_ms
+            } else {
+                direct_timeout_ms
+            };
             handles.push(std::thread::spawn(move || {
-                probe_peer_health(&host, port, tcp_probe_timeout_ms, via)
+                probe_peer_health(&host, port, t_ms, via)
             }));
         }
         for h in handles {
@@ -783,6 +796,20 @@ fn handle_connection(
                 Err(e) => return write_json(&mut stream, 400, &json!({ "error": e.to_string() })),
             };
             let mut ws = read_workspace_file(&cfg.workspace_path);
+            if let Some(expected_rev) = incoming.get("expected_revision").and_then(Value::as_u64) {
+                if ws.revision != expected_rev {
+                    return write_json(
+                        &mut stream,
+                        409,
+                        &json!({
+                            "error": "workspace revision conflict",
+                            "expected_revision": expected_rev,
+                            "current_revision": ws.revision,
+                            "workspace": ws,
+                        }),
+                    );
+                }
+            }
             ws.revision += 1;
             ws.updated_at_ms = now_ms();
             ws.actor = incoming
@@ -841,6 +868,21 @@ fn handle_connection(
                 Ok(v) => v,
                 Err(e) => return write_json(&mut stream, 400, &json!({ "error": e.to_string() })),
             };
+            if let Some(expected_rev) = parsed.get("expected_revision").and_then(Value::as_u64) {
+                let ws_now = read_workspace_file(&cfg.workspace_path);
+                if ws_now.revision != expected_rev {
+                    return write_json(
+                        &mut stream,
+                        409,
+                        &json!({
+                            "error": "workspace revision conflict",
+                            "expected_revision": expected_rev,
+                            "current_revision": ws_now.revision,
+                            "workspace": ws_now,
+                        }),
+                    );
+                }
+            }
             let rpc_req = if parsed.get("jsonrpc").and_then(Value::as_str) == Some("2.0") {
                 parsed
             } else {
@@ -984,6 +1026,8 @@ fn status_text(code: u16) -> &'static str {
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        502 => "Bad Gateway",
         _ => "Internal Server Error",
     }
 }

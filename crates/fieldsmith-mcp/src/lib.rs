@@ -19,6 +19,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::{b64, export, load_doc, missing_grids, question, respond};
+use fieldsmith_core::channel::{
+    analyze_sdf_channel as run_sdf_channel, bind_channel_bcs_to_region, ChannelAxis,
+    ChannelFlowSpec, PassageMode,
+};
 use fieldsmith_core::fsmz;
 use fieldsmith_doc::fixings::{
     insert_fixing_into_document, FixingInsertRequest, FixingKind,
@@ -28,8 +32,9 @@ use fieldsmith_doc::sketch::{
     ParametricSketch, SketchFeatureRequest,
 };
 use fieldsmith_doc::{
-    canonical_color, fsm, param, Convection, Document, Family, FillMode, HeatFlux, Let, Load,
-    LoadKind, Node, NodeKind, Op, ProfileVertex, Region, Selector, Support, Temperature, Transform,
+    canonical_color, fsm, materials, param, Convection, Document, Family, FillMode, HeatFlux, Let,
+    Load, LoadKind, MaterialRole, Node, NodeKind, Op, PlasticityLaw, ProfileVertex, Region,
+    Selector, Support, Temperature, Transform,
 };
 use fieldsmith_solve::antenna::{
     analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
@@ -37,8 +42,9 @@ use fieldsmith_solve::antenna::{
 };
 use fieldsmith_solve::candle_flame::SolarCandleIgnitionSystem;
 use fieldsmith_solve::coupled_system::{
-    CoupledEngineeringSystem, DesignParameter, EngineConfig, MonolithicSystemEngine, NamedScenario,
-    ObjectiveDescriptor, ObjectiveKind, RegenerativeCooledNozzleSystem, SystemAnalysisResult,
+    AnnularSwirlSprayCombustorSystem, CoupledEngineeringSystem, DesignParameter, EngineConfig,
+    MonolithicSystemEngine, NamedScenario, ObjectiveDescriptor, ObjectiveKind,
+    RegenerativeCooledNozzleSystem, SystemAnalysisResult,
 };
 use fieldsmith_solve::fixings::FastenerFixingSystem;
 use fieldsmith_solve::float_bath::{CffCase, FloatBathCoaterDesignSystem};
@@ -295,11 +301,15 @@ impl Server {
             "add_convection" => self.add_convection(args),
             "add_heatflux" => self.add_heatflux(args),
             "set_material" => self.set_material(args),
+            "upsert_custom_material" => self.upsert_custom_material(args),
             "set_let" | "set_param" => self.set_let(args),
             "set_fill" => self.set_fill(args),
             "set_build" => self.set_build(args),
             "doc_text" | "export_fsm" => self.doc_text(args),
             "solve" | "solve_study" => self.solve(args),
+            "verify" => self.verify(args),
+            "sensitivity" => self.sensitivity(args),
+            "analyze_sdf_channel" => self.analyze_sdf_channel(args),
             "export" => self.export(args),
             "list_coupled_systems" => self.list_coupled_systems(args),
             "solve_coupled_system" => self.solve_coupled_system(args),
@@ -329,12 +339,14 @@ impl Server {
                     | "add_convection"
                     | "add_heatflux"
                     | "set_material"
+                    | "upsert_custom_material"
                     | "set_let"
                     | "set_param"
                     | "set_fill"
                     | "set_build"
                     | "solve"
                     | "solve_study"
+                    | "analyze_sdf_channel"
                     | "solve_coupled_system"
                     | "optimise_coupled_system"
                     | "solve_drone_antenna"
@@ -406,6 +418,8 @@ impl Server {
         Ok(json!({
             "name": d.name,
             "material": d.material,
+            "coupled_system": d.coupled_system,
+            "asserts": d.asserts,
             "lets": d.lets,
             "custom_materials": d.custom_materials,
             "fill": fill,
@@ -414,6 +428,8 @@ impl Server {
             "supports": d.supports,
             "loads": d.loads,
             "temperatures": d.temperatures,
+            "convections": d.convections,
+            "heat_fluxes": d.heat_fluxes,
             "missing_grids": missing_grids(d),
             "problems": d.validate(),
         }))
@@ -552,6 +568,64 @@ impl Server {
         } else {
             Err(format!("set_material: no shape named {node:?}"))
         }
+    }
+
+    fn upsert_custom_material(&mut self, args: Value) -> Result<Value, String> {
+        let id = text_field("id", &args)?;
+        let e = number_field("e", &args)?;
+        let nu = number_field("nu", &args)?;
+        let yield_strength = args
+            .get("yield_strength")
+            .or_else(|| args.get("yield"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "upsert_custom_material: missing yield_strength/yield".to_string())?;
+        let density = number_field("density", &args)?;
+        let min_wall = args.get("min_wall").or_else(|| args.get("wall")).and_then(Value::as_f64).unwrap_or(0.8);
+        let role = match args.get("role").and_then(Value::as_str).unwrap_or("structural") {
+            "structural" | "solid" | "" => MaterialRole::Structural,
+            "fluid" => MaterialRole::Fluid,
+            other => {
+                return Err(format!(
+                    "upsert_custom_material: invalid role {other:?} (expected structural|fluid)"
+                ))
+            }
+        };
+        let mat = materials::Material {
+            id: id.clone(),
+            name: args
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string(),
+            e,
+            nu,
+            yield_strength,
+            density,
+            min_wall,
+            alpha: args.get("alpha").or_else(|| args.get("a")).and_then(Value::as_f64),
+            k: args.get("k").and_then(Value::as_f64),
+            yield_z: args.get("yield_z").and_then(Value::as_f64),
+            shear_z: args.get("shear_z").and_then(Value::as_f64),
+            hardening_n: args.get("hardening_n").and_then(Value::as_f64),
+            hardening_k: args.get("hardening_k").and_then(Value::as_f64),
+            weibull_m: args.get("weibull_m").and_then(Value::as_f64),
+            role,
+            source: args
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("Custom user material")
+                .to_string(),
+        };
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let action = if let Some(slot) = d.custom_materials.iter().position(|m| m.id == id) {
+            d.custom_materials[slot] = mat;
+            "updated"
+        } else {
+            d.custom_materials.push(mat);
+            "created"
+        };
+        let problems = d.validate();
+        Ok(json!({ "id": id, "action": action, "problems": problems }))
     }
 
     /// Update an existing `let` variable (or dotted parameter address `<id>.<attr>[.<n>]`),
@@ -736,7 +810,7 @@ impl Server {
             let pair: [f64; 2] = serde_json::from_value(ang.clone())
                 .map_err(|e| format!("set_build: angles: {e}"))?;
             d.solve.build = Some(pair);
-        } else {
+        } else if args.get("theta").is_some() || args.get("phi").is_some() {
             let theta = number_field("theta", &args)?;
             let phi = number_field("phi", &args)?;
             d.solve.build = Some([theta, phi]);
@@ -748,6 +822,32 @@ impl Server {
                 Some(
                     sz.as_f64()
                         .ok_or_else(|| "set_build: size must be a number or null".to_string())?,
+                )
+            };
+        }
+        if let Some(pl) = args.get("plasticity") {
+            d.solve.plasticity = if pl.is_null() {
+                None
+            } else {
+                match pl.as_str().unwrap_or("") {
+                    "" | "linear" | "none" => None,
+                    "j2" => Some(PlasticityLaw::J2),
+                    other => {
+                        return Err(format!(
+                            "set_build: unknown plasticity {other:?} (expected linear|j2)"
+                        ))
+                    }
+                }
+            };
+        }
+        if let Some(hn) = args.get("hardening_n") {
+            d.solve.hardening_n = if hn.is_null() {
+                None
+            } else {
+                Some(
+                    hn.as_f64().ok_or_else(|| {
+                        "set_build: hardening_n must be a number or null".to_string()
+                    })?,
                 )
             };
         }
@@ -808,6 +908,49 @@ impl Server {
             serde_json::from_str(&reply.body)
                 .map_err(|e| format!("the engine envelope failed to re-parse: {e}"))
         }
+    }
+
+    fn verify(&mut self, args: Value) -> Result<Value, String> {
+        let mut q = args;
+        q["kind"] = json!("verify");
+        self.solve(q)
+    }
+
+    fn sensitivity(&mut self, args: Value) -> Result<Value, String> {
+        let mut q = args;
+        q["kind"] = json!("sensitivity");
+        self.solve(q)
+    }
+
+    fn analyze_sdf_channel(&mut self, args: Value) -> Result<Value, String> {
+        let mut spec: ChannelFlowSpec = serde_json::from_value(args.clone()).unwrap_or_default();
+        if let Some(ax) = args.get("axis").and_then(Value::as_str) {
+            spec.axis = ChannelAxis::parse(ax)?;
+        }
+        if let Some(pm) = args.get("passage_mode").and_then(Value::as_str) {
+            spec.passage_mode = PassageMode::parse(pm)?;
+        }
+        let report = {
+            let d = self.doc()?;
+            run_sdf_channel(d, &spec)?
+        };
+        let mut bound_region: Option<String> = None;
+        if let Some(reg) = args.get("bind_region").and_then(Value::as_str) {
+            if !reg.trim().is_empty() {
+                let thermal_case = args
+                    .get("thermal_case")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Channel Thermal");
+                let pressure_case = args.get("pressure_case").and_then(Value::as_str);
+                let d = self.doc.as_mut().ok_or(NO_DOC)?;
+                bind_channel_bcs_to_region(d, &report, reg, thermal_case, pressure_case)?;
+                bound_region = Some(reg.to_string());
+            }
+        }
+        Ok(json!({
+            "report": report,
+            "bound_region": bound_region,
+        }))
     }
 
     /// The export core: facts (including the display timings) and — when requested —
@@ -1295,6 +1438,9 @@ impl Server {
             },
         ];
 
+        let swirl_sys = AnnularSwirlSprayCombustorSystem::default();
+        let swirl_scenarios = swirl_sys.named_scenarios();
+
         Ok(json!({
             "systems": [
                 {
@@ -1351,6 +1497,17 @@ impl Server {
                     "epistemic_parameters": drone_sys.epistemic_parameters(),
                     "objectives": drone_sys.objective_descriptors(),
                     "scenarios": drone_scenarios,
+                },
+                {
+                    "system_id": swirl_sys.system_id(),
+                    "system_title": swirl_sys.system_title(),
+                    "industry_sector": swirl_sys.industry_sector(),
+                    "num_dofs": swirl_sys.num_dofs(),
+                    "fields": swirl_sys.field_descriptors(),
+                    "design_parameters": swirl_sys.design_parameters(),
+                    "epistemic_parameters": swirl_sys.epistemic_parameters(),
+                    "objectives": swirl_sys.objective_descriptors(),
+                    "scenarios": swirl_scenarios,
                 }
             ]
         }))
@@ -1539,6 +1696,43 @@ impl Server {
                 "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
                 "fsm_3d": fsm_3d,
             }))
+        } else if system_id == "annular_swirl_spray_combustor_v1" {
+            use fieldsmith_solve::coupled_system::{
+                solve_annular_swirl_spray_combustor, SwirlSprayCombustorParams,
+            };
+            let sys = AnnularSwirlSprayCombustorSystem::default();
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = EngineConfig::default();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let swirl_report = solve_annular_swirl_spray_combustor(
+                &SwirlSprayCombustorParams::from_vectors(&p, &theta),
+            );
+            let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
+            if sync_cad {
+                if let Some(ref text) = fsm_3d {
+                    let d = fsm::parse(text).map_err(|e| e.to_string())?;
+                    self.doc = Some(d);
+                }
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "swirl_combustor": swirl_report,
+                "synced_to_cad_doc": sync_cad && fsm_3d.is_some(),
+                "fsm_3d": fsm_3d,
+            }))
         } else {
             Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
         }
@@ -1645,6 +1839,10 @@ impl Server {
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else if system_id == "deadcat_4in_gemini_antenna_v1" {
             let sys = DeadCatGeminiAntennaSystem::new();
+            let cfg = EngineConfig::default();
+            self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
+        } else if system_id == "annular_swirl_spray_combustor_v1" {
+            let sys = AnnularSwirlSprayCombustorSystem::default();
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {
@@ -2065,28 +2263,35 @@ impl Default for Server {
 }
 
 const TOOLS_JSON: &str = r#"[
- {"name":"open","description":"Open the session's document (.fsm text or base64 .fsmz). Exactly one of doc/docz.","inputSchema":{"type":"object","properties":{"doc":{"type":"string"},"docz":{"type":"string"}}}},
- {"name":"inspect","description":"The open document's analysis setup: regions, supports, loads, temperatures, material, fill, solve settings, validate problems, missing mesh grids.","inputSchema":{"type":"object","additionalProperties":false}},
+ {"name":"open","description":"Open the session's document (.fsm text or base64 .fsmz). Exactly one of doc/docz.","inputSchema":{"type":"object","properties":{"doc":{"type":"string"},"fsm":{"type":"string"},"docz":{"type":"string"}}}},
+ {"name":"new_document","description":"Reset the session workspace to a fresh empty .fsm document with optional `name` and `material`.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"material":{"type":"string"}}}},
+ {"name":"inspect","description":"The open document's analysis setup: regions, supports, loads, temperatures, convections, heat fluxes, custom materials, coupled system, asserts, fill, solve settings, validate problems, missing mesh grids.","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"list_shapes","description":"Inspect the open document's 3D CSG/SDF shape tree (`shapes`), `lets` variables, and `consumed` expressions.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"upsert_shape","description":"Create or update a 3D CAD primitive or profile-swept shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`, `extrude`, `revolve`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus","extrude","revolve"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"angle":{"type":"number"},"profile":{"type":"array","items":{"type":"object"}},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
+ {"name":"upsert_shape","description":"Create or update a 3D CAD primitive or profile-swept shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`, `extrude`, `revolve`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus","extrude","revolve"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"angle":{"type":"number"},"profile":{"type":"array","items":{"type":["object","array"]}},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
  {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in geometry catalogue, automatically drilling/tapping/counterboring the fixed object and calculating minimal (`T_min`) and maximal (`T_max`) torque.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`) and compile it into a 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
  {"name":"delete_entity","description":"Delete a shape, region, support, load, or temperature by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
- {"name":"add_load","description":"Apply a load (force/pressure/distributed) on a region for a load case.","inputSchema":{"type":"object","required":["region","kind"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"}}}},
+ {"name":"add_load","description":"Apply a load (force/pressure/preload/distributed) on a region for a load case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"},"force":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"pressure":{"type":"number"},"preload":{"type":"number"},"axis":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
  {"name":"add_temperature","description":"Apply a fixed boundary temperature on a region for a thermal case.","inputSchema":{"type":"object","required":["region","celsius"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"celsius":{"type":"number"},"case":{"type":"string"}}}},
- {"name":"set_material","description":"Assign a material label to a node.","inputSchema":{"type":"object","required":["node","material"],"properties":{"node":{"type":"string"},"material":{"type":"string"}}}},
+ {"name":"add_convection","description":"Apply a Robin convective boundary condition (`h` in 1/mm = `(h_SI / k_solid) * 1e-3`, `t_inf` in °C) on a region for a thermal case.","inputSchema":{"type":"object","required":["region","h"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"h":{"type":"number"},"t_inf":{"type":"number"},"tinf":{"type":"number"},"case":{"type":"string"}}}},
+ {"name":"add_heatflux","description":"Apply a Neumann heat-flux boundary condition (`q` in K/mm) on a region for a thermal case.","inputSchema":{"type":"object","required":["region","q"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"q":{"type":"number"},"case":{"type":"string"}}}},
+ {"name":"set_material","description":"Assign a material label to a specific shape `node`, or omit `node` to set the document's default material.","inputSchema":{"type":"object","required":["material"],"properties":{"node":{"type":"string"},"material":{"type":"string"}}}},
+ {"name":"upsert_custom_material","description":"Define or update a typed `custommaterial` in the open document, including Hollomon plasticity (`hardening_n`, `hardening_k`), brittle Weibull modulus (`weibull_m`), and `role` (`\"structural\"` or `\"fluid\"`).","inputSchema":{"type":"object","required":["id","e","nu","density"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"e":{"type":"number"},"nu":{"type":"number"},"yield_strength":{"type":"number"},"yield":{"type":"number"},"density":{"type":"number"},"min_wall":{"type":"number"},"alpha":{"type":"number"},"k":{"type":"number"},"yield_z":{"type":"number"},"shear_z":{"type":"number"},"hardening_n":{"type":"number"},"hardening_k":{"type":"number"},"weibull_m":{"type":"number"},"role":{"type":"string","enum":["structural","fluid"]},"source":{"type":"string"}}}},
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
  {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
- {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)` and optional target element `size`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]}}}},
+ {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, and constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp` and dimensionless elasticities) across `params` (or all non-derived `let` variables in the open `.fsm` document).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1","annular_swirl_spray_combustor_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1","annular_swirl_spray_combustor_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
  {"name":"solve_drone_antenna","description":"Solve the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz` ELRS) Antenna VNA frequency sweep (`S11`, `S21`, `VSWR`, 50 Ω Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`, CFRP eddy-current loss) and 3D radiation lobes (`G(theta, phi)`), and sync the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["optimised_default","unoptimised_tucked"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"pod_eps_r":{"type":"number"},"pod_loss_tan":{"type":"number"},"cfrp_conductivity_s_per_m":{"type":"number"},"match_series_nh":{"type":"number"},"match_shunt_pf":{"type":"number"},"sync_cad":{"type":"boolean"}}}},
  {"name":"optimise_drone_antenna","description":"Optimise the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna geometry (`cfrp_standoff_mm`, `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`, `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance match (`match_series_nh`, `match_shunt_pf`), returning initial vs. optimised VNA/Smith/Lobe reports and syncing the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["unoptimised_tucked","optimised_default"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"iterations":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
  {"name":"discover_compute_peers","description":"Discover Fieldsmith compute servers (`fieldsmith-mcp --serve`) on the local subnet, loopback, or Tailscale/WireGuard interfaces via UDP broadcast (`:18790`) and parallel `/api/health` probes. Returns discovered peers sorted by highest thread count and lowest latency.","inputSchema":{"type":"object","properties":{"ports":{"type":"array","items":{"type":"integer"}},"timeout_ms":{"type":"integer"},"extra_hosts":{"type":"array","items":{"type":"string"}},"include_subnet_sweep":{"type":"boolean"}}}},

@@ -49,8 +49,8 @@ fieldsmith 1
 # @theory_body:
 #   Linear Hookean elasticity over-predicts peak stress at the sharp punch-to-neck fillet by the full geometric concentration factor K_t. Fieldsmith's 3D J2 secant elasto-plastic solver iteratively softens yielded elements (E_sec,e < E_0) using `assemble_pcg_multi`, redistributing stress across the neck ligament and recovering the physical plastic strain field ε_p(x).
 # ---
-# @mcp: Load T19 Sheet Metal Clinching Tutorial via API || load_fsm || {"fsm":"@SELF"}
-#   Load the T19 Sheet Metal Clinching S-Lock model into the active workspace.
+# @mcp: Verify T19 Sheet Metal Clinching Contracts via API || verify || {"dofs":15000}
+#   Run live @assert contract verification on the T19 Sheet Metal Clinching S-Lock model.
 # === END LITERATE HEADER ===
 
 name "T19 — Dialing In Sheet Metal Clinching S-Lock (Analytic & 3D J2 FEM)"
@@ -61,14 +61,12 @@ let r_fillet = 0.30
 let t1 = 1.5
 let t2 = 1.5
 let F_pull = 2400
-let nonlinear_plastic = 1
-let hardening_n = 0.20
 let K_hollomon = 390
 let sigma_uts = 240
 let mu_clinch = 0.18
 let load_angle_deg = 0
 
-custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67
+custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67 hardening_n=0.20 hardening_k=390
 material al5754_clinch
 
 # Overlapping clinched flange Coupon (distinct lower die sheet + upper punch sheet + S-Lock button & annular die groove)
@@ -83,4 +81,4 @@ region lower_clamp = lower_sheet.nx + lower_sheet.px
 region upper_pull_ring = upper_boss.top + upper_boss.side
 support die_fixture lower_clamp fixed=xyz
 load cross_tension upper_pull_ring force=(0, 0, F_pull) case="Cross-Tension Pull-Out"
-solve
+solve plasticity=j2 hardening_n=0.20

@@ -56,7 +56,7 @@ fieldsmith 1
 # @theory_body:
 #   As a steep wave shoals, Boussinesq–Peregrine (1967) dispersive potential flow governs crest steepening until the front face becomes vertical. Once the crest overturns into a plunging jet (Peregrine 1983), Lagrangian DFSPH tracks the falling jet tip impinging onto the forward trough, trapping a cylindrical tube of air and generating intense roller circulation Γ. Inside the turbulent bore, shear dissipation ε fragments the trapped air cavity into a cloud of bubbles down to the Hinze radius a_Hinze, where Laplace capillary pressure 2γ/a balances turbulent Reynolds stresses ρ(ε a)^{2/3}.
 # ---
-# @mcp: Solve T18 Hydro-Structural FSI & Marangoni Study via API || solve_study || {"include_fine":false}
+# @mcp: Solve T18 Hydro-Structural FSI & Marangoni Study via API || solve || {"kind":"solve","dofs":20000}
 #   Run the 2-case P2 thermo-hydro-structural + TPMS Gyroid solver on the T18 slosh baffle and PMD capillary wick.
 # === END LITERATE HEADER ===
 

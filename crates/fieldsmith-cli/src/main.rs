@@ -15,8 +15,10 @@ use fieldsmith_api::question;
 use fieldsmith_api::question::{clock, parse_budget, DEFAULT_RUNGS};
 use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::store;
+use fieldsmith_core::contracts::evaluate_assert as evaluate_literate_assert;
 use fieldsmith_core::import::{import_mesh, ImportOpts};
 use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
+use fieldsmith_core::sensitivity::compute_sensitivities;
 use fieldsmith_core::{
     analyse, analyse_modes, fill::graded, fsmz, CaseResult, ModalRun, Resolution,
 };
@@ -367,11 +369,47 @@ fn run(args: &[String]) -> Result<(), String> {
             };
             let report = args.iter().any(|a| a == "--report");
             let verify = args.iter().any(|a| a == "--verify");
+            let sensitivity_flag = args.iter().any(|a| a == "--sensitivity");
             let raw_header = std::fs::read_to_string(path)
                 .ok()
                 .and_then(|raw| fsm::parse_literate_header(&raw));
             for w in doc.material_warnings() {
                 eprintln!("warning: {w}");
+            }
+            if sensitivity_flag {
+                let rep = compute_sensitivities(&doc, &[], res, clock).map_err(|e| e.0)?;
+                println!(
+                    "## parameter sensitivities — {} (h = {:.2} mm, {} elements, {:.2} g, {:.0} ms)\n",
+                    doc.name, rep.h, rep.elements, rep.baseline_mass_g, rep.elapsed_ms
+                );
+                println!(
+                    "| param | nominal | ∂m/∂p (g) | (p/m)∂m/∂p | case | ∂C/∂p (N·mm) | (p/C)∂C/∂p | ∂u_max/∂p (mm) | ∂σ_vM/∂p (MPa) |"
+                );
+                println!("| :-- | --: | --: | --: | :-- | --: | --: | --: | --: |");
+                for ps in &rep.parameters {
+                    if ps.cases.is_empty() {
+                        println!(
+                            "| `{}` | {:.4} | {:+.4} | {:+.3} | — | — | — | — | — |",
+                            ps.param, ps.nominal, ps.d_mass_g, ps.rel_mass
+                        );
+                    } else {
+                        for cs in &ps.cases {
+                            println!(
+                                "| `{}` | {:.4} | {:+.4} | {:+.3} | {} | {:+.4} | {:+.3} | {:+.5} | {:+.4} |",
+                                ps.param,
+                                ps.nominal,
+                                ps.d_mass_g,
+                                ps.rel_mass,
+                                cs.case,
+                                cs.d_compliance,
+                                cs.rel_compliance,
+                                cs.d_max_displacement,
+                                cs.d_max_vm_elem
+                            );
+                        }
+                    }
+                }
+                return Ok(());
             }
             if let Some(s) = opt(args, "--modes") {
                 let count = s
@@ -463,8 +501,15 @@ fn run(args: &[String]) -> Result<(), String> {
                 print_load_table(&a.cases);
                 if let Some(hdr) = raw_header.as_ref() {
                     print_literate_verification(hdr, &a, None, verify)?;
+                } else if !doc.asserts.is_empty() {
+                    let synth = fsm::LiterateHeader {
+                        id: doc.name.clone(),
+                        asserts: doc.asserts.clone(),
+                        ..Default::default()
+                    };
+                    print_literate_verification(&synth, &a, None, verify)?;
                 } else if verify {
-                    return Err(format!("{path}: no `# === FIELDSMITH LITERATE CASE ===` header found for --verify"));
+                    return Err(format!("{path}: no `assert` statements or `# === FIELDSMITH LITERATE CASE ===` header found for --verify"));
                 }
             } else {
                 println!(
@@ -895,213 +940,6 @@ fn print_load_table(cases: &[CaseResult]) {
             );
         }
     }
-}
-
-fn find_case<'a>(cases: &'a [CaseResult], selector: &str) -> Option<&'a CaseResult> {
-    if selector.is_empty() {
-        return cases.first();
-    }
-    if let Ok(idx1) = selector.parse::<usize>() {
-        if idx1 >= 1 && idx1 <= cases.len() {
-            return cases.get(idx1 - 1);
-        }
-    }
-    cases
-        .iter()
-        .find(|c| c.name.eq_ignore_ascii_case(selector) || c.name.contains(selector))
-}
-
-fn resolve_assert_metric(
-    metric: &str,
-    a: &fieldsmith_core::Analysis,
-    g: Option<&fieldsmith_core::fill::Graded>,
-) -> Result<f64, String> {
-    let m = metric.trim();
-    if m == "mode_split_12_pct" {
-        let freqs = &a
-            .modes
-            .as_ref()
-            .ok_or_else(|| format!("metric '{m}' requires a modal solve (`solve modes=...`)"))?
-            .frequencies;
-        if freqs.len() < 2 {
-            return Err("mode_split_12_pct requires at least 2 modes".into());
-        }
-        let mean = 0.5 * (freqs[0] + freqs[1]).max(1e-12);
-        return Ok(100.0 * (freqs[1] - freqs[0]).abs() / mean);
-    }
-    if let Some(rest) = m.strip_prefix("mode_") {
-        let idx1: usize = rest
-            .parse()
-            .map_err(|_| format!("invalid mode metric '{m}'"))?;
-        let freqs = &a
-            .modes
-            .as_ref()
-            .ok_or_else(|| format!("metric '{m}' requires a modal solve (`solve modes=...`)"))?
-            .frequencies;
-        return freqs
-            .get(idx1.saturating_sub(1))
-            .copied()
-            .ok_or_else(|| format!("metric '{m}' out of range ({} modes solved)", freqs.len()));
-    }
-    match m {
-        "mass_g" => return Ok(g.map(|gr| gr.mass_g).unwrap_or(a.mass_g)),
-        "solid_mass_g" => return Ok(g.map(|gr| gr.solid_mass_g).unwrap_or(a.mass_g)),
-        "graded_mass_g" => {
-            return g
-                .map(|gr| gr.mass_g)
-                .ok_or_else(|| "graded_mass_g requires a fill statement".into())
-        }
-        "mass_saved_pct" => {
-            let gr = g.ok_or_else(|| "mass_saved_pct requires a fill statement".to_string())?;
-            if gr.solid_mass_g <= 0.0 {
-                return Ok(0.0);
-            }
-            return Ok(100.0 * (1.0 - gr.mass_g / gr.solid_mass_g));
-        }
-        "min_peak_peel" => return Ok(a.min_peak_peel),
-        "max_peak_peel" => return Ok(a.max_peak_peel),
-        _ => {}
-    }
-
-    let (use_graded, rest) = if let Some(r) = m.strip_prefix("graded.") {
-        (true, r)
-    } else if let Some(r) = m.strip_prefix("solid.") {
-        (false, r)
-    } else {
-        (false, m)
-    };
-
-    let (field, case_sel) = match rest.split_once(':') {
-        Some((f, cs)) => (f.trim(), cs.trim()),
-        None => (rest.trim(), ""),
-    };
-
-    let graded_cases_vec: Vec<CaseResult> = g
-        .map(|gr| {
-            gr.cases
-                .iter()
-                .chain(gr.thermal_cases.iter())
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let pool: &[CaseResult] = if use_graded {
-        if graded_cases_vec.is_empty() {
-            return Err(format!("metric '{m}' requires a graded fill solve"));
-        }
-        &graded_cases_vec
-    } else {
-        &a.cases
-    };
-
-    let case = find_case(pool, case_sel)
-        .ok_or_else(|| format!("metric '{m}': no solved case matching '{case_sel}'"))?;
-
-    match field {
-        "max_displacement" | "max_disp" | "deflection" => Ok(case.max_displacement),
-        "max_vm_elem" | "vm" => Ok(case.max_vm_elem),
-        "max_von_mises" => Ok(case.max_von_mises),
-        "max_layer_peel" | "peel" => Ok(case.max_layer_peel),
-        "compliance" => Ok(case.compliance),
-        "max_temp" => {
-            let t = case
-                .temperature
-                .as_deref()
-                .ok_or_else(|| format!("case '{}' has no thermal field", case.name))?;
-            Ok(t.iter().copied().fold(f64::NEG_INFINITY, f64::max))
-        }
-        "min_temp" => {
-            let t = case
-                .temperature
-                .as_deref()
-                .ok_or_else(|| format!("case '{}' has no thermal field", case.name))?;
-            Ok(t.iter().copied().fold(f64::INFINITY, f64::min))
-        }
-        "resultant_mag" => {
-            let r = case
-                .load_reports
-                .first()
-                .ok_or_else(|| format!("case '{}' has no load report", case.name))?
-                .resultant;
-            Ok((r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt())
-        }
-        _ => Err(format!("unknown @assert metric '{m}'")),
-    }
-}
-
-fn evaluate_literate_assert(
-    asrt: &fsm::LiterateAssert,
-    a: &fieldsmith_core::Analysis,
-    g: Option<&fieldsmith_core::fill::Graded>,
-) -> Result<(f64, String, bool), String> {
-    let val = resolve_assert_metric(&asrt.metric, a, g)?;
-    let tgt = asrt.target.trim();
-    let tol_raw = asrt.tolerance.trim();
-
-    if let Some(rhs) = tgt.strip_prefix("<=").or_else(|| tgt.strip_prefix("≤")) {
-        let bound: f64 = rhs
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
-        let ok = val <= bound;
-        let margin = format!("{:+.4}", val - bound);
-        return Ok((val, margin, ok));
-    }
-    if let Some(rhs) = tgt.strip_prefix(">=").or_else(|| tgt.strip_prefix("≥")) {
-        let bound: f64 = rhs
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
-        let ok = val >= bound;
-        let margin = format!("{:+.4}", val - bound);
-        return Ok((val, margin, ok));
-    }
-    if let Some(rhs) = tgt.strip_prefix('<') {
-        let bound: f64 = rhs
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
-        let ok = val < bound;
-        let margin = format!("{:+.4}", val - bound);
-        return Ok((val, margin, ok));
-    }
-    if let Some(rhs) = tgt.strip_prefix('>') {
-        let bound: f64 = rhs
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad @assert bound '{tgt}'"))?;
-        let ok = val > bound;
-        let margin = format!("{:+.4}", val - bound);
-        return Ok((val, margin, ok));
-    }
-
-    let expected: f64 = tgt
-        .parse()
-        .map_err(|_| format!("bad @assert target '{tgt}'"))?;
-    let abs_err = (val - expected).abs();
-    if let Some(pct_str) = tol_raw.strip_suffix('%') {
-        let tol_pct: f64 = pct_str
-            .trim()
-            .trim_start_matches("<=")
-            .trim_start_matches('≤')
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad @assert percentage tolerance '{tol_raw}'"))?;
-        let denom = expected.abs().max(1e-12);
-        let rel_pct = 100.0 * abs_err / denom;
-        let ok = rel_pct <= tol_pct;
-        return Ok((val, format!("{rel_pct:.2}%"), ok));
-    }
-    let tol_abs: f64 = tol_raw
-        .trim_start_matches("<=")
-        .trim_start_matches('≤')
-        .trim_start_matches("±")
-        .trim()
-        .parse()
-        .unwrap_or(1e-3);
-    let ok = abs_err <= tol_abs;
-    Ok((val, format!("±{abs_err:.4}"), ok))
 }
 
 fn print_literate_verification(

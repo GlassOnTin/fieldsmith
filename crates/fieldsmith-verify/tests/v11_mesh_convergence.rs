@@ -173,6 +173,7 @@ fn mesh_bar_doc() -> Document {
         yield_z: None,
         shear_z: None,
         source: "test".into(),
+        ..Default::default()
     });
     doc
 }

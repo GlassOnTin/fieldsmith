@@ -193,6 +193,7 @@ fn skirt_doc() -> Document {
         yield_z: None,
         shear_z: None,
         source: "test".into(),
+        ..Default::default()
     });
     let _ = bbox;
     doc

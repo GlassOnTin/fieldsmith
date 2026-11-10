@@ -1,5 +1,6 @@
 fieldsmith 1
 name "4-Inch DeadCat FPV Drone + Gemini Dual-Band (900 MHz / 2.4 GHz) Antenna"
+coupled deadcat_4in_gemini_antenna_v1
 material cf_woven_3k
 
 let wheelbase_mm = 172.0
