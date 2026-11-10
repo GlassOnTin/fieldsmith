@@ -17,7 +17,7 @@ Binaries:
 Builds:
   - versionName: 0.17.0
     versionCode: 1701
-    commit: v0.17.0
+    commit: 8f153fc0a47969ad533a5b0702573d83163e132a
     subdir: android/app
     submodules: true
     sudo:
