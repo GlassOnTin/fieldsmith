@@ -20,13 +20,19 @@ import {
   detectCoupledPhysicsRegime,
   evaluateDocumentFieldEquations,
   getContinuumMaterialSpec,
+  isDocJ2Plastic,
   readLetParam,
+  resolveDocHardeningN,
+  setDocPlasticity,
   upsertLetParam,
 } from '../doc/continuum';
-import { openFreeSurfaceModal } from './FreeSurfaceModal';
-import { openCoordMappingModal } from './CoordMappingModal';
-import { openFixingsCatalogueModal } from './FixingsModal';
-import { openAntennaWorkbenchModal } from './AntennaWorkbench';
+import {
+  openAntennaWorkbenchModal,
+  openChannelProfileModal,
+  openCoordMappingModal,
+  openFixingsCatalogueModal,
+  openFreeSurfaceModal,
+} from './modal-launchers';
 import { ui, useApp } from './ui';
 import { Icon } from './icons';
 import { analysis } from './analysis';
@@ -931,8 +937,8 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
   const eqs = evaluateDocumentFieldEquations(doc);
   const activeEqs = eqs.filter((e) => e.active);
   const hasCoupledRegime = Boolean(detectCoupledPhysicsRegime(doc));
-  const isJ2Plastic = readLetParam(doc, 'nonlinear_plastic', 0) > 0;
-  const hardeningN = readLetParam(doc, 'hardening_n', 0.2);
+  const isJ2Plastic = isDocJ2Plastic(doc);
+  const hardeningN = resolveDocHardeningN(doc, 0.2);
 
   return (
     <div data-testid="setup-multiphysics-section" style={{ marginTop: '10px', padding: '0 6px 8px' }}>
@@ -968,10 +974,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             ]}
             onChange={(v) =>
               store.transact('Set 3D J2 plasticity', (d) => {
-                upsertLetParam(d, 'nonlinear_plastic', v === 'j2' ? 1 : 0);
-                if (v === 'j2' && !d.lets?.some((l) => l.name === 'hardening_n')) {
-                  upsertLetParam(d, 'hardening_n', 0.2);
-                }
+                setDocPlasticity(d, v === 'j2');
               })
             }
             testId="setup-j2-plastic-toggle"
@@ -988,7 +991,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
                   testId="setup-hardening-n"
                   onChange={(v) =>
                     store.transact('Set hardening exponent n', (d) => {
-                      upsertLetParam(d, 'hardening_n', Math.max(0.01, Math.min(1.0, v)));
+                      setDocPlasticity(d, true, v);
                     })
                   }
                 />
@@ -1009,6 +1012,24 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             />
           </div>
         </div>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="open-channel-profile-setup"
+          title="General 1D SDF Internal Channel Flow & Convection BC Operator: slice any .fsm SDF cavity for A(s), P_w(s), D_h(s), Darcy–Weisbach Δp & Gnielinski h_conv, and bind BCs to a region"
+          onClick={() => openChannelProfileModal()}
+          style={{
+            width: '100%',
+            marginTop: '7px',
+            fontSize: '10.5px',
+            padding: '5px 8px',
+            borderColor: '#22d3ee',
+            color: '#67e8f9',
+            fontWeight: 600,
+          }}
+        >
+          🌊 1D SDF Internal Channel Flow &amp; Convection BC…
+        </button>
       </div>
 
       <details open={hasCoupledRegime} style={{ marginBottom: '8px' }}>

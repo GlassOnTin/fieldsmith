@@ -31,11 +31,13 @@ export function openAntennaWorkbenchModal(
   initialPresetMode = presetMode;
   antennaModalSeq++;
   antennaModalOpenState = true;
+  ui.set('antennaOpen', true);
   ui.emit();
 }
 
 export function closeAntennaWorkbenchModal() {
   antennaModalOpenState = false;
+  ui.set('antennaOpen', false);
   ui.emit();
 }
 
@@ -56,7 +58,8 @@ export function syncDeadCatDroneToDocument(
     );
     return false;
   }
-  store.load(parsed.ok);
+  parsed.ok.coupled_system = 'deadcat_4in_gemini_antenna_v1';
+  store.applyExternalDoc(parsed.ok, 'Sync DeadCat antenna');
   if (fitCamera) {
     setTimeout(() => viewApi.fit(false), 40);
   }
@@ -1179,6 +1182,12 @@ export function AntennaWorkbenchModal() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 700, fontSize: '14px', color: '#F8FAFC' }}>
               📡 4&quot; DeadCat FPV Drone &amp; Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench
+            </span>
+            <span
+              class="sys-badge"
+              title="Reduced-order analytical dipole + L-network reference calculator coupled to 3D .fsm CSG"
+            >
+              0D/1D RF REFERENCE CALCULATOR
             </span>
             <span
               data-testid="antenna-qualification-badge"

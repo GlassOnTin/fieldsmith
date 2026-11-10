@@ -3,32 +3,47 @@ import './styles.css';
 import { App } from './app/App';
 import { loadWasm, pick } from './doc/wasm';
 import { Store, store } from './doc/store';
+import {
+  getWorkspaceSyncState,
+  pushWorkspaceSnapshot,
+  resolveConflictAcceptRemote,
+  resolveConflictKeepLocal,
+  startWorkspaceSync,
+} from './doc/workspace-sync';
 import { installShortcuts, viewApi } from './app/commands';
-import { ui } from './app/ui';
+import { apiUrl, ui } from './app/ui';
 import { analysis } from './app/analysis';
 import { liveViewport } from './app/ViewportHost';
-// Lenses register their overlays/inspectors/tree sections as side effects.
+// Core 6-lens spine registers its overlays/inspectors/tree sections; optional workbenches load lazily.
 import './app/setup';
 import './app/results';
 import './app/fill';
 import './app/make';
 import './app/view-opacity';
 import './app/view-clip';
-import './app/systems';
 import './app/theory';
-import './app/tutorials';
 
 async function main() {
   await loadWasm();
   const saved = Store.restore();
   if (saved) store.load(saved);
   installShortcuts();
+  startWorkspaceSync({
+    resolveUrl: apiUrl,
+    onNotify: (msg, kind) => ui.notify(msg, kind),
+  });
   // Expose internals for automation (headless tests drive the UI and read results through it).
   (window as unknown as { fieldsmith: Record<string, unknown> }).fieldsmith = {
     store,
     ui,
     analysis,
     view: viewApi,
+    workspaceSync: {
+      getState: getWorkspaceSyncState,
+      push: pushWorkspaceSnapshot,
+      acceptRemote: resolveConflictAcceptRemote,
+      keepLocal: resolveConflictKeepLocal,
+    },
     /** Ray from the live camera through a client pixel, into the document. */
     pickAt: (x: number, y: number) => {
       const vp = liveViewport;

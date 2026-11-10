@@ -11,8 +11,13 @@ import { pruneConsumers } from '../doc/param';
 import { analysis } from './analysis';
 import { ui } from './ui';
 import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
-import { openFixingsCatalogueModal } from './FixingsModal';
-import { openAntennaWorkbenchModal } from './AntennaWorkbench';
+import {
+  openAntennaWorkbenchModal,
+  openChannelProfileModal,
+  openFixingsCatalogueModal,
+  openFreeSurfaceModal,
+  toggleTutorialsDrawer,
+} from './modal-launchers';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
 import bracketThermalFsm from '../../../examples/bracket-thermal.fsm?raw';
 import bracketFilledFsm from '../../../examples/bracket-filled.fsm?raw';
@@ -441,6 +446,36 @@ export function commands(): Command[] {
       group: 'Systems',
       label: 'Open RF Antenna VNA / Smith Chart Workbench…',
       run: () => openAntennaWorkbenchModal(),
+    },
+    {
+      id: 'systems.open',
+      group: 'Systems',
+      label: 'Open Coupled Multiphysics Systems Workbench…',
+      run: () => ui.set('systemsOpen', true),
+    },
+    {
+      id: 'channel.open',
+      group: 'Physics & Solvers',
+      label: 'Open 1D SDF Internal Channel Flow & Convection BC Operator…',
+      run: () => openChannelProfileModal(),
+    },
+    {
+      id: 'sph.open',
+      group: 'Physics & Solvers',
+      label: 'Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench…',
+      run: () => openFreeSurfaceModal(),
+    },
+    {
+      id: 'tutorials.open',
+      group: 'Help & Theory',
+      label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T19 · A1–A20)',
+      run: () => toggleTutorialsDrawer(),
+    },
+    {
+      id: 'mcp.setup',
+      group: 'Help & Theory',
+      label: 'Open Fieldsmith MCP & REST API Setup Guide',
+      run: () => ui.set('mcpSetupOpen', true),
     },
     { id: 'view.fit', group: 'View', label: 'Fit model in view', keys: 'F', run: () => viewApi.fit(true) },
     {

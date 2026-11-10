@@ -38,11 +38,13 @@ const modalListeners = new Set<() => void>();
 
 export function openSketchWorkbenchModal() {
   sketchModalOpen = true;
+  ui.set('sketchOpen', true);
   modalListeners.forEach((fn) => fn());
 }
 
 export function closeSketchWorkbenchModal() {
   sketchModalOpen = false;
+  ui.set('sketchOpen', false);
   modalListeners.forEach((fn) => fn());
 }
 

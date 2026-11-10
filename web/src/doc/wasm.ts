@@ -1340,3 +1340,140 @@ export function runSpuriousEddyBenchmarkWasm(
   return JSON.parse(w.runSpuriousEddyBenchmark(spec ? JSON.stringify(spec) : ''));
 }
 
+// ---- unified contracts, 3D parameter sensitivities & SDF channel operator (V63) ----
+
+export interface AssertOutcome {
+  label: string;
+  metric: string;
+  target: string;
+  tolerance: string;
+  unit: string;
+  value: number;
+  error_or_margin: string;
+  passed: boolean;
+}
+
+export interface VerificationReport {
+  total: number;
+  passed: number;
+  failed: number;
+  all_passed: boolean;
+  outcomes: AssertOutcome[];
+}
+
+export function verifyFsmContracts(docOrFsm: Document | string, dofs?: number): VerificationReport {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  return JSON.parse(w.verifyFsmContracts(payload, dofs));
+}
+
+export interface CaseSensitivity {
+  case: string;
+  d_compliance: number;
+  rel_compliance: number;
+  d_max_displacement: number;
+  d_max_vm_elem: number;
+}
+
+export interface ParameterSensitivity {
+  param: string;
+  nominal: number;
+  step: number;
+  scheme: string;
+  d_mass_g: number;
+  rel_mass: number;
+  cases: CaseSensitivity[];
+}
+
+export interface SensitivityReport {
+  method: string;
+  solves_run: number;
+  h: number;
+  nodes: number;
+  elements: number;
+  baseline_mass_g: number;
+  baseline_compliance: [string, number][];
+  parameters: ParameterSensitivity[];
+  elapsed_ms: number;
+}
+
+export function computeFsmSensitivities(
+  docOrFsm: Document | string,
+  params?: string[],
+  dofs?: number,
+): SensitivityReport {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  const paramsJson = params && params.length > 0 ? JSON.stringify(params) : undefined;
+  return JSON.parse(w.computeFsmSensitivities(payload, paramsJson, dofs));
+}
+
+export interface ChannelFlowSpec {
+  axis: 'x' | 'y' | 'z';
+  passage_mode: 'auto' | 'interior_void' | 'solid_core';
+  node_id?: string | null;
+  stations: number;
+  span_mm?: [number, number] | null;
+  slice_h_mm?: number | null;
+  mass_flow_kg_s: number;
+  density_kg_m3: number;
+  viscosity_pa_s: number;
+  conductivity_w_m_k: number;
+  cp_j_kg_k: number;
+  roughness_mm: number;
+  inlet_pressure_mpa: number;
+  inlet_temp_c: number;
+  wall_temp_c: number;
+}
+
+export interface ChannelStation {
+  s_mm: number;
+  passage_count: number;
+  area_mm2: number;
+  wetted_perimeter_mm: number;
+  hydraulic_diameter_mm: number;
+  velocity_m_s: number;
+  reynolds: number;
+  friction_factor: number;
+  nusselt: number;
+  h_conv_w_m2_k: number;
+  h_fsm_per_mm: number;
+  static_pressure_mpa: number;
+  bulk_temp_c: number;
+}
+
+export interface ChannelProfileReport {
+  axis: 'x' | 'y' | 'z';
+  slice_h_mm: number;
+  length_mm: number;
+  min_area_mm2: number;
+  max_area_mm2: number;
+  mean_hydraulic_diameter_mm: number;
+  viscous_pressure_drop_mpa: number;
+  outlet_pressure_mpa: number;
+  outlet_temp_c: number;
+  mean_h_conv_w_m2_k: number;
+  mean_h_fsm_per_mm: number;
+  mean_pressure_mpa: number;
+  mean_bulk_temp_c: number;
+  stations: ChannelStation[];
+}
+
+export interface ChannelAnalyzeResult {
+  report: ChannelProfileReport;
+  bound_region?: string | null;
+  doc?: Document | null;
+}
+
+export function analyzeFsmChannel(
+  docOrFsm: Document | string,
+  spec?: Partial<ChannelFlowSpec> & {
+    bind_region?: string;
+    thermal_case?: string;
+    pressure_case?: string;
+  },
+): ChannelAnalyzeResult {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  const res = JSON.parse(w.analyzeFsmChannel(payload, spec ? JSON.stringify(spec) : '')) as ChannelAnalyzeResult;
+  if (res.doc) withLetTables(res.doc);
+  return res;
+}
+

@@ -9,7 +9,7 @@ import { ShapeIcon } from './icons';
 import { addModifier } from './Inspector';
 import { ui, useApp } from './ui';
 import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
-import { openFixingsCatalogueModal } from './FixingsModal';
+import { openFixingsCatalogueModal } from './modal-launchers';
 
 function score(c: Command, q: string): number {
   if (!q) return 1;

@@ -122,6 +122,17 @@ export interface Fill {
   rotate?: Vec3;
 }
 
+export type MaterialRole = 'structural' | 'fluid';
+export type PlasticityLaw = 'j2';
+
+export interface LiterateAssert {
+  label: string;
+  metric: string;
+  target: string;
+  tolerance: string;
+  unit: string;
+}
+
 export interface Material {
   id: string;
   name: string;
@@ -131,8 +142,13 @@ export interface Material {
   density: number;
   min_wall: number;
   alpha?: number | null;
+  k?: number | null;
   yield_z?: number | null;
   shear_z?: number | null;
+  hardening_n?: number | null;
+  hardening_k?: number | null;
+  weibull_m?: number | null;
+  role?: MaterialRole;
   source: string;
 }
 
@@ -171,7 +187,18 @@ export interface Document {
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
-  solve: { size: number | null; modes: number | null; t_ref: number | null; build?: [number, number] | null };
+  solve: {
+    size: number | null;
+    modes: number | null;
+    t_ref: number | null;
+    build?: [number, number] | null;
+    plasticity?: PlasticityLaw | null;
+    hardening_n?: number | null;
+  };
+  /** Optional explicit reduced-order coupled system ID bound to this document (`coupled <id>`). */
+  coupled_system?: string | null;
+  /** Executable verification contracts (`assert ...` or `# @assert:`), preserved across round-trips. */
+  asserts?: LiterateAssert[];
   /** Named scalars and the recorded expression reads. Optional because the Rust side
    * omits both when empty (serde skip_serializing_if) — plain documents carry neither
    * key in their JSON; backfilled by [`withLetTables`] at every intake site. */

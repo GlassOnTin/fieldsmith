@@ -14,7 +14,7 @@ import {
 import { applyAddrs, parseAddr } from '../doc/param';
 import { store } from '../doc/store';
 import { openText, viewApi } from './commands';
-import { openCoordMappingModal } from './CoordMappingModal';
+import { openCoordMappingModal } from './modal-launchers';
 import { ui, useApp } from './ui';
 
 export type SphFluidSpec = WasmSphFluidSpec;
@@ -4162,9 +4162,17 @@ export function FreeSurfaceModal() {
           }}
         >
           <div>
-            <strong style={{ fontSize: '14px' }}>
-              🌊 3D Multi-Regime Free-Surface &amp; Capillary Fluid Workbench
-            </strong>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: '14px' }}>
+                🌊 3D Multi-Regime Free-Surface &amp; Capillary Fluid Workbench
+              </strong>
+              <span
+                class="sys-badge"
+                title="Standalone 1D/2D/SPH regime reference workbench; projects static pressure & meniscus BCs onto .fsm regions"
+              >
+                1D/2D/SPH REFERENCE WORKBENCH
+              </span>
+            </div>
             <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>
               Automatic PDE Switching: Boussinesq–Peregrine Potential ↔ DFSPH Plunging Jet ↔ MLS-CSF Hinze Capillary ↔ Implicit Stokes 1100 °C Spout-Lip Pour
             </div>

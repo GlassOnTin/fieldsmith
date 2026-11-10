@@ -54,10 +54,12 @@ export function openFixingsCatalogueModal(
   initialModalTabState = initialTab ?? 'catalogue';
   fixingsModalSeq++;
   fixingsModalOpenState = true;
+  ui.set('fixingsOpen', true);
   ui.emit();
 }
 export function closeFixingsCatalogueModal() {
   fixingsModalOpenState = false;
+  ui.set('fixingsOpen', false);
   ui.emit();
 }
 
@@ -313,8 +315,16 @@ export function FixingsCatalogueModal() {
           }}
         >
           <div>
-            <div style={{ fontSize: '15px', fontWeight: 700 }}>
-              🔩 Built-In Engineering Fixings, Snap-Fit Catalogue &amp; Sopwith/Weibull Workbench
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '15px', fontWeight: 700 }}>
+                🔩 Built-In Engineering Fixings, Snap-Fit Catalogue &amp; Sopwith/Weibull Workbench
+              </span>
+              <span
+                class="sys-badge"
+                title="Parametric CSG fastener insertion + 1D VDI 2230 / Sopwith / Weibull reference calculator"
+              >
+                CSG + 1D REFERENCE CALCULATOR
+              </span>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--fg-dim)', marginTop: '2px' }}>
               Choose a bolt/fixing &amp; attach it to a host surface, or inspect <strong>1D Sopwith thread load F(z)</strong> &amp; <strong>Weibull reliability</strong>.

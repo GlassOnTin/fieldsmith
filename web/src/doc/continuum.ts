@@ -100,6 +100,7 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       density: 6.5,
       min_wall: 0.8,
       alpha: 90.9e-6,
+      role: 'fluid',
       source:
         'Pilkington UK5 tin2fe liquid-metal reference (Ron Smith, J. Fluid Mech. 1990, 214, 211–228): ρ₀ = 6500 kg/m³, β_Sn = 9.09×10⁻⁵ K⁻¹, k = 32 W/(m·K).',
     },
@@ -187,6 +188,7 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       density: 0.15,
       min_wall: 0.8,
       alpha: 15.0e-6,
+      role: 'fluid',
       source:
         'Forming-gas reducing headspace (4–10% H₂ in N₂) + interfacial SnO/H₂ redox cushion (L_s = (μ_Sn/μ_gas) δ_film).',
     },
@@ -303,6 +305,7 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       density: 0.12,
       min_wall: 0.8,
       alpha: 20.0e-6,
+      role: 'fluid',
       source:
         'Standard dry air oxidizer continuum (23.2 wt% O₂, Pr = 0.71, Sc = 0.70, Rosner thermophoresis C_th = 0.55).',
     },
@@ -331,6 +334,7 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       density: 0.81,
       min_wall: 0.6,
       alpha: 45.0e-6,
+      role: 'fluid',
       source:
         'Aviation kerosene (Jet-A1 / C₁₂H₂₃) hollow-cone swirl spray: LHV = 43.2 MJ/kg, d₃₂ = 35 μm, L_v = 290 kJ/kg.',
     },
@@ -903,12 +907,12 @@ export function getContinuumMaterialSpec(doc: Document, matId: string): Continuu
 
   const resolvedMat: Material = customFound
     ? {
-        ...(catalogFound ?? libFound ?? mp?.fsmMaterial ?? {}),
+        ...(libFound ?? catalogFound ?? mp?.fsmMaterial ?? {}),
         ...customFound,
         alpha:
           customFound.alpha ??
-          catalogFound?.alpha ??
           libFound?.alpha ??
+          catalogFound?.alpha ??
           mp?.fsmMaterial.alpha ??
           15.0e-6,
       }
@@ -932,7 +936,8 @@ export function getContinuumMaterialSpec(doc: Document, matId: string): Continuu
           };
 
   const kVal =
-    (customFound as (Material & { k?: number }) | undefined)?.k ??
+    customFound?.k ??
+    libFound?.k ??
     mp?.thermalConductivityWPerMK ??
     resolveThermalConductivityWPerMK(cleanId, mp?.phase ?? 'solid_elastic');
 
@@ -1092,46 +1097,72 @@ export function collectVolumeContinuumNodes(doc: Document): {
  * benchmark node IDs, or explicit benchmark document name). Never trigger a benchmark
  * 3D overlay merely because a user added a general `let` parameter or boundary condition
  * in Setup (2) on their own CAD part. */
+export function isDocJ2Plastic(doc: Document): boolean {
+  return doc.solve?.plasticity === 'j2';
+}
+
+export function resolveDocHardeningN(doc: Document, fallback = 0.2): number {
+  if (doc.solve?.hardening_n != null && Number.isFinite(doc.solve.hardening_n)) {
+    return doc.solve.hardening_n;
+  }
+  const activeCustom = doc.custom_materials?.find((m) => m.id === doc.material);
+  if (activeCustom?.hardening_n != null && Number.isFinite(activeCustom.hardening_n)) {
+    return activeCustom.hardening_n;
+  }
+  return fallback;
+}
+
+export function setDocPlasticity(draft: Document, j2: boolean, hardeningN?: number): void {
+  if (j2) {
+    const resolvedN = hardeningN ?? resolveDocHardeningN(draft, 0.2);
+    draft.solve.plasticity = 'j2';
+    draft.solve.hardening_n = Math.max(0.01, Math.min(0.8, resolvedN));
+  } else {
+    delete draft.solve.plasticity;
+    delete draft.solve.hardening_n;
+  }
+  if (draft.lets) {
+    const nlIdx = draft.lets.findIndex((l) => l.name === 'nonlinear_plastic');
+    if (nlIdx >= 0) draft.lets.splice(nlIdx, 1);
+  }
+}
+
 export function detectCoupledPhysicsRegime(doc: Document): CoupledPhysicsRegime {
+  if (doc.coupled_system === 'pilkington_float_bath_cvd_coater_v1') {
+    return 'pilkington_uk5_float_bath';
+  }
+  if (doc.coupled_system === 'solar_candle_ignition_v1') {
+    return 'solar_candle_ignition';
+  }
+  if (doc.coupled_system === 'annular_swirl_spray_combustor_v1') {
+    return 'annular_swirl_spray_combustor';
+  }
+  if (doc.coupled_system) {
+    return null;
+  }
+
   const vols = collectVolumeContinuumNodes(doc);
   const matIds = new Set<string>([doc.material, ...vols.map((v) => v.matId)]);
   const nodeIds = new Set<string>(vols.map((v) => v.node.id.toLowerCase()));
-  const nameLower = (doc.name ?? '').toLowerCase();
 
-  // 1. Pilkington UK5 Float-Bath benchmark twin: requires both molten_tin and soda_lime_glass volumes,
-  //    or explicit float-bath assembly node IDs / document title.
   if (
     (matIds.has('molten_tin') && matIds.has('soda_lime_glass')) ||
-    (nodeIds.has('tin_bath_pool') && nodeIds.has('glass_ribbon')) ||
-    nameLower.includes('float-bath') ||
-    nameLower.includes('float bath') ||
-    nameLower.includes('pilkington') ||
-    nameLower.includes('uk5') ||
-    nameLower.includes('t8 —')
+    (nodeIds.has('tin_bath_pool') && nodeIds.has('glass_ribbon'))
   ) {
     return 'pilkington_uk5_float_bath';
   }
 
-  // 2. Solar Candle Ignition benchmark twin: requires paraffin_wax + cotton_wick volumes,
-  //    or explicit candle assembly node IDs / document title.
   if (
     (matIds.has('paraffin_wax') && matIds.has('cotton_wick')) ||
     (nodeIds.has('candle_column') && nodeIds.has('candle_wick')) ||
-    (nodeIds.has('focus_lens') && nodeIds.has('wax_column')) ||
-    nameLower.includes('candle') ||
-    nameLower.includes('t13 —')
+    (nodeIds.has('focus_lens') && nodeIds.has('wax_column'))
   ) {
     return 'solar_candle_ignition';
   }
 
-  // 3. Annular Swirl Spray Combustor benchmark twin: requires combustor + swirl chamber nodes,
-  //    or explicit swirl combustor document title.
   if (
     (nodeIds.has('combustor_casing') && nodeIds.has('swirl_chamber')) ||
-    (matIds.has('jet_a1_spray') && nodeIds.has('nozzle_body')) ||
-    nameLower.includes('swirl atomiser') ||
-    nameLower.includes('spray combustor') ||
-    nameLower.includes('t9 —')
+    (matIds.has('jet_a1_spray') && nodeIds.has('nozzle_body'))
   ) {
     return 'annular_swirl_spray_combustor';
   }
@@ -1263,16 +1294,16 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       stage: 'setup',
       stageNumber: 2,
       title:
-        readLetParam(doc, 'nonlinear_plastic', 0) > 0
+        isDocJ2Plastic(doc)
           ? '3D Quadratic (P2) Navier–Cauchy & J₂ Secant Elasto-Plasticity'
           : '3D Quadratic (P2) Navier–Cauchy Linear Elasticity',
       shortName:
-        readLetParam(doc, 'nonlinear_plastic', 0) > 0
+        isDocJ2Plastic(doc)
           ? '3D P2 J₂ Secant Elasto-Plasticity (K_sec u = f)'
           : '3D P2 Linear Elasticity (Ku = f)',
       active: hasElasticSolve,
       triggerSummary: hasElasticSolve
-        ? `Active: ${doc.supports.length} support(s) (${doc.supports.map((s) => s.id).join(', ')}) + ${doc.loads.length} mechanical load(s) / ${doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length} thermal BC(s) in Setup (2)${readLetParam(doc, 'nonlinear_plastic', 0) > 0 ? ' with 3D J₂ plasticity enabled' : ''}.`
+        ? `Active: ${doc.supports.length} support(s) (${doc.supports.map((s) => s.id).join(', ')}) + ${doc.loads.length} mechanical load(s) / ${doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length} thermal BC(s) in Setup (2)${isDocJ2Plastic(doc) ? ' with 3D J₂ plasticity enabled' : ''}.`
         : 'Standby: Add at least one Support and one Load or Thermal BC in Setup (2).',
       strongForm:
         '−∇ · σ(u) = f_b  in Ω,   σ(u) = C_e : ε(u),   ε(u) = ½ (∇u + ∇uᵀ),   u = 0 on Γ_D,   σ · n = t̂ on Γ_N',
@@ -1281,8 +1312,8 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       liveParameters: [
         `Base continuum material: ${docMatSpec.name} (E = ${(docMatSpec.fsmMaterial.e / 1000).toFixed(1)} GPa, ν = ${docMatSpec.fsmMaterial.nu}, σ_y = ${docMatSpec.fsmMaterial.yield_strength} MPa)`,
         `Constitutive law: ${
-          readLetParam(doc, 'nonlinear_plastic', 0) > 0
-            ? `3D J₂ Elasto-Plastic (Hollomon n = ${readLetParam(doc, 'hardening_n', 0.2).toFixed(2)})`
+          isDocJ2Plastic(doc)
+            ? `3D J₂ Elasto-Plastic (Hollomon n = ${resolveDocHardeningN(doc, 0.2).toFixed(2)})`
             : 'Linear Hookean Elasticity'
         }`,
         `Dirichlet supports Γ_D: ${doc.supports.map((s) => `${s.id} on ${s.region} [fixed=${['x', 'y', 'z'].filter((_, i) => s.fixed[i]).join('')}]`).join('; ') || 'none'}`,
@@ -1770,56 +1801,10 @@ export function generateAppliedMathMarkdownReport(
 }
 
 /**
- * Return the coupled 1D/2D system ID bound to `doc` (or `null` when `doc` is a standard
- * 3D CAD / P2 FEM document or empty canvas). Kept in `doc/continuum.ts` so `App.tsx` can
- * query it without creating a circular import with `app/systems.tsx`.
+ * Return the coupled 1D/2D system ID explicitly declared on `doc` via `coupled <id>`
+ * (`doc.coupled_system`), or `null` when `doc` is a standard 3D CAD / P2 FEM model.
  */
-export function matchedCoupledSystemIdForDoc(doc: Document, sheetId?: string | null): string | null {
-  const docName = (doc.name || '').toLowerCase();
-  const hasLet = (k: string) => doc.lets?.some((l) => l.name === k) ?? false;
-  const regime = detectCoupledPhysicsRegime(doc);
-  if (sheetId === 'T13' || regime === 'solar_candle_ignition' || hasLet('i_solar')) {
-    return 'solar_candle_ignition_v1';
-  }
-  if (sheetId === 'T8' || regime === 'pilkington_uk5_float_bath' || hasLet('h_sill')) {
-    return 'pilkington_float_bath_cvd_coater_v1';
-  }
-  if (
-    sheetId === 'T17' ||
-    docName.includes('rocket') ||
-    docName.includes('regen') ||
-    hasLet('throat_ch_mm') ||
-    ((doc.convections?.length ?? 0) > 0 && (doc.heat_fluxes?.length ?? 0) > 0)
-  ) {
-    return 'regen_nozzle_h2_v1';
-  }
-  if (
-    sheetId === 'T14' ||
-    sheetId === 'A13' ||
-    docName.includes('fixing') ||
-    docName.includes('fastener') ||
-    hasLet('torque_nm') ||
-    doc.loads?.some((l) => l.kind.type === 'preload')
-  ) {
-    return 'jwst_fastener_fixing_envelope_v1';
-  }
-  if (sheetId === 'T16' || sheetId === 'A14' || docName.includes('deadcat') || docName.includes('antenna') || hasLet('cfrp_standoff_mm')) {
-    return 'deadcat_4in_gemini_antenna_v1';
-  }
-  if (sheetId === 'T9' || docName.includes('induction')) {
-    return 'vacuum_induction_melt_v1';
-  }
-  if (sheetId === 'T10' || docName.includes('czochralski') || docName.includes('crystal')) {
-    return 'czochralski_si_crystal_v1';
-  }
-  if (sheetId === 'T11' || docName.includes('caster') || docName.includes('slab')) {
-    return 'continuous_steel_slab_caster_v1';
-  }
-  if (sheetId === 'T12' || docName.includes('pem') || docName.includes('electroly')) {
-    return 'pem_water_electrolyser_v1';
-  }
-  if (regime === 'annular_swirl_spray_combustor' || docName.includes('swirl') || docName.includes('combustor')) {
-    return 'annular_swirl_spray_combustor_v1';
-  }
-  return null;
+export function matchedCoupledSystemIdForDoc(doc: Document, _sheetId?: string | null): string | null {
+  const id = doc.coupled_system?.trim();
+  return id ? id : null;
 }

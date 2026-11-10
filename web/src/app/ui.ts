@@ -43,6 +43,14 @@ class Ui {
   tutorialCategoryFilter: 'all' | 'tutorial' | 'analytic' | 'case-study' | 'example' = 'all';
   /** MCP & REST API Co-Pilot Setup guide modal from the footer. */
   mcpSetupOpen = false;
+  /** Parametric 2D Sketcher & Surface-Feature Engine modal. */
+  sketchOpen = false;
+  /** Engineering Fixings & Snap-Fit Catalogue modal. */
+  fixingsOpen = false;
+  /** Drone Dual-Band Antenna & VNA Smith Chart modal. */
+  antennaOpen = false;
+  /** General 1D SDF Channel Flow & Convection BC Operator modal. */
+  channelProfileOpen = false;
   /** 3D Multi-Regime Free-Surface & Capillary Fluid (SPH) Workbench modal. */
   freeSurfaceOpen = false;
   /** 1D–4D Coordinate Mappings, Conformal Wing Potential Flow & N-D Pullback FEM modal. */

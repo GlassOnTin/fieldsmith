@@ -7,9 +7,11 @@ import type { Node, Op } from '../doc/types';
 import { duplicateNode, moveNode, renameId, inheritedColor, removeNodeAndCompanion } from '../doc/ops';
 import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
-import { openFixingsCatalogueModal } from './FixingsModal';
-import { openSketchWorkbenchModal } from './SketchWorkbench';
-import { openAntennaWorkbenchModal } from './AntennaWorkbench';
+import {
+  openAntennaWorkbenchModal,
+  openFixingsCatalogueModal,
+  openSketchWorkbenchModal,
+} from './modal-launchers';
 import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
 import { addShape } from './commands';
 

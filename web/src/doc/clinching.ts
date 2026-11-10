@@ -137,8 +137,19 @@ export function extractClinchingSpecFromDoc(doc: Document): ClinchingSpec {
     youngsModulusMpa: eMpa,
     yieldStrengthMpa: syMpa,
     utsMpa: Math.max(syMpa * 1.15, getLet(['sigma_uts', 'uts_mpa'], DEFAULT_CLINCHING_SPEC.utsMpa)),
-    hollomonKMpa: Math.max(syMpa * 1.3, getLet(['K_hollomon', 'hollomon_k'], DEFAULT_CLINCHING_SPEC.hollomonKMpa)),
-    hardeningExponentN: Math.max(0.04, Math.min(0.45, getLet(['hardening_n', 'n_hard'], DEFAULT_CLINCHING_SPEC.hardeningExponentN))),
+    hollomonKMpa: Math.max(
+      syMpa * 1.3,
+      customMat?.hardening_k ?? getLet(['K_hollomon', 'hollomon_k'], DEFAULT_CLINCHING_SPEC.hollomonKMpa),
+    ),
+    hardeningExponentN: Math.max(
+      0.04,
+      Math.min(
+        0.45,
+        doc.solve?.hardening_n ??
+          customMat?.hardening_n ??
+          getLet(['hardening_n', 'n_hard'], DEFAULT_CLINCHING_SPEC.hardeningExponentN),
+      ),
+    ),
     frictionMu: Math.max(0.02, Math.min(0.55, getLet(['mu_clinch', 'friction_mu'], DEFAULT_CLINCHING_SPEC.frictionMu))),
     loadAngleDeg: Math.max(0, Math.min(90, getLet(['load_angle_deg', 'peel_angle'], DEFAULT_CLINCHING_SPEC.loadAngleDeg))),
     serviceLoadN: Math.max(100, getLet(['F_pull', 'service_load_n'], DEFAULT_CLINCHING_SPEC.serviceLoadN)),

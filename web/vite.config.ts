@@ -170,6 +170,22 @@ function fieldsmithSharedWorkspacePlugin(): Plugin {
             try {
               const incoming = JSON.parse(body || '{}');
               const ws = readWorkspace();
+              if (
+                typeof incoming.expected_revision === 'number' &&
+                incoming.expected_revision !== ws.revision
+              ) {
+                res.statusCode = 409;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(
+                  JSON.stringify({
+                    error: 'workspace revision conflict',
+                    expected_revision: incoming.expected_revision,
+                    current_revision: ws.revision,
+                    workspace: ws,
+                  }),
+                );
+                return;
+              }
               ws.revision += 1;
               ws.updated_at_ms = Date.now();
               ws.actor = incoming.actor || 'web-ui';
@@ -212,6 +228,23 @@ function fieldsmithSharedWorkspacePlugin(): Plugin {
           req.on('end', () => {
             try {
               const parsed = JSON.parse(body || '{}');
+              const currentWs = readWorkspace();
+              if (
+                typeof parsed.expected_revision === 'number' &&
+                parsed.expected_revision !== currentWs.revision
+              ) {
+                res.statusCode = 409;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(
+                  JSON.stringify({
+                    error: 'workspace revision conflict',
+                    expected_revision: parsed.expected_revision,
+                    current_revision: currentWs.revision,
+                    workspace: currentWs,
+                  }),
+                );
+                return;
+              }
               const rpcReq =
                 parsed.jsonrpc === '2.0'
                   ? parsed

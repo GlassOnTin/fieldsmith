@@ -28,8 +28,9 @@ import {
   ensureContinuumMaterialInDoc,
   evaluateDocumentFieldEquations,
   getContinuumMaterialSpec,
-  readLetParam,
-  upsertLetParam,
+  isDocJ2Plastic,
+  resolveDocHardeningN,
+  setDocPlasticity,
   type ContinuumPhaseId,
 } from '../doc/continuum';
 import { Fragment } from 'preact';
@@ -37,8 +38,11 @@ import { NumRow, NumberInput, Seg, VecRow, fmt } from './fields';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 import { SketchCanvas } from './Sketch';
-import { openSketchWorkbenchModal } from './SketchWorkbench';
-import { openFixingsCatalogueModal } from './FixingsModal';
+import {
+  openAntennaWorkbenchModal,
+  openFixingsCatalogueModal,
+  openSketchWorkbenchModal,
+} from './modal-launchers';
 import { addShape } from './commands';
 import {
   FASTENER_MATERIAL_GROUPS,
@@ -51,10 +55,6 @@ import {
   extractDroneAntennaSpecFromDoc,
   optimiseDroneAntenna,
 } from '../doc/antenna-vna';
-import {
-  openAntennaWorkbenchModal,
-  syncDeadCatDroneToDocument,
-} from './AntennaWorkbench';
 
 let library: ReturnType<typeof materialLibrary> | null = null;
 export function materials() {
@@ -1606,7 +1606,9 @@ function DroneAntennaInspectorCard({ doc }: { doc: Document }) {
             data-testid="inspector-auto-optimise-antenna"
             onClick={() => {
               const res = optimiseDroneAntenna(spec, 8);
-              syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, false);
+              void import('./AntennaWorkbench').then(({ syncDeadCatDroneToDocument }) => {
+                syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, false);
+              });
               ui.notify('Auto-optimised Gemini antenna & CFRP standoff');
             }}
             style={{
@@ -1642,8 +1644,8 @@ function DocumentInspector() {
   ];
   const mat = mats.find((m) => m.id === doc.material) ?? getContinuumMaterialSpec(doc, doc.material).fsmMaterial;
   const isCustomMat = (doc.custom_materials ?? []).some((m) => m.id === doc.material);
-  const isJ2Plastic = readLetParam(doc, 'nonlinear_plastic', 0) > 0;
-  const hardeningN = readLetParam(doc, 'hardening_n', 0.2);
+  const isJ2Plastic = isDocJ2Plastic(doc);
+  const hardeningN = resolveDocHardeningN(doc, 0.2);
   const activeEqs = evaluateDocumentFieldEquations(doc).filter((e) => e.active);
 
   const editOrCreateCustomMaterial = (label: string, mutate: (target: Material) => void) => {
@@ -1812,6 +1814,26 @@ function DocumentInspector() {
                 })
               }
             />
+            <label
+              class="plain"
+              title="Subdomain role: Fluid / Non-Structural volumes remain in CSG & channel slicing but are excluded from 3D solid FEA assembly"
+            >
+              Subdomain role
+            </label>
+            <Seg<'structural' | 'fluid'>
+              value={mat.role === 'fluid' ? 'fluid' : 'structural'}
+              options={[
+                { value: 'structural', label: 'Solid' },
+                { value: 'fluid', label: 'Fluid (non-FEA)' },
+              ]}
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set material role', (m) => {
+                  if (v === 'fluid') m.role = 'fluid';
+                  else delete m.role;
+                })
+              }
+              testId="mat-role"
+            />
           </div>
           <details class="hint" style={{ marginTop: '4px' }}>
             <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Material source datasheet</summary>
@@ -1911,10 +1933,7 @@ function DocumentInspector() {
           ]}
           onChange={(v) =>
             store.transact('Set constitutive law', (d) => {
-              upsertLetParam(d, 'nonlinear_plastic', v === 'j2_plastic' ? 1 : 0);
-              if (v === 'j2_plastic' && !d.lets?.some((l) => l.name === 'hardening_n')) {
-                upsertLetParam(d, 'hardening_n', 0.2);
-              }
+              setDocPlasticity(d, v === 'j2_plastic');
             })
           }
           testId="solve-constitutive-law"
@@ -1930,7 +1949,7 @@ function DocumentInspector() {
               testId="solve-hardening-n"
               onChange={(v) =>
                 store.transact('Set hardening exponent n', (d) => {
-                  upsertLetParam(d, 'hardening_n', Math.max(0.01, Math.min(1.0, v)));
+                  setDocPlasticity(d, true, v);
                 })
               }
             />

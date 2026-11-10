@@ -3,35 +3,28 @@
 // 2) Textbook Theoretical Manual Chapter (governing equations, discretisation & V01–V52 proofs)
 // 3) Live MCP / REST API Flow (with 1-click execution against `POST /api/mcp` & shared workspace sync)
 
-import { useState } from 'preact/hooks';
+import type { JSX } from 'preact';
+import { useEffect, useState } from 'preact/hooks';
 import { applyAddrs, parseAddr } from '../doc/param';
 import { store, type Lens } from '../doc/store';
+import {
+  markWorkspaceRevisionSeen,
+  pushWorkspaceSnapshot,
+} from '../doc/workspace-sync';
 import {
   collectVolumeContinuumNodes,
   evaluateDocumentFieldEquations,
   getContinuumMaterialSpec,
 } from '../doc/continuum';
 import { parseFsm, printFsm } from '../doc/wasm';
-import { EXAMPLES, extraCommands, newDocument, openFile, openText, viewApi } from './commands';
-import { viewOverlays, statusItems } from './App';
+import { EXAMPLES, newDocument, openFile, openText, viewApi } from './commands';
 import { analysis } from './analysis';
-import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { apiUrl, ui, useApp } from './ui';
-import { FixingTorqueAndWeibullWorkbench } from './FixingsModal';
-import { SketchWorkbench } from './SketchWorkbench';
-import {
-  FreeSurfaceModal,
-  FreeSurfaceWorkbench,
-  openFreeSurfaceModal,
-} from './FreeSurfaceModal';
-import {
-  CoordMappingModal,
-  openCoordMappingModal,
-} from './CoordMappingModal';
 import {
   openAntennaWorkbenchModal,
-  syncDeadCatDroneToDocument,
-} from './AntennaWorkbench';
+  openFreeSurfaceModal,
+  toggleTutorialsDrawer,
+} from './modal-launchers';
 import {
   analyzeDroneAntenna,
   defaultOptimisedDroneAntennaSpec,
@@ -39,6 +32,37 @@ import {
   optimiseDroneAntenna,
   unoptimisedTuckedDroneAntennaSpec,
 } from '../doc/antenna-vna';
+
+function LazyFixingWorkbench() {
+  const [Comp, setComp] = useState<(() => JSX.Element | null) | null>(null);
+  useEffect(() => {
+    void import('./FixingsModal').then((m) => setComp(() => m.FixingTorqueAndWeibullWorkbench));
+  }, []);
+  return Comp ? <Comp /> : null;
+}
+
+function LazySketchWorkbenchEmbedded() {
+  const [Comp, setComp] = useState<((props: { embedded?: boolean }) => JSX.Element | null) | null>(null);
+  useEffect(() => {
+    void import('./SketchWorkbench').then((m) => setComp(() => m.SketchWorkbench));
+  }, []);
+  return Comp ? <Comp embedded /> : null;
+}
+
+function LazyFreeSurfaceWorkbenchEmbedded(props: {
+  initialScenario?: string;
+  initialGerrisMode?: boolean;
+  initialGerrisCaseId?: string;
+  initialSpuriousEddyMode?: boolean;
+}) {
+  const [Comp, setComp] = useState<((p: Record<string, unknown>) => JSX.Element | null) | null>(null);
+  useEffect(() => {
+    void import('./FreeSurfaceModal').then((m) =>
+      setComp(() => m.FreeSurfaceWorkbench as unknown as (p: Record<string, unknown>) => JSX.Element | null),
+    );
+  }, []);
+  return Comp ? <Comp embedded {...props} /> : null;
+}
 
 import {
   TUTORIAL_SHEETS,
@@ -181,45 +205,23 @@ export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = f
   }
   if (ok) {
     ui.notify(`Loaded ${sheet.code}: ${sheet.title}`);
-    void fetch(apiUrl('/api/workspace'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        actor: 'web-ui',
-        last_tool: `load-${sheet.code}`,
-        summary: `Loaded ${sheet.code}: ${sheet.title}`,
-        doc_fsm: printFsm(store.doc),
-      }),
-    })
-      .then((r) => r.json())
-      .then((ws) => {
-        if (typeof ws?.revision === 'number') markWorkspaceRevisionSeen(ws.revision);
-      })
-      .catch(() => {});
+    void pushWorkspaceSnapshot({
+      actor: 'web-ui',
+      last_tool: `load-${sheet.code}`,
+      summary: `Loaded ${sheet.code}: ${sheet.title}`,
+      doc_fsm: printFsm(store.doc),
+    });
   }
 }
 
-export function toggleTutorialsDrawer() {
-  if (ui.tutorialsOpen && ui.tutorialMinimised) {
-    ui.set('tutorialMinimised', false);
-    return;
-  }
-  const nextOpen = !ui.tutorialsOpen;
-  ui.set('tutorialMinimised', false);
-  ui.set('tutorialsOpen', nextOpen);
-  if (nextOpen) {
-    const activeSheet = TUTORIAL_SHEETS.find((s) => s.id === ui.tutorialSheetId) ?? TUTORIAL_SHEETS[0];
-    // If the viewport is empty, holds the Float-Bath from a previous session, or doesn't match the active tutorial, load the active tutorial sheet immediately.
-    const curName = store.doc.name || '';
-    if (
-      store.doc.root.length === 0 ||
-      (curName.includes('Float-Bath') && activeSheet.id !== 'T8') ||
-      !curName.startsWith(activeSheet.code)
-    ) {
-      loadTutorialSheetModel(activeSheet.id, false);
-    }
+export function onTutorialsDrawerOpened() {
+  const activeSheet = TUTORIAL_SHEETS.find((s) => s.id === ui.tutorialSheetId) ?? TUTORIAL_SHEETS[0];
+  if (store.doc.root.length === 0) {
+    loadTutorialSheetModel(activeSheet.id, false);
   }
 }
+
+export { toggleTutorialsDrawer };
 
 function gammaLanczos(z: number): number {
   const g = 7;
@@ -509,8 +511,10 @@ function SwirlAtomiserNoxPredictor() {
   });
 
   const applyNozzleLet = (updates: Record<string, number>, nextPBar = fuelPressureBar, nextPhi = equivRatio) => {
-    swirlShared.overlay.fuelPressureBar = nextPBar;
-    swirlShared.overlay.equivRatio = nextPhi;
+    void import('./systems').then(({ swirlShared }) => {
+      swirlShared.overlay.fuelPressureBar = nextPBar;
+      swirlShared.overlay.equivRatio = nextPhi;
+    });
     const nextOrifice = updates.orifice_r ?? orificeR;
     const nextSlot = updates.swirl_slot_r ?? swirlSlotR;
     const nextOffset = updates.swirl_offset ?? swirlOffset;
@@ -2538,7 +2542,9 @@ function DroneAntennaTutorialCard() {
           data-testid="t16-load-unoptimised"
           onClick={() => {
             const bad = unoptimisedTuckedDroneAntennaSpec();
-            syncDeadCatDroneToDocument(bad, analyzeDroneAntenna(bad), true);
+            void import('./AntennaWorkbench').then(({ syncDeadCatDroneToDocument }) => {
+              syncDeadCatDroneToDocument(bad, analyzeDroneAntenna(bad), true);
+            });
             ui.notify('Loaded T16 Unoptimised Tucked CFRP Build (6.5 mm standoff, detuned TPU boot)');
           }}
           style={{ background: 'rgba(244,63,94,0.18)', borderColor: '#F43F5E', color: '#FDA4AF' }}
@@ -2551,7 +2557,9 @@ function DroneAntennaTutorialCard() {
           data-testid="t16-run-optimiser"
           onClick={() => {
             const res = optimiseDroneAntenna(docSpec, 8);
-            syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, true);
+            void import('./AntennaWorkbench').then(({ syncDeadCatDroneToDocument }) => {
+              syncDeadCatDroneToDocument(res.optimisedSpec, res.optimisedReport, true);
+            });
             ui.notify('Auto-Optimised 4" DeadCat Gemini Antenna & L/C Matching Network');
           }}
           style={{ background: 'rgba(16,185,129,0.2)', borderColor: '#10B981', color: '#6EE7B7' }}
@@ -2626,15 +2634,11 @@ function TutorialsDrawer() {
     try {
       // Ensure the current live document is pushed to `/api/workspace` first so `fieldsmith-mcp` operates on it cumulatively
       const currentFsm = store.doc.root.length > 0 ? printFsm(store.doc) : sheet.starterFsm;
-      await fetch(apiUrl('/api/workspace'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          actor: 'web-ui',
-          last_tool: 'tutorial-sync',
-          summary: `Synced before ${step.tool}`,
-          doc_fsm: currentFsm,
-        }),
+      await pushWorkspaceSnapshot({
+        actor: 'web-ui',
+        last_tool: 'tutorial-sync',
+        summary: `Synced before ${step.tool}`,
+        doc_fsm: currentFsm,
       });
       const resp = await fetch(apiUrl('/api/mcp'), {
         method: 'POST',
@@ -2659,8 +2663,10 @@ function TutorialsDrawer() {
         markWorkspaceRevisionSeen(data.workspace.revision);
       }
       if (typeof data?.workspace?.doc_fsm === 'string' && data.workspace.doc_fsm.trim().length > 0) {
-        openText(data.workspace.doc_fsm, `${sheet.id.toLowerCase()}-mcp.fsm`);
-        viewApi.fit(false);
+        const parsed = parseFsm(data.workspace.doc_fsm);
+        if ('ok' in parsed) {
+          store.applyExternalDoc(parsed.ok, `MCP ${step.tool}`);
+        }
       }
       ui.notify(`Executed MCP ${step.tool} (Workspace rev #${data?.workspace?.revision ?? '?'})`);
     } catch (e) {
@@ -2837,13 +2843,12 @@ function TutorialsDrawer() {
         );
       })()}
       {sheet.id === 'T9' && <SwirlAtomiserNoxPredictor />}
-      {(sheet.id === 'T14' || sheet.id === 'A13') && <FixingTorqueAndWeibullWorkbench />}
-      {sheet.id === 'T15' && <SketchWorkbench embedded />}
+      {(sheet.id === 'T14' || sheet.id === 'A13') && <LazyFixingWorkbench />}
+      {sheet.id === 'T15' && <LazySketchWorkbenchEmbedded />}
       {(sheet.id === 'T16' || sheet.id === 'A14') && <DroneAntennaTutorialCard />}
       {(sheet.id === 'T18' || sheet.id === 'A15' || sheet.id === 'A16' || sheet.id === 'A17' || sheet.id === 'A18' || sheet.id === 'A20') && (
         <div class="tut-step-card" style={{ borderColor: '#38bdf8' }}>
-          <FreeSurfaceWorkbench
-            embedded
+          <LazyFreeSurfaceWorkbenchEmbedded
             initialScenario={
               sheet.id === 'A15'
                 ? 'droplet_oscillation_a15'
@@ -3714,22 +3719,18 @@ function McpSetupModal() {
     try {
       const fsmText =
         store.doc.root.length > 0 ? printFsm(store.doc) : TUTORIAL_SHEETS[0].starterFsm;
-      await fetch(apiUrl('/api/workspace'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          actor: 'mobile-client',
-          last_tool: 'remote-solve-sync',
-          summary: 'Pushed active .fsm for native multi-core solve',
-          doc_fsm: fsmText,
-        }),
+      await pushWorkspaceSnapshot({
+        actor: 'mobile-client',
+        last_tool: 'remote-solve-sync',
+        summary: 'Pushed active .fsm for native multi-core solve',
+        doc_fsm: fsmText,
       });
       const resp = await fetch(apiUrl('/api/mcp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tool: 'solve_study',
-          arguments: { include_fine: false },
+          tool: 'solve',
+          arguments: { kind: 'ladder', rungs: [6000, 18000] },
         }),
       });
       const data = await resp.json();
@@ -3985,19 +3986,23 @@ function McpSetupModal() {
             <pre class="tut-code num" style={{ maxHeight: '220px' }}>{`# 1) Inspect current shared workspace (.fsm model + revision)
 curl -s ${origin}/api/workspace | jq .
 
-# 2) Load or update a parameter (e.g. T9 Swirl Atomiser low-NOx orifice_r = 2.1 mm & swirl_offset = 7.2 mm)
+# 2) Update parametric let variables (e.g. T2 cantilever thickness or T9 hydraulic jack)
 curl -s -X POST ${origin}/api/mcp \\
   -H "Content-Type: application/json" \\
-  -d '{"tool":"set_param","arguments":{"addr":"orifice_r","value":2.1}}'
+  -d '{"tool":"set_let","arguments":{"name":"thick","value":12.0}}'
+
+# 3) Run the 3D P2 tetrahedral FEA solver, @assert verifier, or finite-difference sensitivity operator
+curl -s -X POST ${origin}/api/mcp \\
+  -H "Content-Type: application/json" \\
+  -d '{"tool":"solve","arguments":{"kind":"ladder","rungs":[6000,18000]}}'
 
 curl -s -X POST ${origin}/api/mcp \\
   -H "Content-Type: application/json" \\
-  -d '{"tool":"set_param","arguments":{"addr":"swirl_offset","value":7.2}}'
+  -d '{"tool":"verify","arguments":{}}'
 
-# 3) Run the 3D thermo-mechanical FEA solver and return peak stress, deflection & temperature
 curl -s -X POST ${origin}/api/mcp \\
   -H "Content-Type: application/json" \\
-  -d '{"tool":"solve_study","arguments":{"include_fine":false}}'`}</pre>
+  -d '{"tool":"sensitivity","arguments":{"dofs":6000}}'`}</pre>
           </div>
 
           <div class="tut-step-card">
@@ -4020,31 +4025,29 @@ curl -s -X POST ${origin}/api/mcp \\
           </div>
 
           <div class="tut-step-card">
-            <strong>3. Available Fieldsmith MCP Tools (24 Tools)</strong>
-            <pre class="tut-code num" style={{ maxHeight: '220px' }}>{`• new_document(name, material)            — Reset workspace to a clean .fsm document
-• load_fsm(fsm)                           — Load a complete parametric .fsm script (with let variables, CSG & BCs)
-• export_fsm()                            — Return canonical .fsm text of the active workspace
+            <strong>3. Available Fieldsmith MCP Tools (34 Tools — 1:1 Schema &amp; Dispatcher Parity)</strong>
+            <pre class="tut-code num" style={{ maxHeight: '240px' }}>{`• open(text?, name?, material?)           — Open/reset .fsm text or start a clean document
+• inspect() / doc_text()                  — Inspect summary or return canonical .fsm text
 • upsert_shape(id, kind, ...)             — Add/update box, cylinder, sphere, capsule, torus, extrude, or revolve
-• solve_sketch(preset?, entities?, constraints?, macros?) — Solve 2D parametric sketch (LM + QR DOF & conflict check)
-• apply_sketch_feature(id, kind, plane, depth, ...)       — Compile solved 2D sketch onto any 3D face (Boss/Pocket/Revolve)
-• insert_fixing(kind, size, ...)          — Auto-tap host & insert screw/bolt/nut/washer/snap-clip + [T_min, T_max]
-• set_param(addr, value)                  — Update a let variable (e.g. "orifice_r") or attribute ("nozzle.radius")
-• set_material(material, node?)           — Set document material or per-volume material override (e.g. cucrzr on nozzle_body)
-• add_region(id, selectors)               — Define a named surface region (e.g. ["chamber_bore.side"])
+• delete_entity(id)                       — Remove a shape, region, support, load, or thermal BC
+• set_let(name, value)                    — Create or update a parametric let variable
+• set_material(material, node?)           — Set document material or per-volume subdomain material
+• upsert_custom_material(id, name, e, nu, yield_strength, ...) — Define custom material (role=structural|fluid, hardening_n)
+• add_region(id, selectors)               — Define a named surface region (e.g. ["beam.right"])
 • add_support(id, region, fixed)          — Fix [x, y, z] displacements on a region
-• add_load(id, region, kind/preload, ...) — Apply force (N), pressure (MPa), or bolt preload (N) on a region
-• add_temperature(id, region, celsius)    — Apply fixed temperature (°C) boundary condition
-• add_convection(id, region, h, t_inf)    — Apply heat-exchanger convective cooling h·(T − T_inf)
-• add_heatflux(id, region, q)             — Apply surface heat flux (W/mm²)
-• set_fill(family, morph?, cell, cell_min?, erode?, ...) — Configure level-set boundary evolution & multi-zone TPMS infill
-• solve_study(include_fine)               — Run 3D P2 tetrahedral FEA + thermal conduction + modal solver
-• solve_drone_antenna(preset?, spec?, ...)— Evaluate dual-band VNA S₁₁/S₂₁, 50 Ω Smith Chart & 3D radiation lobes
-• optimise_drone_antenna(preset?, ...)    — Auto-optimise CFRP standoff, dielectric dipole lengths, skew & L/C match
-• list_coupled_systems()                  — List registered multi-physics PDE + Adjoint packs
-• optimise_coupled_system(system_id, ...) — Step coupled PDE design levers along exact Adjoint gradients
-• discover_compute_peers(timeout_ms?)     — Scan LAN / subnet (UDP :18790 + /api/health sweep) for Fieldsmith workstations
-• connect_compute_peer(url, sync_workspace?) — Link remote workstation ("auto" or URL) to offload solve jobs
-• disconnect_compute_peer()               — Disconnect remote compute peer and resume local execution`}</pre>
+• add_load(id, region, kind, ...)         — Apply force (N), pressure (MPa), preload (N), or pressure_field
+• add_temperature / add_convection / add_heatflux — Steady-state Fourier thermal BCs
+• analyze_sdf_channel(axis, mass_flow_kg_s, bind_region?, ...) — Slice any 3D SDF channel A(s), D_h(s) & bind Convection/Pressure BCs
+• set_fill(family, cell, ...) / set_build(axis) — Configure TPMS infill & additive build orientation
+• solve(kind, rungs?, modes?, ...)        — Run 3D P2 tetrahedral FEA ladder, sweep, modal, or verify
+• verify(dofs?)                           — Evaluate all .fsm assert / # @assert contracts against P2 FEA
+• sensitivity(params?, dofs?, rel_step?)  — Compute 3D sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p
+• export(format, spacing?, ...)           — Export STL/3MF/STEP/VTK/CSV/report artifacts
+• solve_sketch / apply_sketch_feature     — Solve 2D LM+QR parametric sketch & compile onto 3D faces
+• insert_fixing / solve_drone_antenna / optimise_drone_antenna — Fastener & RF reference helpers
+• list_coupled_systems / solve_coupled_system / optimise_coupled_system — 0D/1D/2D coupled twins + Adjoint
+• solve_free_surface_sph / run_gerris_test_suite — Free-surface & capillary reference solvers
+• discover_compute_peers / connect_compute_peer / disconnect_compute_peer — LAN compute offload`}</pre>
           </div>
         </div>
       </div>
@@ -4052,107 +4055,12 @@ curl -s -X POST ${origin}/api/mcp \\
   );
 }
 
-function TutorialsOverlayHost() {
+export function TutorialsOverlayHost() {
   useApp();
   return (
     <>
       <TutorialsDrawer />
       <McpSetupModal />
-      <FreeSurfaceModal />
-      <CoordMappingModal />
     </>
   );
 }
-{
-  const idx = viewOverlays.findIndex((fn) => fn.name === 'TutorialsOverlayHost');
-  if (idx >= 0) viewOverlays[idx] = TutorialsOverlayHost;
-  else viewOverlays.push(TutorialsOverlayHost);
-}
-
-function TutorialsStatusItem() {
-  return (
-    <>
-      <span class="sep">|</span>
-      <button
-        class="btn ghost small"
-        data-testid="footer-free-surface-sph"
-        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#38bdf8' }}
-        title="Open 3D Multi-Regime Free-Surface &amp; Capillary Fluid Workbench (1100 °C Spout-Lip Heel, Peregrine Wave Air Entrainment, Young–Laplace &amp; TPMS Wick)"
-        onClick={() => openFreeSurfaceModal()}
-      >
-        🌊 SPH
-      </button>
-      <span class="sep">|</span>
-      <button
-        class="btn ghost small"
-        data-testid="footer-coord-mapping"
-        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#a855f7' }}
-        title="Open 1D–4D Coordinate Mappings &amp; Pullback FEM Suite (Polar, Cylindrical, Spherical, Confocal Elliptic, Parabolic, Toroidal &amp; 4D Hyperspherical)"
-        onClick={() => openCoordMappingModal()}
-      >
-        🌐 Coord
-      </button>
-      <span class="sep">|</span>
-      <button
-        class="btn ghost small"
-        data-testid="footer-analytic-tests"
-        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#22d3ee' }}
-        title="Open Closed-Form Analytic Verification Benchmarks Contents (A1–A20 · Gerris / Basilisk)"
-        onClick={() => {
-          ui.set('tutorialMinimised', false);
-          ui.set('tutorialCategoryFilter', 'analytic');
-          ui.set('tutorialContentsOpen', true);
-          ui.set('tutorialsOpen', true);
-        }}
-      >
-        📐 A1–A20
-      </button>
-      <span class="sep">|</span>
-      <button
-        class="btn ghost small"
-        data-testid="footer-tutorials"
-        style={{ height: '20px', padding: '0 5px', fontSize: '11px' }}
-        title="Open Guided Tutorials &amp; Multiphysics Case Studies Contents (T1–T19)"
-        onClick={toggleTutorialsDrawer}
-      >
-        📘 T1–T19
-      </button>
-      <span class="sep">|</span>
-      <button
-        class="btn ghost small"
-        data-testid="footer-mcp-setup"
-        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: 'var(--accent)' }}
-        title="View MCP Server &amp; REST API Co-Pilot Setup Instructions"
-        onClick={() => ui.set('mcpSetupOpen', !ui.mcpSetupOpen)}
-      >
-        MCP
-      </button>
-    </>
-  );
-}
-{
-  const idx = statusItems.findIndex((fn) => fn.name === 'TutorialsStatusItem');
-  if (idx >= 0) statusItems[idx] = TutorialsStatusItem;
-  else statusItems.push(TutorialsStatusItem);
-}
-
-extraCommands.push(() => [
-  {
-    id: 'tutorials.open',
-    group: 'Help & Theory',
-    label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T18 · A1–A16)',
-    run: () => toggleTutorialsDrawer(),
-  },
-  {
-    id: 'sph.open',
-    group: 'Physics & Solvers',
-    label: 'Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench (1100 °C Spout Lip · Peregrine Wave · SPH)',
-    run: () => openFreeSurfaceModal(),
-  },
-  {
-    id: 'mcp.setup',
-    group: 'Help & Theory',
-    label: 'Open Fieldsmith MCP & REST API Setup Guide',
-    run: () => ui.set('mcpSetupOpen', true),
-  },
-]);

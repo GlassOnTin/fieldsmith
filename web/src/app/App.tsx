@@ -1,6 +1,13 @@
 // The application shell: tree | viewport | inspector, status line below.
 import type { JSX } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { store, LENSES } from '../doc/store';
+import {
+  getWorkspaceSyncState,
+  resolveConflictAcceptRemote,
+  resolveConflictKeepLocal,
+  subscribeWorkspaceSync,
+} from '../doc/workspace-sync';
 import { FACE_LABEL } from '../doc/types';
 import type { Face } from '../doc/types';
 import { Tree } from './Tree';
@@ -8,13 +15,83 @@ import { Inspector } from './Inspector';
 import { ViewportHost } from './ViewportHost';
 import { Palette, Menus } from './Palette';
 import { EXAMPLES, addShape, importMeshCommand, newDocument, openFile, openText, runCommand, saveFile } from './commands';
-import { SketchWorkbenchModal, openSketchWorkbenchModal } from './SketchWorkbench';
-import { FixingsCatalogueModal, openFixingsCatalogueModal } from './FixingsModal';
-import { AntennaWorkbenchModal, openAntennaWorkbenchModal } from './AntennaWorkbench';
+import {
+  openAntennaWorkbenchModal,
+  openCoordMappingModal,
+  openFixingsCatalogueModal,
+  openFreeSurfaceModal,
+  openSketchWorkbenchModal,
+  toggleTutorialsDrawer,
+} from './modal-launchers';
 import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
 import { matchedCoupledSystemIdForDoc } from '../doc/continuum';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
+
+function LazyMount({
+  active,
+  load,
+}: {
+  active: boolean;
+  load: () => Promise<() => JSX.Element | null>;
+}) {
+  const [Comp, setComp] = useState<(() => JSX.Element | null) | null>(null);
+  const started = useRef(false);
+  useEffect(() => {
+    if (!active || started.current) return;
+    started.current = true;
+    void load().then((fn) => setComp(() => fn));
+  }, [active]);
+  return Comp ? <Comp /> : null;
+}
+
+function WorkspaceSyncPill() {
+  const [, setTick] = useState(0);
+  useEffect(() => subscribeWorkspaceSync(() => setTick((t) => t + 1)), []);
+  const sync = getWorkspaceSyncState();
+  if (sync.status !== 'conflict' || !sync.conflictRemote) return null;
+  return (
+    <>
+      <span class="sep">|</span>
+      <span
+        data-testid="workspace-conflict-banner"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '1px 6px',
+          borderRadius: '4px',
+          background: 'rgba(239, 68, 68, 0.16)',
+          border: '1px solid var(--danger)',
+          color: '#fca5a5',
+          fontSize: '10.5px',
+          fontFamily: 'var(--mono)',
+        }}
+        title={`Workspace conflict: remote rev #${sync.conflictRemote.revision} (${sync.conflictRemote.actor}:${sync.conflictRemote.last_tool}) modified the workspace while you had local edits`}
+      >
+        <span>⚠ Conflict rev #{sync.conflictRemote.revision}</span>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="workspace-conflict-accept-remote"
+          onClick={() => resolveConflictAcceptRemote()}
+          style={{ height: '16px', padding: '0 5px', fontSize: '10px' }}
+        >
+          Accept Remote
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="workspace-conflict-keep-local"
+          onClick={() => void resolveConflictKeepLocal()}
+          style={{ height: '16px', padding: '0 5px', fontSize: '10px' }}
+        >
+          Keep Local
+        </button>
+      </span>
+    </>
+  );
+}
 
 /** Lens-specific viewport overlays and status items (registered by later lenses). */
 export const viewOverlays: (() => JSX.Element | null)[] = [];
@@ -349,6 +426,62 @@ function StatusBar() {
       {statusItems.map((S, i) => (
         <S key={i} />
       ))}
+      <WorkspaceSyncPill />
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-free-surface-sph"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#38bdf8' }}
+        title="Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench"
+        onClick={() => openFreeSurfaceModal()}
+      >
+        🌊 SPH
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-coord-mapping"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#a855f7' }}
+        title="Open 1D–4D Coordinate Mappings & Pullback FEM Suite"
+        onClick={() => openCoordMappingModal()}
+      >
+        🌐 Coord
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-analytic-tests"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#22d3ee' }}
+        title="Open Closed-Form Analytic Verification Benchmarks Contents (A1–A20)"
+        onClick={() => {
+          ui.set('tutorialMinimised', false);
+          ui.set('tutorialCategoryFilter', 'analytic');
+          ui.set('tutorialContentsOpen', true);
+          ui.set('tutorialsOpen', true);
+        }}
+      >
+        📐 A1–A20
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-tutorials"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px' }}
+        title="Open Guided Tutorials & Multiphysics Case Studies Contents (T1–T19)"
+        onClick={toggleTutorialsDrawer}
+      >
+        📘 T1–T19
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-mcp-setup"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: 'var(--accent)' }}
+        title="View MCP Server & REST API Co-Pilot Setup Instructions"
+        onClick={() => ui.set('mcpSetupOpen', !ui.mcpSetupOpen)}
+      >
+        MCP
+      </button>
       {s && (
         <>
           <span class="sep">|</span>
@@ -535,6 +668,14 @@ export function App() {
         {viewOverlays.map((O, i) => (
           <O key={i} />
         ))}
+        <LazyMount
+          active={ui.systemsOpen || matchedCoupledSystemIdForDoc(store.doc) !== null}
+          load={() => import('./systems').then((m) => m.SystemsOverlayHost)}
+        />
+        <LazyMount
+          active={ui.tutorialsOpen || ui.mcpSetupOpen}
+          load={() => import('./tutorials').then((m) => m.TutorialsOverlayHost)}
+        />
         <Toast />
       </main>
       <aside class={`panel insp-panel${ui.inspOpen ? ' open' : ''}`}>
@@ -580,9 +721,30 @@ export function App() {
       <StatusBar />
       <Palette />
       <Menus />
-      <SketchWorkbenchModal />
-      <FixingsCatalogueModal />
-      <AntennaWorkbenchModal />
+      <LazyMount
+        active={ui.sketchOpen}
+        load={() => import('./SketchWorkbench').then((m) => m.SketchWorkbenchModal)}
+      />
+      <LazyMount
+        active={ui.fixingsOpen}
+        load={() => import('./FixingsModal').then((m) => m.FixingsCatalogueModal)}
+      />
+      <LazyMount
+        active={ui.antennaOpen}
+        load={() => import('./AntennaWorkbench').then((m) => m.AntennaWorkbenchModal)}
+      />
+      <LazyMount
+        active={ui.channelProfileOpen}
+        load={() => import('./ChannelProfileModal').then((m) => m.ChannelProfileModal)}
+      />
+      <LazyMount
+        active={ui.freeSurfaceOpen}
+        load={() => import('./FreeSurfaceModal').then((m) => m.FreeSurfaceModal)}
+      />
+      <LazyMount
+        active={ui.coordMappingOpen}
+        load={() => import('./CoordMappingModal').then((m) => m.CoordMappingModal)}
+      />
     </div>
   );
 }

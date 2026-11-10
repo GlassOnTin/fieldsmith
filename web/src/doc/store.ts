@@ -37,10 +37,21 @@ export class Store {
   lastAction = '';
   /** Incremented when a whole document is loaded (open / new / example) — the view refits. */
   loads = 0;
+  /** Listeners notified only on local human document changes (`load`, `transact`, `commitTransient`, `undo`, `redo`), never on `applyExternalDoc`. */
+  private localMutationListeners = new Set<(doc: Document, label: string) => void>();
 
   subscribe(l: Listener): () => void {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
+  }
+
+  subscribeLocalMutations(l: (doc: Document, label: string) => void): () => void {
+    this.localMutationListeners.add(l);
+    return () => this.localMutationListeners.delete(l);
+  }
+
+  private emitLocalMutation(label: string) {
+    for (const l of this.localMutationListeners) l(this.doc, label);
   }
 
   private emit(docChanged: boolean) {
@@ -53,7 +64,7 @@ export class Store {
   }
 
   /** Replace the whole document (open / new). Clears history. */
-  load(doc: Document) {
+  load(doc: Document, opts?: { fromExternalSync?: boolean }) {
     this.doc = doc;
     this.past = [];
     this.future = [];
@@ -61,6 +72,27 @@ export class Store {
     this.transientBase = null;
     this.loads++;
     this.emit(true);
+    if (!opts?.fromExternalSync) {
+      this.emitLocalMutation(`Load ${doc.name || 'document'}`);
+    }
+  }
+
+  /**
+   * Apply an incoming external/MCP document update as an undoable transaction without
+   * clearing undo history, resetting camera (`loads`), or dropping valid selections.
+   */
+  applyExternalDoc(doc: Document, label: string): boolean {
+    const base = this.transientBase ?? this.doc;
+    if (JSON.stringify(doc) === JSON.stringify(base)) return false;
+    this.past.push({ doc: base, label });
+    if (this.past.length > HISTORY_LIMIT) this.past.shift();
+    this.future = [];
+    this.transientBase = null;
+    this.doc = doc;
+    this.lastAction = label;
+    this.fixSelection();
+    this.emit(true);
+    return true;
   }
 
   /** Apply an undoable edit. `fn` mutates a draft copy. */
@@ -76,6 +108,7 @@ export class Store {
     this.doc = draft;
     this.lastAction = label;
     this.emit(true);
+    this.emitLocalMutation(label);
   }
 
   /** Live edit during a drag: updates the document without recording history until `commit`. */
@@ -96,6 +129,7 @@ export class Store {
     this.future = [];
     this.lastAction = label;
     this.emit(true);
+    this.emitLocalMutation(label);
   }
 
   cancelTransient() {
@@ -126,6 +160,7 @@ export class Store {
     this.lastAction = `Undo ${prev.label}`;
     this.fixSelection();
     this.emit(true);
+    this.emitLocalMutation(this.lastAction);
   }
 
   redo() {
@@ -136,6 +171,7 @@ export class Store {
     this.lastAction = `Redo ${next.label}`;
     this.fixSelection();
     this.emit(true);
+    this.emitLocalMutation(this.lastAction);
   }
 
   select(sel: Selection) {

@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   listCoupledSystems,
+  parseFsm,
+  printFsm,
   solveCoupledSystem,
   type CandleFlameVisual,
   type CandleTransientFrame,
@@ -18,13 +20,18 @@ import {
 } from '../doc/wasm';
 import { store } from '../doc/store';
 import {
+  getWorkspaceSyncState,
+  markWorkspaceRevisionSeen,
+  pushWorkspaceSnapshot,
+  subscribeWorkspaceSnapshots,
+} from '../doc/workspace-sync';
+import {
   detectCoupledPhysicsRegime,
   matchedCoupledSystemIdForDoc,
   upsertLetParam,
 } from '../doc/continuum';
-import { viewOverlays } from './App';
-import { extraCommands, openText, viewApi } from './commands';
-import { apiUrl, ui, useApp } from './ui';
+import { viewApi } from './commands';
+import { ui, useApp } from './ui';
 import { viewportExtensions, liveViewport } from './ViewportHost';
 import type { Viewport } from '../view/viewport';
 
@@ -2781,6 +2788,20 @@ viewportExtensions.push({
     syncCoupledViewportOverlay(vp);
   },
 });
+if (liveViewport) {
+  syncCoupledViewportOverlay(liveViewport);
+}
+
+function syncCoupledFsmToStore(fsmText: string, systemId: string, label: string): boolean {
+  const parsed = parseFsm(fsmText);
+  if ('error' in parsed) {
+    ui.notify(`Line ${parsed.error.line}: ${parsed.error.message}`, 'error', 6000);
+    return false;
+  }
+  parsed.ok.coupled_system = systemId;
+  store.applyExternalDoc(parsed.ok, label);
+  return true;
+}
 
 function CoupledViewportHud() {
   useApp();
@@ -2791,96 +2812,70 @@ function CoupledViewportHud() {
   };
 
   useEffect(() => {
-    let active = true;
-    const poll = async () => {
-      try {
-        const resp = await fetch(apiUrl('/api/workspace'));
-        if (!resp.ok || !active) return;
-        const ws = (await resp.json()) as WorkspaceSnapshot;
-        if (lastSeenWorkspaceRevision < 0) {
-          lastSeenWorkspaceRevision = typeof ws.revision === 'number' ? ws.revision : 0;
-          return;
+    return subscribeWorkspaceSnapshots((ws) => {
+      if (ws.actor !== 'mcp-agent') return;
+      if (
+        ws.coupled_system_id === 'pilkington_float_bath_cvd_coater_v1' &&
+        Array.isArray(ws.design_p)
+      ) {
+        coupledShared.designP = ws.design_p;
+        if (Array.isArray(ws.epistemic_theta)) {
+          coupledShared.epistemicTheta = ws.epistemic_theta;
         }
-        if (typeof ws.revision === 'number' && ws.revision > lastSeenWorkspaceRevision) {
-          lastSeenWorkspaceRevision = ws.revision;
-          if (ws.actor === 'mcp-agent') {
-            if (
-              ws.coupled_system_id === 'pilkington_float_bath_cvd_coater_v1' &&
-              Array.isArray(ws.design_p)
-            ) {
-              coupledShared.designP = ws.design_p;
-              if (Array.isArray(ws.epistemic_theta)) {
-                coupledShared.epistemicTheta = ws.epistemic_theta;
-              }
-              try {
-                coupledShared.bundle = solveCoupledSystem(
-                  'pilkington_float_bath_cvd_coater_v1',
-                  coupledShared.designP,
-                  coupledShared.epistemicTheta,
-                );
-              } catch {
-                // ignore
-              }
-            } else if (
-              ws.coupled_system_id === 'solar_candle_ignition_v1' &&
-              Array.isArray(ws.design_p)
-            ) {
-              candleShared.designP = ws.design_p;
-              if (Array.isArray(ws.epistemic_theta)) {
-                candleShared.epistemicTheta = ws.epistemic_theta;
-              }
-              try {
-                candleShared.bundle = solveCoupledSystem(
-                  'solar_candle_ignition_v1',
-                  candleShared.designP,
-                  candleShared.epistemicTheta,
-                );
-              } catch {
-                // ignore
-              }
-            }
-            if (typeof ws.doc_fsm === 'string' && ws.doc_fsm.trim().length > 0) {
-              ui.tutorialsOpen = false;
-              ui.systemsOpen = false;
-              openText(ws.doc_fsm, 'mcp-shared-workspace.fsm');
-              if (ws.last_tool === 'solve' || ws.last_tool === 'solve_study') {
-                store.setLens('results');
-              } else if (ws.last_tool === 'set_fill') {
-                store.setLens('fill');
-              } else if (
-                ws.last_tool === 'add_support' ||
-                ws.last_tool === 'add_load' ||
-                ws.last_tool === 'add_temperature' ||
-                ws.last_tool === 'add_convection' ||
-                ws.last_tool === 'add_heatflux' ||
-                ws.last_tool === 'add_region'
-              ) {
-                store.setLens('setup');
-              } else if (
-                ws.last_tool === 'open' ||
-                ws.last_tool === 'load_fsm' ||
-                ws.last_tool === 'new_document' ||
-                ws.last_tool === 'upsert_shape' ||
-                ws.last_tool === 'add_primitive'
-              ) {
-                store.setLens('shape');
-              }
-              viewApi.fit(false);
-              if (liveViewport) syncCoupledViewportOverlay(liveViewport);
-              ui.notify(`Synced MCP Co-Pilot update (rev #${ws.revision}: ${ws.last_tool})`);
-            }
-          }
+        try {
+          coupledShared.bundle = solveCoupledSystem(
+            'pilkington_float_bath_cvd_coater_v1',
+            coupledShared.designP,
+            coupledShared.epistemicTheta,
+          );
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore offline
+        bump();
+      } else if (
+        ws.coupled_system_id === 'solar_candle_ignition_v1' &&
+        Array.isArray(ws.design_p)
+      ) {
+        candleShared.designP = ws.design_p;
+        if (Array.isArray(ws.epistemic_theta)) {
+          candleShared.epistemicTheta = ws.epistemic_theta;
+        }
+        try {
+          candleShared.bundle = solveCoupledSystem(
+            'solar_candle_ignition_v1',
+            candleShared.designP,
+            candleShared.epistemicTheta,
+          );
+        } catch {
+          // ignore
+        }
+        bump();
       }
-    };
-    const timer = window.setInterval(poll, 1000);
-    poll();
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+      if (typeof ws.doc_fsm === 'string' && ws.doc_fsm.trim().length > 0) {
+        ui.tutorialsOpen = false;
+        ui.systemsOpen = false;
+        if (ws.last_tool === 'solve') {
+          store.setLens('results');
+        } else if (ws.last_tool === 'set_fill') {
+          store.setLens('fill');
+        } else if (
+          ws.last_tool === 'add_support' ||
+          ws.last_tool === 'add_load' ||
+          ws.last_tool === 'add_temperature' ||
+          ws.last_tool === 'add_convection' ||
+          ws.last_tool === 'add_heatflux' ||
+          ws.last_tool === 'add_region'
+        ) {
+          store.setLens('setup');
+        } else if (
+          ws.last_tool === 'open' ||
+          ws.last_tool === 'upsert_shape'
+        ) {
+          store.setLens('shape');
+        }
+        if (liveViewport) syncCoupledViewportOverlay(liveViewport);
+      }
+    });
   }, []);
 
   const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
@@ -3103,7 +3098,11 @@ function CoupledViewportHud() {
               class="btn small"
               title="Rebuild 3D .fsm CSG & FEA mesh to match current slider positions"
               onClick={() => {
-                openText(buildFloatBathFsm(coupledShared.designP), 'uk5-float-bath-coater.fsm');
+                syncCoupledFsmToStore(
+                  buildFloatBathFsm(coupledShared.designP),
+                  'pilkington_float_bath_cvd_coater_v1',
+                  'Sync UK5 Float-Bath 3D .fsm',
+                );
                 ui.set('resultsCase', 0);
               }}
             >
@@ -4601,7 +4600,11 @@ function SolarCandleViewportHud({
               title="Rebuild 3D .fsm CSG & Thermo-Mechanical FEA mesh to match current optical lens & wick parameters"
               onClick={() => {
                 if (bundle.fsm_3d) {
-                  openText(bundle.fsm_3d, 'solar-candle-ignition.fsm');
+                  syncCoupledFsmToStore(
+                    bundle.fsm_3d,
+                    'solar_candle_ignition_v1',
+                    'Sync Solar Candle 3D .fsm',
+                  );
                   ui.set('resultsCase', 0);
                 }
               }}
@@ -5175,25 +5178,8 @@ function SolarCandle3DTwin({
 }
 
 // ---- Live Shared Workspace Synchronisation (MCP + REST + Browser Co-Pilot) ----
-
-interface WorkspaceSnapshot {
-  revision: number;
-  updated_at_ms: number;
-  actor: string;
-  last_tool: string;
-  doc_fsm: string | null;
-  coupled_system_id: string | null;
-  design_p: number[] | null;
-  epistemic_theta: number[] | null;
-}
-
-let lastSeenWorkspaceRevision = -1;
-
-export function markWorkspaceRevisionSeen(rev: number): void {
-  if (typeof rev === 'number' && Number.isFinite(rev)) {
-    lastSeenWorkspaceRevision = Math.max(lastSeenWorkspaceRevision, rev);
-  }
-}
+// Re-export `markWorkspaceRevisionSeen` for backwards compatibility with any caller.
+export { markWorkspaceRevisionSeen };
 
 async function pushWorkspaceState(payload: {
   actor?: string;
@@ -5204,21 +5190,7 @@ async function pushWorkspaceState(payload: {
   design_p?: number[];
   epistemic_theta?: number[];
 }): Promise<void> {
-  try {
-    const resp = await fetch(apiUrl('/api/workspace'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actor: 'web-ui', ...payload }),
-    });
-    if (resp.ok) {
-      const ws = (await resp.json()) as WorkspaceSnapshot;
-      if (typeof ws.revision === 'number') {
-        lastSeenWorkspaceRevision = Math.max(lastSeenWorkspaceRevision, ws.revision);
-      }
-    }
-  } catch {
-    // Non-fatal when running as a static bundle without the dev/MCP server
-  }
+  await pushWorkspaceSnapshot({ actor: 'web-ui', ...payload });
 }
 
 // ---- Main 3-Column Coupled Systems Workbench Modal ----
@@ -5295,67 +5267,39 @@ export function SystemsWorkbench() {
   const [epistemicTheta, setEpistemicTheta] = useState<number[]>([]);
   const [bundle, setBundle] = useState<CoupledSolveBundle | null>(null);
   const [bathField, setBathField] = useState<BathFieldMode>('glass_temp');
-  const [wsRev, setWsRev] = useState<number>(lastSeenWorkspaceRevision);
-  const [wsActor, setWsActor] = useState<string>('ready');
+  const [wsRev, setWsRev] = useState<number>(() => Math.max(0, getWorkspaceSyncState().revision));
+  const [wsActor, setWsActor] = useState<string>(() => getWorkspaceSyncState().lastActor || 'ready');
   const [error, setError] = useState<string | null>(null);
 
-  // Background poll of `/api/workspace` so MCP / REST edits immediately sync into the live Web UI
+  // Subscribe to global workspace sync snapshots (single poll owner in `workspace-sync.ts`)
   useEffect(() => {
-    let active = true;
-    const poll = async () => {
-      try {
-        const resp = await fetch(apiUrl('/api/workspace'));
-        if (!resp.ok || !active) return;
-        const ws = (await resp.json()) as WorkspaceSnapshot;
-        if (lastSeenWorkspaceRevision < 0) {
-          lastSeenWorkspaceRevision = typeof ws.revision === 'number' ? ws.revision : 0;
-          return;
-        }
-        if (typeof ws.revision === 'number' && ws.revision > lastSeenWorkspaceRevision) {
-          lastSeenWorkspaceRevision = ws.revision;
-          setWsRev(ws.revision);
-          setWsActor(`${ws.actor}:${ws.last_tool}`);
-          if (ws.actor === 'mcp-agent') {
-            if (ws.coupled_system_id && Array.isArray(ws.design_p)) {
-              setActiveId(ws.coupled_system_id);
-              setDesignP(ws.design_p);
-              const th = Array.isArray(ws.epistemic_theta) ? ws.epistemic_theta : epistemicTheta;
-              setEpistemicTheta(th);
-              try {
-                const res = solveCoupledSystem(ws.coupled_system_id, ws.design_p, th);
-                setBundle(res);
-                if (ws.coupled_system_id === 'pilkington_float_bath_cvd_coater_v1') {
-                  coupledShared.designP = ws.design_p;
-                  coupledShared.epistemicTheta = th;
-                  coupledShared.bundle = res;
-                  if (liveViewport) syncCoupledViewportOverlay(liveViewport);
-                } else if (ws.coupled_system_id === 'solar_candle_ignition_v1') {
-                  candleShared.designP = ws.design_p;
-                  candleShared.epistemicTheta = th;
-                  candleShared.bundle = res;
-                  if (liveViewport) syncCoupledViewportOverlay(liveViewport);
-                }
-              } catch {
-                // ignore
-              }
-            }
-            if (typeof ws.doc_fsm === 'string' && ws.doc_fsm.trim().length > 0) {
-              openText(ws.doc_fsm, 'mcp-shared-workspace.fsm');
-              viewApi.fit(false);
-              ui.notify(`Synced MCP Co-Pilot update (rev #${ws.revision}: ${ws.last_tool})`);
-            }
+    return subscribeWorkspaceSnapshots((ws) => {
+      setWsRev(ws.revision);
+      setWsActor(`${ws.actor}:${ws.last_tool}`);
+      if (ws.actor === 'mcp-agent' && ws.coupled_system_id && Array.isArray(ws.design_p)) {
+        setActiveId(ws.coupled_system_id);
+        setDesignP(ws.design_p);
+        const th = Array.isArray(ws.epistemic_theta) ? ws.epistemic_theta : epistemicTheta;
+        setEpistemicTheta(th);
+        try {
+          const res = solveCoupledSystem(ws.coupled_system_id, ws.design_p, th);
+          setBundle(res);
+          if (ws.coupled_system_id === 'pilkington_float_bath_cvd_coater_v1') {
+            coupledShared.designP = ws.design_p;
+            coupledShared.epistemicTheta = th;
+            coupledShared.bundle = res;
+            if (liveViewport) syncCoupledViewportOverlay(liveViewport);
+          } else if (ws.coupled_system_id === 'solar_candle_ignition_v1') {
+            candleShared.designP = ws.design_p;
+            candleShared.epistemicTheta = th;
+            candleShared.bundle = res;
+            if (liveViewport) syncCoupledViewportOverlay(liveViewport);
           }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore offline
       }
-    };
-    const timer = window.setInterval(poll, 1000);
-    poll();
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+    });
   }, []);
 
   useEffect(() => {
@@ -5544,7 +5488,7 @@ export function SystemsWorkbench() {
     } else {
       coupledShared.overlay.enabled = false;
     }
-    if (openText(fsm, filename)) {
+    if (syncCoupledFsmToStore(fsm, activeId, `Sync ${filename}`)) {
       ui.set('resultsCase', 0);
       ui.set('systemsOpen', false);
       if (jumpToResults) {
@@ -5555,7 +5499,7 @@ export function SystemsWorkbench() {
       void pushWorkspaceState({
         last_tool: 'syncTo3DViewport',
         summary: `Loaded 3D CAD Twin (${filename}) into Viewport`,
-        doc_fsm: fsm,
+        doc_fsm: printFsm(store.doc),
         coupled_system_id: activeId,
         design_p: designP,
         epistemic_theta: epistemicTheta,
@@ -5601,7 +5545,12 @@ export function SystemsWorkbench() {
         {/* Top bar */}
         <div class="sys-header">
           <div class="sys-header-left">
-            <span class="sys-badge">MONOLITHIC PDE + ADJOINT + UQ</span>
+            <span
+              class="sys-badge"
+              title="Reduced-order 0D/1D/2D coupled PDE/ODE reference twin with Adjoint gradients & UQ; projects boundary conditions onto the 3D .fsm continuum model"
+            >
+              0D/1D/2D COUPLED TWIN · ADJOINT + UQ
+            </span>
             {activeId && (
               <button
                 class="btn small ghost"
@@ -6205,8 +6154,7 @@ function CausalAttributionSvg({
   );
 }
 
-// Register 3D Coupled Physics HUD in viewport + command palette (no floating top-left pill)
-viewOverlays.push(function SystemsOverlayHost() {
+export function SystemsOverlayHost() {
   useApp();
   return (
     <>
@@ -6214,13 +6162,4 @@ viewOverlays.push(function SystemsOverlayHost() {
       <SystemsWorkbench />
     </>
   );
-});
-
-extraCommands.push(() => [
-  {
-    id: 'systems.open',
-    group: 'Systems',
-    label: 'Open Coupled Multiphysics Systems Workbench…',
-    run: () => ui.set('systemsOpen', true),
-  },
-]);
+}
