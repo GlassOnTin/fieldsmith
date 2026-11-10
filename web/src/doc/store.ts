@@ -1,6 +1,7 @@
 // Application state: the document (with undo/redo), selection and UI lens.
-import type { Document } from './types';
+import type { DocCommand, DocCommandOutcome, Document } from './types';
 import { emptyDocument, withLetTables } from './types';
+import { applyDocCommand } from './wasm';
 
 export type Lens = 'shape' | 'setup' | 'results' | 'fill' | 'make' | 'theory';
 export const LENSES: { id: Lens; label: string; key: string }[] = [
@@ -109,6 +110,27 @@ export class Store {
     this.lastAction = label;
     this.emit(true);
     this.emitLocalMutation(label);
+  }
+
+  /**
+   * Dispatch a typed `DocCommand` through the shared Rust `apply_doc_command` WASM reducer
+   * as an undoable document transaction.
+   */
+  dispatch(label: string, cmd: DocCommand): DocCommandOutcome {
+    const base = this.transientBase ?? this.doc;
+    const { doc: nextDoc, outcome } = applyDocCommand(this.doc, cmd);
+    if (JSON.stringify(nextDoc) !== JSON.stringify(base) || this.transientBase) {
+      this.past.push({ doc: base, label });
+      if (this.past.length > HISTORY_LIMIT) this.past.shift();
+      this.future = [];
+      this.transientBase = null;
+      this.doc = nextDoc;
+      this.lastAction = label;
+      this.fixSelection();
+      this.emit(true);
+      this.emitLocalMutation(label);
+    }
+    return outcome;
   }
 
   /** Live edit during a drag: updates the document without recording history until `commit`. */

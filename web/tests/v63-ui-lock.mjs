@@ -288,7 +288,93 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[6/6] typed J2 plasticity + coupled isolation + 1D SDF channel BC bind + WASM sensitivity (∂m/∂r_in = ${boundCheck.dMass.toFixed(3)} g/mm): PASS`,
+    `[6/7] typed J2 plasticity + coupled isolation + 1D SDF channel BC bind + WASM sensitivity (∂m/∂r_in = ${boundCheck.dMass.toFixed(3)} g/mm): PASS`,
+  );
+
+  // 7. WASM-backed SketchWorkbench -> persistent `.fsm` sketch + sketchfeature + live `let` sync via `store.dispatch`
+  await page.evaluate(async () => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(
+      'fieldsmith 1\nname "Sketch Lock Test"\nmaterial ss316l\nlet bracket_w = 78\n',
+    );
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('shape');
+  });
+  await page.click('[data-testid="hud-open-sketch-workbench"]');
+  await page.waitForSelector('[data-testid="parametric-sketch-workbench"]', { timeout: 5000 });
+
+  // Bind segment s0 (default selected in L-Flanged Mounting Bracket preset) to `let bracket_w`
+  await page.fill('[data-testid="smart-dim-value-input"]', '78');
+  await page.fill('[data-testid="smart-dim-expr-input"]', 'bracket_w');
+  await page.click('[data-testid="btn-apply-smart-dim"]');
+  const badgeText = await page.textContent('[data-testid="sketch-dof-status-badge"]');
+  assert(badgeText && badgeText.includes('DOF=0'), `Expected DOF=0 in WASM SketchWorkbench, got '${badgeText}'`);
+
+  // Click Build 3D Feature in Document -> dispatches `apply_sketch_feature` through WASM reducer
+  await page.click('[data-testid="apply-sketch-feature-btn"]');
+
+  const sketchSyncCheck = await page.evaluate(async () => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const store = window.fieldsmith.store;
+    const printedBefore = wasm.printFsm(store.doc);
+    const reparsed = wasm.parseFsm(printedBefore);
+    if ('error' in reparsed) throw new Error(reparsed.error.message);
+
+    // Now mutate `bracket_w` from 78 -> 94 via `store.dispatch({ cmd: 'set_let' })`
+    store.dispatch('Set bracket_w = 94', { cmd: 'set_let', name: 'bracket_w', value: 94 });
+    const bossNode = store.doc.root.find((n) => n.id === 'sketch_boss1');
+    const xs =
+      bossNode && bossNode.kind.type === 'extrude'
+        ? bossNode.kind.profile.map((v) => v.x)
+        : [];
+    const spanAfterDispatch = xs.length > 0 ? Math.max(...xs) - Math.min(...xs) : 0;
+
+    // Also test legacy `applyAddr` path (used by Inspector let inputs & 1D/2D sweeps) -> must also sync!
+    const paramMod = await import('/src/doc/param.ts');
+    store.transact('Inspector let edit bracket_w = 106', (d) => {
+      paramMod.applyAddr(d, paramMod.parseAddr('bracket_w'), 106);
+    });
+    const bossNode2 = store.doc.root.find((n) => n.id === 'sketch_boss1');
+    const xs2 =
+      bossNode2 && bossNode2.kind.type === 'extrude'
+        ? bossNode2.kind.profile.map((v) => v.x)
+        : [];
+    const spanAfterInspector = xs2.length > 0 ? Math.max(...xs2) - Math.min(...xs2) : 0;
+
+    return {
+      sketchesLen: store.doc.sketches?.length ?? 0,
+      sketchFeaturesLen: store.doc.sketch_features?.length ?? 0,
+      hasSketchBlock: printedBefore.includes('sketch sketch_boss1_sk'),
+      hasSketchFeatureLine: printedBefore.includes('sketchfeature sketch_boss1'),
+      roundTripSketches: reparsed.ok.sketches?.length ?? 0,
+      spanAfterDispatch,
+      spanAfterInspector,
+    };
+  });
+
+  assert(sketchSyncCheck.sketchesLen === 1, `Expected 1 saved sketch, got ${sketchSyncCheck.sketchesLen}`);
+  assert(sketchSyncCheck.sketchFeaturesLen === 1, `Expected 1 sketch_feature binding, got ${sketchSyncCheck.sketchFeaturesLen}`);
+  assert(sketchSyncCheck.hasSketchBlock && sketchSyncCheck.hasSketchFeatureLine, 'Missing sketch/sketchfeature in printed .fsm');
+  assert(sketchSyncCheck.roundTripSketches === 1, 'Saved sketch lost across WASM printFsm/parseFsm');
+  assert(
+    Math.abs(sketchSyncCheck.spanAfterDispatch - 94) < 1e-3,
+    `Expected Extrude width 94 mm after store.dispatch(set_let), got ${sketchSyncCheck.spanAfterDispatch}`,
+  );
+  assert(
+    Math.abs(sketchSyncCheck.spanAfterInspector - 106) < 1e-3,
+    `Expected Extrude width 106 mm after applyAddr(bracket_w), got ${sketchSyncCheck.spanAfterInspector}`,
+  );
+
+  // Re-open SketchWorkbench and confirm saved sketch dropdown mounts and auto-loads `sketch_boss1_sk`
+  await page.click('[data-testid="hud-open-sketch-workbench"]');
+  await page.waitForSelector('[data-testid="sketch-saved-select"]', { timeout: 3000 });
+  const savedSelectVal = await page.$eval('[data-testid="sketch-saved-select"]', (el) => el.value);
+  assert(savedSelectVal === 'sketch_boss1_sk', `Expected saved sketch 'sketch_boss1_sk' auto-selected, got '${savedSelectVal}'`);
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[7/7] WASM SketchWorkbench -> persistent .fsm sketch + store.dispatch(set_let) -> 3D Extrude sync (${sketchSyncCheck.spanAfterDispatch.toFixed(1)} -> ${sketchSyncCheck.spanAfterInspector.toFixed(1)} mm): PASS`,
   );
   await page.close();
 } catch (e) {

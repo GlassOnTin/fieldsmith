@@ -2329,3 +2329,71 @@ pub fn analyze_fsm_channel_wasm(doc_or_fsm: &str, spec_json: &str) -> Result<Str
         "doc": if bound.is_some() { Some(&doc) } else { None },
     }))
 }
+
+/// Return the canonical list of built-in 2D parametric sketch templates (`SketchPresetMeta`).
+#[wasm_bindgen(js_name = sketchPresets)]
+pub fn sketch_presets_wasm() -> Result<String, JsValue> {
+    to_json(&fieldsmith_doc::sketch::list_sketch_presets())
+}
+
+/// Solve a 2D `ParametricSketch` against the `let` parameters in `doc_json` using the
+/// authoritative Rust Levenberg–Marquardt + homotopy + column-pivoted QR solver.
+#[wasm_bindgen(js_name = solveSketch)]
+pub fn solve_sketch_wasm(sketch_json: &str, doc_json: &str) -> Result<String, JsValue> {
+    let mut sk: fieldsmith_doc::sketch::ParametricSketch = serde_json::from_str(sketch_json)
+        .map_err(|e| js_err(format!("invalid ParametricSketch JSON: {e}")))?;
+    let lets: Vec<(String, f64)> = if doc_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str::<Document>(doc_json)
+            .ok()
+            .map(|d| d.lets.iter().map(|l| (l.name.clone(), l.value)).collect())
+            .unwrap_or_default()
+    };
+    let report = fieldsmith_doc::sketch::solve_sketch(&mut sk, &lets).map_err(js_err)?;
+    to_json(&report)
+}
+
+/// Expand one `SketchMacro` (or JSON array of `SketchMacro`s) into `sketch_json` and return
+/// the updated `ParametricSketch` JSON.
+#[wasm_bindgen(js_name = expandSketchMacro)]
+pub fn expand_sketch_macro_wasm(sketch_json: &str, macro_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_doc::sketch::{ParametricSketch, SketchMacro};
+    let mut sk: ParametricSketch = serde_json::from_str(sketch_json)
+        .map_err(|e| js_err(format!("invalid ParametricSketch JSON: {e}")))?;
+    let trimmed = macro_json.trim();
+    if trimmed.starts_with('[') {
+        let macs: Vec<SketchMacro> = serde_json::from_str(trimmed)
+            .map_err(|e| js_err(format!("invalid SketchMacro[] JSON: {e}")))?;
+        sk.macros.extend(macs);
+    } else {
+        let mac: SketchMacro = serde_json::from_str(trimmed)
+            .map_err(|e| js_err(format!("invalid SketchMacro JSON: {e}")))?;
+        sk.macros.push(mac);
+    }
+    sk.expand_macros().map_err(js_err)?;
+    to_json(&sk)
+}
+
+/// Re-solve all persistent `doc.sketches` and update bound 3D `doc.sketch_features` nodes
+/// against current `doc.lets` and host geometry.
+#[wasm_bindgen(js_name = syncSketchFeatures)]
+pub fn sync_sketch_features_wasm(doc_json: &str) -> Result<String, JsValue> {
+    let mut doc = doc_from(doc_json)?;
+    fieldsmith_doc::sketch::sync_sketch_features(&mut doc).map_err(js_err)?;
+    to_json(&doc)
+}
+
+/// Apply one authoritative `DocCommand` mutation to `doc_json` and return `{"doc", "outcome"}`.
+#[wasm_bindgen(js_name = applyDocCommand)]
+pub fn apply_doc_command_wasm(doc_json: &str, cmd_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_doc::command::{apply_doc_command, DocCommand};
+    let mut doc = doc_from(doc_json)?;
+    let cmd: DocCommand = serde_json::from_str(cmd_json)
+        .map_err(|e| js_err(format!("invalid DocCommand JSON: {e}")))?;
+    let outcome = apply_doc_command(&mut doc, cmd).map_err(js_err)?;
+    to_json(&serde_json::json!({
+        "doc": doc,
+        "outcome": outcome,
+    }))
+}

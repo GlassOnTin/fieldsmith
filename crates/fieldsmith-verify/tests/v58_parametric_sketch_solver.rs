@@ -184,6 +184,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
     // 1. Attach a filleted bolt-flange boss onto `base_plate.top` (z = 12 mm)
     let boss_req = SketchFeatureRequest {
         feature_id: "top_flange_boss".into(),
+        sketch_id: None,
         sketch: ParametricSketch::default(),
         preset: Some("bolt_flange_plate".into()),
         on: Some("base_plate.top".into()),
@@ -193,6 +194,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
             symmetric: false,
         },
         lets: BTreeMap::new(),
+        associate_with_host: false,
     };
     let boss_sum =
         apply_sketch_feature_to_document(&mut doc, &boss_req).expect("apply boss extrude on face");
@@ -206,6 +208,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
         .unwrap();
     let pocket_req = SketchFeatureRequest {
         feature_id: "front_lightening_slot".into(),
+        sketch_id: None,
         sketch: slot_sk,
         preset: None,
         on: Some("base_plate.ny".into()),
@@ -215,6 +218,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
             blend: 0.0,
         },
         lets: BTreeMap::new(),
+        associate_with_host: false,
     };
     let pocket_sum =
         apply_sketch_feature_to_document(&mut doc, &pocket_req).expect("apply pocket cut on face");
@@ -223,6 +227,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
     // 3. Add a 360-degree turned aerospace spool (`NodeKind::Revolve`) on top of the flange boss
     let rev_req = SketchFeatureRequest {
         feature_id: "turned_spool_collar".into(),
+        sketch_id: None,
         sketch: ParametricSketch::default(),
         preset: Some("turned_aerospace_spool".into()),
         on: Some("xy".into()),
@@ -231,6 +236,7 @@ fn v58_stage2_surface_sketch_boss_pocket_and_revolve_compile_and_solve_3d_fea() 
             blend: 1.5,
         },
         lets: BTreeMap::new(),
+        associate_with_host: false,
     };
     let rev_sum =
         apply_sketch_feature_to_document(&mut doc, &rev_req).expect("apply revolve boss");

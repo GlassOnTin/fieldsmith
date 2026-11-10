@@ -115,7 +115,9 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "upsert_shape",
             "insert_fixing",
             "solve_sketch",
+            "upsert_sketch",
             "apply_sketch_feature",
+            "apply_doc_command",
             "delete_entity",
             "add_region",
             "add_support",
@@ -586,4 +588,80 @@ fn spatial_boundary_conditions_round_trip_and_solve_over_mcp() {
 
     let del = c.tool_ok(14, "delete_entity", json!({"id": "hf_grad"}));
     assert_eq!(del["kind"], "heatflux");
+}
+
+#[test]
+fn parametric_sketch_persists_in_fsm_and_reacts_to_set_let_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    c.tool_ok(
+        2,
+        "new_document",
+        json!({"name": "MCP Persistent Sketch", "material": "ss316l"}),
+    );
+    c.tool_ok(3, "set_let", json!({"name": "boss_w", "value": 20.0}));
+    c.tool_ok(4, "set_let", json!({"name": "boss_d", "value": 16.0}));
+
+    let feat = c.tool_ok(
+        5,
+        "apply_sketch_feature",
+        json!({
+            "feature_id": "boss1",
+            "sketch_id": "sk_boss",
+            "operation": {"kind": "boss_extrude", "height": 12.0},
+            "sketch": {
+                "id": "sk_boss",
+                "plane": {"kind": "xy"},
+                "points": [
+                    {"id": "p0", "x": -10.0, "y": -8.0},
+                    {"id": "p1", "x": 10.0, "y": -8.0},
+                    {"id": "p2", "x": 10.0, "y": 8.0},
+                    {"id": "p3", "x": -10.0, "y": 8.0}
+                ],
+                "segments": [
+                    {"id": "s0", "p1": "p0", "p2": "p1"},
+                    {"id": "s1", "p1": "p1", "p2": "p2"},
+                    {"id": "s2", "p1": "p2", "p2": "p3"},
+                    {"id": "s3", "p1": "p3", "p2": "p0"}
+                ],
+                "constraints": [
+                    {"id": "c_fix", "kind": "fixed", "point": "p0", "x": -10.0, "y": -8.0},
+                    {"id": "c_h0", "kind": "horizontal", "segment": "s0"},
+                    {"id": "c_h2", "kind": "horizontal", "segment": "s2"},
+                    {"id": "c_v1", "kind": "vertical", "segment": "s1"},
+                    {"id": "c_v3", "kind": "vertical", "segment": "s3"},
+                    {"id": "c_w", "kind": "distance", "segment": "s0", "value": 20.0, "expr": "boss_w"},
+                    {"id": "c_d", "kind": "distance", "segment": "s1", "value": 16.0, "expr": "boss_d"}
+                ]
+            }
+        }),
+    );
+    assert!(feat["problems"].as_array().unwrap().is_empty(), "{feat}");
+    assert_eq!(feat["sketches"], 1);
+    assert_eq!(feat["sketch_features"], 1);
+
+    let insp = c.tool_ok(6, "inspect", json!({}));
+    assert_eq!(insp["sketches"].as_array().unwrap().len(), 1);
+    assert_eq!(insp["sketch_features"].as_array().unwrap().len(), 1);
+
+    let txt = c.tool_ok(7, "doc_text", json!({}));
+    let fsm_str = txt["text"].as_str().expect("doc_text.text");
+    assert!(fsm_str.contains("sketch sk_boss"), "{fsm_str}");
+    assert!(fsm_str.contains("sketchfeature boss1 sketch=sk_boss"), "{fsm_str}");
+
+    // Re-open the printed `.fsm` text and verify the sketch binding survives round-trip.
+    c.tool_ok(8, "open", json!({"doc": fsm_str}));
+    c.tool_ok(9, "set_let", json!({"name": "boss_w", "value": 34.0}));
+
+    let shapes = c.tool_ok(10, "list_shapes", json!({}));
+    let profile = shapes["shapes"][0]["kind"]["profile"]
+        .as_array()
+        .expect("extrude profile");
+    let xs: Vec<f64> = profile.iter().map(|v| v["x"].as_f64().unwrap()).collect();
+    let span_x = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+        - xs.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(
+        (span_x - 34.0).abs() < 1e-4,
+        "expected boss_w=34 to update 3D extrude profile span to 34 mm, got {span_x} ({profile:?})"
+    );
 }

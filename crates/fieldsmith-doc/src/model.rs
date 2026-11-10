@@ -49,6 +49,14 @@ pub struct Document {
     /// `.fsm` parse/print round-trips and evaluated by `QuestionSpec::Verify`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub asserts: Vec<crate::fsm::LiterateAssert>,
+    /// Parametric 2D sketches (`sketch <id> ... { ... }`), preserved across `.fsm` and JSON
+    /// round-trips so interactive edits and `let` sweeps re-solve from constraint truth.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sketches: Vec<crate::sketch::ParametricSketch>,
+    /// Provenance bindings from 3D features (`extrude` / `revolve`) back to their driving
+    /// `ParametricSketch` (`sketchfeature <id> sketch=<sketch_id> ...`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sketch_features: Vec<crate::sketch::SketchFeatureBinding>,
 }
 
 impl Default for Document {
@@ -70,6 +78,8 @@ impl Default for Document {
             solve: SolveSettings::default(),
             coupled_system: None,
             asserts: Vec::new(),
+            sketches: Vec::new(),
+            sketch_features: Vec::new(),
         }
     }
 }
@@ -1262,6 +1272,60 @@ impl Document {
                 errs.push(format!(
                     "assert '{}' must state non-empty label, metric, and target",
                     a.label
+                ));
+            }
+        }
+        let mut seen_sketches = std::collections::HashSet::new();
+        for sk in &self.sketches {
+            if !crate::fsm::is_ident(&sk.id) {
+                errs.push(format!(
+                    "Sketch '{}' is not a valid name (letters, digits, _; not starting with a digit)",
+                    sk.id
+                ));
+            }
+            if !seen_sketches.insert(sk.id.clone()) {
+                errs.push(format!("Sketch '{}' is defined more than once", sk.id));
+            }
+            if let crate::sketch::SketchPlane::OnFace { host_id, .. } = &sk.plane {
+                if !ids.contains(host_id) {
+                    errs.push(format!(
+                        "Sketch '{}' refers to missing host shape '{}'",
+                        sk.id, host_id
+                    ));
+                }
+            }
+            let mut sk_copy = sk.clone();
+            match crate::sketch::solve_sketch(&mut sk_copy, &let_values) {
+                Ok(rep) => {
+                    if rep.status == crate::sketch::SketchStatus::OverConstrainedConflict {
+                        errs.push(format!(
+                            "Sketch '{}' has conflicting constraints: {}",
+                            sk.id,
+                            rep.conflicting_constraints.join(", ")
+                        ));
+                    }
+                }
+                Err(e) => errs.push(format!("Sketch '{}': {e}", sk.id)),
+            }
+        }
+        let mut seen_sketch_feats = std::collections::HashSet::new();
+        for b in &self.sketch_features {
+            if !seen_sketch_feats.insert(b.feature_id.clone()) {
+                errs.push(format!(
+                    "Sketch feature '{}' is bound more than once",
+                    b.feature_id
+                ));
+            }
+            if !self.sketches.iter().any(|s| s.id == b.sketch_id) {
+                errs.push(format!(
+                    "Sketch feature '{}' refers to missing sketch '{}'",
+                    b.feature_id, b.sketch_id
+                ));
+            }
+            if !ids.contains(&b.feature_id) {
+                errs.push(format!(
+                    "Sketch feature '{}' refers to missing shape '{}'",
+                    b.feature_id, b.feature_id
                 ));
             }
         }

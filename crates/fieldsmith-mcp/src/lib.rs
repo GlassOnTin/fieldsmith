@@ -24,17 +24,17 @@ use fieldsmith_core::channel::{
     ChannelFlowSpec, PassageMode,
 };
 use fieldsmith_core::fsmz;
+use fieldsmith_doc::command::{apply_doc_command, DocCommand};
 use fieldsmith_doc::fixings::{
     insert_fixing_into_document, FixingInsertRequest, FixingKind,
 };
 use fieldsmith_doc::sketch::{
-    apply_sketch_feature_to_document, preset_sketch_template, solve_sketch as solve_sketch_doc,
-    ParametricSketch, SketchFeatureRequest,
+    preset_sketch_template, solve_sketch as solve_sketch_doc, ParametricSketch,
+    SketchFeatureRequest,
 };
 use fieldsmith_doc::{
-    canonical_color, fsm, materials, param, Convection, Document, Family, FillMode, HeatFlux, Let,
-    Load, LoadKind, MaterialRole, Node, NodeKind, Op, PlasticityLaw, ProfileVertex, Region,
-    Selector, Support, Temperature, Transform,
+    canonical_color, fsm, materials, Document, Family, FillMode, LoadKind, MaterialRole, Node,
+    NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform,
 };
 use fieldsmith_solve::antenna::{
     analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
@@ -292,7 +292,9 @@ impl Server {
             "upsert_shape" | "add_primitive" => self.upsert_shape(args),
             "insert_fixing" => self.insert_fixing(args),
             "solve_sketch" => self.solve_sketch(args),
+            "upsert_sketch" | "save_sketch" => self.upsert_sketch(args),
             "apply_sketch_feature" => self.apply_sketch_feature(args),
+            "apply_doc_command" => self.exec_doc_command(args),
             "delete_entity" => self.delete_entity(args),
             "add_region" => self.add_region(args),
             "add_support" => self.add_support(args),
@@ -330,7 +332,10 @@ impl Server {
                     | "upsert_shape"
                     | "add_primitive"
                     | "insert_fixing"
+                    | "upsert_sketch"
+                    | "save_sketch"
                     | "apply_sketch_feature"
+                    | "apply_doc_command"
                     | "delete_entity"
                     | "add_region"
                     | "add_support"
@@ -421,6 +426,8 @@ impl Server {
             "coupled_system": d.coupled_system,
             "asserts": d.asserts,
             "lets": d.lets,
+            "sketches": d.sketches,
+            "sketch_features": d.sketch_features,
             "custom_materials": d.custom_materials,
             "fill": fill,
             "solve": d.solve,
@@ -437,24 +444,30 @@ impl Server {
 
     fn add_region(&mut self, args: Value) -> Result<Value, String> {
         let selectors: Vec<Selector> = field("selectors", &args)?;
-        self.add_entity("region", args, |d, id| {
-            d.regions.push(Region { id, selectors });
-            Ok(())
-        })
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(d, DocCommand::UpsertRegion { id, selectors })?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn add_support(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
         let fixed: [bool; 3] = field("fixed", &args)?;
-        self.add_entity("support", args, |d, id| {
-            d.supports.push(Support { id, region, fixed });
-            Ok(())
-        })
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(d, DocCommand::UpsertSupport { id, region, fixed })?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn add_load(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
-        let case = case_or_default(&args, "Load 1");
+        let case = Some(case_or_default(&args, "Load 1"));
         let pressure_fn = args
             .get("pressure_fn")
             .or_else(|| args.get("expr"))
@@ -495,19 +508,18 @@ impl Server {
         } else {
             return Err("add_load: missing kind (or force / pressure / pressure_fn / preload)".into());
         };
-        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
-        self.add_entity("load", args, |d, id| {
-            if let Some(ref rid) = replace_id {
-                d.loads.retain(|l| l.id != *rid);
-            }
-            d.loads.push(Load {
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertLoad {
                 id,
                 region,
                 case,
                 kind,
-            });
-            Ok(())
-        })
+            },
+        )?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn add_temperature(&mut self, args: Value) -> Result<Value, String> {
@@ -528,21 +540,20 @@ impl Server {
             None if expr.is_some() => 0.0,
             None => return Err("add_temperature: missing celsius (or temp_fn)".into()),
         };
-        let case = case_or_default(&args, "Thermal 1");
-        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
-        self.add_entity("temperature", args, |d, id| {
-            if let Some(ref rid) = replace_id {
-                d.temperatures.retain(|t| t.id != *rid);
-            }
-            d.temperatures.push(Temperature {
+        let case = Some(case_or_default(&args, "Thermal 1"));
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertTemperature {
                 id,
                 region,
                 celsius,
                 expr,
                 case,
-            });
-            Ok(())
-        })
+            },
+        )?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn add_convection(&mut self, args: Value) -> Result<Value, String> {
@@ -576,13 +587,12 @@ impl Server {
             None if t_inf_expr.is_some() => 0.0,
             None => return Err("add_convection: missing t_inf/tinf (or tinf_fn)".into()),
         };
-        let case = case_or_default(&args, "Thermal 1");
-        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
-        self.add_entity("conv", args, |d, id| {
-            if let Some(ref rid) = replace_id {
-                d.convections.retain(|c| c.id != *rid);
-            }
-            d.convections.push(Convection {
+        let case = Some(case_or_default(&args, "Thermal 1"));
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertConvection {
                 id,
                 region,
                 h,
@@ -590,9 +600,9 @@ impl Server {
                 h_expr,
                 t_inf_expr,
                 case,
-            });
-            Ok(())
-        })
+            },
+        )?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn add_heatflux(&mut self, args: Value) -> Result<Value, String> {
@@ -609,54 +619,42 @@ impl Server {
             None if expr.is_some() => 0.0,
             None => return Err("add_heatflux: missing q (or q_fn)".into()),
         };
-        let case = case_or_default(&args, "Thermal 1");
-        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
-        self.add_entity("hf", args, |d, id| {
-            if let Some(ref rid) = replace_id {
-                d.heat_fluxes.retain(|hf| hf.id != *rid);
-            }
-            d.heat_fluxes.push(HeatFlux {
+        let case = Some(case_or_default(&args, "Thermal 1"));
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertHeatFlux {
                 id,
                 region,
                 q,
                 expr,
                 case,
-            });
-            Ok(())
-        })
-    }
-
-    /// The add_* body: optional `id` (else a fresh id with the tool's prefix), push the
-    /// entity, report it with the document's current problem list — the same `validate`
-    /// the `check` verb prints.
-    fn add_entity<F>(&mut self, prefix: &str, args: Value, build: F) -> Result<Value, String>
-    where
-        F: FnOnce(&mut Document, String) -> Result<(), String>,
-    {
-        let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        let id = match args.get("id") {
-            Some(Value::String(s)) if !s.is_empty() => s.clone(),
-            _ => d.fresh_id(prefix),
-        };
-        build(d, id.clone())?;
-        let problems = d.validate();
-        Ok(json!({"added": id, "problems": problems}))
+            },
+        )?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
     fn set_material(&mut self, args: Value) -> Result<Value, String> {
         let material = text_field("material", &args)?;
-        let node = args.get("node").and_then(Value::as_str).unwrap_or("");
+        let node = args
+            .get("node")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        if node.is_empty() {
-            d.material = material.clone();
-            let problems = d.validate();
-            return Ok(json!({"material": material, "problems": problems}));
-        }
-        if d.set_node_material(node, &material) {
-            let problems = d.validate();
-            Ok(json!({"node": node, "material": material, "problems": problems}))
+        let out = apply_doc_command(
+            d,
+            DocCommand::SetMaterial {
+                material: material.clone(),
+                node: node.clone(),
+            },
+        )?;
+        if let Some(n) = node {
+            Ok(json!({"node": n, "material": material, "problems": out.problems}))
         } else {
-            Err(format!("set_material: no shape named {node:?}"))
+            Ok(json!({"material": material, "problems": out.problems}))
         }
     }
 
@@ -707,50 +705,37 @@ impl Server {
                 .to_string(),
         };
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        let action = if let Some(slot) = d.custom_materials.iter().position(|m| m.id == id) {
-            d.custom_materials[slot] = mat;
-            "updated"
-        } else {
-            d.custom_materials.push(mat);
-            "created"
-        };
-        let problems = d.validate();
-        Ok(json!({ "id": id, "action": action, "problems": problems }))
+        let out = apply_doc_command(d, DocCommand::UpsertCustomMaterial { material: mat })?;
+        Ok(json!({ "id": id, "action": out.action, "problems": out.problems }))
     }
 
     /// Update an existing `let` variable (or dotted parameter address `<id>.<attr>[.<n>]`),
-    /// or define a new `let` variable, and re-evaluate all dependent consumer expressions.
+    /// or define a new `let` variable, and re-evaluate all dependent consumer expressions
+    /// and bound parametric sketch features.
     fn set_let(&mut self, args: Value) -> Result<Value, String> {
         let name = text_field("name", &args)
             .or_else(|_| text_field("addr", &args))?;
         let value = number_field("value", &args)?;
-        if !value.is_finite() {
-            return Err(format!("set_let: value {value} is not finite"));
-        }
+        let expr = args
+            .get("expr")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        if name.contains('.') {
-            let addr = param::ParamAddr::parse(&name).map_err(|e| format!("set_let: {e}"))?;
-            param::apply(d, &addr, value).map_err(|e| format!("set_let: {e}"))?;
-            let problems = d.validate();
-            return Ok(json!({"name": name, "value": value, "problems": problems}));
-        }
-        if let Some(slot) = d.lets.iter().position(|l| l.name == name) {
-            let addr = param::ParamAddr::parse(&name).map_err(|e| format!("set_let: {e}"))?;
-            param::apply(d, &addr, value).map_err(|e| format!("set_let: {e}"))?;
-            d.lets[slot].expr = format!("{value}");
-            let problems = d.validate();
-            Ok(json!({"name": name, "value": value, "lets": d.lets, "problems": problems}))
-        } else {
-            if !fsm::is_ident(&name) {
-                return Err(format!("set_let: {name:?} is not a valid let identifier"));
-            }
-            d.lets.push(Let {
+        let is_dotted = name.contains('.');
+        let out = apply_doc_command(
+            d,
+            DocCommand::SetLet {
                 name: name.clone(),
-                expr: format!("{value}"),
                 value,
-            });
-            let problems = d.validate();
-            Ok(json!({"name": name, "value": value, "lets": d.lets, "problems": problems}))
+                expr,
+            },
+        )?;
+        if is_dotted {
+            Ok(json!({"name": name, "value": value, "problems": out.problems}))
+        } else {
+            Ok(json!({"name": name, "value": value, "lets": d.lets, "problems": out.problems}))
         }
     }
 
@@ -1393,73 +1378,75 @@ impl Server {
         serde_json::to_value(report).map_err(|e| e.to_string())
     }
 
+    /// Persist and solve a named 2D parametric sketch in `doc.sketches` (creating or updating by `id`)
+    /// and re-synchronize any 3D `sketchfeature` bindings referencing that sketch.
+    fn upsert_sketch(&mut self, args: Value) -> Result<Value, String> {
+        let sketch: ParametricSketch = if let Some(sub) = args.get("sketch") {
+            serde_json::from_value(sub.clone()).map_err(|e| format!("upsert_sketch: sketch: {e}"))?
+        } else {
+            serde_json::from_value(args).map_err(|e| format!("upsert_sketch: {e}"))?
+        };
+        if self.doc.is_none() {
+            self.doc = Some(Document::default());
+        }
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let outcome = apply_doc_command(d, DocCommand::UpsertSketch { sketch })?;
+        Ok(json!({
+            "id": outcome.entity_id,
+            "action": outcome.action,
+            "report": outcome.sketch_report,
+            "sketches": d.sketches.len(),
+            "problems": outcome.problems,
+        }))
+    }
+
+    /// Execute any typed [`DocCommand`] mutation against the open document using the shared
+    /// authoritative reducer (`fieldsmith_doc::command::apply_doc_command`).
+    fn exec_doc_command(&mut self, args: Value) -> Result<Value, String> {
+        let cmd: DocCommand = if let Some(sub) = args.get("command") {
+            serde_json::from_value(sub.clone()).map_err(|e| format!("apply_doc_command: {e}"))?
+        } else {
+            serde_json::from_value(args).map_err(|e| format!("apply_doc_command: {e}"))?
+        };
+        if self.doc.is_none() {
+            self.doc = Some(Document::default());
+        }
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let outcome = apply_doc_command(d, cmd)?;
+        serde_json::to_value(outcome).map_err(|e| e.to_string())
+    }
+
     /// Solve a 2D parametric sketch on a datum plane (`"xy"`, `"xz"`, `"yz"`) or attached directly
     /// to a 3D shape face (`on: "<shape_id>.<face>"`) and compile it into a 3D feature
     /// (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.
     fn apply_sketch_feature(&mut self, args: Value) -> Result<Value, String> {
-        let req: SketchFeatureRequest = serde_json::from_value(args)
+        let request: SketchFeatureRequest = serde_json::from_value(args)
             .map_err(|e| format!("apply_sketch_feature: {e}"))?;
         if self.doc.is_none() {
             self.doc = Some(Document::default());
         }
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        let summary = apply_sketch_feature_to_document(d, &req)?;
-        let problems = d.validate();
+        let outcome = apply_doc_command(d, DocCommand::ApplySketchFeature { request })?;
         Ok(json!({
-            "feature": summary,
+            "feature": outcome.sketch_feature,
             "shapes": d.root.len(),
-            "problems": problems,
+            "sketches": d.sketches.len(),
+            "sketch_features": d.sketch_features.len(),
+            "problems": outcome.problems,
             "fsm": fsm::print(d),
         }))
     }
 
-    /// Delete a shape, region, support, load, or temperature by `id`.
+    /// Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.
     fn delete_entity(&mut self, args: Value) -> Result<Value, String> {
         let id = text_field("id", &args)?;
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        let n_shapes = d.root.len();
-        d.root.retain(|n| n.id != id);
-        if d.root.len() < n_shapes {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "shape", "problems": problems}));
-        }
-        let n_regions = d.regions.len();
-        d.regions.retain(|r| r.id != id);
-        if d.regions.len() < n_regions {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "region", "problems": problems}));
-        }
-        let n_supports = d.supports.len();
-        d.supports.retain(|s| s.id != id);
-        if d.supports.len() < n_supports {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "support", "problems": problems}));
-        }
-        let n_loads = d.loads.len();
-        d.loads.retain(|l| l.id != id);
-        if d.loads.len() < n_loads {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "load", "problems": problems}));
-        }
-        let n_temps = d.temperatures.len();
-        d.temperatures.retain(|t| t.id != id);
-        if d.temperatures.len() < n_temps {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "temperature", "problems": problems}));
-        }
-        let n_convs = d.convections.len();
-        d.convections.retain(|c| c.id != id);
-        if d.convections.len() < n_convs {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "convection", "problems": problems}));
-        }
-        let n_hfs = d.heat_fluxes.len();
-        d.heat_fluxes.retain(|hf| hf.id != id);
-        if d.heat_fluxes.len() < n_hfs {
-            let problems = d.validate();
-            return Ok(json!({"deleted": id, "kind": "heatflux", "problems": problems}));
-        }
-        Err(format!("delete_entity: no entity named {id:?}"))
+        let outcome = apply_doc_command(d, DocCommand::DeleteEntity { id })?;
+        Ok(json!({
+            "deleted": outcome.entity_id,
+            "kind": outcome.entity_kind,
+            "problems": outcome.problems,
+        }))
     }
 
     /// List all registered pluggable [`CoupledEngineeringSystem`] domain packs, their design levers,
@@ -2372,8 +2359,10 @@ const TOOLS_JSON: &str = r#"[
  {"name":"upsert_shape","description":"Create or update a 3D CAD primitive or profile-swept shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`, `extrude`, `revolve`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus","extrude","revolve"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"angle":{"type":"number"},"profile":{"type":"array","items":{"type":["object","array"]}},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
  {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in geometry catalogue, automatically drilling/tapping/counterboring the fixed object and calculating minimal (`T_min`) and maximal (`T_max`) torque.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
- {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`) and compile it into a 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"delete_entity","description":"Delete a shape, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
+ {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
+ {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
  {"name":"add_load","description":"Apply a load (force/pressure/preload/distributed, including spatially varying `pressure_fn` f(x,y,z,r)) on a region for a load case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"},"force":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"pressure":{"type":"number"},"pressure_fn":{"type":"string"},"preload":{"type":"number"},"axis":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},

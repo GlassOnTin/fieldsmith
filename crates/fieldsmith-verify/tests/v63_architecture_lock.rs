@@ -1,13 +1,15 @@
 //! V63 — Unified Human ↔ AI Architecture Lock:
-//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 34 MCP tools.
+//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 36 MCP tools.
 //! 2. Executable `# @mcp:` literate directives across every `.fsm` file in `examples/`.
 //! 3. `apiv: 2` same-result envelope parity between `fieldsmith_api::respond` and
 //!    `fieldsmith_mcp::Server::handle` for `QuestionSpec::Verify` (`ok` + `refusal`)
 //!    and `QuestionSpec::Sensitivity`, plus `analyze_sdf_channel` accuracy & BC binding.
 //! 4. Typed `.fsm` grammar round-trip (`coupled <id>`, `assert "..."`, `role=fluid`,
-//!    `solve plasticity=j2 hardening_n=...`).
+//!    `solve plasticity=j2 hardening_n=...`, `sketch <id> { ... }`, `sketchfeature ...`).
 //! 5. HTTP `409 Conflict` optimistic concurrency (`expected_revision`) on `/api/workspace`
 //!    and `/api/mcp`.
+//! 6. Persistent parametric 2D `sketch` + `sketchfeature` driving 3D P2 FEA mass & bending
+//!    stiffness under `DocCommand::SetLet` updates.
 
 use std::path::{Path, PathBuf};
 
@@ -148,7 +150,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        34.0,
+        36.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -224,6 +226,8 @@ fn v63_architecture_lock() {
                     && reparsed.solve.plasticity == doc.solve.plasticity
                     && reparsed.solve.hardening_n == doc.solve.hardening_n
                     && reparsed.custom_materials.len() == doc.custom_materials.len()
+                    && reparsed.sketches == doc.sketches
+                    && reparsed.sketch_features == doc.sketch_features
                 {
                     out.roundtripped = true;
                 } else {
@@ -646,6 +650,94 @@ solve tref=20
         0.0,
     ));
 
+    // -------------------------------------------------------------------------
+    // 6. Persistent `.fsm` sketch + sketchfeature + DocCommand::SetLet -> 3D P2 FEA
+    // -------------------------------------------------------------------------
+    let sketch_beam_fsm = "\
+fieldsmith 1
+name \"Parametric Sketch Cantilever\"
+material ss316l
+let beam_b = 12
+let beam_h = 10
+sketch beam_sec on=xy {
+  point p0 at=(-6, 0)
+  point p1 at=(6, 0)
+  point p2 at=(6, 10)
+  point p3 at=(-6, 10)
+  segment s0 p1=p0 p2=p1
+  segment s1 p1=p1 p2=p2
+  segment s2 p1=p2 p2=p3
+  segment s3 p1=p3 p2=p0
+  constraint c_fix kind=fixed point=p0 at=(-6, 0)
+  constraint c_h0 kind=horizontal segment=s0
+  constraint c_h2 kind=horizontal segment=s2
+  constraint c_v1 kind=vertical segment=s1
+  constraint c_v3 kind=vertical segment=s3
+  constraint c_w kind=distance segment=s0 value=12 expr=\"beam_b\"
+  constraint c_d kind=distance segment=s1 value=10 expr=\"beam_h\"
+}
+sketchfeature beam_body sketch=beam_sec kind=boss_extrude h=60
+region root_end = beam_body.bottom
+region tip_end = beam_body.top
+support fix root_end fixed=xyz
+load tip_shear tip_end force=(0, -250, 0)
+solve build=(0, 0)
+";
+    let mut sk_srv = Server::new();
+    let (sk_open_err, sk_open_val) =
+        mcp_tool_call(&mut sk_srv, 900, "open", json!({ "doc": sketch_beam_fsm }));
+    assert!(!sk_open_err, "sketch beam open failed: {sk_open_val}");
+    let (_, sk_txt_1) = mcp_tool_call(&mut sk_srv, 901, "doc_text", json!({}));
+    let printed_sk = sk_txt_1["text"].as_str().expect("doc_text.text");
+    let reparsed_sk = fsm::parse(printed_sk).expect("reparse printed sketch beam");
+    assert_eq!(reparsed_sk.sketches.len(), 1);
+    assert_eq!(reparsed_sk.sketch_features.len(), 1);
+    assert_eq!(fsm::print(&reparsed_sk), printed_sk);
+
+    let (solve10_err, solve10) =
+        mcp_tool_call(&mut sk_srv, 902, "solve", json!({ "kind": "solve", "h": 3.0 }));
+    assert!(!solve10_err, "solve at beam_h=10 failed: {solve10}");
+    let mass_10 = solve10["single"]["peel"]["mass_g"].as_f64().expect("mass_10");
+    let u_10 = solve10["single"]["cases"][0]["max_displacement"]
+        .as_f64()
+        .expect("u_10");
+
+    let (cmd_err, cmd_out) = mcp_tool_call(
+        &mut sk_srv,
+        903,
+        "apply_doc_command",
+        json!({ "cmd": "set_let", "name": "beam_h", "value": 15.0 }),
+    );
+    assert!(!cmd_err, "apply_doc_command set_let failed: {cmd_out}");
+    assert!(
+        cmd_out["problems"].as_array().unwrap().is_empty(),
+        "unexpected validation problems: {cmd_out}"
+    );
+
+    let (solve15_err, solve15) =
+        mcp_tool_call(&mut sk_srv, 904, "solve", json!({ "kind": "solve", "h": 3.0 }));
+    assert!(!solve15_err, "solve at beam_h=15 failed: {solve15}");
+    let mass_15 = solve15["single"]["peel"]["mass_g"].as_f64().expect("mass_15");
+    let u_15 = solve15["single"]["cases"][0]["max_displacement"]
+        .as_f64()
+        .expect("u_15");
+
+    report.check(Check::relative(
+        "Sketch-driven 3D mass ratio m(beam_h=15) / m(beam_h=10)",
+        1.5,
+        mass_15 / mass_10,
+        "",
+        0.04,
+    ));
+    // Euler-Bernoulli bending scales as (10/15)^3 = 0.2963; Timoshenko shear at L/h = 4..6 shifts ratio to ~0.315.
+    report.check(Check::relative(
+        "Sketch-driven 3D tip deflection ratio u(beam_h=15) / u(beam_h=10)",
+        0.315,
+        u_15 / u_10,
+        "",
+        0.12,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -654,7 +746,8 @@ solve tref=20
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
              `sensitivity`, general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
-             and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
+             persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
+             stiffness scaling, and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
             fsm_files.len(),
             mcp_directives_total,
             tool_count,
@@ -667,15 +760,13 @@ solve tref=20
 
     report.section(
         "Named gaps",
-        "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`) is verified \
-         separately in `web/tests/v63-ui-lock.mjs`.\n\
+        "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`) and WASM \
+         `SketchWorkbench` -> `DocCommand` dispatch are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. `QuestionSpec::Sensitivity` uses locked-`h` finite differences with re-stuffed \
          meshes (`method: \"finite_difference_remesh\"`, `2k + 1` solves), not fixed-topology \
          boundary-velocity adjoints.\n\
-         3. `bind_channel_bcs_to_region` currently writes spatial-mean `h`, `T_∞`, and `p` onto \
-         scalar `Convection` / `Pressure` BCs rather than station-varying spatial BC fields.\n\
-         4. Parametric 2D sketches (`ParametricSketch`) still compile down to `ProfileVertex` \
-         lists on `Extrude` / `Revolve` rather than persisting constraint graphs inside `.fsm`.",
+         3. Domain-specific `CoupledEngineeringSystem` models (`float_bath`, `candle_flame`, `antenna`, etc.) \
+         are currently compiled Rust structs rather than user-authored 0D/1D `.fsm` equation blocks.",
     );
 
     report.finish();

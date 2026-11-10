@@ -265,6 +265,10 @@ pub fn apply(doc: &mut Document, addr: &ParamAddr, value: f64) -> Result<(), Str
         ));
     }
     write_plain(doc, &addr.id, &addr.attr, addr.comp, value);
+    if !doc.sketch_features.is_empty() {
+        crate::sketch::sync_sketch_features(doc)
+            .map_err(|e| format!("param {addr}: {e}"))?;
+    }
     Ok(())
 }
 
@@ -327,6 +331,10 @@ fn apply_let(doc: &mut Document, name: &str, value: f64) -> Result<(), String> {
             ));
         }
         write_plain(doc, &c.target, &c.attr, c.comp, v);
+    }
+    if !doc.sketch_features.is_empty() {
+        crate::sketch::sync_sketch_features(doc)
+            .map_err(|e| format!("param {name}: {e}"))?;
     }
     Ok(())
 }

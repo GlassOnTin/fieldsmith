@@ -6,12 +6,28 @@
 // headers), so the threaded build loads only when `crossOriginIsolated` holds; only the
 // chosen variant is fetched.
 import type * as W from '../pkg/fieldsmith_wasm.js';
-import type { Document, Face, Material, Vec3 } from './types';
+import type {
+  DocCommand,
+  DocCommandOutcome,
+  Document,
+  Face,
+  Material,
+  ParametricSketch,
+  SketchMacro,
+  SketchPresetMeta,
+  SketchSolveReport,
+  Vec3,
+} from './types';
 import { withLetTables } from './types';
 
 /** The bound API (the two builds differ only in their init entry points). */
 let w: Omit<typeof W, 'default' | 'initSync'>;
 let ready: Promise<void> | null = null;
+
+/** True once `loadWasm()` has resolved and `w` is ready for synchronous calls. */
+export function isWasmLoaded(): boolean {
+  return typeof w !== 'undefined';
+}
 
 /** Whether this context can run the threaded build. */
 export const threaded: boolean = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
@@ -1497,6 +1513,48 @@ export function analyzeFsmChannel(
   const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
   const res = JSON.parse(w.analyzeFsmChannel(payload, spec ? JSON.stringify(spec) : '')) as ChannelAnalyzeResult;
   if (res.doc) withLetTables(res.doc);
+  return res;
+}
+
+// ---- Parametric 2D Sketch Solver & Authoritative DocCommand Reducer ------------------
+
+let cachedSketchPresets: SketchPresetMeta[] | null = null;
+
+export function sketchPresets(): SketchPresetMeta[] {
+  if (!cachedSketchPresets) {
+    cachedSketchPresets = JSON.parse(w.sketchPresets()) as SketchPresetMeta[];
+  }
+  return structuredClone(cachedSketchPresets);
+}
+
+export function solveSketch(sketch: ParametricSketch, doc?: Document): SketchSolveReport {
+  return JSON.parse(
+    w.solveSketch(JSON.stringify(sketch), doc ? JSON.stringify(doc) : ''),
+  ) as SketchSolveReport;
+}
+
+export function expandSketchMacro(
+  sketch: ParametricSketch,
+  macro: SketchMacro | SketchMacro[],
+): ParametricSketch {
+  return JSON.parse(
+    w.expandSketchMacro(JSON.stringify(sketch), JSON.stringify(macro)),
+  ) as ParametricSketch;
+}
+
+export function syncSketchFeatures(doc: Document): Document {
+  const updated = JSON.parse(w.syncSketchFeatures(JSON.stringify(doc))) as Document;
+  return withLetTables(updated);
+}
+
+export function applyDocCommand(
+  doc: Document,
+  cmd: DocCommand,
+): { doc: Document; outcome: DocCommandOutcome } {
+  const res = JSON.parse(
+    w.applyDocCommand(JSON.stringify(doc), JSON.stringify(cmd)),
+  ) as { doc: Document; outcome: DocCommandOutcome };
+  withLetTables(res.doc);
   return res;
 }
 

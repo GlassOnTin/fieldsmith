@@ -16,6 +16,16 @@
 import type { Consumer, Document, Let, Node } from './types';
 import { findNode, walk } from './types';
 import { rustFloat } from './numfmt';
+import { isWasmLoaded, syncSketchFeatures } from './wasm';
+
+function syncBoundSketches(doc: Document): void {
+  if ((doc.sketch_features?.length ?? 0) > 0 && isWasmLoaded()) {
+    const synced = syncSketchFeatures(doc);
+    doc.root = synced.root;
+    doc.sketches = synced.sketches;
+    doc.sketch_features = synced.sketch_features;
+  }
+}
 
 /** One parsed address: let name (attr "") or statement id, attribute name, optional
  * 0-based component index. */
@@ -242,6 +252,7 @@ export function applyAddr(doc: Document, addr: ParamAddr, value: number): void {
     );
   }
   writePlain(doc, addr.id, addr.attr, addr.comp, value);
+  syncBoundSketches(doc);
 }
 
 /** Set one or more lets simultaneously and re-evaluate all remaining lets and recorded
@@ -292,6 +303,7 @@ function applyLets(doc: Document, applied: ReadonlyMap<string, number>, updateLe
     }
     writePlain(doc, c.target, c.attr, c.comp, v);
   }
+  syncBoundSketches(doc);
 }
 
 /** Set one let and re-evaluate the lets and recorded expressions that read it, in
@@ -326,6 +338,8 @@ export function applyAddrs(doc: Document, pairs: readonly (readonly [ParamAddr, 
   }
   if (letMap.size > 0) {
     applyLets(doc, letMap, updateLetExpr);
+  } else if (pairs.length > 0) {
+    syncBoundSketches(doc);
   }
 }
 

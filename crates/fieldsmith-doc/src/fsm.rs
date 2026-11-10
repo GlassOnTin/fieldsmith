@@ -786,6 +786,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     }
     // Stack of open groups: (header node, children, modifiers).
     let mut stack: Vec<(Node, Vec<Node>, Vec<Modifier>)> = Vec::new();
+    // Open `sketch <id> ... { ... }` block, if currently inside one.
+    let mut open_sketch: Option<crate::sketch::ParametricSketch> = None;
     let mut saw_header = false;
     // Per-node material labels wait here until parse end: `material <id> on <shape>` may
     // run before the shape's line. A shape the document never declares fails then, by
@@ -815,6 +817,10 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             if !c.done() {
                 return Err(err("nothing may follow '}' on the same line".into()));
             }
+            if let Some(sk) = open_sketch.take() {
+                doc.sketches.push(sk);
+                continue;
+            }
             let (mut node, children, modifiers) =
                 stack.pop().ok_or_else(|| err("unmatched '}'".into()))?;
             node.kind = NodeKind::Group {
@@ -822,6 +828,14 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 modifiers,
             };
             push_node(&mut doc, &mut stack, node);
+            continue;
+        }
+
+        if let Some(ref mut sk) = open_sketch {
+            parse_sketch_body_line(sk, &mut c)?;
+            if !c.done() {
+                return Err(err("unexpected text at end of sketch line".into()));
+            }
             continue;
         }
 
@@ -1496,9 +1510,59 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 a.finish()?;
                 doc.custom_materials.push(mat);
             }
+            "sketch" => {
+                if !stack.is_empty() {
+                    return Err(err("sketch is only allowed at the top level".into()));
+                }
+                let id = c.ident("a sketch name")?;
+                if doc.sketches.iter().any(|s| s.id == id) {
+                    return Err(err(format!("Sketch '{id}' is defined more than once")));
+                }
+                let mut a = c.attrs("", &[])?;
+                let opens = c.is_sym('{');
+                let offset = a.num_or("offset", 0.0)?;
+                let plane = match a.string("on")?.as_deref() {
+                    None | Some("xy") => crate::sketch::SketchPlane::Xy { offset },
+                    Some("xz") => crate::sketch::SketchPlane::Xz { offset },
+                    Some("yz") => crate::sketch::SketchPlane::Yz { offset },
+                    Some(spec) => crate::sketch::SketchPlane::parse_spec(spec, offset)
+                        .map_err(|m| err(format!("sketch '{id}': {m}")))?,
+                };
+                a.finish()?;
+                if !opens {
+                    return Err(err("sketch needs '{' at the end of the line".into()));
+                }
+                c.next();
+                if !c.done() {
+                    return Err(err("nothing may follow '{'".into()));
+                }
+                open_sketch = Some(crate::sketch::ParametricSketch {
+                    id,
+                    plane,
+                    points: Vec::new(),
+                    segments: Vec::new(),
+                    circles: Vec::new(),
+                    constraints: Vec::new(),
+                    macros: Vec::new(),
+                });
+            }
+            "sketchfeature" => {
+                if !stack.is_empty() {
+                    return Err(err("sketchfeature is only allowed at the top level".into()));
+                }
+                let binding = parse_sketch_feature(&mut c)?;
+                let feat_id = binding.feature_id.clone();
+                doc.sketch_features.push(binding);
+                // If the `.fsm` file hand-authored `sketch` + `sketchfeature` without an
+                // explicit `extrude`/`revolve` node yet, materialize it immediately so
+                // downstream `region` statements can reference `<feat_id>.top` etc.
+                if doc.find(&feat_id).is_none() {
+                    crate::sketch::sync_sketch_features(&mut doc).map_err(err)?;
+                }
+            }
             other => return Err(err(format!("unknown keyword '{other}'"))),
         }
-        if !c.done() && !matches!(kw.as_str(), "group") {
+        if !c.done() && !matches!(kw.as_str(), "group" | "sketch") {
             return Err(err("unexpected text at end of line".into()));
         }
     }
@@ -1508,7 +1572,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             message: "empty document".into(),
         });
     }
-    if !stack.is_empty() {
+    if open_sketch.is_some() || !stack.is_empty() {
         return Err(ParseError {
             line: text.lines().count(),
             message: "missing '}'".into(),
@@ -1578,6 +1642,849 @@ fn parse_axis(c: &mut Cursor) -> Result<Axis, ParseError> {
         "z" => Ok(Axis::Z),
         _ => c.err("expected x, y or z"),
     }
+}
+
+fn ident_or_str(c: &mut Cursor, what: &str) -> Result<String, ParseError> {
+    match c.next() {
+        Some(Tok::Ident(s) | Tok::Str(s)) => Ok(s),
+        _ => c.err(format!("expected {what}")),
+    }
+}
+
+fn id_tok(s: &str) -> String {
+    if is_ident(s) {
+        s.to_string()
+    } else {
+        q(s)
+    }
+}
+
+fn parse_sketch_body_line(
+    sk: &mut crate::sketch::ParametricSketch,
+    c: &mut Cursor,
+) -> Result<(), ParseError> {
+    use crate::sketch::{
+        SketchCircle, SketchConstraint, SketchConstraintKind, SketchMacro, SketchPoint,
+        SketchSegment,
+    };
+    let kw = c.ident("point, segment, circle, constraint, or macro")?;
+    let line = c.line;
+    let err = |m: String| ParseError { line, message: m };
+    match kw.as_str() {
+        "point" => {
+            let id = ident_or_str(c, "a point id")?;
+            let mut a = c.attrs("", &[])?;
+            let (x, y) = a
+                .pair("at")?
+                .ok_or_else(|| err("sketch point needs at=(x, y)".into()))?;
+            let fixed = a.flag("fixed");
+            let construction = a.flag("construction");
+            a.finish()?;
+            sk.points.push(SketchPoint {
+                id,
+                x,
+                y,
+                fixed,
+                construction,
+            });
+        }
+        "segment" => {
+            let id = ident_or_str(c, "a segment id")?;
+            let mut a = c.attrs("", &[])?;
+            let p1 = a.req_string("p1")?;
+            let p2 = a.req_string("p2")?;
+            let bulge = a.num_or("bulge", 0.0)?;
+            let construction = a.flag("construction");
+            a.finish()?;
+            sk.segments.push(SketchSegment {
+                id,
+                p1,
+                p2,
+                bulge,
+                construction,
+            });
+        }
+        "circle" => {
+            let id = ident_or_str(c, "a circle id")?;
+            let mut a = c.attrs("", &[])?;
+            let center = a.req_string("center")?;
+            let radius = a.req_num("r")?;
+            let construction = a.flag("construction");
+            a.finish()?;
+            sk.circles.push(SketchCircle {
+                id,
+                center,
+                radius,
+                construction,
+            });
+        }
+        "constraint" => {
+            let id = ident_or_str(c, "a constraint id")?;
+            let mut a = c.attrs("", &[])?;
+            let kind_str = a.req_string("kind")?;
+            let kind = match kind_str.as_str() {
+                "coincident" => SketchConstraintKind::Coincident {
+                    p1: a.req_string("p1")?,
+                    p2: a.req_string("p2")?,
+                },
+                "fixed" => {
+                    let point = a.req_string("point")?;
+                    let (x, y) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("fixed constraint needs at=(x, y)".into()))?;
+                    SketchConstraintKind::Fixed { point, x, y }
+                }
+                "horizontal" => SketchConstraintKind::Horizontal {
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                },
+                "vertical" => SketchConstraintKind::Vertical {
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                },
+                "parallel" => SketchConstraintKind::Parallel {
+                    seg1: a.req_string("seg1")?,
+                    seg2: a.req_string("seg2")?,
+                },
+                "perpendicular" => SketchConstraintKind::Perpendicular {
+                    seg1: a.req_string("seg1")?,
+                    seg2: a.req_string("seg2")?,
+                },
+                "equal_length" => SketchConstraintKind::EqualLength {
+                    seg1: a.req_string("seg1")?,
+                    seg2: a.req_string("seg2")?,
+                },
+                "tangent" => SketchConstraintKind::Tangent {
+                    seg: a.req_string("seg")?,
+                    target: a.req_string("target")?,
+                },
+                "concentric" => SketchConstraintKind::Concentric {
+                    c1: a.req_string("c1")?,
+                    c2: a.req_string("c2")?,
+                },
+                "midpoint" => SketchConstraintKind::Midpoint {
+                    point: a.req_string("point")?,
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                },
+                "symmetric" => SketchConstraintKind::Symmetric {
+                    p1: a.req_string("p1")?,
+                    p2: a.req_string("p2")?,
+                    axis: a.req_string("axis")?,
+                },
+                "point_on_line" => SketchConstraintKind::PointOnLine {
+                    point: a.req_string("point")?,
+                    segment: a.req_string("segment")?,
+                },
+                "distance" => SketchConstraintKind::Distance {
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                    value: a.req_num("value")?,
+                    expr: a.string("expr")?,
+                },
+                "horizontal_distance" => SketchConstraintKind::HorizontalDistance {
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                    value: a.req_num("value")?,
+                    expr: a.string("expr")?,
+                },
+                "vertical_distance" => SketchConstraintKind::VerticalDistance {
+                    segment: a.string("segment")?,
+                    p1: a.string("p1")?,
+                    p2: a.string("p2")?,
+                    value: a.req_num("value")?,
+                    expr: a.string("expr")?,
+                },
+                "angle" => SketchConstraintKind::Angle {
+                    seg1: a.req_string("seg1")?,
+                    seg2: a.string("seg2")?,
+                    degrees: a.req_num("degrees")?,
+                    expr: a.string("expr")?,
+                },
+                "radius" => SketchConstraintKind::Radius {
+                    target: a.req_string("target")?,
+                    value: a.req_num("value")?,
+                    expr: a.string("expr")?,
+                },
+                "diameter" => SketchConstraintKind::Diameter {
+                    target: a.req_string("target")?,
+                    value: a.req_num("value")?,
+                    expr: a.string("expr")?,
+                },
+                other => return Err(err(format!("unknown sketch constraint kind '{other}'"))),
+            };
+            a.finish()?;
+            sk.constraints.push(SketchConstraint { id, kind });
+        }
+        "macro" => {
+            let mkind = c.ident("a macro kind")?;
+            let mut a = c.attrs("", &[])?;
+            let mac = match mkind.as_str() {
+                "rect" => {
+                    let id = a.req_string("id")?;
+                    let (x, y) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("macro rect needs at=(x, y)".into()))?;
+                    let (width, height) = a
+                        .pair("size")?
+                        .ok_or_else(|| err("macro rect needs size=(w, h)".into()))?;
+                    let fillet = a.num_or("fillet", 0.0)?;
+                    let construction = a.flag("construction");
+                    SketchMacro::Rect {
+                        id,
+                        x,
+                        y,
+                        width,
+                        height,
+                        fillet,
+                        construction,
+                    }
+                }
+                "center_rect" => {
+                    let id = a.req_string("id")?;
+                    let (cx, cy) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("macro center_rect needs at=(cx, cy)".into()))?;
+                    let (width, height) = a
+                        .pair("size")?
+                        .ok_or_else(|| err("macro center_rect needs size=(w, h)".into()))?;
+                    let fillet = a.num_or("fillet", 0.0)?;
+                    let construction = a.flag("construction");
+                    SketchMacro::CenterRect {
+                        id,
+                        cx,
+                        cy,
+                        width,
+                        height,
+                        fillet,
+                        construction,
+                    }
+                }
+                "circle" => {
+                    let id = a.req_string("id")?;
+                    let (cx, cy) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("macro circle needs at=(cx, cy)".into()))?;
+                    let radius = a.req_num("r")?;
+                    let construction = a.flag("construction");
+                    SketchMacro::Circle {
+                        id,
+                        cx,
+                        cy,
+                        radius,
+                        construction,
+                    }
+                }
+                "slot" => {
+                    let id = a.req_string("id")?;
+                    let (x1, y1) = a
+                        .pair("p1")?
+                        .ok_or_else(|| err("macro slot needs p1=(x1, y1)".into()))?;
+                    let (x2, y2) = a
+                        .pair("p2")?
+                        .ok_or_else(|| err("macro slot needs p2=(x2, y2)".into()))?;
+                    let radius = a.req_num("r")?;
+                    SketchMacro::Slot {
+                        id,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        radius,
+                    }
+                }
+                "polygon" => {
+                    let id = a.req_string("id")?;
+                    let (cx, cy) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("macro polygon needs at=(cx, cy)".into()))?;
+                    let radius = a.req_num("r")?;
+                    let sides = a.req_num("sides")?.max(3.0) as usize;
+                    let angle_deg = a.num_or("angle", 0.0)?;
+                    let construction = a.flag("construction");
+                    SketchMacro::Polygon {
+                        id,
+                        cx,
+                        cy,
+                        radius,
+                        sides,
+                        angle_deg,
+                        construction,
+                    }
+                }
+                "bolt_circle" => {
+                    let id = a.req_string("id")?;
+                    let (cx, cy) = a
+                        .pair("at")?
+                        .ok_or_else(|| err("macro bolt_circle needs at=(cx, cy)".into()))?;
+                    let pcd = a.req_num("pcd")?;
+                    let count = a.req_num("count")?.max(1.0) as usize;
+                    let hole_diameter = a.req_num("hole_d")?;
+                    let start_angle_deg = a.num_or("start_angle", 0.0)?;
+                    SketchMacro::BoltCircle {
+                        id,
+                        cx,
+                        cy,
+                        pcd,
+                        count,
+                        hole_diameter,
+                        start_angle_deg,
+                    }
+                }
+                "fillet_corner" => SketchMacro::FilletCorner {
+                    point_id: a.req_string("point")?,
+                    radius: a.req_num("r")?,
+                },
+                other => return Err(err(format!("unknown sketch macro '{other}'"))),
+            };
+            a.finish()?;
+            sk.macros.push(mac);
+        }
+        other => return Err(err(format!("unexpected keyword '{other}' inside sketch"))),
+    }
+    Ok(())
+}
+
+fn parse_sketch_feature(
+    c: &mut Cursor,
+) -> Result<crate::sketch::SketchFeatureBinding, ParseError> {
+    use crate::sketch::{SketchFeatureBinding, SketchFeatureOp};
+    let line = c.line;
+    let err = |m: String| ParseError { line, message: m };
+    let feature_id = c.ident("a feature shape id")?;
+    let mut a = c.attrs("", &[])?;
+    let sketch_id = a.req_string("sketch")?;
+    let kind_str = a.req_string("kind")?;
+    let associate_with_host = a.flag("associate_host");
+    let operation = match kind_str.as_str() {
+        "boss_extrude" => SketchFeatureOp::BossExtrude {
+            height: a.req_num("h")?,
+            blend: a.num_or("blend", 0.0)?,
+            symmetric: a.flag("symmetric"),
+        },
+        "pocket_cut" => SketchFeatureOp::PocketCut {
+            depth: a.num_or("depth", 10.0)?,
+            through_all: a.flag("through_all"),
+            blend: a.num_or("blend", 0.0)?,
+        },
+        "revolve_boss" => SketchFeatureOp::RevolveBoss {
+            angle_deg: a.num_or("angle", 360.0)?,
+            blend: a.num_or("blend", 0.0)?,
+        },
+        "revolve_cut" => SketchFeatureOp::RevolveCut {
+            angle_deg: a.num_or("angle", 360.0)?,
+            blend: a.num_or("blend", 0.0)?,
+        },
+        other => return Err(err(format!("unknown sketchfeature kind '{other}'"))),
+    };
+    a.finish()?;
+    Ok(SketchFeatureBinding {
+        feature_id,
+        sketch_id,
+        operation,
+        associate_with_host,
+    })
+}
+
+fn print_sketch(o: &mut String, sk: &crate::sketch::ParametricSketch) {
+    use crate::sketch::{SketchConstraintKind, SketchMacro, SketchPlane};
+    let mut hdr = format!("sketch {}", id_tok(&sk.id));
+    match &sk.plane {
+        SketchPlane::Xy { offset } => {
+            if *offset != 0.0 {
+                hdr += &format!(" offset={}", n(*offset));
+            }
+        }
+        SketchPlane::Xz { offset } => {
+            hdr += " on=xz";
+            if *offset != 0.0 {
+                hdr += &format!(" offset={}", n(*offset));
+            }
+        }
+        SketchPlane::Yz { offset } => {
+            hdr += " on=yz";
+            if *offset != 0.0 {
+                hdr += &format!(" offset={}", n(*offset));
+            }
+        }
+        SketchPlane::OnFace {
+            host_id,
+            face,
+            offset,
+        } => {
+            hdr += &format!(" on={}", q(&format!("{}.{}", host_id, face.name())));
+            if *offset != 0.0 {
+                hdr += &format!(" offset={}", n(*offset));
+            }
+        }
+    }
+    let _ = writeln!(o, "{hdr} {{");
+    for pt in &sk.points {
+        let mut line = format!(
+            "  point {} at=({}, {})",
+            id_tok(&pt.id),
+            n(pt.x),
+            n(pt.y)
+        );
+        if pt.fixed {
+            line += " fixed";
+        }
+        if pt.construction {
+            line += " construction";
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    for seg in &sk.segments {
+        let mut line = format!(
+            "  segment {} p1={} p2={}",
+            id_tok(&seg.id),
+            id_tok(&seg.p1),
+            id_tok(&seg.p2)
+        );
+        if seg.bulge != 0.0 {
+            line += &format!(" bulge={}", n(seg.bulge));
+        }
+        if seg.construction {
+            line += " construction";
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    for cir in &sk.circles {
+        let mut line = format!(
+            "  circle {} center={} r={}",
+            id_tok(&cir.id),
+            id_tok(&cir.center),
+            n(cir.radius)
+        );
+        if cir.construction {
+            line += " construction";
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    for c in &sk.constraints {
+        let mut line = format!("  constraint {} ", id_tok(&c.id));
+        match &c.kind {
+            SketchConstraintKind::Coincident { p1, p2 } => {
+                let _ = write!(line, "kind=coincident p1={} p2={}", id_tok(p1), id_tok(p2));
+            }
+            SketchConstraintKind::Fixed { point, x, y } => {
+                let _ = write!(
+                    line,
+                    "kind=fixed point={} at=({}, {})",
+                    id_tok(point),
+                    n(*x),
+                    n(*y)
+                );
+            }
+            SketchConstraintKind::Horizontal { segment, p1, p2 } => {
+                line += "kind=horizontal";
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+            }
+            SketchConstraintKind::Vertical { segment, p1, p2 } => {
+                line += "kind=vertical";
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+            }
+            SketchConstraintKind::Parallel { seg1, seg2 } => {
+                let _ = write!(
+                    line,
+                    "kind=parallel seg1={} seg2={}",
+                    id_tok(seg1),
+                    id_tok(seg2)
+                );
+            }
+            SketchConstraintKind::Perpendicular { seg1, seg2 } => {
+                let _ = write!(
+                    line,
+                    "kind=perpendicular seg1={} seg2={}",
+                    id_tok(seg1),
+                    id_tok(seg2)
+                );
+            }
+            SketchConstraintKind::EqualLength { seg1, seg2 } => {
+                let _ = write!(
+                    line,
+                    "kind=equal_length seg1={} seg2={}",
+                    id_tok(seg1),
+                    id_tok(seg2)
+                );
+            }
+            SketchConstraintKind::Tangent { seg, target } => {
+                let _ = write!(
+                    line,
+                    "kind=tangent seg={} target={}",
+                    id_tok(seg),
+                    id_tok(target)
+                );
+            }
+            SketchConstraintKind::Concentric { c1, c2 } => {
+                let _ = write!(line, "kind=concentric c1={} c2={}", id_tok(c1), id_tok(c2));
+            }
+            SketchConstraintKind::Midpoint {
+                point,
+                segment,
+                p1,
+                p2,
+            } => {
+                let _ = write!(line, "kind=midpoint point={}", id_tok(point));
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+            }
+            SketchConstraintKind::Symmetric { p1, p2, axis } => {
+                let _ = write!(
+                    line,
+                    "kind=symmetric p1={} p2={} axis={}",
+                    id_tok(p1),
+                    id_tok(p2),
+                    id_tok(axis)
+                );
+            }
+            SketchConstraintKind::PointOnLine { point, segment } => {
+                let _ = write!(
+                    line,
+                    "kind=point_on_line point={} segment={}",
+                    id_tok(point),
+                    id_tok(segment)
+                );
+            }
+            SketchConstraintKind::Distance {
+                segment,
+                p1,
+                p2,
+                value,
+                expr,
+            } => {
+                line += "kind=distance";
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+                line += &format!(" value={}", n(*value));
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+            SketchConstraintKind::HorizontalDistance {
+                segment,
+                p1,
+                p2,
+                value,
+                expr,
+            } => {
+                line += "kind=horizontal_distance";
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+                line += &format!(" value={}", n(*value));
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+            SketchConstraintKind::VerticalDistance {
+                segment,
+                p1,
+                p2,
+                value,
+                expr,
+            } => {
+                line += "kind=vertical_distance";
+                if let Some(s) = segment {
+                    line += &format!(" segment={}", id_tok(s));
+                }
+                if let Some(a) = p1 {
+                    line += &format!(" p1={}", id_tok(a));
+                }
+                if let Some(b) = p2 {
+                    line += &format!(" p2={}", id_tok(b));
+                }
+                line += &format!(" value={}", n(*value));
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+            SketchConstraintKind::Angle {
+                seg1,
+                seg2,
+                degrees,
+                expr,
+            } => {
+                let _ = write!(line, "kind=angle seg1={}", id_tok(seg1));
+                if let Some(s2) = seg2 {
+                    line += &format!(" seg2={}", id_tok(s2));
+                }
+                line += &format!(" degrees={}", n(*degrees));
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+            SketchConstraintKind::Radius {
+                target,
+                value,
+                expr,
+            } => {
+                let _ = write!(line, "kind=radius target={} value={}", id_tok(target), n(*value));
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+            SketchConstraintKind::Diameter {
+                target,
+                value,
+                expr,
+            } => {
+                let _ = write!(
+                    line,
+                    "kind=diameter target={} value={}",
+                    id_tok(target),
+                    n(*value)
+                );
+                if let Some(ex) = expr {
+                    line += &format!(" expr={}", q(ex));
+                }
+            }
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    for m in &sk.macros {
+        let mut line = String::from("  macro ");
+        match m {
+            SketchMacro::Rect {
+                id,
+                x,
+                y,
+                width,
+                height,
+                fillet,
+                construction,
+            } => {
+                let _ = write!(
+                    line,
+                    "rect id={} at=({}, {}) size=({}, {})",
+                    id_tok(id),
+                    n(*x),
+                    n(*y),
+                    n(*width),
+                    n(*height)
+                );
+                if *fillet != 0.0 {
+                    line += &format!(" fillet={}", n(*fillet));
+                }
+                if *construction {
+                    line += " construction";
+                }
+            }
+            SketchMacro::CenterRect {
+                id,
+                cx,
+                cy,
+                width,
+                height,
+                fillet,
+                construction,
+            } => {
+                let _ = write!(
+                    line,
+                    "center_rect id={} at=({}, {}) size=({}, {})",
+                    id_tok(id),
+                    n(*cx),
+                    n(*cy),
+                    n(*width),
+                    n(*height)
+                );
+                if *fillet != 0.0 {
+                    line += &format!(" fillet={}", n(*fillet));
+                }
+                if *construction {
+                    line += " construction";
+                }
+            }
+            SketchMacro::Circle {
+                id,
+                cx,
+                cy,
+                radius,
+                construction,
+            } => {
+                let _ = write!(
+                    line,
+                    "circle id={} at=({}, {}) r={}",
+                    id_tok(id),
+                    n(*cx),
+                    n(*cy),
+                    n(*radius)
+                );
+                if *construction {
+                    line += " construction";
+                }
+            }
+            SketchMacro::Slot {
+                id,
+                x1,
+                y1,
+                x2,
+                y2,
+                radius,
+            } => {
+                let _ = write!(
+                    line,
+                    "slot id={} p1=({}, {}) p2=({}, {}) r={}",
+                    id_tok(id),
+                    n(*x1),
+                    n(*y1),
+                    n(*x2),
+                    n(*y2),
+                    n(*radius)
+                );
+            }
+            SketchMacro::Polygon {
+                id,
+                cx,
+                cy,
+                radius,
+                sides,
+                angle_deg,
+                construction,
+            } => {
+                let _ = write!(
+                    line,
+                    "polygon id={} at=({}, {}) r={} sides={sides}",
+                    id_tok(id),
+                    n(*cx),
+                    n(*cy),
+                    n(*radius)
+                );
+                if *angle_deg != 0.0 {
+                    line += &format!(" angle={}", n(*angle_deg));
+                }
+                if *construction {
+                    line += " construction";
+                }
+            }
+            SketchMacro::BoltCircle {
+                id,
+                cx,
+                cy,
+                pcd,
+                count,
+                hole_diameter,
+                start_angle_deg,
+            } => {
+                let _ = write!(
+                    line,
+                    "bolt_circle id={} at=({}, {}) pcd={} count={count} hole_d={}",
+                    id_tok(id),
+                    n(*cx),
+                    n(*cy),
+                    n(*pcd),
+                    n(*hole_diameter)
+                );
+                if *start_angle_deg != 0.0 {
+                    line += &format!(" start_angle={}", n(*start_angle_deg));
+                }
+            }
+            SketchMacro::FilletCorner { point_id, radius } => {
+                let _ = write!(
+                    line,
+                    "fillet_corner point={} r={}",
+                    id_tok(point_id),
+                    n(*radius)
+                );
+            }
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    let _ = writeln!(o, "}}");
+}
+
+fn print_sketch_feature(o: &mut String, sf: &crate::sketch::SketchFeatureBinding) {
+    use crate::sketch::SketchFeatureOp;
+    let mut line = format!(
+        "sketchfeature {} sketch={} ",
+        id_tok(&sf.feature_id),
+        id_tok(&sf.sketch_id)
+    );
+    match &sf.operation {
+        SketchFeatureOp::BossExtrude {
+            height,
+            blend,
+            symmetric,
+        } => {
+            let _ = write!(line, "kind=boss_extrude h={}", n(*height));
+            if *blend != 0.0 {
+                line += &format!(" blend={}", n(*blend));
+            }
+            if *symmetric {
+                line += " symmetric";
+            }
+        }
+        SketchFeatureOp::PocketCut {
+            depth,
+            through_all,
+            blend,
+        } => {
+            let _ = write!(line, "kind=pocket_cut depth={}", n(*depth));
+            if *through_all {
+                line += " through_all";
+            }
+            if *blend != 0.0 {
+                line += &format!(" blend={}", n(*blend));
+            }
+        }
+        SketchFeatureOp::RevolveBoss { angle_deg, blend } => {
+            let _ = write!(line, "kind=revolve_boss angle={}", n(*angle_deg));
+            if *blend != 0.0 {
+                line += &format!(" blend={}", n(*blend));
+            }
+        }
+        SketchFeatureOp::RevolveCut { angle_deg, blend } => {
+            let _ = write!(line, "kind=revolve_cut angle={}", n(*angle_deg));
+            if *blend != 0.0 {
+                line += &format!(" blend={}", n(*blend));
+            }
+        }
+    }
+    if sf.associate_with_host {
+        line += " associate_host";
+    }
+    let _ = writeln!(o, "{line}");
 }
 
 fn parse_modifier(kw: &str, c: &mut Cursor) -> Result<Modifier, ParseError> {
@@ -1741,6 +2648,15 @@ pub fn print(doc: &Document) -> String {
     }
     for node in &doc.root {
         print_node(&mut o, node, 0, &p);
+    }
+    if !doc.sketches.is_empty() || !doc.sketch_features.is_empty() {
+        o.push('\n');
+    }
+    for sk in &doc.sketches {
+        print_sketch(&mut o, sk);
+    }
+    for sf in &doc.sketch_features {
+        print_sketch_feature(&mut o, sf);
     }
     if !doc.regions.is_empty()
         || !doc.supports.is_empty()

@@ -204,6 +204,258 @@ export interface Document {
    * key in their JSON; backfilled by [`withLetTables`] at every intake site. */
   lets?: Let[];
   consumed?: Consumer[];
+  /** Persistent 2D parametric sketches (`sketch <id> ... { ... }`) and 3D feature bindings (`sketchfeature ...`). */
+  sketches?: ParametricSketch[];
+  sketch_features?: SketchFeatureBinding[];
+}
+
+// ---- Parametric 2D Sketch & Authoritative DocCommand Types --------------------------
+
+export type SketchPlane =
+  | { kind: 'xy'; offset?: number }
+  | { kind: 'xz'; offset?: number }
+  | { kind: 'yz'; offset?: number }
+  | { kind: 'on_face'; host_id: string; face: Face; offset?: number };
+
+export interface SketchPoint {
+  id: string;
+  x: number;
+  y: number;
+  fixed?: boolean;
+  construction?: boolean;
+}
+
+export interface SketchSegment {
+  id: string;
+  p1: string;
+  p2: string;
+  bulge?: number;
+  construction?: boolean;
+}
+
+export interface SketchCircle {
+  id: string;
+  center: string;
+  radius: number;
+  construction?: boolean;
+}
+
+export type SketchConstraint =
+  | { id: string; kind: 'coincident'; p1: string; p2: string }
+  | { id: string; kind: 'fixed'; point: string; x: number; y: number }
+  | { id: string; kind: 'horizontal'; segment?: string; p1?: string; p2?: string }
+  | { id: string; kind: 'vertical'; segment?: string; p1?: string; p2?: string }
+  | { id: string; kind: 'parallel'; seg1: string; seg2: string }
+  | { id: string; kind: 'perpendicular'; seg1: string; seg2: string }
+  | { id: string; kind: 'equal_length'; seg1: string; seg2: string }
+  | { id: string; kind: 'tangent'; seg: string; target: string }
+  | { id: string; kind: 'concentric'; c1: string; c2: string }
+  | { id: string; kind: 'midpoint'; point: string; segment?: string; p1?: string; p2?: string }
+  | { id: string; kind: 'symmetric'; p1: string; p2: string; axis: string }
+  | { id: string; kind: 'point_on_line'; point: string; segment: string }
+  | {
+      id: string;
+      kind: 'distance';
+      segment?: string;
+      p1?: string;
+      p2?: string;
+      value: number;
+      expr?: string;
+    }
+  | {
+      id: string;
+      kind: 'horizontal_distance';
+      segment?: string;
+      p1?: string;
+      p2?: string;
+      value: number;
+      expr?: string;
+    }
+  | {
+      id: string;
+      kind: 'vertical_distance';
+      segment?: string;
+      p1?: string;
+      p2?: string;
+      value: number;
+      expr?: string;
+    }
+  | { id: string; kind: 'angle'; seg1: string; seg2?: string; degrees: number; expr?: string }
+  | { id: string; kind: 'radius'; target: string; value: number; expr?: string }
+  | { id: string; kind: 'diameter'; target: string; value: number; expr?: string };
+
+export type SketchMacro =
+  | {
+      macro: 'rect';
+      id: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      fillet?: number;
+      construction?: boolean;
+    }
+  | {
+      macro: 'center_rect';
+      id: string;
+      cx: number;
+      cy: number;
+      width: number;
+      height: number;
+      fillet?: number;
+      construction?: boolean;
+    }
+  | { macro: 'circle'; id: string; cx: number; cy: number; radius: number; construction?: boolean }
+  | { macro: 'slot'; id: string; x1: number; y1: number; x2: number; y2: number; radius: number }
+  | {
+      macro: 'polygon';
+      id: string;
+      cx: number;
+      cy: number;
+      radius: number;
+      sides: number;
+      angle_deg?: number;
+      construction?: boolean;
+    }
+  | {
+      macro: 'bolt_circle';
+      id: string;
+      cx: number;
+      cy: number;
+      pcd: number;
+      count: number;
+      hole_diameter: number;
+      start_angle_deg?: number;
+    }
+  | { macro: 'fillet_corner'; point_id: string; radius: number };
+
+export interface ParametricSketch {
+  id: string;
+  plane: SketchPlane;
+  points: SketchPoint[];
+  segments: SketchSegment[];
+  circles: SketchCircle[];
+  constraints: SketchConstraint[];
+  macros?: SketchMacro[];
+}
+
+export type SketchStatus =
+  | 'fully_constrained'
+  | 'under_constrained'
+  | 'redundant_constraints'
+  | 'over_constrained_conflict';
+
+export interface PointFreedom {
+  id: string;
+  x: number;
+  y: number;
+  dof: number;
+  status: SketchStatus;
+}
+
+export interface SketchSolveReport {
+  status: SketchStatus;
+  converged: boolean;
+  iterations: number;
+  max_residual: number;
+  l2_residual: number;
+  total_variables: number;
+  total_equations: number;
+  jacobian_rank: number;
+  dof: number;
+  redundant_constraints: string[];
+  conflicting_constraints: string[];
+  point_freedom: PointFreedom[];
+  solved_sketch: ParametricSketch;
+  outer_profile: ProfileVertex[];
+  hole_profiles: ProfileVertex[][];
+  diagnosis: string;
+}
+
+export type SketchFeatureOp =
+  | { kind: 'boss_extrude'; height: number; blend?: number; symmetric?: boolean }
+  | { kind: 'pocket_cut'; depth: number; through_all?: boolean; blend?: number }
+  | { kind: 'revolve_boss'; angle_deg?: number; blend?: number }
+  | { kind: 'revolve_cut'; angle_deg?: number; blend?: number };
+
+export interface SketchFeatureBinding {
+  feature_id: string;
+  sketch_id: string;
+  operation: SketchFeatureOp;
+  associate_with_host?: boolean;
+}
+
+export interface SketchFeatureRequest {
+  feature_id: string;
+  sketch_id?: string;
+  sketch?: ParametricSketch;
+  preset?: string;
+  on?: string;
+  operation: SketchFeatureOp;
+  lets?: Record<string, number>;
+  associate_with_host?: boolean;
+}
+
+export interface SketchFeatureSummary {
+  feature_id: string;
+  sketch_id: string;
+  created_node_ids: string[];
+  plane_description: string;
+  world_origin: Vec3;
+  world_rotation_deg: Vec3;
+  solve_report: SketchSolveReport;
+}
+
+export interface SketchPresetMeta {
+  id: string;
+  title: string;
+  subtitle: string;
+  default_op: SketchFeatureOp;
+  sketch: ParametricSketch;
+}
+
+export type DocCommand =
+  | { cmd: 'set_material'; material: string; node?: string }
+  | { cmd: 'upsert_custom_material'; material: Material }
+  | { cmd: 'set_let'; name: string; value: number; expr?: string }
+  | { cmd: 'delete_let'; name: string }
+  | { cmd: 'upsert_node'; node: Node; parent_group_id?: string }
+  | { cmd: 'delete_entity'; id: string }
+  | { cmd: 'upsert_region'; id?: string; selectors: Selector[] }
+  | { cmd: 'upsert_support'; id?: string; region: string; fixed: [boolean, boolean, boolean] }
+  | { cmd: 'upsert_load'; id?: string; region: string; case?: string; kind: LoadKind }
+  | {
+      cmd: 'upsert_temperature';
+      id?: string;
+      region: string;
+      celsius: number;
+      expr?: string;
+      case?: string;
+    }
+  | {
+      cmd: 'upsert_convection';
+      id?: string;
+      region: string;
+      h: number;
+      t_inf: number;
+      h_expr?: string;
+      t_inf_expr?: string;
+      case?: string;
+    }
+  | { cmd: 'upsert_heat_flux'; id?: string; region: string; q: number; expr?: string; case?: string }
+  | { cmd: 'set_fill'; fill: Fill | null }
+  | { cmd: 'set_solve'; solve: Document['solve'] }
+  | { cmd: 'upsert_sketch'; sketch: ParametricSketch }
+  | { cmd: 'delete_sketch'; id: string }
+  | { cmd: 'apply_sketch_feature'; request: SketchFeatureRequest };
+
+export interface DocCommandOutcome {
+  entity_id?: string;
+  entity_kind?: string;
+  action?: string;
+  sketch_report?: SketchSolveReport;
+  sketch_feature?: SketchFeatureSummary;
+  problems: string[];
 }
 
 /** A fixed boundary temperature (°C) on a labelled region, one thermal case (M14): the
@@ -278,6 +530,8 @@ export function emptyDocument(): Document {
     solve: { size: null, modes: null, t_ref: null },
     lets: [],
     consumed: [],
+    sketches: [],
+    sketch_features: [],
   };
 }
 
@@ -290,6 +544,8 @@ export function withLetTables<T extends Document>(doc: T): T {
   doc.consumed ??= [];
   doc.convections ??= [];
   doc.heat_fluxes ??= [];
+  doc.sketches ??= [];
+  doc.sketch_features ??= [];
   if (doc.fill) doc.fill.rotate ??= [0, 0, 0];
   return doc;
 }
@@ -355,6 +611,8 @@ export function allIds(doc: Document): Set<string> {
   for (const c of doc.convections) s.add(c.id);
   for (const f of doc.heat_fluxes) s.add(f.id);
   for (const l of doc.lets ?? []) s.add(l.name);
+  for (const sk of doc.sketches ?? []) s.add(sk.id);
+  for (const sf of doc.sketch_features ?? []) s.add(sf.feature_id);
   return s;
 }
 

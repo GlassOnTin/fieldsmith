@@ -1030,7 +1030,7 @@ export function upsertLetParam(draft: Document, name: string, value: number): vo
   } else {
     draft.lets.push({ name, expr: formatted, value });
   }
-  if (draft.consumed && draft.consumed.length > 0) {
+  if ((draft.consumed && draft.consumed.length > 0) || (draft.sketch_features && draft.sketch_features.length > 0)) {
     try {
       applyAddrs(draft, [[{ id: name, attr: '', comp: null }, value]], true);
     } catch {

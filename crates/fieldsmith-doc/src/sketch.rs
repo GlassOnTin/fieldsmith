@@ -521,6 +521,7 @@ impl ParametricSketch {
         fillet: f64,
         construction: bool,
     ) -> Result<(), String> {
+        let id = id.trim();
         if width <= 0.0 || height <= 0.0 {
             return Err(format!("rect '{id}' width and height must be positive"));
         }
@@ -699,6 +700,7 @@ impl ParametricSketch {
         radius: f64,
         construction: bool,
     ) -> Result<(), String> {
+        let id = id.trim();
         if radius <= 0.0 {
             return Err(format!("circle '{id}' radius must be positive"));
         }
@@ -744,6 +746,7 @@ impl ParametricSketch {
         y2: f64,
         radius: f64,
     ) -> Result<(), String> {
+        let id = id.trim();
         if radius <= 0.0 {
             return Err(format!("slot '{id}' radius must be positive"));
         }
@@ -833,6 +836,7 @@ impl ParametricSketch {
         angle_deg: f64,
         construction: bool,
     ) -> Result<(), String> {
+        let id = id.trim();
         if !(3..=64).contains(&sides) {
             return Err(format!("polygon '{id}' sides must be between 3 and 64"));
         }
@@ -887,6 +891,7 @@ impl ParametricSketch {
         hole_diameter: f64,
         start_angle_deg: f64,
     ) -> Result<(), String> {
+        let id = id.trim();
         if count == 0 || pcd <= 0.0 || hole_diameter <= 0.0 {
             return Err(format!(
                 "bolt_circle '{id}' requires count >= 1, pcd > 0, hole_diameter > 0"
@@ -909,6 +914,7 @@ impl ParametricSketch {
     /// Replace a sharp corner point `point_id` joining two straight segments with a tangent
     /// circular arc of `radius`.
     pub fn fillet_sketch_corner(&mut self, point_id: &str, radius: f64) -> Result<(), String> {
+        let point_id = point_id.trim();
         if radius <= 0.0 {
             return Err("fillet radius must be positive".into());
         }
@@ -2514,11 +2520,88 @@ fn default_revolve_angle() -> f64 {
     360.0
 }
 
+/// Metadata and built sketch for each built-in engineering preset template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchPresetMeta {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub default_op: SketchFeatureOp,
+    pub sketch: ParametricSketch,
+}
+
+/// Return the canonical list of built-in parametric sketch templates shared by MCP, WASM, and UI.
+pub fn list_sketch_presets() -> Vec<SketchPresetMeta> {
+    vec![
+        SketchPresetMeta {
+            id: "flanged_mounting_bracket".into(),
+            title: "L-Flanged Mounting Bracket (0 DOF)".into(),
+            subtitle: "6-segment orthogonal L-profile + ⌀ 6.4 mm mounting hole with Horizontal, Vertical & Distance constraints".into(),
+            default_op: SketchFeatureOp::BossExtrude {
+                height: 18.0,
+                blend: 0.0,
+                symmetric: false,
+            },
+            sketch: preset_sketch_template("flanged_mounting_bracket")
+                .expect("flanged_mounting_bracket preset"),
+        },
+        SketchPresetMeta {
+            id: "turned_aerospace_spool".into(),
+            title: "Turned Aerospace Spool Half-Section (Revolve 360°)".into(),
+            subtitle: "Axisymmetric flanged hub & thin web on XZ plane (`r >= 8 mm` bore) ready for 360° `revolve`".into(),
+            default_op: SketchFeatureOp::RevolveBoss {
+                angle_deg: 360.0,
+                blend: 0.0,
+            },
+            sketch: preset_sketch_template("turned_aerospace_spool")
+                .expect("turned_aerospace_spool preset"),
+        },
+        SketchPresetMeta {
+            id: "slotted_adjustment_link".into(),
+            title: "Slotted Adjustment Link (Obround Arcs + Twin Bores)".into(),
+            subtitle: "Tangent `bulge = 1.0` semicircle stadium link with twin ⌀ 10 mm pin bores".into(),
+            default_op: SketchFeatureOp::BossExtrude {
+                height: 10.0,
+                blend: 0.0,
+                symmetric: false,
+            },
+            sketch: preset_sketch_template("slotted_adjustment_link")
+                .expect("slotted_adjustment_link preset"),
+        },
+        SketchPresetMeta {
+            id: "bolt_flange_plate".into(),
+            title: "4-Bolt Filleted Flange Plate (5 Interior Hole Loops)".into(),
+            subtitle: "64×64 mm R8 filleted plate with ⌀ 28 mm center bore + 4× ⌀ 5.5 mm bolt circle (`PCD = 44 mm`)".into(),
+            default_op: SketchFeatureOp::BossExtrude {
+                height: 10.0,
+                blend: 2.0,
+                symmetric: false,
+            },
+            sketch: preset_sketch_template("bolt_flange_plate")
+                .expect("bolt_flange_plate preset"),
+        },
+    ]
+}
+
+/// Persistent provenance record linking a compiled 3D feature (`extrude` / `revolve`) in `doc`
+/// back to its driving `ParametricSketch` in `doc.sketches`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchFeatureBinding {
+    pub feature_id: String,
+    pub sketch_id: String,
+    pub operation: SketchFeatureOp,
+    #[serde(default)]
+    pub associate_with_host: bool,
+}
+
 /// Request payload for `apply_sketch_feature_to_document` (and the `apply_sketch_feature` MCP tool).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeatureRequest {
     /// ID of the new 3D feature node to create or update in the `.fsm` document.
     pub feature_id: String,
+    /// Optional ID of an existing `ParametricSketch` in `doc.sketches` (or target ID to save under).
+    #[serde(default)]
+    pub sketch_id: Option<String>,
     /// The parametric sketch (or preset template name via `preset`).
     #[serde(default)]
     pub sketch: ParametricSketch,
@@ -2530,6 +2613,9 @@ pub struct SketchFeatureRequest {
     pub on: Option<String>,
     /// 3D feature operation (`boss_extrude`, `pocket_cut`, `revolve_boss`, `revolve_cut`).
     pub operation: SketchFeatureOp,
+    /// Whether to nest surface-attached features inside the host shape's group in `doc.root`.
+    #[serde(default)]
+    pub associate_with_host: bool,
     /// Optional named `.fsm` `let` parameters to upsert before solving the sketch.
     #[serde(default)]
     pub lets: BTreeMap<String, f64>,
@@ -2539,6 +2625,7 @@ pub struct SketchFeatureRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeatureSummary {
     pub feature_id: String,
+    pub sketch_id: String,
     pub created_node_ids: Vec<String>,
     pub plane_description: String,
     pub world_origin: [f64; 3],
@@ -2547,7 +2634,7 @@ pub struct SketchFeatureSummary {
 }
 
 /// Resolved 3D frame for placing an extruded or revolved sketch feature in world coordinates.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedSketchFrame {
     /// Center of the target face or datum plane in world `(x, y, z)`.
     pub plane_origin: [f64; 3],
@@ -2557,6 +2644,10 @@ pub struct ResolvedSketchFrame {
     pub rotate_deg: [f64; 3],
     /// Thickness of the host solid along `-outward_normal` (used for `through_all` pocket cuts).
     pub host_thickness: f64,
+    /// Width of the host face along local `U` (mm).
+    pub face_width: f64,
+    /// Height of the host face along local `V` (mm).
+    pub face_height: f64,
     pub description: String,
 }
 
@@ -2572,6 +2663,8 @@ pub fn resolve_sketch_plane_frame(
             outward_normal: [0.0, 0.0, 1.0],
             rotate_deg: [0.0, 0.0, 0.0],
             host_thickness: 50.0,
+            face_width: 80.0,
+            face_height: 60.0,
             description: format!("World XY plane (z = {offset:.2} mm, normal +Z)"),
         }),
         SketchPlane::Xz { offset } => Ok(ResolvedSketchFrame {
@@ -2579,6 +2672,8 @@ pub fn resolve_sketch_plane_frame(
             outward_normal: [0.0, -1.0, 0.0],
             rotate_deg: [90.0, 0.0, 0.0],
             host_thickness: 50.0,
+            face_width: 80.0,
+            face_height: 60.0,
             description: format!("World XZ plane (y = {offset:.2} mm)"),
         }),
         SketchPlane::Yz { offset } => Ok(ResolvedSketchFrame {
@@ -2586,6 +2681,8 @@ pub fn resolve_sketch_plane_frame(
             outward_normal: [1.0, 0.0, 0.0],
             rotate_deg: [0.0, 90.0, 0.0],
             host_thickness: 50.0,
+            face_width: 80.0,
+            face_height: 60.0,
             description: format!("World YZ plane (x = {offset:.2} mm, normal +X)"),
         }),
         SketchPlane::OnFace {
@@ -2593,20 +2690,30 @@ pub fn resolve_sketch_plane_frame(
             face,
             offset,
         } => {
-            let node = find_node_recursive(&doc.root, host_id).ok_or_else(|| {
+            let mut node = find_node_recursive(&doc.root, host_id).ok_or_else(|| {
                 format!("sketch attachment host shape '{host_id}' not found in document")
             })?;
+            if let NodeKind::Group { children, .. } = &node.kind {
+                if node.transform.translate == [0.0; 3] {
+                    if let Some(primary) = children
+                        .iter()
+                        .find(|c| c.op == Op::Add && !matches!(c.kind, NodeKind::Group { .. }))
+                    {
+                        node = primary;
+                    }
+                }
+            }
             let at = node.transform.translate;
             let (hx, hy, hz) = node_half_extents(&node.kind);
-            let (n, dist, thick) = match face {
-                Face::Top | Face::Pz => ([0.0, 0.0, 1.0], hz, 2.0 * hz),
-                Face::Bottom | Face::Nz => ([0.0, 0.0, -1.0], hz, 2.0 * hz),
-                Face::Px => ([1.0, 0.0, 0.0], hx, 2.0 * hx),
-                Face::Nx => ([-1.0, 0.0, 0.0], hx, 2.0 * hx),
-                Face::Py => ([0.0, 1.0, 0.0], hy, 2.0 * hy),
-                Face::Ny => ([0.0, -1.0, 0.0], hy, 2.0 * hy),
-                Face::Side => ([1.0, 0.0, 0.0], hx, 2.0 * hx),
-                Face::All => ([0.0, 0.0, 1.0], hz, 2.0 * hz),
+            let (n, dist, thick, fw, fh) = match face {
+                Face::Top | Face::Pz => ([0.0, 0.0, 1.0], hz, 2.0 * hz, 2.0 * hx, 2.0 * hy),
+                Face::Bottom | Face::Nz => ([0.0, 0.0, -1.0], hz, 2.0 * hz, 2.0 * hx, 2.0 * hy),
+                Face::Px => ([1.0, 0.0, 0.0], hx, 2.0 * hx, 2.0 * hy, 2.0 * hz),
+                Face::Nx => ([-1.0, 0.0, 0.0], hx, 2.0 * hx, 2.0 * hy, 2.0 * hz),
+                Face::Py => ([0.0, 1.0, 0.0], hy, 2.0 * hy, 2.0 * hx, 2.0 * hz),
+                Face::Ny => ([0.0, -1.0, 0.0], hy, 2.0 * hy, 2.0 * hx, 2.0 * hz),
+                Face::Side => ([1.0, 0.0, 0.0], hx, 2.0 * hx, 2.0 * hy, 2.0 * hz),
+                Face::All => ([0.0, 0.0, 1.0], hz, 2.0 * hz, 2.0 * hx, 2.0 * hy),
             };
             let d = dist + offset;
             let origin = [at[0] + n[0] * d, at[1] + n[1] * d, at[2] + n[2] * d];
@@ -2623,6 +2730,8 @@ pub fn resolve_sketch_plane_frame(
                 outward_normal: n,
                 rotate_deg,
                 host_thickness: thick.max(10.0),
+                face_width: fw,
+                face_height: fh,
                 description: format!(
                     "Surface '{}.{}' at ({:.2}, {:.2}, {:.2}) mm",
                     host_id,
@@ -2677,32 +2786,353 @@ fn node_half_extents(kind: &NodeKind) -> (f64, f64, f64) {
             }
             (r_max, r_max, z_max)
         }
+        NodeKind::Mesh { bbox, .. } => (
+            0.5 * (bbox[3] - bbox[0]).abs(),
+            0.5 * (bbox[4] - bbox[1]).abs(),
+            0.5 * (bbox[5] - bbox[2]).abs(),
+        ),
+        NodeKind::Group { children, .. } => {
+            let mut mx = 4.0_f64;
+            let mut my = 4.0_f64;
+            let mut mz = 2.0_f64;
+            for c in children.iter().filter(|c| !c.suppressed) {
+                let (cx, cy, cz) = node_half_extents(&c.kind);
+                mx = mx.max(c.transform.translate[0].abs() + cx);
+                my = my.max(c.transform.translate[1].abs() + cy);
+                mz = mz.max(c.transform.translate[2].abs() + cz);
+            }
+            (mx, my, mz)
+        }
         _ => (20.0, 20.0, 10.0),
     }
 }
 
-fn upsert_node(doc: &mut Document, node: Node) {
-    if let Some(existing) = doc.root.iter_mut().find(|n| n.id == node.id) {
-        *existing = node;
+/// Update an existing node anywhere in `doc.root` (preserving its `material`, `color`, and
+/// `suppressed` state), or return `Some(node)` if no node with that ID exists yet.
+fn update_existing_node(doc: &mut Document, node: Node) -> Option<Node> {
+    if let Some(existing) = doc.find_mut(&node.id) {
+        existing.kind = node.kind;
+        existing.op = node.op;
+        existing.blend = node.blend;
+        existing.transform = node.transform;
+        None
     } else {
-        doc.root.push(node);
+        Some(node)
     }
 }
 
-/// Solve a `SketchFeatureRequest` and compile it into 3D `.fsm` nodes on `doc`.
+fn prune_stale_holes_recursive(nodes: &mut Vec<Node>, feature_id: &str, keep_holes: usize) {
+    let prefix = format!("{feature_id}_hole");
+    nodes.retain(|n| {
+        if let Some(rest) = n.id.strip_prefix(&prefix) {
+            if let Ok(idx) = rest.parse::<usize>() {
+                return idx >= 1 && idx <= keep_holes;
+            }
+        }
+        true
+    });
+    for n in nodes.iter_mut() {
+        if let NodeKind::Group { children, .. } = &mut n.kind {
+            prune_stale_holes_recursive(children, feature_id, keep_holes);
+        }
+    }
+}
+
+fn insert_new_feature_nodes(
+    doc: &mut Document,
+    plane: &SketchPlane,
+    associate_with_host: bool,
+    mut new_nodes: Vec<Node>,
+) {
+    if new_nodes.is_empty() {
+        return;
+    }
+    if let (SketchPlane::OnFace { host_id, .. }, true) = (plane, associate_with_host) {
+        // 1. If `host_id` itself is a Group, append to its children.
+        if let Some(host) = doc.find_mut(host_id) {
+            if let NodeKind::Group { children, .. } = &mut host.kind {
+                children.extend(new_nodes);
+                return;
+            }
+        }
+        // 2. If `host_id` is inside a parent Group, append to that parent Group's children.
+        fn push_into_parent_group(
+            nodes: &mut [Node],
+            host_id: &str,
+            to_add: &mut Option<Vec<Node>>,
+        ) -> bool {
+            for n in nodes {
+                if let NodeKind::Group { children, .. } = &mut n.kind {
+                    if children.iter().any(|c| c.id == host_id) {
+                        if let Some(items) = to_add.take() {
+                            children.extend(items);
+                        }
+                        return true;
+                    }
+                    if push_into_parent_group(children, host_id, to_add) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        let mut pending = Some(new_nodes);
+        if push_into_parent_group(&mut doc.root, host_id, &mut pending) {
+            return;
+        }
+        new_nodes = pending.expect("not consumed");
+        // 3. If `host_id` is a top-level primitive in `doc.root`, wrap `host` + `new_nodes` into `<host_id>_assy`.
+        if let Some(idx) = doc.root.iter().position(|n| n.id == *host_id) {
+            let base_assy = format!("{host_id}_assy");
+            let assy_id = if doc.node_ids().iter().any(|id| id == &base_assy) {
+                doc.fresh_id(&base_assy)
+            } else {
+                base_assy
+            };
+            let host_node = doc.root.remove(idx);
+            let host_op = host_node.op;
+            let mut children = vec![host_node];
+            children.extend(new_nodes);
+            doc.root.insert(
+                idx,
+                Node {
+                    id: assy_id,
+                    op: host_op,
+                    blend: 0.0,
+                    suppressed: false,
+                    transform: Transform::default(),
+                    material: None,
+                    color: None,
+                    kind: NodeKind::Group {
+                        children,
+                        modifiers: Vec::new(),
+                    },
+                },
+            );
+            return;
+        }
+    }
+    doc.root.extend(new_nodes);
+}
+
+fn compile_sketch_feature_nodes(
+    doc: &mut Document,
+    feature_id: &str,
+    plane: &SketchPlane,
+    operation: &SketchFeatureOp,
+    associate_with_host: bool,
+    report: &SketchSolveReport,
+) -> Result<(Vec<String>, ResolvedSketchFrame, [f64; 3]), String> {
+    let frame = resolve_sketch_plane_frame(doc, plane)?;
+    let n = frame.outward_normal;
+    let mut created_ids = Vec::new();
+    let mut pending_new_nodes = Vec::new();
+    let mut world_origin = frame.plane_origin;
+
+    let mut stage_node = |node: Node| {
+        created_ids.push(node.id.clone());
+        if let Some(unplaced) = update_existing_node(doc, node) {
+            pending_new_nodes.push(unplaced);
+        }
+    };
+
+    match operation {
+        SketchFeatureOp::BossExtrude {
+            height,
+            blend,
+            symmetric,
+        } => {
+            if *height <= 0.0 {
+                return Err("boss_extrude height must be positive".into());
+            }
+            let shift = if *symmetric { 0.0 } else { 0.5 * *height };
+            world_origin = [
+                frame.plane_origin[0] + n[0] * shift,
+                frame.plane_origin[1] + n[1] * shift,
+                frame.plane_origin[2] + n[2] * shift,
+            ];
+            stage_node(Node {
+                id: feature_id.to_string(),
+                kind: NodeKind::Extrude {
+                    profile: report.outer_profile.clone(),
+                    height: *height,
+                },
+                op: Op::Add,
+                blend: *blend,
+                suppressed: false,
+                transform: Transform {
+                    translate: world_origin,
+                    rotate: frame.rotate_deg,
+                },
+                material: None,
+                color: None,
+            });
+
+            for (idx, hole_loop) in report.hole_profiles.iter().enumerate() {
+                let hole_id = format!("{feature_id}_hole{}", idx + 1);
+                stage_node(Node {
+                    id: hole_id,
+                    kind: NodeKind::Extrude {
+                        profile: hole_loop.clone(),
+                        height: *height + 1.0,
+                    },
+                    op: Op::Subtract,
+                    blend: 0.0,
+                    suppressed: false,
+                    transform: Transform {
+                        translate: world_origin,
+                        rotate: frame.rotate_deg,
+                    },
+                    material: None,
+                    color: None,
+                });
+            }
+            prune_stale_holes_recursive(&mut doc.root, feature_id, report.hole_profiles.len());
+        }
+        SketchFeatureOp::PocketCut {
+            depth,
+            through_all,
+            blend,
+        } => {
+            let cut_depth = if *through_all {
+                frame.host_thickness + 2.0
+            } else {
+                (*depth).max(0.1)
+            };
+            let cut_h = cut_depth + 0.5;
+            let shift = -0.5 * cut_depth + 0.25;
+            world_origin = [
+                frame.plane_origin[0] + n[0] * shift,
+                frame.plane_origin[1] + n[1] * shift,
+                frame.plane_origin[2] + n[2] * shift,
+            ];
+            stage_node(Node {
+                id: feature_id.to_string(),
+                kind: NodeKind::Extrude {
+                    profile: report.outer_profile.clone(),
+                    height: cut_h,
+                },
+                op: Op::Subtract,
+                blend: *blend,
+                suppressed: false,
+                transform: Transform {
+                    translate: world_origin,
+                    rotate: frame.rotate_deg,
+                },
+                material: None,
+                color: None,
+            });
+            prune_stale_holes_recursive(&mut doc.root, feature_id, 0);
+        }
+        SketchFeatureOp::RevolveBoss { angle_deg, blend } => {
+            stage_node(Node {
+                id: feature_id.to_string(),
+                kind: NodeKind::Revolve {
+                    profile: report.outer_profile.clone(),
+                    angle: angle_deg.clamp(1.0, 360.0),
+                },
+                op: Op::Add,
+                blend: *blend,
+                suppressed: false,
+                transform: Transform {
+                    translate: world_origin,
+                    rotate: [0.0, 0.0, 0.0],
+                },
+                material: None,
+                color: None,
+            });
+            prune_stale_holes_recursive(&mut doc.root, feature_id, 0);
+        }
+        SketchFeatureOp::RevolveCut { angle_deg, blend } => {
+            stage_node(Node {
+                id: feature_id.to_string(),
+                kind: NodeKind::Revolve {
+                    profile: report.outer_profile.clone(),
+                    angle: angle_deg.clamp(1.0, 360.0),
+                },
+                op: Op::Subtract,
+                blend: *blend,
+                suppressed: false,
+                transform: Transform {
+                    translate: world_origin,
+                    rotate: [0.0, 0.0, 0.0],
+                },
+                material: None,
+                color: None,
+            });
+            prune_stale_holes_recursive(&mut doc.root, feature_id, 0);
+        }
+    }
+
+    insert_new_feature_nodes(doc, plane, associate_with_host, pending_new_nodes);
+    Ok((created_ids, frame, world_origin))
+}
+
+/// Re-solve all persistent `doc.sketch_features` against current `doc.lets` and host geometry,
+/// updating both `doc.sketches` and the compiled 3D `extrude`/`revolve` nodes in `doc.root`.
+pub fn sync_sketch_features(doc: &mut Document) -> Result<(), String> {
+    if doc.sketch_features.is_empty() {
+        return Ok(());
+    }
+    let let_pairs: Vec<(String, f64)> = doc
+        .lets
+        .iter()
+        .map(|l| (l.name.clone(), l.value))
+        .collect();
+    let bindings = doc.sketch_features.clone();
+    for b in &bindings {
+        let mut sk = doc
+            .sketches
+            .iter()
+            .find(|s| s.id == b.sketch_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "sketchfeature '{}' references missing sketch '{}'",
+                    b.feature_id, b.sketch_id
+                )
+            })?;
+        let report = solve_sketch(&mut sk, &let_pairs)?;
+        if report.outer_profile.len() < 2 {
+            return Err(format!(
+                "sketch '{}' bound to '{}' did not produce a closed profile loop",
+                sk.id, b.feature_id
+            ));
+        }
+        if let Some(slot) = doc.sketches.iter_mut().find(|s| s.id == b.sketch_id) {
+            *slot = report.solved_sketch.clone();
+        }
+        compile_sketch_feature_nodes(
+            doc,
+            &b.feature_id,
+            &report.solved_sketch.plane,
+            &b.operation,
+            b.associate_with_host,
+            &report,
+        )?;
+    }
+    Ok(())
+}
+
+/// Solve a `SketchFeatureRequest`, persist the `ParametricSketch` and `SketchFeatureBinding` on
+/// `doc`, and compile it into 3D `.fsm` nodes on `doc`.
 pub fn apply_sketch_feature_to_document(
     doc: &mut Document,
     req: &SketchFeatureRequest,
 ) -> Result<SketchFeatureSummary, String> {
-    if req.feature_id.trim().is_empty() {
+    let feature_id = req.feature_id.trim();
+    if feature_id.is_empty() {
         return Err("feature_id must not be empty".into());
     }
 
     // 1. Upsert any requested `.fsm` `let` bindings
     for (k, v) in &req.lets {
-        if let Some(existing) = doc.lets.iter_mut().find(|l| &l.name == k) {
-            existing.value = *v;
-            existing.expr = format!("{v}");
+        if doc.lets.iter().any(|l| &l.name == k) {
+            let addr = crate::param::ParamAddr::parse(k)?;
+            crate::param::apply(doc, &addr, *v)?;
+            if let Some(existing) = doc.lets.iter_mut().find(|l| &l.name == k) {
+                existing.expr = format!("{v}");
+            }
         } else {
             doc.lets.push(Let {
                 name: k.clone(),
@@ -2717,11 +3147,10 @@ pub fn apply_sketch_feature_to_document(
         .map(|l| (l.name.clone(), l.value))
         .collect();
 
-    // 2. Load preset sketch if requested, and apply `on` plane override
+    // 2. Load preset or existing sketch if requested, and apply `on` plane override
     let mut sketch = if let Some(preset_name) = req.preset.as_deref() {
         let mut p = preset_sketch_template(preset_name)?;
         if !req.sketch.constraints.is_empty() {
-            // Allow caller to append or override constraints on top of a preset
             for c in &req.sketch.constraints {
                 if let Some(ex) = p.constraints.iter_mut().find(|ec| ec.id == c.id) {
                     *ex = c.clone();
@@ -2731,9 +3160,55 @@ pub fn apply_sketch_feature_to_document(
             }
         }
         p
+    } else if req.sketch.points.is_empty() && req.sketch.macros.is_empty() {
+        let lookup_id = req
+            .sketch_id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(req.sketch.id.as_str())
+            .trim();
+        if let Some(saved) = doc.sketches.iter().find(|s| s.id == lookup_id) {
+            saved.clone()
+        } else {
+            req.sketch.clone()
+        }
     } else {
         req.sketch.clone()
     };
+
+    // Determine canonical persisted `sketch_id`
+    let persisted_sketch_id = if let Some(sid) = req
+        .sketch_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        sid.to_string()
+    } else if let Some(existing_binding) = doc
+        .sketch_features
+        .iter()
+        .find(|b| b.feature_id == feature_id)
+    {
+        existing_binding.sketch_id.clone()
+    } else {
+        let cand = sketch.id.trim();
+        let claimed_elsewhere = doc
+            .sketch_features
+            .iter()
+            .any(|b| b.sketch_id == cand && b.feature_id != feature_id);
+        if req.preset.is_none()
+            && !cand.is_empty()
+            && cand != "sketch1"
+            && cand != feature_id
+            && crate::fsm::is_ident(cand)
+            && !claimed_elsewhere
+        {
+            cand.to_string()
+        } else {
+            format!("{feature_id}_sketch")
+        }
+    };
+    sketch.id = persisted_sketch_id.clone();
 
     if let Some(on_spec) = req.on.as_deref() {
         if !on_spec.trim().is_empty() {
@@ -2751,162 +3226,41 @@ pub fn apply_sketch_feature_to_document(
         ));
     }
 
-    // 4. Resolve 3D coordinate frame from `sketch.plane`
-    let frame = resolve_sketch_plane_frame(doc, &sketch.plane)?;
-    let n = frame.outward_normal;
-    let mut created_ids = Vec::new();
-    let mut world_origin = frame.plane_origin;
+    // 4. Compile into 3D `.fsm` nodes
+    let (created_ids, frame, world_origin) = compile_sketch_feature_nodes(
+        doc,
+        feature_id,
+        &report.solved_sketch.plane,
+        &req.operation,
+        req.associate_with_host,
+        &report,
+    )?;
 
-    match &req.operation {
-        SketchFeatureOp::BossExtrude {
-            height,
-            blend,
-            symmetric,
-        } => {
-            if *height <= 0.0 {
-                return Err("boss_extrude height must be positive".into());
-            }
-            // `Prim::Extrude` spans `z in [-height/2, +height/2]` in its local frame.
-            // Shifting along `+outward_normal` by `height/2` seats the boss bottom flush on the face!
-            let shift = if *symmetric { 0.0 } else { 0.5 * *height };
-            world_origin = [
-                frame.plane_origin[0] + n[0] * shift,
-                frame.plane_origin[1] + n[1] * shift,
-                frame.plane_origin[2] + n[2] * shift,
-            ];
-            upsert_node(
-                doc,
-                Node {
-                    id: req.feature_id.clone(),
-                    kind: NodeKind::Extrude {
-                        profile: report.outer_profile.clone(),
-                        height: *height,
-                    },
-                    op: Op::Add,
-                    blend: *blend,
-                    suppressed: false,
-                    transform: Transform {
-                        translate: world_origin,
-                        rotate: frame.rotate_deg,
-                    },
-                    material: None,
-                    color: None,
-                },
-            );
-            created_ids.push(req.feature_id.clone());
-
-            // Automatically subtract any interior hole loops through the boss!
-            for (idx, hole_loop) in report.hole_profiles.iter().enumerate() {
-                let hole_id = format!("{}_hole{}", req.feature_id, idx + 1);
-                upsert_node(
-                    doc,
-                    Node {
-                        id: hole_id.clone(),
-                        kind: NodeKind::Extrude {
-                            profile: hole_loop.clone(),
-                            height: *height + 1.0,
-                        },
-                        op: Op::Subtract,
-                        blend: 0.0,
-                        suppressed: false,
-                        transform: Transform {
-                            translate: world_origin,
-                            rotate: frame.rotate_deg,
-                        },
-                        material: None,
-                        color: None,
-                    },
-                );
-                created_ids.push(hole_id);
-            }
-        }
-        SketchFeatureOp::PocketCut {
-            depth,
-            through_all,
-            blend,
-        } => {
-            let cut_depth = if *through_all {
-                frame.host_thickness + 2.0
-            } else {
-                (*depth).max(0.1)
-            };
-            // Shift inward (`-outward_normal`) by `cut_depth/2 - 0.25` so top of tool clears the surface by 0.5 mm
-            let cut_h = cut_depth + 0.5;
-            let shift = -0.5 * cut_depth + 0.25;
-            world_origin = [
-                frame.plane_origin[0] + n[0] * shift,
-                frame.plane_origin[1] + n[1] * shift,
-                frame.plane_origin[2] + n[2] * shift,
-            ];
-            upsert_node(
-                doc,
-                Node {
-                    id: req.feature_id.clone(),
-                    kind: NodeKind::Extrude {
-                        profile: report.outer_profile.clone(),
-                        height: cut_h,
-                    },
-                    op: Op::Subtract,
-                    blend: *blend,
-                    suppressed: false,
-                    transform: Transform {
-                        translate: world_origin,
-                        rotate: frame.rotate_deg,
-                    },
-                    material: None,
-                    color: None,
-                },
-            );
-            created_ids.push(req.feature_id.clone());
-        }
-        SketchFeatureOp::RevolveBoss { angle_deg, blend } => {
-            upsert_node(
-                doc,
-                Node {
-                    id: req.feature_id.clone(),
-                    kind: NodeKind::Revolve {
-                        profile: report.outer_profile.clone(),
-                        angle: angle_deg.clamp(1.0, 360.0),
-                    },
-                    op: Op::Add,
-                    blend: *blend,
-                    suppressed: false,
-                    transform: Transform {
-                        translate: world_origin,
-                        rotate: [0.0, 0.0, 0.0],
-                    },
-                    material: None,
-                    color: None,
-                },
-            );
-            created_ids.push(req.feature_id.clone());
-        }
-        SketchFeatureOp::RevolveCut { angle_deg, blend } => {
-            upsert_node(
-                doc,
-                Node {
-                    id: req.feature_id.clone(),
-                    kind: NodeKind::Revolve {
-                        profile: report.outer_profile.clone(),
-                        angle: angle_deg.clamp(1.0, 360.0),
-                    },
-                    op: Op::Subtract,
-                    blend: *blend,
-                    suppressed: false,
-                    transform: Transform {
-                        translate: world_origin,
-                        rotate: [0.0, 0.0, 0.0],
-                    },
-                    material: None,
-                    color: None,
-                },
-            );
-            created_ids.push(req.feature_id.clone());
-        }
+    // 5. Persist solved `ParametricSketch` and `SketchFeatureBinding` on `doc`
+    if let Some(slot) = doc.sketches.iter_mut().find(|s| s.id == persisted_sketch_id) {
+        *slot = report.solved_sketch.clone();
+    } else {
+        doc.sketches.push(report.solved_sketch.clone());
+    }
+    let binding = SketchFeatureBinding {
+        feature_id: feature_id.to_string(),
+        sketch_id: persisted_sketch_id.clone(),
+        operation: req.operation.clone(),
+        associate_with_host: req.associate_with_host,
+    };
+    if let Some(slot) = doc
+        .sketch_features
+        .iter_mut()
+        .find(|b| b.feature_id == feature_id)
+    {
+        *slot = binding;
+    } else {
+        doc.sketch_features.push(binding);
     }
 
     Ok(SketchFeatureSummary {
-        feature_id: req.feature_id.clone(),
+        feature_id: feature_id.to_string(),
+        sketch_id: persisted_sketch_id,
         created_node_ids: created_ids,
         plane_description: frame.description,
         world_origin,

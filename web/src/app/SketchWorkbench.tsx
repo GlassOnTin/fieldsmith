@@ -6,7 +6,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { store } from '../doc/store';
-import type { Face, Node } from '../doc/types';
+import type {
+  Face,
+  Node,
+  ParametricSketch,
+  SketchFeatureOp,
+  SketchPlane,
+  SketchPresetMeta,
+  SketchSolveReport,
+  SketchStatus,
+} from '../doc/types';
 import {
   FIXINGS_CATALOGUE,
   FIXING_SIZES,
@@ -14,22 +23,7 @@ import {
   type FixingKindId,
 } from '../doc/fixings-catalog';
 import { resolveHostSurfaceFrame } from '../doc/ops';
-import {
-  SKETCH_PRESETS,
-  addBoltCircleToSketch,
-  addCenterRectToSketch,
-  addCircleToSketch,
-  addPolygonToSketch,
-  addSlotToSketch,
-  applySketchFeatureToDoc,
-  filletSketchCorner,
-  solveParametricSketch,
-  type ParametricSketch,
-  type SketchFeatureOp,
-  type SketchPlane,
-  type SketchSolveReport,
-  type SketchStatus,
-} from '../doc/sketch-solver';
+import { expandSketchMacro, sketchPresets, solveSketch } from '../doc/wasm';
 import { Icon } from './icons';
 import { ui, useApp } from './ui';
 
@@ -130,20 +124,60 @@ export function SketchWorkbench({
   onClose?: () => void;
 }) {
   useApp();
-  const [presetId, setPresetId] = useState<string>(SKETCH_PRESETS[0].id);
-  const [sketch, setSketch] = useState<ParametricSketch>(() => SKETCH_PRESETS[0].build());
-  const [featureId, setFeatureId] = useState<string>('sketch_boss1');
-  const [planeMode, setPlaneMode] = useState<'xy' | 'xz' | 'yz' | 'on_face'>('xy');
-  const [hostShapeId, setHostShapeId] = useState<string>(() => store.doc.root[0]?.id ?? 'base');
-  const [hostFace, setHostFace] = useState<Face>('top');
-  const [planeOffset] = useState<number>(0);
-  const [opKind, setOpKind] = useState<SketchFeatureOp['kind']>('boss_extrude');
-  const [extrudeHeight, setExtrudeHeight] = useState<number>(16);
-  const [pocketDepth, setPocketDepth] = useState<number>(8);
-  const [throughAll, setThroughAll] = useState<boolean>(false);
-  const [revolveAngle, setRevolveAngle] = useState<number>(360);
-  const [featureBlend, setFeatureBlend] = useState<number>(0);
-  const [associateInTree, setAssociateInTree] = useState<boolean>(true);
+  const presets = useMemo<SketchPresetMeta[]>(() => sketchPresets(), []);
+  const initialSaved = store.doc.sketches?.[0] ?? null;
+  const initialBinding = initialSaved
+    ? store.doc.sketch_features?.find((b) => b.sketch_id === initialSaved.id) ?? null
+    : null;
+
+  const [presetId, setPresetId] = useState<string>(presets[0]?.id ?? 'flanged_mounting_bracket');
+  const [sketch, setSketch] = useState<ParametricSketch>(() =>
+    initialSaved ? structuredClone(initialSaved) : structuredClone(presets[0].sketch),
+  );
+  const [featureId, setFeatureId] = useState<string>(
+    () => initialBinding?.feature_id ?? 'sketch_boss1',
+  );
+  const [planeMode, setPlaneMode] = useState<'xy' | 'xz' | 'yz' | 'on_face'>(() => {
+    const pl = initialSaved?.plane;
+    return pl ? pl.kind : 'xy';
+  });
+  const [hostShapeId, setHostShapeId] = useState<string>(() => {
+    const pl = initialSaved?.plane;
+    if (pl && pl.kind === 'on_face') return pl.host_id;
+    return store.doc.root[0]?.id ?? 'base';
+  });
+  const [hostFace, setHostFace] = useState<Face>(() => {
+    const pl = initialSaved?.plane;
+    if (pl && pl.kind === 'on_face') return pl.face;
+    return 'top';
+  });
+  const [planeOffset] = useState<number>(() => initialSaved?.plane?.offset ?? 0);
+  const [opKind, setOpKind] = useState<SketchFeatureOp['kind']>(
+    () => initialBinding?.operation.kind ?? 'boss_extrude',
+  );
+  const [extrudeHeight, setExtrudeHeight] = useState<number>(() =>
+    initialBinding?.operation.kind === 'boss_extrude' ? initialBinding.operation.height : 16,
+  );
+  const [pocketDepth, setPocketDepth] = useState<number>(() =>
+    initialBinding?.operation.kind === 'pocket_cut' ? initialBinding.operation.depth : 8,
+  );
+  const [throughAll, setThroughAll] = useState<boolean>(() =>
+    initialBinding?.operation.kind === 'pocket_cut'
+      ? Boolean(initialBinding.operation.through_all)
+      : false,
+  );
+  const [revolveAngle, setRevolveAngle] = useState<number>(() =>
+    initialBinding?.operation.kind === 'revolve_boss' ||
+    initialBinding?.operation.kind === 'revolve_cut'
+      ? (initialBinding.operation.angle_deg ?? 360)
+      : 360,
+  );
+  const [featureBlend, setFeatureBlend] = useState<number>(
+    () => initialBinding?.operation.blend ?? 0,
+  );
+  const [associateInTree, setAssociateInTree] = useState<boolean>(
+    () => initialBinding?.associate_with_host ?? true,
+  );
   const [sketchFixingKind, setSketchFixingKind] = useState<FixingKindId>('self_tapping_screw');
   const [sketchFixingSize, setSketchFixingSize] = useState<string>('M4');
 
@@ -184,34 +218,92 @@ export function SketchWorkbench({
   const dragPointRef = useRef<string | null>(null);
   const dragViewRef = useRef<ViewTransform | null>(null);
 
-  // Map document `lets` for expression evaluation
-  const letsMap = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const l of store.doc.lets ?? []) {
-      m[l.name] = l.value;
-    }
-    return m;
-  }, [store.doc.lets]);
+  const letsSig = (store.doc.lets ?? []).map((l) => `${l.name}:${l.value}`).join('|');
 
-  const report: SketchSolveReport = useMemo(
-    () => solveParametricSketch(sketch, letsMap),
-    [sketch, letsMap],
-  );
+  const report: SketchSolveReport = useMemo(() => {
+    try {
+      return solveSketch(sketch, store.doc);
+    } catch (err) {
+      return {
+        status: 'over_constrained_conflict',
+        converged: false,
+        iterations: 0,
+        max_residual: 0,
+        l2_residual: 0,
+        total_variables: sketch.points.length * 2 + sketch.circles.length,
+        total_equations: sketch.constraints.length,
+        jacobian_rank: 0,
+        dof: 0,
+        redundant_constraints: [],
+        conflicting_constraints: [],
+        point_freedom: sketch.points.map((p) => ({
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          dof: 0,
+          status: 'over_constrained_conflict',
+        })),
+        solved_sketch: sketch,
+        outer_profile: [],
+        hole_profiles: [],
+        diagnosis: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }, [sketch, letsSig]);
 
   const solved = report.solved_sketch;
 
   const loadPreset = (id: string) => {
-    const found = SKETCH_PRESETS.find((p) => p.id === id);
+    const found = presets.find((p) => p.id === id);
     if (!found) return;
     setPresetId(found.id);
-    const built = found.build();
+    const built = structuredClone(found.sketch);
     setSketch(built);
-    setOpKind(found.defaultOp.kind);
-    if (found.defaultOp.kind === 'boss_extrude') setExtrudeHeight(found.defaultOp.height);
-    if (found.defaultOp.kind === 'revolve_boss') setRevolveAngle(found.defaultOp.angle_deg);
+    setPlaneMode(built.plane.kind);
+    setOpKind(found.default_op.kind);
+    if (found.default_op.kind === 'boss_extrude') setExtrudeHeight(found.default_op.height);
+    if (
+      found.default_op.kind === 'revolve_boss' &&
+      typeof found.default_op.angle_deg === 'number'
+    ) {
+      setRevolveAngle(found.default_op.angle_deg);
+    }
     setSelectedSegId(built.segments[0]?.id ?? null);
     setSelectedPointIds(built.points[0] ? [built.points[0].id] : []);
     setSelectedCircleId(built.circles[0]?.id ?? null);
+  };
+
+  const loadSavedSketch = (sid: string) => {
+    const saved = (store.doc.sketches ?? []).find((s) => s.id === sid);
+    if (!saved) return;
+    const copy = structuredClone(saved);
+    setSketch(copy);
+    setPlaneMode(copy.plane.kind);
+    if (copy.plane.kind === 'on_face') {
+      setHostShapeId(copy.plane.host_id);
+      setHostFace(copy.plane.face);
+    }
+    const bind = (store.doc.sketch_features ?? []).find((b) => b.sketch_id === sid);
+    if (bind) {
+      setFeatureId(bind.feature_id);
+      setOpKind(bind.operation.kind);
+      setAssociateInTree(Boolean(bind.associate_with_host));
+      setFeatureBlend(bind.operation.blend ?? 0);
+      if (bind.operation.kind === 'boss_extrude') setExtrudeHeight(bind.operation.height);
+      if (bind.operation.kind === 'pocket_cut') {
+        setPocketDepth(bind.operation.depth);
+        setThroughAll(Boolean(bind.operation.through_all));
+      }
+      if (
+        bind.operation.kind === 'revolve_boss' ||
+        bind.operation.kind === 'revolve_cut'
+      ) {
+        setRevolveAngle(bind.operation.angle_deg ?? 360);
+      }
+    }
+    setSelectedSegId(copy.segments[0]?.id ?? null);
+    setSelectedPointIds(copy.points[0] ? [copy.points[0].id] : []);
+    setSelectedCircleId(copy.circles[0]?.id ?? null);
   };
 
   // Draw the 2D parametric sketch canvas with color-coded DOF freedom and constraint badges
@@ -727,11 +819,31 @@ export function SketchWorkbench({
     });
   };
 
+  const buildCurrentPlane = (): SketchPlane =>
+    planeMode === 'on_face'
+      ? { kind: 'on_face', host_id: hostShapeId, face: hostFace, offset: planeOffset }
+      : { kind: planeMode, offset: planeOffset };
+
+  const saveSketchToDocument = () => {
+    const plane = buildCurrentPlane();
+    const sid = (sketch.id || '').trim() || `${(featureId || 'sketch').trim()}_sk`;
+    const payload: ParametricSketch = { ...structuredClone(solved), id: sid, plane };
+    try {
+      const outcome = store.dispatch(`Save Sketch ${sid}`, {
+        cmd: 'upsert_sketch',
+        sketch: payload,
+      });
+      if (outcome.sketch_report) {
+        setSketch(structuredClone(outcome.sketch_report.solved_sketch));
+      }
+      ui.notify(`Saved parametric sketch '${sid}' into .fsm document`, 'info');
+    } catch (err) {
+      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
+
   const applyTo3dDocument = () => {
-    const plane: SketchPlane =
-      planeMode === 'on_face'
-        ? { kind: 'on_face', host_id: hostShapeId, face: hostFace, offset: planeOffset }
-        : { kind: planeMode, offset: planeOffset };
+    const plane = buildCurrentPlane();
 
     const op: SketchFeatureOp =
       opKind === 'boss_extrude'
@@ -742,27 +854,42 @@ export function SketchWorkbench({
             ? { kind: 'revolve_boss', angle_deg: revolveAngle, blend: featureBlend }
             : { kind: 'revolve_cut', angle_deg: revolveAngle, blend: featureBlend };
 
-    let createdIds: string[] = [];
-    let planeDesc = '';
-    store.transact(`Apply 2D Sketch Feature ${featureId}`, (d) => {
-      const res = applySketchFeatureToDoc(
-        d,
-        featureId.trim() || 'sketch_feat1',
-        report,
-        plane,
-        op,
-        associateInTree,
-      );
-      createdIds = res.createdIds;
-      planeDesc = res.planeDescription;
-    });
-    if (createdIds.length > 0) {
-      store.select({ kind: 'node', id: createdIds[0] });
-      ui.notify(
-        `Applied ${op.kind} '${createdIds[0]}' (${createdIds.length} node${createdIds.length > 1 ? 's' : ''}) on ${planeDesc}`,
-        'info',
-      );
-      if (onClose) onClose();
+    const featId = featureId.trim() || 'sketch_feat1';
+    const rawSid = (sketch.id || '').trim();
+    const sketchId =
+      rawSid && rawSid !== 'sketch1' && !presets.some((p) => p.id === rawSid)
+        ? rawSid
+        : `${featId}_sk`;
+    const skPayload: ParametricSketch = {
+      ...structuredClone(solved),
+      id: sketchId,
+      plane,
+    };
+
+    try {
+      const outcome = store.dispatch(`Apply 2D Sketch Feature ${featId}`, {
+        cmd: 'apply_sketch_feature',
+        request: {
+          feature_id: featId,
+          sketch_id: sketchId,
+          sketch: skPayload,
+          on: planeMode === 'on_face' ? `${hostShapeId}.${hostFace}` : planeMode,
+          operation: op,
+          associate_with_host: associateInTree,
+        },
+      });
+      const summary = outcome.sketch_feature;
+      setSketch((prev) => ({ ...prev, id: sketchId, plane }));
+      if (summary && summary.created_node_ids.length > 0) {
+        store.select({ kind: 'node', id: summary.created_node_ids[0] });
+        ui.notify(
+          `Applied ${op.kind} '${summary.created_node_ids[0]}' (${summary.created_node_ids.length} node${summary.created_node_ids.length > 1 ? 's' : ''}) on ${summary.plane_description}`,
+          'info',
+        );
+        if (onClose) onClose();
+      }
+    } catch (err) {
+      ui.notify(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
@@ -893,8 +1020,10 @@ export function SketchWorkbench({
           tool: 'apply_sketch_feature',
           arguments: {
             feature_id: featureId,
-            preset: presetId,
+            sketch_id: sketch.id || `${featureId}_sk`,
             on: planeMode === 'on_face' ? `${hostShapeId}.${hostFace}` : planeMode,
+            associate_with_host: associateInTree,
+            sketch: solved,
             operation:
               opKind === 'boss_extrude'
                 ? { kind: 'boss_extrude', height: extrudeHeight, blend: featureBlend }
@@ -906,7 +1035,7 @@ export function SketchWorkbench({
         null,
         2,
       ),
-    [featureId, presetId, planeMode, hostShapeId, hostFace, opKind, extrudeHeight, pocketDepth, throughAll, revolveAngle, featureBlend],
+    [featureId, sketch.id, solved, associateInTree, planeMode, hostShapeId, hostFace, opKind, extrudeHeight, pocketDepth, throughAll, revolveAngle, featureBlend],
   );
 
   return (
@@ -982,6 +1111,27 @@ export function SketchWorkbench({
         {/* Row 1: Preset Selector + 2D Sketch Geometry Icon Dock (Cyan-Blue CAD Palette) */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            {(store.doc.sketches?.length ?? 0) > 0 && (
+              <>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e' }}>Saved:</label>
+                <select
+                  class="select"
+                  data-testid="sketch-saved-select"
+                  value={(store.doc.sketches ?? []).some((s) => s.id === sketch.id) ? sketch.id : ''}
+                  onChange={(e) => loadSavedSketch((e.target as HTMLSelectElement).value)}
+                  style={{ fontSize: '11px', maxWidth: '180px' }}
+                >
+                  <option value="" disabled>
+                    — Select doc sketch —
+                  </option>
+                  {(store.doc.sketches ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
             <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-2)' }}>Template:</label>
             <select
               class="select"
@@ -990,7 +1140,7 @@ export function SketchWorkbench({
               onChange={(e) => loadPreset((e.target as HTMLSelectElement).value)}
               style={{ fontSize: '11px', maxWidth: '250px' }}
             >
-              {SKETCH_PRESETS.map((p) => (
+              {presets.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.title}
                 </option>
@@ -1028,48 +1178,93 @@ export function SketchWorkbench({
                   label: 'Center Rect',
                   title: 'Add a symmetric Center Rectangle macro (R)',
                   icon: Icon.geomRect,
-                  run: () =>
-                    setSketch(() => {
-                      const next = structuredClone(solved);
-                      addCenterRectToSketch(next, `rect${next.segments.length + 1}`, 0, 0, 48, 30, 0, false);
-                      return next;
-                    }),
+                  run: () => {
+                    try {
+                      setSketch(
+                        expandSketchMacro(solved, {
+                          macro: 'center_rect',
+                          id: `rect${solved.segments.length + 1}`,
+                          cx: 0,
+                          cy: 0,
+                          width: 48,
+                          height: 30,
+                          fillet: 0,
+                          construction: false,
+                        }),
+                      );
+                    } catch (err) {
+                      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                    }
+                  },
                 },
                 {
                   id: 'macro-add-hole',
                   label: 'Circle / Hole',
                   title: 'Add a parametric Circle / Interior Hole (C)',
                   icon: Icon.geomCircle,
-                  run: () =>
-                    setSketch(() => {
-                      const next = structuredClone(solved);
-                      addCircleToSketch(next, `hole_${next.circles.length + 1}`, 20, 15, 3.2, false);
-                      return next;
-                    }),
+                  run: () => {
+                    try {
+                      setSketch(
+                        expandSketchMacro(solved, {
+                          macro: 'circle',
+                          id: `hole_${solved.circles.length + 1}`,
+                          cx: 20,
+                          cy: 15,
+                          radius: 3.2,
+                          construction: false,
+                        }),
+                      );
+                    } catch (err) {
+                      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                    }
+                  },
                 },
                 {
                   id: 'macro-add-slot',
                   label: 'Obround Slot',
                   title: 'Add a parametric Obround Adjustment Slot macro (S)',
                   icon: Icon.geomSlot,
-                  run: () =>
-                    setSketch(() => {
-                      const next = structuredClone(solved);
-                      addSlotToSketch(next, `slot${next.segments.length + 1}`, -10, 0, 10, 0, 4.5);
-                      return next;
-                    }),
+                  run: () => {
+                    try {
+                      setSketch(
+                        expandSketchMacro(solved, {
+                          macro: 'slot',
+                          id: `slot${solved.segments.length + 1}`,
+                          x1: -10,
+                          y1: 0,
+                          x2: 10,
+                          y2: 0,
+                          radius: 4.5,
+                        }),
+                      );
+                    } catch (err) {
+                      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                    }
+                  },
                 },
                 {
                   id: 'macro-add-bolt-circle',
                   label: 'Bolt Circle',
                   title: 'Add a Bolt-Hole Circle pattern (construction PCD + N equal holes)',
                   icon: Icon.geomBoltCircle,
-                  run: () =>
-                    setSketch(() => {
-                      const next = structuredClone(solved);
-                      addBoltCircleToSketch(next, `bc${next.circles.length + 1}`, 0, 0, 36, 4, 4.2, 0);
-                      return next;
-                    }),
+                  run: () => {
+                    try {
+                      setSketch(
+                        expandSketchMacro(solved, {
+                          macro: 'bolt_circle',
+                          id: `bc${solved.circles.length + 1}`,
+                          cx: 0,
+                          cy: 0,
+                          pcd: 36,
+                          count: 4,
+                          hole_diameter: 4.2,
+                          start_angle_deg: 0,
+                        }),
+                      );
+                    } catch (err) {
+                      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                    }
+                  },
                 },
                 {
                   id: 'macro-add-hex',
@@ -1077,17 +1272,40 @@ export function SketchWorkbench({
                   title: 'Build a regular 6-sided Hex Nut profile + center bore',
                   icon: Icon.geomPolygon,
                   run: () => {
-                    const sk: ParametricSketch = {
-                      id: 'hex_profile',
-                      plane: sketch.plane,
-                      points: [],
-                      segments: [],
-                      circles: [],
-                      constraints: [],
-                    };
-                    addPolygonToSketch(sk, 'hex', 0, 0, 22, 6, 0, false);
-                    addCircleToSketch(sk, 'bore', 0, 0, 8, false);
-                    setSketch(sk);
+                    try {
+                      const sk: ParametricSketch = {
+                        id: 'hex_profile',
+                        plane: sketch.plane,
+                        points: [],
+                        segments: [],
+                        circles: [],
+                        constraints: [],
+                      };
+                      setSketch(
+                        expandSketchMacro(sk, [
+                          {
+                            macro: 'polygon',
+                            id: 'hex',
+                            cx: 0,
+                            cy: 0,
+                            radius: 22,
+                            sides: 6,
+                            angle_deg: 0,
+                            construction: false,
+                          },
+                          {
+                            macro: 'circle',
+                            id: 'bore',
+                            cx: 0,
+                            cy: 0,
+                            radius: 8,
+                            construction: false,
+                          },
+                        ]),
+                      );
+                    } catch (err) {
+                      ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                    }
                   },
                 },
               ] as const
@@ -1140,11 +1358,17 @@ export function SketchWorkbench({
                 onClick={() => {
                   const targetPt = selectedPointIds[0] || solved.points[0]?.id;
                   if (!targetPt) return;
-                  setSketch(() => {
-                    const next = structuredClone(solved);
-                    filletSketchCorner(next, targetPt, filletRadius);
-                    return next;
-                  });
+                  try {
+                    setSketch(
+                      expandSketchMacro(solved, {
+                        macro: 'fillet_corner',
+                        point_id: targetPt,
+                        radius: filletRadius,
+                      }),
+                    );
+                  } catch (err) {
+                    ui.notify(err instanceof Error ? err.message : String(err), 'error');
+                  }
                 }}
                 style={{
                   display: 'inline-flex',
@@ -1512,6 +1736,19 @@ export function SketchWorkbench({
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '5px 8px', alignItems: 'center', fontSize: '11px' }}>
+              <label>Sketch ID:</label>
+              <input
+                type="text"
+                class="text-input"
+                data-testid="sketch-id-input"
+                value={sketch.id}
+                onInput={(e) => {
+                  const nextId = (e.target as HTMLInputElement).value;
+                  setSketch((prev) => ({ ...prev, id: nextId }));
+                }}
+                style={{ fontSize: '11px', padding: '3px 6px' }}
+              />
+
               <label>Feature Name:</label>
               <input
                 type="text"
@@ -1724,6 +1961,16 @@ export function SketchWorkbench({
                   style={{ fontSize: '10.5px' }}
                 >
                   {showMcpJson ? 'Hide MCP JSON' : '🤖 View MCP Tool Call'}
+                </button>
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="save-sketch-btn"
+                  onClick={saveSketchToDocument}
+                  style={{ fontSize: '11px', fontWeight: 600 }}
+                  title="Persist this 2D parametric sketch in doc.sketches (.fsm `sketch <id> { ... }`) without creating a 3D feature yet"
+                >
+                  💾 Save Sketch
                 </button>
                 <button
                   type="button"
