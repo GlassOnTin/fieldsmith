@@ -114,6 +114,69 @@ pub fn load_fn_probe(src: &str, lo: f64, hi: f64) -> Result<String, JsValue> {
     }))
 }
 
+/// Compile and sample a world-space spatial boundary-condition expression `f(x, y, z, r)`
+/// (`pressure_fn`, `temp_fn`, `h_fn`, `tinf_fn`, `q_fn`) with document `let` variables in
+/// scope, returning 121 preview points along its primary coordinate (`x`, `y`, `z`, or `r`).
+#[wasm_bindgen(js_name = spatialFnProbe)]
+pub fn spatial_fn_probe(
+    src: &str,
+    doc_json: &str,
+    lo: f64,
+    hi: f64,
+    non_negative: bool,
+) -> Result<String, JsValue> {
+    let lets: Vec<(String, f64)> = serde_json::from_str::<Document>(doc_json)
+        .ok()
+        .map(|d| d.lets.iter().map(|l| (l.name.clone(), l.value)).collect())
+        .unwrap_or_default();
+    let f = match fieldsmith_doc::spatial::SpatialFn::compile_with_lets(src, &lets) {
+        Ok(f) => f,
+        Err(e) => {
+            return to_json(&serde_json::json!({ "ok": false, "error": e }));
+        }
+    };
+    let coord = f.primary_coord();
+    let (d, from): ((f64, f64), &str) = match f.domain() {
+        Some((a, b)) if b > a => ((a, b), "domain"),
+        _ => {
+            let b = if hi > lo { hi } else { lo + 50.0 };
+            ((lo, b), "requested")
+        }
+    };
+    let n = 121usize;
+    let mut xs = Vec::with_capacity(n);
+    let mut ys = Vec::with_capacity(n);
+    let mut y_min = f64::INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    for i in 0..n {
+        let u = d.0 + (d.1 - d.0) * i as f64 / (n - 1).max(1) as f64;
+        let p = match coord {
+            fieldsmith_doc::spatial::SpatialCoord::X
+            | fieldsmith_doc::spatial::SpatialCoord::R => [u, 0.0, 0.0],
+            fieldsmith_doc::spatial::SpatialCoord::Y => [0.0, u, 0.0],
+            fieldsmith_doc::spatial::SpatialCoord::Z => [0.0, 0.0, u],
+        };
+        let v = f.eval(p);
+        if v.is_finite() {
+            y_min = y_min.min(v);
+            y_max = y_max.max(v);
+        }
+        xs.push(u);
+        ys.push(v);
+    }
+    to_json(&serde_json::json!({
+        "ok": true,
+        "coord": coord.name(),
+        "domain": { "lo": d.0, "hi": d.1, "from": from },
+        "bands": f.bands().iter().map(|b| serde_json::json!({ "lo": b.lo, "hi": b.hi })).collect::<Vec<_>>(),
+        "xs": xs,
+        "ys": ys,
+        "min": if y_min.is_finite() { Some(y_min) } else { None },
+        "max": if y_max.is_finite() { Some(y_max) } else { None },
+        "checks": f.static_checks("spatial_fn", non_negative),
+    }))
+}
+
 /// The built-in material library (JSON array).
 #[wasm_bindgen]
 pub fn material_library() -> Result<String, JsValue> {

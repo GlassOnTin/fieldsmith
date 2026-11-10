@@ -50,9 +50,10 @@ pub use stress::{
     nodal_stress_thermal_multi, principal_stresses, von_mises, Stress,
 };
 pub use thermal::{
-    assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
-    element_thermal_integrals, solve_conduction, thermal_load, thermal_load_multi, Csr,
-    HeatFluxBc, RobinBc, ThermalRefData,
+    assemble_laplace, assemble_laplace_k, element_flux, element_flux_spatial, element_laplace,
+    element_pressure_spatial, element_robin, element_robin_spatial, element_thermal_integrals,
+    solve_conduction, solve_conduction_spatial, thermal_load, thermal_load_multi, Csr, HeatFluxBc,
+    RobinBc, SpatialHeatFluxBc, SpatialRobinBc, ThermalRefData,
 };
 
 pub type V3 = [f64; 3];

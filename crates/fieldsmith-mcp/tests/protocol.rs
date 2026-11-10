@@ -508,3 +508,82 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
     assert!(graded["mass_g"].as_f64().unwrap() < graded["solid_mass_g"].as_f64().unwrap() * 0.70);
     assert!(graded["max_layer_peel"].as_array().unwrap()[1].as_f64().unwrap() < 0.60);
 }
+
+#[test]
+fn spatial_boundary_conditions_round_trip_and_solve_over_mcp() {
+    let mut c = Client::spawn();
+    let _ = c.ask(
+        1,
+        "initialize",
+        json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}),
+    );
+    c.tool_ok(
+        2,
+        "new_document",
+        json!({"name": "MCP Spatial BC Wall", "material": "ss316l"}),
+    );
+    c.tool_ok(
+        3,
+        "upsert_shape",
+        json!({"id": "wall", "kind": "box", "size": [4.0, 10.0, 20.0], "at": [2.0, 5.0, 10.0]}),
+    );
+    c.tool_ok(
+        4,
+        "add_region",
+        json!({"id": "base", "selectors": [{"shape": "wall", "face": "nz"}]}),
+    );
+    c.tool_ok(
+        5,
+        "add_region",
+        json!({"id": "wet", "selectors": [{"shape": "wall", "face": "nx"}]}),
+    );
+    c.tool_ok(
+        6,
+        "add_region",
+        json!({"id": "dry", "selectors": [{"shape": "wall", "face": "px"}]}),
+    );
+    c.tool_ok(
+        7,
+        "add_support",
+        json!({"id": "fix_base", "region": "base", "fixed": [true, true, true]}),
+    );
+    let r_load = c.tool_ok(
+        8,
+        "add_load",
+        json!({"id": "hydro", "region": "wet", "pressure": 5.0, "pressure_fn": "0.5 * (20 - z)", "case": "Hydro"}),
+    );
+    assert!(r_load["problems"].as_array().unwrap().is_empty(), "{r_load}");
+    let r_temp = c.tool_ok(
+        9,
+        "add_temperature",
+        json!({"id": "t_grad", "region": "wet", "temp_fn": "20 + 3 * z", "case": "Thermal"}),
+    );
+    assert!(r_temp["problems"].as_array().unwrap().is_empty(), "{r_temp}");
+    let r_conv = c.tool_ok(
+        10,
+        "add_convection",
+        json!({"id": "c_grad", "region": "dry", "h_fn": "0.02 + 0.002 * z", "tinf_fn": "20 + 0.5 * z", "case": "Thermal"}),
+    );
+    assert!(r_conv["problems"].as_array().unwrap().is_empty(), "{r_conv}");
+    let r_hf = c.tool_ok(
+        11,
+        "add_heatflux",
+        json!({"id": "hf_grad", "region": "dry", "q_fn": "0.1 * sin(pi * z / 20)", "case": "Thermal"}),
+    );
+    assert!(r_hf["problems"].as_array().unwrap().is_empty(), "{r_hf}");
+
+    let txt = c.tool_ok(12, "doc_text", json!({}));
+    let fsm_str = txt["text"].as_str().expect("doc_text.text");
+    assert!(fsm_str.contains("pressure_fn=\"0.5 * (20 - z)\""));
+    assert!(fsm_str.contains("temp_fn=\"20 + 3 * z\""));
+    assert!(fsm_str.contains("h_fn=\"0.02 + 0.002 * z\""));
+    assert!(fsm_str.contains("tinf_fn=\"20 + 0.5 * z\""));
+    assert!(fsm_str.contains("q_fn=\"0.1 * sin(pi * z / 20)\""));
+
+    let solved = c.tool_ok(13, "solve", json!({"kind": "solve", "h": 3.0}));
+    assert_eq!(solved["status"], "ok");
+    assert_eq!(solved["single"]["cases"].as_array().unwrap().len(), 2);
+
+    let del = c.tool_ok(14, "delete_entity", json!({"id": "hf_grad"}));
+    assert_eq!(del["kind"], "heatflux");
+}

@@ -153,7 +153,7 @@ fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     if let Some(load) = doc.loads.iter().find(|l| l.id == addr.id) {
         return match (&load.kind, addr.attr.as_str(), addr.comp) {
             (LoadKind::Force { vector }, "force", Some(i)) => Ok(vector[i]),
-            (LoadKind::Pressure { mpa }, "mpa", None) => Ok(*mpa),
+            (LoadKind::Pressure { mpa, .. }, "mpa", None) => Ok(*mpa),
             (LoadKind::Preload { newtons, .. }, "newtons", None) => Ok(*newtons),
             (LoadKind::Distributed { total: Some(t), .. }, "total", None) => Ok(*t),
             _ => Err(format!("param {addr}: unsupported load attribute")),

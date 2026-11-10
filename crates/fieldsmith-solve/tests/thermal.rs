@@ -6,8 +6,8 @@ use fieldsmith_solve::p2::P2Mesh;
 use fieldsmith_solve::pcg::SolverOptions;
 use fieldsmith_solve::{
     assemble_laplace, assemble_laplace_k, element_flux, element_laplace, element_robin,
-    element_thermal_integrals, nodal_stress_thermal, solve_conduction, thermal_load, HeatFluxBc,
-    RobinBc, ThermalRefData,
+    element_thermal_integrals, nodal_stress_thermal, solve_conduction, solve_conduction_spatial,
+    thermal_load, HeatFluxBc, RobinBc, SpatialHeatFluxBc, SpatialRobinBc, ThermalRefData,
 };
 
 const V: [[f64; 3]; 4] = [
@@ -1042,4 +1042,146 @@ fn conduction_validates_the_conductivity_vector() {
             "bad k {bad}: {e}"
         );
     }
+}
+
+#[test]
+fn spatial_robin_and_flux_reproduce_quadratic_harmonic_field_to_machine_precision() {
+    // Exact quadratic harmonic field T(x, y, z) = 20 + x·y + 2·x·z (∇²T = 0) on the unit cube:
+    // - Hold x = 0 at T = 20 (Dirichlet).
+    // - On x = 1 (outward normal +x, ∂T/∂n = y + 2z), apply spatially varying quadratic Robin
+    //   h(y, z) = 0.5 + y² + z² and t_inf(y, z) = (20 + y + 2z) + (y + 2z) / h(y, z), so
+    //   h(x)·(t_inf(x) − T(x)) = y + 2z = ∂T/∂n everywhere on x = 1.
+    // - On the remaining 4 lateral faces, prescribe spatially varying normal flux q(x):
+    //   y = 0 -> −x, y = 1 -> +x, z = 0 -> −2x, z = 1 -> +2x.
+    // Because T is quadratic and h is quadratic, the 4×4 Duffy Gauss–Legendre rule integrates
+    // both ∫ h·φa·φb dΓ (degree 7) and ∫ q·φa dΓ (degree 4) to machine precision.
+    let mesh = cube_mesh();
+    let k = ones_k(&mesh);
+    let d: Vec<Option<f64>> = mesh
+        .nodes
+        .iter()
+        .map(|p| if p[0] == 0.0 { Some(20.0) } else { None })
+        .collect();
+    let facets = hull_facets(&mesh);
+    let face_on = |f: &[u32; 6], axis: usize, val: f64| -> bool {
+        f.iter()
+            .all(|&n| (mesh.nodes[n as usize][axis] - val).abs() < 1e-12)
+    };
+    let x1_facets: Vec<[u32; 6]> = facets.iter().copied().filter(|f| face_on(f, 0, 1.0)).collect();
+    let y0_facets: Vec<[u32; 6]> = facets.iter().copied().filter(|f| face_on(f, 1, 0.0)).collect();
+    let y1_facets: Vec<[u32; 6]> = facets.iter().copied().filter(|f| face_on(f, 1, 1.0)).collect();
+    let z0_facets: Vec<[u32; 6]> = facets.iter().copied().filter(|f| face_on(f, 2, 0.0)).collect();
+    let z1_facets: Vec<[u32; 6]> = facets.iter().copied().filter(|f| face_on(f, 2, 1.0)).collect();
+    assert_eq!(x1_facets.len(), 2);
+
+    let spatial_robin = [SpatialRobinBc {
+        facets: x1_facets,
+        eval: Box::new(|p| {
+            let (_, y, z) = (p[0], p[1], p[2]);
+            let h = 0.5 + y * y + z * z;
+            let t_wall = 20.0 + y + 2.0 * z;
+            let q_n = y + 2.0 * z;
+            Ok((h, t_wall + q_n / h))
+        }),
+    }];
+    let spatial_flux = [
+        SpatialHeatFluxBc {
+            facets: y0_facets,
+            eval: Box::new(|p| Ok(-p[0])),
+        },
+        SpatialHeatFluxBc {
+            facets: y1_facets,
+            eval: Box::new(|p| Ok(p[0])),
+        },
+        SpatialHeatFluxBc {
+            facets: z0_facets,
+            eval: Box::new(|p| Ok(-2.0 * p[0])),
+        },
+        SpatialHeatFluxBc {
+            facets: z1_facets,
+            eval: Box::new(|p| Ok(2.0 * p[0])),
+        },
+    ];
+    let opts = SolverOptions {
+        rtol: 1e-12,
+        ..SolverOptions::default()
+    };
+    let (t, report) =
+        solve_conduction_spatial(&mesh, &d, &k, &[], &spatial_robin, &[], &spatial_flux, opts)
+            .unwrap();
+    assert!(report.converged, "{report:?}");
+    for (i, &ti) in t.iter().enumerate() {
+        let [x, y, z] = mesh.nodes[i];
+        let want = 20.0 + x * y + 2.0 * x * z;
+        assert!(
+            (ti - want).abs() < 1e-10,
+            "node {i} at [{x}, {y}, {z}]: got {ti}, want {want}"
+        );
+    }
+}
+
+#[test]
+fn pure_spatial_robin_without_dirichlet_is_solvable_when_h_positive() {
+    // Pure spatial Robin (no fixed temperature, no uniform Robin) lifts the constant mode
+    // whenever h(x) > 0 on at least one Gauss point, and rejects h(x) ≡ 0 or negative h(x).
+    let mesh = cube_mesh();
+    let k = ones_k(&mesh);
+    let d = vec![None; mesh.nodes.len()];
+    let facets = hull_facets(&mesh);
+    let ok_robin = [SpatialRobinBc {
+        facets: facets.clone(),
+        eval: Box::new(|p| Ok((0.2 + 0.3 * p[2], 85.0))),
+    }];
+    let (t, report) = solve_conduction_spatial(
+        &mesh,
+        &d,
+        &k,
+        &[],
+        &ok_robin,
+        &[],
+        &[],
+        SolverOptions {
+            rtol: 1e-12,
+            ..SolverOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(report.converged);
+    for &ti in &t {
+        assert!((ti - 85.0).abs() < 1e-9, "got {ti}");
+    }
+
+    let zero_robin = [SpatialRobinBc {
+        facets: facets.clone(),
+        eval: Box::new(|_| Ok((0.0, 85.0))),
+    }];
+    let err_zero = solve_conduction_spatial(
+        &mesh,
+        &d,
+        &k,
+        &[],
+        &zero_robin,
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
+    assert!(err_zero.contains("no convection band with h > 0"), "{err_zero}");
+
+    let neg_robin = [SpatialRobinBc {
+        facets,
+        eval: Box::new(|_| Ok((-0.1, 85.0))),
+    }];
+    let err_neg = solve_conduction_spatial(
+        &mesh,
+        &d,
+        &k,
+        &[],
+        &neg_robin,
+        &[],
+        &[],
+        SolverOptions::default(),
+    )
+    .unwrap_err();
+    assert!(err_neg.contains("finite and ≥ 0"), "{err_neg}");
 }

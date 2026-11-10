@@ -390,6 +390,29 @@ pub struct HeatFluxBc {
     pub facets: Vec<[u32; 6]>,
 }
 
+/// World-space evaluator `(h(x), t_inf(x))` for [`SpatialRobinBc`].
+pub type SpatialRobinEval<'a> = Box<dyn Fn(V3) -> Result<(f64, f64), String> + Sync + 'a>;
+
+/// World-space evaluator `q(x)` for [`SpatialHeatFluxBc`].
+pub type SpatialFluxEval<'a> = Box<dyn Fn(V3) -> Result<f64, String> + Sync + 'a>;
+
+/// A spatially varying convection (Robin) band: `(h(x), t_inf(x))` evaluated in world
+/// coordinates `[x, y, z]` (mm) at each of the 9 Gauss–Legendre points of every 6-node
+/// boundary facet. Adds `m_h[a][b] = ∫ h(x) φ_a φ_b dΓ` to the conduction matrix and
+/// `l_ht[a] = ∫ h(x) t_inf(x) φ_a dΓ` to the load vector.
+pub struct SpatialRobinBc<'a> {
+    pub facets: Vec<[u32; 6]>,
+    pub eval: SpatialRobinEval<'a>,
+}
+
+/// A spatially varying prescribed surface heat flux (Neumann) band: `q(x)` (W/mm²)
+/// evaluated in world coordinates `[x, y, z]` (mm) at each of the 9 Gauss–Legendre points
+/// of every 6-node boundary facet, adding `l_q[a] = ∫ q(x) φ_a dΓ` to the load vector.
+pub struct SpatialHeatFluxBc<'a> {
+    pub facets: Vec<[u32; 6]>,
+    pub eval: SpatialFluxEval<'a>,
+}
+
 /// Steady conduction on the P2 mesh with Dirichlet temperatures per node (`Some(t)` =
 /// fixed °C, `None` = insulated), optional convection (Robin) bands, and optional
 /// prescribed heat-flux bands. Returns nodal temperature (°C). Solvable iff at least
@@ -408,6 +431,24 @@ pub fn solve_conduction(
     k: &[f64],
     robin: &[RobinBc],
     flux: &[HeatFluxBc],
+    opts: SolverOptions,
+) -> Result<(Vec<f64>, SolveReport), String> {
+    solve_conduction_spatial(mesh, d, k, robin, &[], flux, &[], opts)
+}
+
+/// Steady conduction on the P2 mesh accepting both uniform [`RobinBc`]/[`HeatFluxBc`] and
+/// world-space [`SpatialRobinBc`]/[`SpatialHeatFluxBc`] boundary terms. When
+/// `spatial_robin` and `spatial_flux` are empty, arithmetic is bit-for-bit identical to
+/// [`solve_conduction`].
+#[allow(clippy::too_many_arguments)]
+pub fn solve_conduction_spatial(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k: &[f64],
+    robin: &[RobinBc],
+    spatial_robin: &[SpatialRobinBc<'_>],
+    flux: &[HeatFluxBc],
+    spatial_flux: &[SpatialHeatFluxBc<'_>],
     opts: SolverOptions,
 ) -> Result<(Vec<f64>, SolveReport), String> {
     faer::set_global_parallelism(faer::Parallelism::None);
@@ -445,8 +486,9 @@ pub fn solve_conduction(
             ));
         }
     }
-    if !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0) {
-        return Err(if flux.is_empty() {
+    let no_fixed_or_uniform_h = !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0);
+    if spatial_robin.is_empty() && no_fixed_or_uniform_h {
+        return Err(if flux.is_empty() && spatial_flux.is_empty() {
             "conduction has no fixed temperature and no convection band with h > 0 — every \
              face would be insulated; place at least one temperature region or a convection"
                 .into()
@@ -473,6 +515,23 @@ pub fn solve_conduction(
             }
         }
     }
+    let mut any_positive_spatial_h = false;
+    for (bi, bc) in spatial_robin.iter().enumerate() {
+        for f in &bc.facets {
+            let (m_h, l_ht, max_h) = element_robin_spatial(mesh, f, &*bc.eval)
+                .map_err(|e| format!("convection band {bi}: {e}"))?;
+            if max_h > 0.0 {
+                any_positive_spatial_h = true;
+            }
+            for i in 0..6 {
+                let ni = f[i] as usize;
+                load[ni] += l_ht[i];
+                for j in 0..6 {
+                    a.add(ni, f[j], m_h[i][j]);
+                }
+            }
+        }
+    }
     // Heat-flux bands join the same load vector — the facet integral is the flux's
     // whole contribution; no matrix term. Facets on fixed rows are lifted to zero with
     // the rest of the right-hand side.
@@ -483,6 +542,27 @@ pub fn solve_conduction(
                 load[f[i] as usize] += bc.q * l[i];
             }
         }
+    }
+    for (bi, bc) in spatial_flux.iter().enumerate() {
+        for f in &bc.facets {
+            let l_q = element_flux_spatial(mesh, f, &*bc.eval)
+                .map_err(|e| format!("heat flux band {bi}: {e}"))?;
+            for i in 0..6 {
+                load[f[i] as usize] += l_q[i];
+            }
+        }
+    }
+    if no_fixed_or_uniform_h && !any_positive_spatial_h {
+        return Err(if flux.is_empty() && spatial_flux.is_empty() {
+            "conduction has no fixed temperature and no convection band with h > 0 — every \
+             face would be insulated; place at least one temperature region or a convection"
+                .into()
+        } else {
+            "conduction has no fixed temperature and no convection band with h > 0 — a heat \
+             flux q alone does not fix the field's level; place at least one temperature \
+             region or a convection"
+                .into()
+        });
     }
     // Lift the Dirichlet values into the right-hand side: solve A_ff x = −A_fd·s_d, then
     // write the fixed values back. Symmetric one-sided lift (full matrix times the
@@ -614,6 +694,204 @@ pub fn element_robin(mesh: &P2Mesh, nodes: &[u32; 6]) -> ([[f64; 6]; 6], [f64; 6
 /// contribution (no matrix term). Same quadrature, same winding irrelevance.
 pub fn element_flux(mesh: &P2Mesh, nodes: &[u32; 6]) -> [f64; 6] {
     element_robin(mesh, nodes).1
+}
+
+/// 4-point Gauss–Legendre quadrature on `[0, 1]` (exact up to polynomial degree 7).
+/// Through the Duffy map `ξ = (u, v·(1−u))` (16 points per facet), this integrates
+/// `h(x)·φa·φb·(1−u)` up to quadratic `h(x)` (total degree `2 + 2 + 2 + 1 = 7`) and
+/// `q(x)·φa·(1−u)` up to quartic `q(x)` (total degree `4 + 2 + 1 = 7`) to machine precision
+/// on affine P2 facets.
+fn gl4_unit_interval() -> [(f64, f64); 4] {
+    let s6_5 = (6.0_f64 / 5.0).sqrt();
+    let r1 = (3.0 / 7.0 - (2.0 / 7.0) * s6_5).sqrt();
+    let r2 = (3.0 / 7.0 + (2.0 / 7.0) * s6_5).sqrt();
+    let s30 = 30.0_f64.sqrt();
+    let w1 = (18.0 + s30) / 72.0;
+    let w2 = (18.0 - s30) / 72.0;
+    [
+        (0.5 * (1.0 - r2), w2),
+        (0.5 * (1.0 - r1), w1),
+        (0.5 * (1.0 + r1), w1),
+        (0.5 * (1.0 + r2), w2),
+    ]
+}
+
+/// Facet Robin quadrature result `(m_h, l_ht, max_h)`.
+pub type RobinFacetQuad = ([[f64; 6]; 6], [f64; 6], f64);
+
+/// Local spatially varying Robin integrals on one 6-node P2 boundary facet using the
+/// 16-point (4×4 degree-7) Duffy Gauss–Legendre rule: returns `(m_h, l_ht, max_h)` where
+/// `m_h[a][b] = ∫ h(x) φa φb dΓ` and `l_ht[a] = ∫ h(x) t_inf(x) φa dΓ`.
+pub fn element_robin_spatial<F>(
+    mesh: &P2Mesh,
+    nodes: &[u32; 6],
+    eval: F,
+) -> Result<RobinFacetQuad, String>
+where
+    F: Fn(V3) -> Result<(f64, f64), String>,
+{
+    let p: [V3; 6] = nodes.map(|f| mesh.nodes[f as usize]);
+    let gl = gl4_unit_interval();
+    let elem = P2Triangle;
+    let mut m = [[0.0f64; 6]; 6];
+    let mut l = [0.0f64; 6];
+    let mut max_h = 0.0f64;
+    for &(u, wu) in &gl {
+        for &(v, wv) in &gl {
+            let xi = [u, v * (1.0 - u)];
+            let s = wu * wv * (1.0 - u);
+            let n = elem.evaluate_basis(&xi);
+            let dn = elem.evaluate_gradients(&xi);
+            let mut x_gp = [0.0f64; 3];
+            let mut t1 = [0.0f64; 3];
+            let mut t2 = [0.0f64; 3];
+            for (k, (&nk, &dnk)) in n.iter().zip(dn.iter()).enumerate() {
+                for c in 0..3 {
+                    x_gp[c] += nk * p[k][c];
+                    t1[c] += dnk[0] * p[k][c];
+                    t2[c] += dnk[1] * p[k][c];
+                }
+            }
+            let (h, t_inf) = eval(x_gp)?;
+            if !(h.is_finite() && h >= 0.0) {
+                return Err(format!(
+                    "h({:.4}, {:.4}, {:.4}) must be finite and ≥ 0 (got {h})",
+                    x_gp[0], x_gp[1], x_gp[2]
+                ));
+            }
+            if !t_inf.is_finite() {
+                return Err(format!(
+                    "t_inf({:.4}, {:.4}, {:.4}) must be finite (got {t_inf})",
+                    x_gp[0], x_gp[1], x_gp[2]
+                ));
+            }
+            if h > max_h {
+                max_h = h;
+            }
+            let cx = t1[1] * t2[2] - t1[2] * t2[1];
+            let cy = t1[2] * t2[0] - t1[0] * t2[2];
+            let cz = t1[0] * t2[1] - t1[1] * t2[0];
+            let dgamma = s * (cx * cx + cy * cy + cz * cz).sqrt();
+            for a in 0..6 {
+                l[a] += dgamma * h * t_inf * n[a];
+                for b in 0..6 {
+                    m[a][b] += dgamma * h * n[a] * n[b];
+                }
+            }
+        }
+    }
+    Ok((m, l, max_h))
+}
+
+/// Nodal spatially varying surface-flux integrals on one 6-node P2 boundary facet:
+/// `flux[a] = ∫ q(x) φa dΓ` via the 16-point (4×4 degree-7) Duffy Gauss–Legendre rule.
+pub fn element_flux_spatial<F>(
+    mesh: &P2Mesh,
+    nodes: &[u32; 6],
+    eval: F,
+) -> Result<[f64; 6], String>
+where
+    F: Fn(V3) -> Result<f64, String>,
+{
+    let p: [V3; 6] = nodes.map(|f| mesh.nodes[f as usize]);
+    let gl = gl4_unit_interval();
+    let elem = P2Triangle;
+    let mut l = [0.0f64; 6];
+    for &(u, wu) in &gl {
+        for &(v, wv) in &gl {
+            let xi = [u, v * (1.0 - u)];
+            let s = wu * wv * (1.0 - u);
+            let n = elem.evaluate_basis(&xi);
+            let dn = elem.evaluate_gradients(&xi);
+            let mut x_gp = [0.0f64; 3];
+            let mut t1 = [0.0f64; 3];
+            let mut t2 = [0.0f64; 3];
+            for (k, (&nk, &dnk)) in n.iter().zip(dn.iter()).enumerate() {
+                for c in 0..3 {
+                    x_gp[c] += nk * p[k][c];
+                    t1[c] += dnk[0] * p[k][c];
+                    t2[c] += dnk[1] * p[k][c];
+                }
+            }
+            let q = eval(x_gp)?;
+            if !q.is_finite() {
+                return Err(format!(
+                    "q({:.4}, {:.4}, {:.4}) must be finite (got {q})",
+                    x_gp[0], x_gp[1], x_gp[2]
+                ));
+            }
+            let cx = t1[1] * t2[2] - t1[2] * t2[1];
+            let cy = t1[2] * t2[0] - t1[0] * t2[2];
+            let cz = t1[0] * t2[1] - t1[1] * t2[0];
+            let dgamma = s * (cx * cx + cy * cy + cz * cz).sqrt();
+            for a in 0..6 {
+                l[a] += dgamma * q * n[a];
+            }
+        }
+    }
+    Ok(l)
+}
+
+/// Consistent P2 nodal traction forces, resultant force, and origin moment for a spatially
+/// varying normal pressure `p(x)` (MPa, positive inward `-p(x)·n_out`) on one 6-node facet,
+/// integrated via the 16-point (4×4 degree-7) Duffy Gauss–Legendre rule.
+pub fn element_pressure_spatial<F>(
+    mesh: &P2Mesh,
+    nodes: &[u32; 6],
+    n_out: V3,
+    eval: F,
+) -> Result<([V3; 6], V3, V3), String>
+where
+    F: Fn(V3) -> Result<f64, String>,
+{
+    let p: [V3; 6] = nodes.map(|f| mesh.nodes[f as usize]);
+    let gl = gl4_unit_interval();
+    let elem = P2Triangle;
+    let mut nodal_f = [[0.0f64; 3]; 6];
+    let mut resultant = [0.0f64; 3];
+    let mut moment = [0.0f64; 3];
+    for &(u, wu) in &gl {
+        for &(v, wv) in &gl {
+            let xi = [u, v * (1.0 - u)];
+            let s = wu * wv * (1.0 - u);
+            let n = elem.evaluate_basis(&xi);
+            let dn = elem.evaluate_gradients(&xi);
+            let mut x_gp = [0.0f64; 3];
+            let mut t1 = [0.0f64; 3];
+            let mut t2 = [0.0f64; 3];
+            for (k, (&nk, &dnk)) in n.iter().zip(dn.iter()).enumerate() {
+                for c in 0..3 {
+                    x_gp[c] += nk * p[k][c];
+                    t1[c] += dnk[0] * p[k][c];
+                    t2[c] += dnk[1] * p[k][c];
+                }
+            }
+            let mpa = eval(x_gp)?;
+            if !mpa.is_finite() {
+                return Err(format!(
+                    "pressure({:.4}, {:.4}, {:.4}) must be finite (got {mpa})",
+                    x_gp[0], x_gp[1], x_gp[2]
+                ));
+            }
+            let cx = t1[1] * t2[2] - t1[2] * t2[1];
+            let cy = t1[2] * t2[0] - t1[0] * t2[2];
+            let cz = t1[0] * t2[1] - t1[1] * t2[0];
+            let dgamma = s * (cx * cx + cy * cy + cz * cz).sqrt();
+            let df = n_out.map(|c| -mpa * dgamma * c);
+            for a in 0..6 {
+                for c in 0..3 {
+                    nodal_f[a][c] += df[c] * n[a];
+                }
+            }
+            for c in 0..3 {
+                resultant[c] += df[c];
+            }
+            moment[0] += x_gp[1] * df[2] - x_gp[2] * df[1];
+            moment[1] += x_gp[2] * df[0] - x_gp[0] * df[2];
+            moment[2] += x_gp[0] * df[1] - x_gp[1] * df[0];
+        }
+    }
+    Ok((nodal_f, resultant, moment))
 }
 
 /// Reference data for the degree-3 integrand of the thermal load

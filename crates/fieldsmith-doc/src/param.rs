@@ -365,7 +365,7 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
     if let Some(load) = doc.loads.iter_mut().find(|l| l.id == target) {
         match (&mut load.kind, attr, comp) {
             (LoadKind::Force { vector }, "force", Some(k)) => vector[k] = v,
-            (LoadKind::Pressure { mpa }, "mpa", None) => *mpa = v,
+            (LoadKind::Pressure { mpa, .. }, "mpa", None) => *mpa = v,
             (LoadKind::Preload { newtons, .. }, "newtons", None) => *newtons = v,
             (LoadKind::Distributed { total, .. }, "total", None) => *total = Some(v),
             _ => unreachable!("the writer was checked against this statement"),

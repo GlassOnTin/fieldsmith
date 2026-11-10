@@ -8,9 +8,9 @@ import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
 import type { Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
-import { FACE_CODES, evalBody, loadFnProbe } from '../doc/wasm';
+import { FACE_CODES, evalBody, loadFnProbe, spatialFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
-import type { LevelResult, LoadFnProbe, PickHit } from '../doc/wasm';
+import type { LevelResult, LoadFnProbe, PickHit, SpatialFnProbe } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
 import { inspectors, NameField } from './Inspector';
@@ -1673,6 +1673,101 @@ function FnField({ id, expr }: { id: string; expr: string }) {
   );
 }
 
+function SpatialFnCurve({ probe, unit }: { probe: SpatialFnProbe; unit: string }) {
+  if (!probe.ok || !probe.xs || !probe.ys || !probe.domain) {
+    return <div class="error-box">{probe.error ?? 'invalid spatial expression'}</div>;
+  }
+  const { xs, ys, domain, coord = 'z', min, max } = probe;
+  const W = 220;
+  const H = 56;
+  const PAD = 5;
+  const xr = domain.hi - domain.lo || 1;
+  const yLo = min ?? 0;
+  const yHi = max ?? 1;
+  const yr = Math.max(1e-12, yHi - yLo);
+  const px = (x: number) => PAD + ((x - domain.lo) / xr) * (W - 2 * PAD);
+  const py = (y: number) => H - 14 - ((y - yLo) / yr) * (H - 22);
+  const pts = xs
+    .map((x, i) => `${px(x).toFixed(1)},${py(Number.isFinite(ys[i]) ? ys[i] : yLo).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      data-testid="spatial-fn-curve"
+      style={{ width: '100%', display: 'block', marginTop: 2 }}
+    >
+      <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
+      <text x={PAD} y={H - 2} fontSize="9" fill="var(--text-3)" fontFamily="var(--mono)">
+        {coord} ∈ [{domain.lo.toFixed(1)}, {domain.hi.toFixed(1)}] mm · [{(yLo).toPrecision(3)}, {(yHi).toPrecision(3)}] {unit}
+      </text>
+    </svg>
+  );
+}
+
+/** Optional world-space f(x, y, z, r) profile row for Pressure, Temperature, Convection, and HeatFlux. */
+function SpatialFnField(props: {
+  label: string;
+  unit: string;
+  value?: string;
+  placeholder?: string;
+  nonNegative?: boolean;
+  testId: string;
+  commit: (next: string | undefined) => void;
+}) {
+  const cur = props.value ?? '';
+  const [v, setV] = useState(cur);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty) setV(cur);
+  }, [cur, dirty]);
+  const trimmed = v.trim();
+  const probe = trimmed.length > 0 ? spatialFnProbe(trimmed, store.doc, 0, 50, Boolean(props.nonNegative)) : null;
+  const commitVal = () => {
+    const t = v.trim();
+    const next = t.length > 0 ? t : undefined;
+    if (dirty && (next ?? '') !== cur) {
+      props.commit(next);
+    }
+    setDirty(false);
+  };
+  return (
+    <>
+      <label class="plain">{props.label}</label>
+      <div class="numbox">
+        <input
+          class="num"
+          value={v}
+          placeholder={props.placeholder ?? 'uniform (or f(x, y, z, r))'}
+          data-testid={props.testId}
+          spellcheck={false}
+          title="Optional world-space field f(x, y, z, r) in mm with let variables, math functions, bands `lo < z < hi -> expr`, or `lerp(z, s0, v0, ...)`"
+          onInput={(e) => {
+            setV((e.target as HTMLInputElement).value);
+            setDirty(true);
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
+          onBlur={commitVal}
+        />
+      </div>
+      {probe && (
+        <div style={{ gridColumn: '1 / -1' }}>
+          {probe.checks && probe.checks.length > 0 && (
+            <div class="error-box">
+              {probe.checks.map((c) => (
+                <div key={c}>{c}</div>
+              ))}
+            </div>
+          )}
+          <SpatialFnCurve probe={probe} unit={props.unit} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function LoadInspector({ id }: { id: string }) {
   useApp();
   const l = store.doc.loads.find((x) => x.id === id);
@@ -1783,6 +1878,21 @@ function LoadInspector({ id }: { id: string }) {
               testId="pressure"
               title="Positive pushes into the face"
               driven={drivenExpr(store.doc, id, 'mpa')}
+            />
+            <SpatialFnField
+              label="Profile p(x)"
+              unit="MPa"
+              value={l.kind.expr}
+              placeholder="uniform (or e.g. 0.5*(20 - z))"
+              testId="pressure-fn"
+              commit={(next) =>
+                store.transact('Set spatial pressure profile', (d) => {
+                  const k = loadIn(d, id).kind;
+                  if (k.type !== 'pressure') return;
+                  if (next) k.expr = next;
+                  else delete k.expr;
+                })
+              }
             />
             <TextInputRow
               label="Case"
@@ -1974,6 +2084,20 @@ function TemperatureInspector({ id }: { id: string }) {
           title="Fixed boundary temperature for the conduction solve; faces without one stay insulated"
           driven={drivenExpr(store.doc, id, 'celsius')}
         />
+        <SpatialFnField
+          label="Profile T(x)"
+          unit="°C"
+          value={t.expr}
+          placeholder="uniform (or e.g. 20 + 3*z)"
+          testId="temperature-fn"
+          commit={(next) =>
+            store.transact('Set spatial temperature profile', (d) => {
+              const item = temperatureIn(d, id);
+              if (next) item.expr = next;
+              else delete item.expr;
+            })
+          }
+        />
         <TextInputRow
           label="Case"
           value={t.case}
@@ -1983,7 +2107,7 @@ function TemperatureInspector({ id }: { id: string }) {
         />
       </div>
       <div class="hint" style={{ gridColumn: '1 / -1' }}>
-        The region's facet nodes take this value Dirichlet-style in the conduction solve and the
+        The region's facet nodes take this value (or T(x, y, z, r)) Dirichlet-style in the conduction solve and the
         whole part expands by α·(T − tref) from it; two temperatures sharing nodes inside one
         case must agree, and the reference is the solve statement's tref (20 °C when unstated).
       </div>
@@ -2033,6 +2157,21 @@ function ConvectionInspector({ id }: { id: string }) {
           title="Heat loss per unit area, h·(T − ambient), in W/(mm²·K) — natural convection in air (5 W/(m²·K)) is 5e-6 in these units"
           driven={drivenExpr(store.doc, id, 'h')}
         />
+        <SpatialFnField
+          label="Profile h(x)"
+          unit="W/(mm²·K)"
+          value={c.h_expr}
+          nonNegative
+          placeholder="uniform (or lerp(z, …))"
+          testId="convection-h-fn"
+          commit={(next) =>
+            store.transact('Set spatial convection h(x)', (d) => {
+              const item = convectionIn(d, id);
+              if (next) item.h_expr = next;
+              else delete item.h_expr;
+            })
+          }
+        />
         <NumRow
           label="Ambient"
           unit="°C"
@@ -2045,6 +2184,20 @@ function ConvectionInspector({ id }: { id: string }) {
           step={10}
           title="Ambient or coolant temperature the region loses heat to"
           driven={drivenExpr(store.doc, id, 'tinf')}
+        />
+        <SpatialFnField
+          label="Profile T∞(x)"
+          unit="°C"
+          value={c.t_inf_expr}
+          placeholder="uniform (or lerp(z, …))"
+          testId="convection-tinf-fn"
+          commit={(next) =>
+            store.transact('Set spatial convection T_inf(x)', (d) => {
+              const item = convectionIn(d, id);
+              if (next) item.t_inf_expr = next;
+              else delete item.t_inf_expr;
+            })
+          }
         />
         <TextInputRow
           label="Case"
@@ -2104,6 +2257,20 @@ function HeatFluxInspector({ id }: { id: string }) {
           step={1e-3}
           title="Heat entering per unit area in W/mm²; positive is into the solid, negative is out (1 kW/m² is 1e-3)"
           driven={drivenExpr(store.doc, id, 'q')}
+        />
+        <SpatialFnField
+          label="Profile q(x)"
+          unit="W/mm²"
+          value={f.expr}
+          placeholder="uniform (or e.g. 0.05*cos(pi*z/40))"
+          testId="heatflux-q-fn"
+          commit={(next) =>
+            store.transact('Set spatial heat flux q(x)', (d) => {
+              const item = heatfluxIn(d, id);
+              if (next) item.expr = next;
+              else delete item.expr;
+            })
+          }
         />
         <TextInputRow
           label="Case"

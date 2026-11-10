@@ -16,14 +16,16 @@ pub mod steptess;
 pub mod voxel;
 
 use fieldsmith_doc::loaddist::LoadFn;
+use fieldsmith_doc::spatial::SpatialFn;
 use fieldsmith_doc::{materials, Document, LoadDir, LoadKind};
 use fieldsmith_field::expr::{self, Expr};
 use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
-    compliance, element_stress, element_stress_thermal, layer_peel_utilization, min_compressive,
-    nodal_stress, nodal_stress_mat, nodal_stress_thermal, nodal_stress_thermal_multi, solve,
-    solve_conduction, thermal_load, thermal_load_multi, upper_compliance, von_mises, HeatFluxBc,
-    P2Mesh, Problem, RobinBc, SolveReport, SolverOptions, Stress, ThermalRefData, V3,
+    compliance, element_pressure_spatial, element_stress, element_stress_thermal,
+    layer_peel_utilization, min_compressive, nodal_stress, nodal_stress_mat, nodal_stress_thermal,
+    nodal_stress_thermal_multi, solve, solve_conduction_spatial, thermal_load, thermal_load_multi,
+    upper_compliance, von_mises, HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions,
+    SpatialHeatFluxBc, SpatialRobinBc, Stress, ThermalRefData, V3,
 };
 use serde::Serialize;
 
@@ -741,9 +743,52 @@ pub fn case_force_report(
             }
             _ => None,
         };
+        let spatial_pressure: Option<SpatialFn> = match &l.kind {
+            LoadKind::Pressure {
+                expr: Some(src), ..
+            } => {
+                let lets: Vec<(String, f64)> =
+                    doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
+                Some(
+                    SpatialFn::compile_with_lets(src, &lets)
+                        .map_err(|e| SetupError(format!("load '{}': pressure_fn: {e}", l.id)))?,
+                )
+            }
+            _ => None,
+        };
         for (i, &fi) in fs.iter().enumerate() {
             let fct = &facets[fi];
             let a = fct.area(mesh);
+            if let Some(ref pfn) = spatial_pressure {
+                let n_out = fct.normal(mesh);
+                let (nodal_f, f_facet, m_facet) =
+                    element_pressure_spatial(mesh, &fct.nodes, n_out, |x_gp| Ok(pfn.eval(x_gp)))
+                        .map_err(|e| SetupError(format!("load '{}': pressure_fn: {e}", l.id)))?;
+                let t_mean = if a > 0.0 {
+                    f_facet.map(|c| c / a)
+                } else {
+                    [0.0; 3]
+                };
+                let mut key: Vec<u64> = fct.nodes[..3]
+                    .iter()
+                    .map(|&n| mesh.nodes[n as usize])
+                    .flat_map(|p| p.map(|c| c.to_bits()))
+                    .collect();
+                key.sort_unstable();
+                let mut key2 = [0u64; 9];
+                key2.copy_from_slice(&key);
+                prescribed.insert(key2, t_mean);
+                for (a_loc, &n) in fct.nodes.iter().enumerate() {
+                    for c in 0..3 {
+                        force[3 * n as usize + c] += nodal_f[a_loc][c];
+                    }
+                }
+                for c in 0..3 {
+                    resultant[c] += f_facet[c];
+                    moment[c] += m_facet[c];
+                }
+                continue;
+            }
             let t = match &dist {
                 Some(dz) => {
                     let v = dz.q[i] * dz.scale;
@@ -751,7 +796,7 @@ pub fn case_force_report(
                 }
                 None => match l.kind {
                     LoadKind::Force { vector } => vector.map(|c| c / area),
-                    LoadKind::Pressure { mpa } => fct.normal(mesh).map(|c| -mpa * c),
+                    LoadKind::Pressure { mpa, .. } => fct.normal(mesh).map(|c| -mpa * c),
                     LoadKind::Preload { newtons, .. } => match preload_split {
                         Some((ahat, c_mean, a_pos, a_neg))
                             if a_pos > 1e-6 * area && a_neg > 1e-6 * area =>
@@ -866,7 +911,8 @@ pub fn case_temperatures(
     h: f64,
 ) -> Result<Vec<Option<f64>>, SetupError> {
     let mut d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
-    let mut owner: Vec<Option<String>> = vec![None; mesh.nodes.len()];
+    let mut owner: Vec<Option<(String, bool)>> = vec![None; mesh.nodes.len()];
+    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
     for t in doc.temperatures.iter().filter(|t| t.case == name) {
         let fs = region_facets(doc, &t.region, mesh, facets, h)?;
         if fs.is_empty() {
@@ -875,21 +921,48 @@ pub fn case_temperatures(
                 t.id, t.region
             )));
         }
+        let t_fn = match &t.expr {
+            Some(src) => Some(
+                SpatialFn::compile_with_lets(src, &lets)
+                    .map_err(|e| SetupError(format!("temperature '{}': temp_fn: {e}", t.id)))?,
+            ),
+            None => None,
+        };
         for &fi in &fs {
             for &n in &facets[fi].nodes {
                 let n = n as usize;
-                if let (Some(prev), Some(prev_v)) = (&owner[n], d[n]) {
-                    if prev != &t.id && prev_v != t.celsius {
+                let p = mesh.nodes[n];
+                let val = match &t_fn {
+                    Some(f) => {
+                        let v = f.eval(p);
+                        if !v.is_finite() {
+                            return Err(SetupError(format!(
+                                "temperature '{}': temp_fn is not finite at ({:.3}, {:.3}, {:.3}) mm (got {v})",
+                                t.id, p[0], p[1], p[2]
+                            )));
+                        }
+                        v
+                    }
+                    None => t.celsius,
+                };
+                let is_spatial = t_fn.is_some();
+                if let (Some((prev, prev_spatial)), Some(prev_v)) = (&owner[n], d[n]) {
+                    let clash = if *prev_spatial || is_spatial {
+                        (prev_v - val).abs() > 1e-9
+                    } else {
+                        prev_v != val
+                    };
+                    if prev != &t.id && clash {
                         return Err(SetupError(format!(
                             "temperatures '{prev}' and '{}' meet at shared surface nodes \
-                             but hold different values ({prev_v} °C and {} °C) — a node \
+                             but hold different values ({prev_v} °C and {val} °C) — a node \
                              cannot carry both temperatures in one thermal case",
-                            t.id, t.celsius
+                            t.id
                         )));
                     }
                 }
-                owner[n] = Some(t.id.clone());
-                d[n] = Some(t.celsius);
+                owner[n] = Some((t.id.clone(), is_spatial));
+                d[n] = Some(val);
             }
         }
     }
@@ -908,7 +981,29 @@ pub fn case_convections(
     name: &str,
     h: f64,
 ) -> Result<Vec<RobinBc>, SetupError> {
-    let mut bands = Vec::new();
+    let (uniform, spatial) = case_convections_all(doc, mesh, facets, name, h)?;
+    if !spatial.is_empty() {
+        return Err(SetupError(
+            "case_convections called on a case with spatial h_fn/tinf_fn; use case_convections_all"
+                .into(),
+        ));
+    }
+    Ok(uniform)
+}
+
+/// Uniform and world-space Robin bands for one thermal case. When `h_expr` and
+/// `t_inf_expr` are both `None`, the statement pushes a uniform [`RobinBc`], preserving
+/// bit-for-bit identity on existing cases.
+pub fn case_convections_all(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<(Vec<RobinBc>, Vec<SpatialRobinBc<'static>>), SetupError> {
+    let mut uniform = Vec::new();
+    let mut spatial = Vec::new();
+    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
     for c in doc.convections.iter().filter(|c| c.case == name) {
         let fs = region_facets(doc, &c.region, mesh, facets, h)?;
         if fs.is_empty() {
@@ -917,13 +1012,41 @@ pub fn case_convections(
                 c.id, c.region
             )));
         }
-        bands.push(RobinBc {
-            h: c.h,
-            t_inf: c.t_inf,
-            facets: fs.iter().map(|&i| facets[i].nodes).collect(),
-        });
+        let facet_nodes: Vec<[u32; 6]> = fs.iter().map(|&i| facets[i].nodes).collect();
+        if c.h_expr.is_none() && c.t_inf_expr.is_none() {
+            uniform.push(RobinBc {
+                h: c.h,
+                t_inf: c.t_inf,
+                facets: facet_nodes,
+            });
+        } else {
+            let h_fn = match &c.h_expr {
+                Some(src) => Some(
+                    SpatialFn::compile_with_lets(src, &lets)
+                        .map_err(|e| SetupError(format!("convection '{}': h_fn: {e}", c.id)))?,
+                ),
+                None => None,
+            };
+            let tinf_fn = match &c.t_inf_expr {
+                Some(src) => Some(
+                    SpatialFn::compile_with_lets(src, &lets)
+                        .map_err(|e| SetupError(format!("convection '{}': tinf_fn: {e}", c.id)))?,
+                ),
+                None => None,
+            };
+            let h_const = c.h;
+            let t_inf_const = c.t_inf;
+            spatial.push(SpatialRobinBc {
+                facets: facet_nodes,
+                eval: Box::new(move |p| {
+                    let hv = h_fn.as_ref().map_or(h_const, |f| f.eval(p));
+                    let tv = tinf_fn.as_ref().map_or(t_inf_const, |f| f.eval(p));
+                    Ok((hv, tv))
+                }),
+            });
+        }
     }
-    Ok(bands)
+    Ok((uniform, spatial))
 }
 
 /// Prescribed heat-flux bands for one thermal case: every heatflux statement named for
@@ -938,7 +1061,26 @@ pub fn case_heat_fluxes(
     name: &str,
     h: f64,
 ) -> Result<Vec<HeatFluxBc>, SetupError> {
-    let mut bands = Vec::new();
+    let (uniform, spatial) = case_heat_fluxes_all(doc, mesh, facets, name, h)?;
+    if !spatial.is_empty() {
+        return Err(SetupError(
+            "case_heat_fluxes called on a case with spatial q_fn; use case_heat_fluxes_all".into(),
+        ));
+    }
+    Ok(uniform)
+}
+
+/// Uniform and world-space heat-flux bands for one thermal case.
+pub fn case_heat_fluxes_all(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+) -> Result<(Vec<HeatFluxBc>, Vec<SpatialHeatFluxBc<'static>>), SetupError> {
+    let mut uniform = Vec::new();
+    let mut spatial = Vec::new();
+    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
     for c in doc.heat_fluxes.iter().filter(|c| c.case == name) {
         let fs = region_facets(doc, &c.region, mesh, facets, h)?;
         if fs.is_empty() {
@@ -947,12 +1089,23 @@ pub fn case_heat_fluxes(
                 c.id, c.region
             )));
         }
-        bands.push(HeatFluxBc {
-            q: c.q,
-            facets: fs.iter().map(|&i| facets[i].nodes).collect(),
-        });
+        let facet_nodes: Vec<[u32; 6]> = fs.iter().map(|&i| facets[i].nodes).collect();
+        match &c.expr {
+            None => uniform.push(HeatFluxBc {
+                q: c.q,
+                facets: facet_nodes,
+            }),
+            Some(src) => {
+                let q_fn = SpatialFn::compile_with_lets(src, &lets)
+                    .map_err(|e| SetupError(format!("heat flux '{}': q_fn: {e}", c.id)))?;
+                spatial.push(SpatialHeatFluxBc {
+                    facets: facet_nodes,
+                    eval: Box::new(move |p| Ok(q_fn.eval(p))),
+                });
+            }
+        }
     }
-    Ok(bands)
+    Ok((uniform, spatial))
 }
 
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
@@ -1182,10 +1335,19 @@ pub fn run_thermal_case(
     equilibrate: bool,
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
-    let robin = case_convections(doc, mesh, facets, &name, h)?;
-    let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
-    let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
-        .map_err(SetupError)?;
+    let (robin, spatial_robin) = case_convections_all(doc, mesh, facets, &name, h)?;
+    let (flux, spatial_flux) = case_heat_fluxes_all(doc, mesh, facets, &name, h)?;
+    let (t, creport) = solve_conduction_spatial(
+        mesh,
+        &d,
+        k,
+        &robin,
+        &spatial_robin,
+        &flux,
+        &spatial_flux,
+        SolverOptions::default(),
+    )
+    .map_err(SetupError)?;
     let grad_t = compute_nodal_temperature_gradient(mesh, &t);
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
@@ -1261,10 +1423,19 @@ pub fn run_thermal_case_multi(
     equilibrate: bool,
 ) -> Result<CaseResult, SetupError> {
     let d = case_temperatures(doc, mesh, facets, &name, h)?;
-    let robin = case_convections(doc, mesh, facets, &name, h)?;
-    let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
-    let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
-        .map_err(SetupError)?;
+    let (robin, spatial_robin) = case_convections_all(doc, mesh, facets, &name, h)?;
+    let (flux, spatial_flux) = case_heat_fluxes_all(doc, mesh, facets, &name, h)?;
+    let (t, creport) = solve_conduction_spatial(
+        mesh,
+        &d,
+        k,
+        &robin,
+        &spatial_robin,
+        &flux,
+        &spatial_flux,
+        SolverOptions::default(),
+    )
+    .map_err(SetupError)?;
     let grad_t = compute_nodal_temperature_gradient(mesh, &t);
     // Pure thermal conduction (no mechanical supports or zero CTE): return exact nodal
     // temperature field and conduction report without forcing an elastic stress solve.
@@ -2707,5 +2878,70 @@ load rim_load rim force=(0, 0, -2000)
             a_fluid.mass_g,
             a_fake.mass_g
         );
+    }
+
+    #[test]
+    fn hydrostatic_pressure_fn_and_spatial_thermal_bcs_match_analytic_integrals() {
+        // Wall x = 0 on [0, 4] × [0, 10] × [0, 20]:
+        // Hydrostatic pressure p(z) = 0.5·(20 − z) MPa (10 MPa at bottom z = 0, 0 at top z = 20):
+        // - Exact F_x = 10 · ∫_0^20 0.5·(20 − z) dz = 1000 N
+        // - Exact centre of pressure z_cp = H / 3 = 20 / 3 mm => M_y = 20_000 / 3 N·mm
+        //   (uniform 5 MPa would wrongly give M_y = 10_000 N·mm).
+        let src = "\
+fieldsmith 1
+name \"Hydrostatic Wall + Spatial Conduction\"
+material ss316l
+let h_top = 20
+box wall size=(4, 10, 20) at=(2, 5, 10)
+region base = wall.nz
+region wet = wall.nx
+region dry = wall.px
+support fix_base base fixed=xyz
+load hydro wet pressure=5 pressure_fn=\"0.5 * (h_top - z)\" case=\"Hydro\"
+temperature hot_grad wet temp=60 temp_fn=\"20 + 4 * z\" case=\"Thermal\"
+convection cool_side dry h=0.05 tinf=20 h_fn=\"0.02 + 0.003 * z\" tinf_fn=\"20 + 0.5 * z\" case=\"Thermal\"
+solve tref=20
+";
+        let doc = fsm::parse(src).expect("parse spatial BC doc");
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+        let res = analyse(&doc, Resolution::Size(2.5), now).expect("solve spatial BCs");
+        let hydro = res.cases.iter().find(|c| c.name == "Hydro").expect("Hydro");
+        let rep = &hydro.load_reports[0];
+        let want_fx = 1000.0;
+        let want_my = 20_000.0 / 3.0;
+        let want_mz = -5000.0;
+        assert!(
+            (rep.resultant[0] - want_fx).abs() / want_fx < 0.02,
+            "F_x = {:.3} N vs {want_fx} N",
+            rep.resultant[0]
+        );
+        assert!(
+            (rep.moment[1] - want_my).abs() / want_my < 0.03,
+            "M_y = {:.2} N·mm vs hydrostatic {want_my:.2} N·mm",
+            rep.moment[1]
+        );
+        assert!(
+            (rep.moment[2] - want_mz).abs() / want_mz.abs() < 0.03,
+            "M_z = {:.2} N·mm vs {want_mz:.2} N·mm",
+            rep.moment[2]
+        );
+
+        let therm = res
+            .cases
+            .iter()
+            .find(|c| c.name == "Thermal")
+            .expect("Thermal");
+        assert!(therm.solve.converged);
+        let temps = therm.temperature.as_ref().expect("temps");
+        for (p, &ti) in res.mesh.nodes.iter().zip(temps.iter()) {
+            if p[0].abs() < 1e-6 {
+                let want = 20.0 + 4.0 * p[2];
+                assert!(
+                    (ti - want).abs() < 1e-6,
+                    "Dirichlet temp_fn at z={}: got {ti}, want {want}",
+                    p[2]
+                );
+            }
+        }
     }
 }

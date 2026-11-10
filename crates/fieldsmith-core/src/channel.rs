@@ -8,6 +8,7 @@
 //! Nusselt convection + bulk enthalpy balance), and optionally binds the resulting convective
 //! film and fluid pressure onto a named `.fsm` region for 3D P2 thermo-structural FEA.
 
+use fieldsmith_doc::spatial::{SpatialCoord, SpatialFn};
 use fieldsmith_doc::{materials, Convection, Document, Load, LoadKind};
 use fieldsmith_field::expr;
 use fieldsmith_mesh::slice::{polygon_signed_area, slice_field};
@@ -476,8 +477,11 @@ pub fn analyze_sdf_channel(
     })
 }
 
-/// Bind a solved [`ChannelProfileReport`]'s mean convective film (`h`, `T_∞`) and internal fluid
-/// pressure onto `region` in `doc` so 3D P2 thermo-structural FEA solves with geometry-derived BCs.
+/// Bind a solved [`ChannelProfileReport`]'s station-by-station convective film
+/// (`h(s)`, `T_∞(s)` via `lerp(...)`) and internal fluid pressure `p(s)` onto `region` in `doc`
+/// so 3D P2 thermo-structural FEA resolves local throat cooling and Bernoulli pressure drop
+/// rather than spatial averages. Scalar summary fields (`h`, `t_inf`, `mpa`) retain the mean
+/// values for display and parameter inspection.
 pub fn bind_channel_bcs_to_region(
     doc: &mut Document,
     report: &ChannelProfileReport,
@@ -488,12 +492,32 @@ pub fn bind_channel_bcs_to_region(
     if !doc.regions.iter().any(|r| r.id == region) {
         return Err(format!("unknown region '{region}' in document"));
     }
+    let coord = match report.axis {
+        ChannelAxis::X => SpatialCoord::X,
+        ChannelAxis::Y => SpatialCoord::Y,
+        ChannelAxis::Z => SpatialCoord::Z,
+    };
+    let h_samples: Vec<(f64, f64)> = report
+        .stations
+        .iter()
+        .map(|st| (st.s_mm, st.h_fsm_per_mm.max(0.0)))
+        .collect();
+    let t_samples: Vec<(f64, f64)> = report
+        .stations
+        .iter()
+        .map(|st| (st.s_mm, st.bulk_temp_c))
+        .collect();
+    let h_expr = SpatialFn::format_lerp(coord, &h_samples);
+    let t_inf_expr = SpatialFn::format_lerp(coord, &t_samples);
+
     let conv_id = format!("chan_conv_{region}");
     let conv = Convection {
         id: conv_id.clone(),
         region: region.to_string(),
         h: report.mean_h_fsm_per_mm,
         t_inf: report.mean_bulk_temp_c,
+        h_expr,
+        t_inf_expr,
         case: thermal_case.to_string(),
     };
     if let Some(existing) = doc.convections.iter_mut().find(|c| c.id == conv_id) {
@@ -503,12 +527,19 @@ pub fn bind_channel_bcs_to_region(
     }
 
     if let Some(pcase) = pressure_case {
+        let p_samples: Vec<(f64, f64)> = report
+            .stations
+            .iter()
+            .map(|st| (st.s_mm, st.static_pressure_mpa.max(0.0)))
+            .collect();
+        let p_expr = SpatialFn::format_lerp(coord, &p_samples);
         let load_id = format!("chan_press_{region}");
         let load = Load {
             id: load_id.clone(),
             region: region.to_string(),
             kind: LoadKind::Pressure {
                 mpa: report.mean_pressure_mpa.max(0.0),
+                expr: p_expr,
             },
             case: pcase.to_string(),
         };
@@ -631,11 +662,56 @@ solve tref=20
         assert!(throat.velocity_m_s > 2.4 * inlet.velocity_m_s);
         assert!(throat.h_conv_w_m2_k > 1.8 * inlet.h_conv_w_m2_k);
 
-        // Bind extracted convection + fluid pressure back into `doc` and run 3D P2 FEA!
+        // Bind extracted station-by-station convection + fluid pressure into `doc` and run 3D P2 FEA!
         bind_channel_bcs_to_region(&mut doc, &rep, "inner_wall", "HotFire", Some("InternalPressure"))
             .expect("bind BCs");
-        let fea = analyse(&doc, Resolution::Dofs(10_000), zero_clock).expect("3D FEA with bound channel BCs");
+        assert!(doc.convections[0]
+            .h_expr
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("lerp(z,"));
+        assert!(doc.convections[0]
+            .t_inf_expr
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("lerp(z,"));
+        let printed = fsm::print(&doc);
+        let reparsed = fsm::parse(&printed).expect("round-trip bound channel .fsm");
+        assert_eq!(reparsed.convections, doc.convections);
+        assert_eq!(reparsed.loads, doc.loads);
+
+        let fea = analyse(&doc, Resolution::Dofs(12_000), zero_clock)
+            .expect("3D FEA with bound spatial channel BCs");
         assert_eq!(fea.cases.len(), 2);
         assert!(fea.cases.iter().all(|c| c.solve.converged && c.max_vm_elem > 0.0));
+
+        // Verify physical throat cooling: on the inner bore wall under uniform outer heat flux
+        // (and a radial wall thickness that is THICKER at z = 30 mm where r_bore = 4.5 mm than at
+        // the ends where r_bore = 8 mm), the 2× higher convective film h(z) at the throat keeps
+        // the inner bore wall measurably cooler at z ≈ 30 mm than near the inlet/outlet ends!
+        let hot = fea.cases.iter().find(|c| c.name == "HotFire").expect("HotFire case");
+        let temps = hot.temperature.as_ref().expect("nodal temperature");
+        let mut throat_wall_t = Vec::new();
+        let mut end_wall_t = Vec::new();
+        for (p, &ti) in fea.mesh.nodes.iter().zip(temps.iter()) {
+            let r = p[0].hypot(p[1]);
+            let z = p[2];
+            // Bore profile: R(z) = 8 - 3.5 * (1 - |z - 30|/30)
+            let r_bore = 8.0 - 3.5 * (1.0 - (z - 30.0).abs() / 30.0);
+            if (r - r_bore).abs() < 0.75 {
+                if (z - 30.0).abs() < 4.0 {
+                    throat_wall_t.push(ti);
+                } else if !(12.0..=48.0).contains(&z) && (4.0..=56.0).contains(&z) {
+                    end_wall_t.push(ti);
+                }
+            }
+        }
+        assert!(!throat_wall_t.is_empty() && !end_wall_t.is_empty());
+        let mean_throat_t = throat_wall_t.iter().sum::<f64>() / throat_wall_t.len() as f64;
+        let mean_end_t = end_wall_t.iter().sum::<f64>() / end_wall_t.len() as f64;
+        assert!(
+            mean_throat_t < mean_end_t,
+            "expected accelerated throat cooling (throat inner-wall {mean_throat_t:.2} °C < ends {mean_end_t:.2} °C)"
+        );
     }
 }

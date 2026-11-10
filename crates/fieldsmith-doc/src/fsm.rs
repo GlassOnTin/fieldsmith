@@ -668,6 +668,14 @@ impl Attrs {
             Some(Some(Val::Ident(_))) | Some(_) => self.err(format!("'{key}' must be a number")),
         }
     }
+    fn opt_compound_num(&mut self, key: &str, attr: &str) -> Result<Option<f64>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::Num(v))) => Ok(Some(v)),
+            Some(Some(Val::Expr { txt })) => Ok(Some(self.eval_for(key, attr, None, &txt)?)),
+            Some(Some(Val::Ident(_))) | Some(_) => self.err(format!("'{key}' must be a number")),
+        }
+    }
     fn req_string(&mut self, key: &str) -> Result<String, ParseError> {
         match self.string(key)? {
             Some(s) => Ok(s),
@@ -1209,10 +1217,25 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let region = c.ident("a region name")?;
                 let mut a = c.attrs(&id, &let_scope(&doc))?;
                 let case = a.string("case")?.unwrap_or_else(|| "Load 1".into());
+                let p_num = a.num("pressure")?;
+                let p_fn = a.string("pressure_fn")?;
                 let kind = if let Some(v) = a.vec3("force")? {
+                    if p_num.is_some() || p_fn.is_some() {
+                        return Err(err("load cannot combine force= with pressure=/pressure_fn=".into()));
+                    }
                     LoadKind::Force { vector: v }
-                } else if let Some(p) = a.num("pressure")? {
-                    LoadKind::Pressure { mpa: p }
+                } else if p_num.is_some() || p_fn.is_some() {
+                    if let Some(ref src) = p_fn {
+                        if let Err(e) =
+                            crate::spatial::SpatialFn::compile_with_lets(src, &let_scope(&doc))
+                        {
+                            return Err(err(format!("pressure_fn: {e}")));
+                        }
+                    }
+                    LoadKind::Pressure {
+                        mpa: p_num.unwrap_or(0.0),
+                        expr: p_fn,
+                    }
                 } else if let Some(n) = a.expr_num("preload", "newtons")? {
                     let axis = a.vec3("axis")?.unwrap_or([0.0; 3]);
                     LoadKind::Preload { newtons: n, axis }
@@ -1263,8 +1286,19 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     return Err(err(format!("Name '{id}' is used more than once")));
                 }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs(&id, &let_scope(&doc))?;
-                let celsius = a.req_compound_num("temp", "celsius")?;
+                let scope = let_scope(&doc);
+                let mut a = c.attrs(&id, &scope)?;
+                let expr = a.string("temp_fn")?;
+                if let Some(ref src) = expr {
+                    if let Err(e) = crate::spatial::SpatialFn::compile_with_lets(src, &scope) {
+                        return Err(err(format!("temp_fn: {e}")));
+                    }
+                }
+                let celsius = if expr.is_some() {
+                    a.opt_compound_num("temp", "celsius")?.unwrap_or(0.0)
+                } else {
+                    a.req_compound_num("temp", "celsius")?
+                };
                 let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
                 doc.consumed.append(&mut a.consumed);
                 a.finish()?;
@@ -1272,6 +1306,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     id,
                     region,
                     celsius,
+                    expr,
                     case,
                 });
             }
@@ -1281,9 +1316,30 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     return Err(err(format!("Name '{id}' is used more than once")));
                 }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs(&id, &let_scope(&doc))?;
-                let h = a.req_compound_num("h", "h")?;
-                let t_inf = a.req_compound_num("tinf", "tinf")?;
+                let scope = let_scope(&doc);
+                let mut a = c.attrs(&id, &scope)?;
+                let h_expr = a.string("h_fn")?;
+                if let Some(ref src) = h_expr {
+                    if let Err(e) = crate::spatial::SpatialFn::compile_with_lets(src, &scope) {
+                        return Err(err(format!("h_fn: {e}")));
+                    }
+                }
+                let t_inf_expr = a.string("tinf_fn")?;
+                if let Some(ref src) = t_inf_expr {
+                    if let Err(e) = crate::spatial::SpatialFn::compile_with_lets(src, &scope) {
+                        return Err(err(format!("tinf_fn: {e}")));
+                    }
+                }
+                let h = if h_expr.is_some() {
+                    a.opt_compound_num("h", "h")?.unwrap_or(0.0)
+                } else {
+                    a.req_compound_num("h", "h")?
+                };
+                let t_inf = if t_inf_expr.is_some() {
+                    a.opt_compound_num("tinf", "tinf")?.unwrap_or(0.0)
+                } else {
+                    a.req_compound_num("tinf", "tinf")?
+                };
                 let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
                 doc.consumed.append(&mut a.consumed);
                 a.finish()?;
@@ -1291,7 +1347,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     id,
                     region,
                     h,
+                    h_expr,
                     t_inf,
+                    t_inf_expr,
                     case,
                 });
             }
@@ -1301,8 +1359,19 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     return Err(err(format!("Name '{id}' is used more than once")));
                 }
                 let region = c.ident("a region name")?;
-                let mut a = c.attrs(&id, &let_scope(&doc))?;
-                let q = a.req_compound_num("q", "q")?;
+                let scope = let_scope(&doc);
+                let mut a = c.attrs(&id, &scope)?;
+                let expr = a.string("q_fn")?;
+                if let Some(ref src) = expr {
+                    if let Err(e) = crate::spatial::SpatialFn::compile_with_lets(src, &scope) {
+                        return Err(err(format!("q_fn: {e}")));
+                    }
+                }
+                let q = if expr.is_some() {
+                    a.opt_compound_num("q", "q")?.unwrap_or(0.0)
+                } else {
+                    a.req_compound_num("q", "q")?
+                };
                 let case = a.string("case")?.unwrap_or_else(|| "Thermal 1".into());
                 doc.consumed.append(&mut a.consumed);
                 a.finish()?;
@@ -1310,6 +1379,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     id,
                     region,
                     q,
+                    expr,
                     case,
                 });
             }
@@ -1711,7 +1781,13 @@ pub fn print(doc: &Document) -> String {
     for l in &doc.loads {
         let kind = match &l.kind {
             LoadKind::Force { vector } => format!("force={}", p.v3_for(&l.id, "force", *vector)),
-            LoadKind::Pressure { mpa } => format!("pressure={}", n(*mpa)),
+            LoadKind::Pressure { mpa, expr } => {
+                let mut k = format!("pressure={}", n(*mpa));
+                if let Some(src) = expr {
+                    k += &format!(" pressure_fn={}", q(src));
+                }
+                k
+            }
             LoadKind::Preload { newtons, axis } => {
                 let mut k = format!("preload={}", p.num_for(&l.id, "newtons", None, *newtons));
                 if *axis != [0.0; 3] {
@@ -1734,35 +1810,47 @@ pub fn print(doc: &Document) -> String {
         let _ = writeln!(o, "load {} {} {} case={}", l.id, l.region, kind, q(&l.case));
     }
     for t in &doc.temperatures {
-        let _ = writeln!(
-            o,
-            "temperature {} {} temp={} case={}",
+        let mut line = format!(
+            "temperature {} {} temp={}",
             t.id,
             t.region,
             p.num_for(&t.id, "celsius", None, t.celsius),
-            q(&t.case)
         );
+        if let Some(src) = &t.expr {
+            line += &format!(" temp_fn={}", q(src));
+        }
+        line += &format!(" case={}", q(&t.case));
+        let _ = writeln!(o, "{line}");
     }
     for c in &doc.convections {
-        let _ = writeln!(
-            o,
-            "convection {} {} h={} tinf={} case={}",
+        let mut line = format!(
+            "convection {} {} h={}",
             c.id,
             c.region,
             p.num_for(&c.id, "h", None, c.h),
-            p.num_for(&c.id, "tinf", None, c.t_inf),
-            q(&c.case)
         );
+        if let Some(src) = &c.h_expr {
+            line += &format!(" h_fn={}", q(src));
+        }
+        line += &format!(" tinf={}", p.num_for(&c.id, "tinf", None, c.t_inf));
+        if let Some(src) = &c.t_inf_expr {
+            line += &format!(" tinf_fn={}", q(src));
+        }
+        line += &format!(" case={}", q(&c.case));
+        let _ = writeln!(o, "{line}");
     }
     for f in &doc.heat_fluxes {
-        let _ = writeln!(
-            o,
-            "heatflux {} {} q={} case={}",
+        let mut line = format!(
+            "heatflux {} {} q={}",
             f.id,
             f.region,
             p.num_for(&f.id, "q", None, f.q),
-            q(&f.case)
         );
+        if let Some(src) = &f.expr {
+            line += &format!(" q_fn={}", q(src));
+        }
+        line += &format!(" case={}", q(&f.case));
+        let _ = writeln!(o, "{line}");
     }
     if let Some(f) = &doc.fill {
         o.push('\n');
@@ -3643,5 +3731,29 @@ box b size=(20, 10, 10)
         let reparsed = parse(&printed).expect("reparse printed");
         assert_eq!(reparsed.asserts, doc.asserts);
         assert_eq!(reparsed.coupled_system, doc.coupled_system);
+    }
+
+    #[test]
+    fn spatial_boundary_condition_fields_round_trip_and_validate() {
+        let raw = "\
+fieldsmith 1
+name \"Spatial BCs\"
+material cucrzr
+let q_peak = 1.4
+cylinder bore r=8 h=60 at=(0, 0, 30)
+region wall = bore.side
+region cap = bore.top
+region bot = bore.bottom
+support fix bot
+load p_var wall pressure=0.5 pressure_fn=\"lerp(z, 0, 0.8, 30, 0.4, 60, 0.2)\" case=\"Press\"
+temperature t_var cap temp=40 temp_fn=\"40 + 0.5 * r\" case=\"Hot\"
+convection c_var wall h=0.003 h_fn=\"lerp(z, 0, 0.002, 30, 0.006, 60, 0.0025)\" tinf=25 tinf_fn=\"20 + 0.15 * z\" case=\"Hot\"
+heatflux q_var wall q=0.8 q_fn=\"0.2 + q_peak * exp(-((z - 30) / 10)^2)\" case=\"Hot\"
+";
+        let doc = parse(raw).expect("parse spatial BCs");
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+        let printed = print(&doc);
+        let reparsed = parse(&printed).expect("reparse spatial BCs");
+        assert_eq!(reparsed, doc);
     }
 }

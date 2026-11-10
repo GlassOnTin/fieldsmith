@@ -455,20 +455,45 @@ impl Server {
     fn add_load(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
         let case = case_or_default(&args, "Load 1");
+        let pressure_fn = args
+            .get("pressure_fn")
+            .or_else(|| args.get("expr"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let kind: LoadKind = if args.get("kind").is_some() {
             field("kind", &args)?
-        } else if let Some(n) = args.get("preload").or_else(|| args.get("newtons")).and_then(Value::as_f64) {
+        } else if let Some(n) = args
+            .get("preload")
+            .or_else(|| args.get("newtons"))
+            .and_then(Value::as_f64)
+        {
             let axis: [f64; 3] = args
                 .get("axis")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or([0.0; 3]);
             LoadKind::Preload { newtons: n, axis }
-        } else if let Some(p) = args.get("pressure").or_else(|| args.get("mpa")).and_then(Value::as_f64) {
-            LoadKind::Pressure { mpa: p }
-        } else if let Some(v) = args.get("force").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        } else if args.get("pressure").is_some()
+            || args.get("mpa").is_some()
+            || pressure_fn.is_some()
+        {
+            let p = args
+                .get("pressure")
+                .or_else(|| args.get("mpa"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            LoadKind::Pressure {
+                mpa: p,
+                expr: pressure_fn,
+            }
+        } else if let Some(v) = args
+            .get("force")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
             LoadKind::Force { vector: v }
         } else {
-            return Err("add_load: missing kind (or force / pressure / preload)".into());
+            return Err("add_load: missing kind (or force / pressure / pressure_fn / preload)".into());
         };
         let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
         self.add_entity("load", args, |d, id| {
@@ -487,13 +512,33 @@ impl Server {
 
     fn add_temperature(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
-        let celsius = number_field("celsius", &args)?;
+        let expr = args
+            .get("temp_fn")
+            .or_else(|| args.get("expr"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let celsius = match args
+            .get("celsius")
+            .or_else(|| args.get("temp"))
+            .and_then(Value::as_f64)
+        {
+            Some(v) => v,
+            None if expr.is_some() => 0.0,
+            None => return Err("add_temperature: missing celsius (or temp_fn)".into()),
+        };
         let case = case_or_default(&args, "Thermal 1");
+        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
         self.add_entity("temperature", args, |d, id| {
+            if let Some(ref rid) = replace_id {
+                d.temperatures.retain(|t| t.id != *rid);
+            }
             d.temperatures.push(Temperature {
                 id,
                 region,
                 celsius,
+                expr,
                 case,
             });
             Ok(())
@@ -502,19 +547,48 @@ impl Server {
 
     fn add_convection(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
-        let h = number_field("h", &args)?;
-        let t_inf = args
+        let h_expr = args
+            .get("h_fn")
+            .or_else(|| args.get("h_expr"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let t_inf_expr = args
+            .get("tinf_fn")
+            .or_else(|| args.get("t_inf_fn"))
+            .or_else(|| args.get("t_inf_expr"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let h = match args.get("h").and_then(Value::as_f64) {
+            Some(v) => v,
+            None if h_expr.is_some() => 0.0,
+            None => return Err("add_convection: missing h (or h_fn)".into()),
+        };
+        let t_inf = match args
             .get("t_inf")
             .or_else(|| args.get("tinf"))
             .and_then(Value::as_f64)
-            .ok_or_else(|| "add_convection: missing t_inf/tinf".to_string())?;
+        {
+            Some(v) => v,
+            None if t_inf_expr.is_some() => 0.0,
+            None => return Err("add_convection: missing t_inf/tinf (or tinf_fn)".into()),
+        };
         let case = case_or_default(&args, "Thermal 1");
+        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
         self.add_entity("conv", args, |d, id| {
+            if let Some(ref rid) = replace_id {
+                d.convections.retain(|c| c.id != *rid);
+            }
             d.convections.push(Convection {
                 id,
                 region,
                 h,
                 t_inf,
+                h_expr,
+                t_inf_expr,
                 case,
             });
             Ok(())
@@ -523,13 +597,29 @@ impl Server {
 
     fn add_heatflux(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
-        let q = number_field("q", &args)?;
+        let expr = args
+            .get("q_fn")
+            .or_else(|| args.get("expr"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let q = match args.get("q").and_then(Value::as_f64) {
+            Some(v) => v,
+            None if expr.is_some() => 0.0,
+            None => return Err("add_heatflux: missing q (or q_fn)".into()),
+        };
         let case = case_or_default(&args, "Thermal 1");
+        let replace_id = args.get("id").and_then(Value::as_str).map(|s| s.to_string());
         self.add_entity("hf", args, |d, id| {
+            if let Some(ref rid) = replace_id {
+                d.heat_fluxes.retain(|hf| hf.id != *rid);
+            }
             d.heat_fluxes.push(HeatFlux {
                 id,
                 region,
                 q,
+                expr,
                 case,
             });
             Ok(())
@@ -1356,6 +1446,18 @@ impl Server {
         if d.temperatures.len() < n_temps {
             let problems = d.validate();
             return Ok(json!({"deleted": id, "kind": "temperature", "problems": problems}));
+        }
+        let n_convs = d.convections.len();
+        d.convections.retain(|c| c.id != id);
+        if d.convections.len() < n_convs {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "convection", "problems": problems}));
+        }
+        let n_hfs = d.heat_fluxes.len();
+        d.heat_fluxes.retain(|hf| hf.id != id);
+        if d.heat_fluxes.len() < n_hfs {
+            let problems = d.validate();
+            return Ok(json!({"deleted": id, "kind": "heatflux", "problems": problems}));
         }
         Err(format!("delete_entity: no entity named {id:?}"))
     }
@@ -2271,13 +2373,13 @@ const TOOLS_JSON: &str = r#"[
  {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in geometry catalogue, automatically drilling/tapping/counterboring the fixed object and calculating minimal (`T_min`) and maximal (`T_max`) torque.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`) and compile it into a 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"delete_entity","description":"Delete a shape, region, support, load, or temperature by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
+ {"name":"delete_entity","description":"Delete a shape, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
- {"name":"add_load","description":"Apply a load (force/pressure/preload/distributed) on a region for a load case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"},"force":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"pressure":{"type":"number"},"preload":{"type":"number"},"axis":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
- {"name":"add_temperature","description":"Apply a fixed boundary temperature on a region for a thermal case.","inputSchema":{"type":"object","required":["region","celsius"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"celsius":{"type":"number"},"case":{"type":"string"}}}},
- {"name":"add_convection","description":"Apply a Robin convective boundary condition (`h` in 1/mm = `(h_SI / k_solid) * 1e-3`, `t_inf` in °C) on a region for a thermal case.","inputSchema":{"type":"object","required":["region","h"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"h":{"type":"number"},"t_inf":{"type":"number"},"tinf":{"type":"number"},"case":{"type":"string"}}}},
- {"name":"add_heatflux","description":"Apply a Neumann heat-flux boundary condition (`q` in K/mm) on a region for a thermal case.","inputSchema":{"type":"object","required":["region","q"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"q":{"type":"number"},"case":{"type":"string"}}}},
+ {"name":"add_load","description":"Apply a load (force/pressure/preload/distributed, including spatially varying `pressure_fn` f(x,y,z,r)) on a region for a load case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"},"force":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"pressure":{"type":"number"},"pressure_fn":{"type":"string"},"preload":{"type":"number"},"axis":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
+ {"name":"add_temperature","description":"Apply a fixed or spatially varying (`temp_fn` f(x,y,z,r)) boundary temperature on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"celsius":{"type":"number"},"temp_fn":{"type":"string"},"case":{"type":"string"}}}},
+ {"name":"add_convection","description":"Apply a Robin convective boundary condition (`h` in 1/mm = `(h_SI / k_solid) * 1e-3`, `t_inf` in °C, with optional world-space `h_fn` and `tinf_fn` f(x,y,z,r)) on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"h":{"type":"number"},"h_fn":{"type":"string"},"t_inf":{"type":"number"},"tinf":{"type":"number"},"tinf_fn":{"type":"string"},"case":{"type":"string"}}}},
+ {"name":"add_heatflux","description":"Apply a Neumann heat-flux boundary condition (`q` in K/mm, or world-space `q_fn` f(x,y,z,r)) on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"q":{"type":"number"},"q_fn":{"type":"string"},"case":{"type":"string"}}}},
  {"name":"set_material","description":"Assign a material label to a specific shape `node`, or omit `node` to set the document's default material.","inputSchema":{"type":"object","required":["material"],"properties":{"node":{"type":"string"},"material":{"type":"string"}}}},
  {"name":"upsert_custom_material","description":"Define or update a typed `custommaterial` in the open document, including Hollomon plasticity (`hardening_n`, `hardening_k`), brittle Weibull modulus (`weibull_m`), and `role` (`\"structural\"` or `\"fluid\"`).","inputSchema":{"type":"object","required":["id","e","nu","density"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"e":{"type":"number"},"nu":{"type":"number"},"yield_strength":{"type":"number"},"yield":{"type":"number"},"density":{"type":"number"},"min_wall":{"type":"number"},"alpha":{"type":"number"},"k":{"type":"number"},"yield_z":{"type":"number"},"shear_z":{"type":"number"},"hardening_n":{"type":"number"},"hardening_k":{"type":"number"},"weibull_m":{"type":"number"},"role":{"type":"string","enum":["structural","fluid"]},"source":{"type":"string"}}}},
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},

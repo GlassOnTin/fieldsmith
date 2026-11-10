@@ -89,7 +89,7 @@ export type LoadDir = { form: 'global'; v: Vec3 } | { form: 'local'; v: Vec3 };
 
 export type LoadKind =
   | { type: 'force'; vector: Vec3 }
-  | { type: 'pressure'; mpa: number }
+  | { type: 'pressure'; mpa: number; expr?: string }
   | { type: 'preload'; newtons: number; axis?: Vec3 }
   | { type: 'distributed'; expr: string; dir: LoadDir; total?: number };
 
@@ -213,6 +213,7 @@ export interface Temperature {
   id: string;
   region: string;
   celsius: number;
+  expr?: string;
   case: string;
 }
 
@@ -228,6 +229,8 @@ export interface Convection {
   region: string;
   h: number;
   t_inf: number;
+  h_expr?: string;
+  t_inf_expr?: string;
   case: string;
 }
 
@@ -242,6 +245,7 @@ export interface HeatFlux {
   id: string;
   region: string;
   q: number;
+  expr?: string;
   case: string;
 }
 

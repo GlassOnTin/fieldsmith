@@ -249,11 +249,22 @@ try {
 
   const boundCheck = await page.evaluate(async () => {
     const wasm = await import('/src/doc/wasm.ts');
-    const ver = wasm.verifyFsmContracts(window.fieldsmith.store.doc, 3000);
-    const sens = wasm.computeFsmSensitivities(window.fieldsmith.store.doc, ['r_in'], 3000);
+    const doc = window.fieldsmith.store.doc;
+    const chanConv = doc.convections.find((c) => c.id === 'chan_conv_bore_wall');
+    const chanLoad = doc.loads.find((l) => l.id === 'chan_press_bore_wall');
+    const printed = wasm.printFsm(doc);
+    const reparsed = wasm.parseFsm(printed);
+    if ('error' in reparsed) throw new Error(reparsed.error.message);
+    window.fieldsmith.store.select({ kind: 'convection', id: 'chan_conv_bore_wall' });
+    const ver = wasm.verifyFsmContracts(doc, 3000);
+    const sens = wasm.computeFsmSensitivities(doc, ['r_in'], 3000);
     return {
-      convections: window.fieldsmith.store.doc.convections.length,
-      loads: window.fieldsmith.store.doc.loads.length,
+      convections: doc.convections.length,
+      loads: doc.loads.length,
+      hExpr: chanConv?.h_expr ?? '',
+      tinfExpr: chanConv?.t_inf_expr ?? '',
+      pExpr: chanLoad?.kind.type === 'pressure' ? chanLoad.kind.expr ?? '' : '',
+      roundTripHExpr: reparsed.ok.convections.find((c) => c.id === 'chan_conv_bore_wall')?.h_expr ?? '',
       allPassed: ver.all_passed,
       sensMethod: sens.method,
       sensSolves: sens.solves_run,
@@ -262,6 +273,12 @@ try {
     };
   });
   assert(boundCheck.convections >= 2, `Expected bound channel convection BC, got ${boundCheck.convections}`);
+  assert(boundCheck.hExpr.startsWith('lerp(z,'), `Expected station-resolved lerp(z, ...) h_expr, got '${boundCheck.hExpr}'`);
+  assert(boundCheck.tinfExpr.startsWith('lerp(z,'), `Expected station-resolved lerp(z, ...) t_inf_expr, got '${boundCheck.tinfExpr}'`);
+  assert(boundCheck.pExpr.startsWith('lerp(z,'), `Expected station-resolved lerp(z, ...) pressure expr, got '${boundCheck.pExpr}'`);
+  assert(boundCheck.roundTripHExpr === boundCheck.hExpr, 'Spatial h_fn did not round-trip through printFsm/parseFsm');
+  await page.waitForSelector('[data-testid="convection-h-fn"]', { timeout: 3000 });
+  await page.waitForSelector('[data-testid="spatial-fn-curve"]', { timeout: 3000 });
   assert(boundCheck.allPassed, 'verifyFsmContracts failed in browser WASM');
   assert(
     boundCheck.sensMethod === 'finite_difference_remesh' && boundCheck.sensSolves === 3,

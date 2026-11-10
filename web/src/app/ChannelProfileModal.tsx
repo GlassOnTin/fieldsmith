@@ -148,6 +148,7 @@ export function ChannelProfileModal() {
       const res = analyzeFsmChannel(store.doc, {
         ...buildSpec(),
         bind_region: targetRegion,
+        pressure_case: 'Channel Pressure',
       });
       setReport(res.report);
       setErr(null);
@@ -159,7 +160,7 @@ export function ChannelProfileModal() {
           d.loads = structuredClone(nextLoads);
         });
         ui.notify(
-          `Bound Convection (h = ${res.report.mean_h_conv_w_m2_k.toFixed(0)} W/(m²·K), T_∞ = ${res.report.mean_bulk_temp_c.toFixed(1)} °C) & Pressure (${res.report.mean_pressure_mpa.toFixed(3)} MPa) to ${targetRegion}`,
+          `Bound station-resolved lerp(${res.report.axis}, …) Convection (mean h = ${res.report.mean_h_conv_w_m2_k.toFixed(0)} W/(m²·K), T_∞ = ${res.report.mean_bulk_temp_c.toFixed(1)} °C) & Pressure (${res.report.mean_pressure_mpa.toFixed(3)} MPa) to ${targetRegion}`,
         );
       }
     } catch (e) {

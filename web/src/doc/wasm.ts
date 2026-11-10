@@ -83,6 +83,29 @@ export function loadFnProbe(src: string, lo: number, hi: number): LoadFnProbe {
   return JSON.parse(w.loadFnProbe(src, lo, hi));
 }
 
+export interface SpatialFnProbe {
+  ok: boolean;
+  error?: string;
+  coord?: 'x' | 'y' | 'z' | 'r';
+  domain?: { lo: number; hi: number; from: 'domain' | 'requested' };
+  bands?: { lo: number; hi: number }[];
+  xs?: number[];
+  ys?: number[];
+  min?: number | null;
+  max?: number | null;
+  checks?: string[];
+}
+
+export function spatialFnProbe(
+  src: string,
+  doc: Document,
+  lo = 0,
+  hi = 50,
+  nonNegative = false,
+): SpatialFnProbe {
+  return JSON.parse(w.spatialFnProbe(src, JSON.stringify(doc), lo, hi, nonNegative));
+}
+
 export function materialLibrary(): Material[] {
   return JSON.parse(w.material_library());
 }

@@ -406,7 +406,14 @@ pub enum LoadKind {
     /// Total force in N, distributed uniformly over the region's area.
     Force { vector: [f64; 3] },
     /// Pressure in MPa acting against the outward normal (positive pushes into the part).
-    Pressure { mpa: f64 },
+    /// When `expr` (`pressure_fn="..."`) is present, evaluates the world-space field
+    /// `p(x, y, z, r)` in MPa at surface Gauss points (`mpa` holds the scalar fallback /
+    /// summary value).
+    Pressure {
+        mpa: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expr: Option<String>,
+    },
     /// Axial bolt clamping preload in N applied over the region (inward normal clamping
     /// traction `newtons / area`, or an opposed `±newtons` clamping pinch along `axis`
     /// when `axis` is non-zero and facets span both sides of the region mid-plane).
@@ -453,8 +460,11 @@ pub struct Load {
 pub struct Temperature {
     pub id: String,
     pub region: String,
-    /// Fixed boundary temperature (°C).
+    /// Fixed boundary temperature (°C), or reference/summary temperature when `expr` is set.
     pub celsius: f64,
+    /// Optional world-space Dirichlet temperature field `T(x, y, z, r)` in °C (`temp_fn="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
     /// Thermal case name. Temperatures sharing a case are solved together, then drive
     /// thermal expansion from the solve's reference temperature.
     pub case: String,
@@ -474,8 +484,14 @@ pub struct Convection {
     /// 5e-6 in these units. Read against the solver's pinned solid conductivity
     /// k = 1 W/(mm·K) — the materials sheet carries no conductivity today.
     pub h: f64,
+    /// Optional world-space convective film field `h(x, y, z, r)` in W/(mm²·K) (`h_fn="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_expr: Option<String>,
     /// Ambient/coolant temperature (°C).
     pub t_inf: f64,
+    /// Optional world-space ambient/coolant bulk temperature field `T_∞(x, y, z, r)` in °C (`tinf_fn="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_inf_expr: Option<String>,
     /// Thermal case name. A convection applies in the thermal case of the same name.
     pub case: String,
 }
@@ -493,6 +509,9 @@ pub struct HeatFlux {
     pub region: String,
     /// Heat flux per unit area (W/mm²), positive into the solid.
     pub q: f64,
+    /// Optional world-space Neumann surface heat flux `q(x, y, z, r)` in W/mm² (`q_fn="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
     /// Thermal case name. A heat flux applies in the thermal case of the same name.
     pub case: String,
 }
@@ -981,6 +1000,23 @@ impl Document {
                     l.id, l.region
                 ));
             }
+            if let LoadKind::Pressure { mpa, expr } = &l.kind {
+                let what = format!("load '{}'", l.id);
+                if !mpa.is_finite() {
+                    errs.push(format!("{what}: pressure= is not a finite number"));
+                }
+                if let Some(src) = expr {
+                    if src.contains(['\n', '\r']) {
+                        errs.push(format!(
+                            "{what}: pressure_fn must be one line (separate bands with ';')"
+                        ));
+                    }
+                    match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
+                        Ok(f) => errs.extend(f.static_checks(&format!("{what} pressure_fn"), false)),
+                        Err(e) => errs.push(format!("{what}: pressure_fn: {e}")),
+                    }
+                }
+            }
             if let LoadKind::Preload { newtons, axis } = &l.kind {
                 let what = format!("load '{}'", l.id);
                 if !newtons.is_finite() {
@@ -1041,6 +1077,18 @@ impl Document {
                     t.id
                 ));
             }
+            if let Some(src) = &t.expr {
+                let what = format!("Temperature '{}' temp_fn", t.id);
+                if src.contains(['\n', '\r']) {
+                    errs.push(format!(
+                        "{what}: must be one line (separate bands with ';')"
+                    ));
+                }
+                match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
+                    Ok(f) => errs.extend(f.static_checks(&what, false)),
+                    Err(e) => errs.push(format!("{what}: {e}")),
+                }
+            }
             for l in &self.loads {
                 if l.case == t.case {
                     errs.push(format!(
@@ -1058,7 +1106,10 @@ impl Document {
         // where the mesh is known.
         for (i, a) in self.temperatures.iter().enumerate() {
             for b in &self.temperatures[..i] {
-                if a.case == b.case && a.region == b.region && a.celsius != b.celsius {
+                if a.case == b.case
+                    && a.region == b.region
+                    && (a.celsius != b.celsius || a.expr != b.expr)
+                {
                     errs.push(format!(
                         "Temperatures '{}' and '{}' set conflicting values ({} °C and \
                          {} °C) on region '{}' in thermal case '{}' — one value per \
@@ -1086,11 +1137,35 @@ impl Document {
                     c.id, c.h
                 ));
             }
+            if let Some(src) = &c.h_expr {
+                let what = format!("Convection '{}' h_fn", c.id);
+                if src.contains(['\n', '\r']) {
+                    errs.push(format!(
+                        "{what}: must be one line (separate bands with ';')"
+                    ));
+                }
+                match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
+                    Ok(f) => errs.extend(f.static_checks(&what, true)),
+                    Err(e) => errs.push(format!("{what}: {e}")),
+                }
+            }
             if !c.t_inf.is_finite() {
                 errs.push(format!(
                     "Convection '{}' tinf= is not a finite number",
                     c.id
                 ));
+            }
+            if let Some(src) = &c.t_inf_expr {
+                let what = format!("Convection '{}' tinf_fn", c.id);
+                if src.contains(['\n', '\r']) {
+                    errs.push(format!(
+                        "{what}: must be one line (separate bands with ';')"
+                    ));
+                }
+                match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
+                    Ok(f) => errs.extend(f.static_checks(&what, false)),
+                    Err(e) => errs.push(format!("{what}: {e}")),
+                }
             }
             for l in &self.loads {
                 if l.case == c.case {
@@ -1118,6 +1193,18 @@ impl Document {
             if !f.q.is_finite() {
                 errs.push(format!("Heat flux '{}' q= is not a finite number", f.id));
             }
+            if let Some(src) = &f.expr {
+                let what = format!("Heat flux '{}' q_fn", f.id);
+                if src.contains(['\n', '\r']) {
+                    errs.push(format!(
+                        "{what}: must be one line (separate bands with ';')"
+                    ));
+                }
+                match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
+                    Ok(sf) => errs.extend(sf.static_checks(&what, false)),
+                    Err(e) => errs.push(format!("{what}: {e}")),
+                }
+            }
             for l in &self.loads {
                 if l.case == f.case {
                     errs.push(format!(
@@ -1133,7 +1220,13 @@ impl Document {
         // agree; differing values would double-assemble the surface term.
         for (i, a) in self.convections.iter().enumerate() {
             for b in &self.convections[..i] {
-                if a.case == b.case && a.region == b.region && (a.h != b.h || a.t_inf != b.t_inf) {
+                if a.case == b.case
+                    && a.region == b.region
+                    && (a.h != b.h
+                        || a.t_inf != b.t_inf
+                        || a.h_expr != b.h_expr
+                        || a.t_inf_expr != b.t_inf_expr)
+                {
                     errs.push(format!(
                         "Convections '{}' and '{}' set conflicting values (h {} and {}) on \
                          region '{}' in thermal case '{}' — one value per region per case",

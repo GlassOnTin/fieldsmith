@@ -7,6 +7,7 @@ pub mod materials;
 pub mod model;
 pub mod param;
 pub mod sketch;
+pub mod spatial;
 
 pub use materials::{Material, MaterialRole};
 pub use model::*;
