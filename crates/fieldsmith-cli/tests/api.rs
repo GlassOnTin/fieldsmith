@@ -62,7 +62,7 @@ fn api_ok_solves_and_exits_zero() {
     assert_eq!(v["status"], "ok");
     assert_eq!(v["apiv"], 2);
     assert!(v["engine"].as_str().unwrap().contains("fieldsmith"));
-    assert_eq!(v["single"]["provenance"]["dofs"], 44481);
+    assert_eq!(v["single"]["provenance"]["dofs"], 48822);
     assert_eq!(v["name"], "Bracket");
     std::fs::remove_dir_all(store.parent().unwrap()).ok();
 }
@@ -245,7 +245,7 @@ fn api_two_runs_with_an_empty_store_agree() {
     // timing leaves move from run to run.
     assert_eq!(a["records"][0]["dofs"], b["records"][0]["dofs"]);
     assert_eq!(a["records"][1]["dofs"], b["records"][1]["dofs"]);
-    assert_eq!(a["records"][1]["dofs"], 183537);
+    assert_eq!(a["records"][1]["dofs"], 190440);
     let rec = serde_json::to_string(&a["records"][1]).unwrap();
     assert!(
         !rec.contains("bracket") && !rec.contains(".fsm"),

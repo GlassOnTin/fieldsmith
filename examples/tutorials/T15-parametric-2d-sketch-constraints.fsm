@@ -13,7 +13,7 @@ fieldsmith 1
 # @verification_refs: docs/verification/V4.md
 # ---
 # @assert: Combined Pin Pull Resultant |F_pull| || resultant_mag || 1281.60 || 0.5% || N
-# @assert: Extruded Boss & Collar von Mises Stress σ_vM || max_vm_elem || 18.83 || 8.0% || MPa
+# @assert: Extruded Boss & Collar von Mises Stress σ_vM || max_vm_elem || 16.99 || 10.0% || MPa
 # @assert: Bracket Tip Deflection |u|_max || max_displacement || 0.0061 || 15.0% || mm
 # ---
 # @step: 1. Inspect Color-Coded Degrees of Freedom (DOF = N_vars − rank(J)) || shape

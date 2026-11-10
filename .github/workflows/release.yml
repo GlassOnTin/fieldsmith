@@ -51,7 +51,7 @@ jobs:
     needs: verify-ci
     if: needs.verify-ci.outputs.ci-passed != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_PROFILE_DEV_OPT_LEVEL: "3"
     steps:

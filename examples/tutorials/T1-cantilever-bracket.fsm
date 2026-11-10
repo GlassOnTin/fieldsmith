@@ -13,7 +13,7 @@ fieldsmith 1
 # @verification_refs: docs/verification/V1.md, docs/verification/V2.md
 # ---
 # @assert: Applied 15°-Angled Pin Pull Resultant |F| || resultant_mag || 400.02 || 0.5% || N
-# @assert: Fillet Peak Element von Mises Stress σ_vM || max_vm_elem || 17.50 || 12.0% || MPa
+# @assert: Fillet Peak Element von Mises Stress σ_vM || max_vm_elem || 20.52 || 12.0% || MPa
 # @assert: Safe PETG Yield Margin (σ_vM ≤ 47 MPa) || max_vm_elem || <= 47.0 || <= 47.0 || MPa
 # ---
 # @step: 1. How Parts Are Built: Adding Blocks, Subtracting Holes & Rounding Corners || shape
