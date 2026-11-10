@@ -5508,39 +5508,57 @@ pub fn build_float_bath_3d_fsm(design_p: &[f64]) -> String {
 #   H_sill = {h_sill_mm:.1} mm | x_beam = {x_beam_m:.1} m | Q_beam = {q_beam_kw:.0} kW | H2 = {p_h2_pct:.2}% | I_motor = {i_motor_a:.0} A
 name "UK5 Float-Bath & CVD Coater (H_sill={h_sill_mm:.0}mm, x_beam={x_beam_m:.1}m)"
 material ss316l
+custommaterial sic_refractory name="Alumino-Silicate / SiC Refractory" e=95000 nu=0.20 yield=140 density=2.65 wall=1.5 a=0.0000046 source="Fused-cast float-bath refractory"
+custommaterial molten_sn_bath name="Molten Tin Bath Sn(l)" e=1200 nu=0.45 yield=18 density=6.50 wall=0.8 a=0.0000909 source="Pilkington tin2fe liquid metal (Ron Smith JFM 1990)"
+custommaterial sodalime_ribbon name="Soda-Lime Float Glass (VFT Melt)" e=72000 nu=0.22 yield=65 density=2.50 wall=0.8 a=0.000009 source="Pilkington float2fe VFT melt log10 eta = -2.65 + 4210/(T-264)"
+custommaterial graphite_fender name="Graphite Fender / Top-Roll" e=11500 nu=0.21 yield=48 density=1.82 wall=1.0 a=0.0000042 source="Poco graphite bath fender & top-roll attenuator"
 
 let bath_len = {bath_len_mm}
 let bath_w = {bath_w_mm}
 let sill_step = {sill_step_mm}
 let beam_x = {beam_x_mm}
-
-# Central structural support pedestal (isolates fixed base from hot spout thermal expansion)
-box support_pedestal size=(76, 36, 6) at=(0, 0, 3)
-color "#52525b" on support_pedestal
+let h_sill = {h_sill_mm:.1}
+let u_pull = 0.16
+let i_motor = {i_motor_a:.0}
+let p_h2 = {p_h2_pct:.2}
+let q_beam = {q_beam_kw:.0}
+let top_roll_cant = {top_roll_cant_deg:.2}
 
 # Refractory casing floor, molten-tin continuum & side walls
 box refractory_casing size=(bath_len + 16, bath_w + 12, 20) at=(0, 0, 14)
 box tin_cavity size=(bath_len - 12, bath_w - 8, 9) at=(0, 0, 21) subtract
+material sic_refractory on refractory_casing
 color "#6b665e" on refractory_casing
+
+# Active Molten-Tin Pool Continuum (ρ = 6500 kg/m³, VMS circulation + Lorentz MHD)
+box tin_bath_pool size=(bath_len - 14, bath_w - 10, 4.5) at=(0, 0, 14.5)
+material molten_sn_bath on tin_bath_pool
+color "#64748b" on tin_bath_pool
 
 # Downstream Refractory Sill Step (controls bath depth H(x) = {h_sill_mm:.1} mm)
 box refractory_sill size=(116, bath_w - 4, sill_step) at=(32, 0, {sill_z_mm:.1})
+material sic_refractory on refractory_sill
 color "#c87d3b" on refractory_sill
 
 # Upstream Hot-Spread Glass Zone & Downstream Stretched Glass Ribbon (W(x) narrowing)
 box ribbon_hot_spread size=(78, {hot_spread_w_mm}, 6) at=(-58, 0, 17)
+material sodalime_ribbon on ribbon_hot_spread
 color "#f59e0b" on ribbon_hot_spread
 box glass_ribbon size=(142, {ribbon_w_mm}, 5) at=(28, 0, 16.5)
+material sodalime_ribbon on glass_ribbon
 color "#38bdf8" on glass_ribbon
 
 # Top-Roll Attenuator Shafts engaging ribbon edges in the stretching zone
 box top_roll_north size=(12, 16, 5) at=(-24, 22, 19.5)
 box top_roll_south size=(12, 16, 5) at=(-24, -22, 19.5)
+material graphite_fender on top_roll_north
+material graphite_fender on top_roll_south
 color "#94a3b8" on top_roll_north
 color "#94a3b8" on top_roll_south
 
 # Overhead Water-Cooled CVD Coating Beam Bridge at x = {x_beam_m:.1} m (Q_beam = {q_beam_kw:.0} kW)
 box cvd_coater_beam size=(14, bath_w + 8, 9) at=(beam_x, 0, 24.5)
+material ss316l on cvd_coater_beam
 color "#e05a47" on cvd_coater_beam
 
 # Linear Electromagnetic Motor Inductors (I_motor = {i_motor_a:.0} A)
@@ -5549,7 +5567,7 @@ box linear_motor_south size=(84, 6, 8) at=(12, -26, 23)
 color "#d9a441" on linear_motor_north
 color "#d9a441" on linear_motor_south
 
-region casing_base = support_pedestal.nz
+region casing_base = refractory_casing.nz
 region coater_slot = cvd_coater_beam.pz
 region hot_spout = refractory_casing.nx
 

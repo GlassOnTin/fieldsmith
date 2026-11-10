@@ -419,18 +419,16 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             if sign(rim(1.0 - alpha)) > 0.0 {
                 return;
             }
-            // Crossing beyond the claim window: a mid-edge crossing here would mint a new
-            // vertex, and the added dofs re-tessellate the mesh around the bore crown — on V3
-            // they pulled the Kt answer off band on three of five rungs while claims alone
-            // move it the other way. The mouth contract needs a node ON the rim, not a new
-            // dof, and the zero end is a kept corner on the max face (`val == 0`): claim it
-            // instead — nearest-wins with run bookkeeping, exactly like the claim window
-            // below — presenting the crossing at that vertex to every consuming stencil with
-            // no new dofs. Reach runs to 1 − alpha, held green by the fixture outcomes
-            // (tests/mouth_junction.rs: apex, seal and volume through 0.7 of a pitch). Pairs
-            // whose own crossing the claimed corner no longer covers ride the second pass
-            // below as raw tails.
+            // If the segment near `z` plunges into the strict interior (`f < -tiny`) rather than
+            // riding a zero-valued face patch (`|f| <= tiny`), then `z` sits on one face of a thin
+            // feature while `u` lies outside an opposite face (e.g. a vertical edge through a
+            // horizontal flange from the groove below to the top cap). Claiming `z` here would
+            // drag the top-cap vertex across the solid thickness onto the bottom face.
+            let is_zero_patch = f(rim(1.0 - 1e-4)).abs() <= 1e-6 * max_h;
             if sign(rim(alpha)) > 0.0 {
+                if !is_zero_patch {
+                    return;
+                }
                 let s = positive_boundary(
                     &f,
                     pu,
@@ -470,6 +468,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
                 *e = (s, c);
             }
             *claim_runs.entry(u).or_insert(0) += 1;
+            return;
         }
         let t = crossing(&f, pos(a), pos(b), fa, fb);
         let c = lerp(pos(a), pos(b), t);
@@ -526,9 +525,19 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
         // point. A record from a different edge matches nothing here, and that pair keeps its
         // raw crossing.
         let cp = lerp(pos(a), pos(b), t);
-        if [a, b]
-            .iter()
-            .any(|&v| warp.contains_key(&v) && claim_runs.get(&v) != Some(&1))
+        let is_through_flange = [a, b].iter().all(|&v| {
+            if let Some(&(_, cw)) = warp.get(&v) {
+                let d2 = (cp[0] - cw[0]).powi(2) + (cp[1] - cw[1]).powi(2) + (cp[2] - cw[2]).powi(2);
+                let mid = lerp(cw, cp, 0.5);
+                d2 > (0.40 * max_h).powi(2) && f(mid) < -0.05 * max_h
+            } else {
+                true
+            }
+        });
+        if !is_through_flange
+            && [a, b]
+                .iter()
+                .any(|&v| warp.contains_key(&v) && claim_runs.get(&v) != Some(&1))
         {
             return;
         }
@@ -575,7 +584,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
     };
 
     lat.tets(|t| {
-        let s = t.map(|v| {
+        let mut s = t.map(|v| {
             if val[v] < 0.0 {
                 -1i8
             } else if val[v] > 0.0 {
@@ -585,7 +594,7 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
             }
         });
         let npos = s.iter().filter(|&&x| x > 0).count();
-        let nneg = s.iter().filter(|&&x| x < 0).count();
+        let mut nneg = s.iter().filter(|&&x| x < 0).count();
         // Sorted lattice pair of the tet edge (i, j) — the key of `cuts` and `zero_cuts`.
         let ek = |i: usize, j: usize| -> (usize, usize) {
             if t[i] < t[j] {
@@ -594,6 +603,36 @@ pub fn stuff(f: impl Fn(V3) -> f64, lo: V3, hi: V3, h: f64) -> (TetMesh, Lattice
                 (t[j], t[i])
             }
         };
+        if nneg == 0 && npos > 0 {
+            // When all interior vertices of a thin flange/collar tet were warped onto one face
+            // (setting their `val` to 0.0), check whether any of those `s == 0` vertices carries
+            // a stored `zero_cuts` crossing to a positive vertex across solid material (`f(mid) < 0`).
+            // Promoting such vertices back to `s = -1` prevents dropping the cap tet and exposing
+            // internal diagonal V-trenches across thin flanges.
+            for i in 0..4 {
+                if s[i] == 0 && warp.contains_key(&t[i]) {
+                    let cw = warp_pos(t[i]);
+                    let has_through_cut = (0..4).any(|j| {
+                        if s[j] > 0 {
+                            let key = ek(i, j);
+                            if let Some(&w) = zero_cuts.get(&key) {
+                                let cp = lerp(pos(key.0), pos(key.1), w);
+                                let d2 = (cp[0] - cw[0]).powi(2)
+                                    + (cp[1] - cw[1]).powi(2)
+                                    + (cp[2] - cw[2]).powi(2);
+                                let mid = lerp(cw, cp, 0.5);
+                                return d2 > (0.40 * max_h).powi(2) && f(mid) < -0.05 * max_h;
+                            }
+                        }
+                        false
+                    });
+                    if has_through_cut {
+                        s[i] = -1;
+                        nneg += 1;
+                    }
+                }
+            }
+        }
         if nneg == 0 {
             if npos == 0 {
                 // All four vertices on the surface: keep if the tet lies inside.

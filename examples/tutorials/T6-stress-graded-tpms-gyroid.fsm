@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t6-gyroid-graded-bracket.fsm
 # @verification_refs: docs/verification/V6.md, docs/verification/V7.md, docs/verification/V48.md
 # ---
+# @assert: Stress-Graded Gyroid Mass Reduction Δm / m_solid || mass_saved_pct || >= 30.0 || >= 30% || %
+# @assert: Applied Pin Pull Resultant |F| || resultant_mag || 400.02 || 0.5% || N
+# @assert: Graded Bracket Peak von Mises Stress σ_vM || graded.max_vm_elem || 17.10 || 8.0% || MPa
+# ---
 # @step: 1. Look Inside the Part: Smooth Gyroid Lattice & Protected Bolt Collars || fill
 #   Why print a part 100% solid if the middle carries almost no stress? Tap "Go to Fill →" (which automatically turns on a 50% cutaway section and translucent outer skin so you can see inside). Inside the outer shell is a Gyroid — a smooth, wave-like 3D honeycomb belonging to a family called Triply Periodic Minimal Surfaces (TPMS). Unlike sharp criss-cross struts that concentrate stress at corners, a Gyroid has smooth soap-film curves with zero sharp junctions, and we keep a 2 mm solid protective collar around all three bolt holes ("protect").
 # @expected:
@@ -55,3 +59,4 @@ region load_pin = hole3.side
 support s1 mount fixed=xyz
 load l1 load_pin force=(103.5, 0, -386.4)
 fill gyroid sheet cell=6 skin=1.2 skin_max=2.2 rho=(0.2, 0.6) curve=1.5 wall=0.8 protect=(hole1, hole2, hole3) margin=2
+solve

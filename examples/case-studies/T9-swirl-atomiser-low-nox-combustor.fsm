@@ -4,13 +4,16 @@ fieldsmith 1
 # @code: T9
 # @category: case-study
 # @level: Flagship Multi-Physics
-# @title: Swirl Atomiser Nozzle, Combustor & Heat Exchanger — Predicting NOx
-# @subtitle: Build a multi-part swirl fuel atomiser inside a cooled combustion chamber, and tune nozzle geometry to shrink fuel droplets and cut NOx emissions.
+# @title: 3D Swirl Atomiser & Cooled Combustor Thermo-Structural FEA + 0D/1D Reduced-Order Spray Evaporation & Zeldovich NOx Workbench
+# @subtitle: Solve 3D P2 multi-material thermo-elastic stress across a CuCrZr swirl nozzle and SS316L heat-exchanger liner, paired with a 0D/1D reduced-order swirl film thickness (D₃₂), D² droplet evaporation, and Zeldovich thermal-NOx workbench.
 # @verification_badge: Lesson 9 · Multi-Physics · Swirl Spray, Heat Exchanger & NOx
 # @doc_path: docs/case-studies/T9-swirl-atomiser-low-nox-combustor.md
 # @fsm_path: examples/case-studies/T9-swirl-atomiser-low-nox-combustor.fsm
 # @starter_fsm_name: T9-swirl-atomiser-combustor-hx.fsm
 # @verification_refs: docs/verification/V51.md
+# ---
+# @assert: Case 1 Combustor Pressure (18 bar) Stress || max_vm_elem:1 || >= 10.0 || >= 10.0 || MPa
+# @assert: Case 2 Combustor Thermal & HX Stress || max_vm_elem:2 || >= 200.0 || >= 200.0 || MPa
 # ---
 # @step: 1. Inside a Swirl Atomiser Nozzle & 3D Volumetric Spray / Flame Cutaway || shape
 #   Liquid fuel cannot burn cleanly as a solid stream — it must first be shattered into a fine mist of microscopic droplets (atomisation) so it evaporates and mixes evenly with air. Look at the 3D cutaway in the viewport alongside the live "3D Volumetric Swirl Spray, Turbulent Flame & NOx Plume" HUD (`[data-testid="coupled-viewport-hud"]`): at the bottom is the bronze CuCrZr Swirl Atomiser ("nozzle_body"). Two angled tangential fuel ports ("swirl_port_pos/neg") spin fuel into a high-speed vortex that shoots out of "exit_orifice" as a 3D hollow spray cone, igniting into 6 nested ParaView volumetric swirl-flame shells quenched by the 4 radial dilution jets ("dilution_jet_x/y") at z = 48 mm.

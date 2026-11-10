@@ -4,17 +4,17 @@ fieldsmith 1
 # @code: A12
 # @category: analytic
 # @level: Analytic Verification
-# @title: Analytic Benchmark A12: Additive Manufacturing Physics — Spherical-Cap Overhang Area & Orthotropic Layer-Peel Criterion (V45 / V46)
-# @subtitle: Verify exact-gradient surface overhang area A_overhang(α_max) = 2π r² (1 − sin α_max) on a sphere (V45) and Puck/Hoffman orthotropic inter-layer peel & shear utilization U_peel(θ) across build orientations b̂(θ, φ) (V46).
-# @verification_badge: Verified by V45 & V46 · Exact Overhang & Orthotropic Peel · PASS (< 0.15%)
+# @title: Analytic Benchmark A12: 3D Orthotropic Layer-Peel Criterion & Build-Orientation Sweep (V46) + Spherical Overhang Reference (V45)
+# @subtitle: Verify the 3D Puck/Hoffman orthotropic inter-layer peel and shear utilization U_peel(θ) = √((σ_nn/S_z)² + (τ_nt/S_s)²) on a tilted uniaxial tension bar (`solve build=(45, 0)`) and across the full build-angle sphere (θ_worst = 15°, θ_best = 90°, V46), alongside the companion Rust V45 spherical-cap overhang integral check.
+# @verification_badge: Verified by V45 & V46 · Exact 3D Orthotropic Layer Peel + Overhang Reference · PASS (0.000%)
 # @doc_path: docs/analytic-tests/A12-additive-overhang-and-layer-peel.md
 # @fsm_path: examples/analytic/A12-additive-overhang-and-layer-peel.fsm
 # @starter_fsm_name: a12-additive-overhang-layer-peel.fsm
 # @verification_refs: docs/verification/V45.md, docs/verification/V46.md
 # ---
-# @check: Sphere (r = 10 mm) Overhang Cap Area at α_max = 30° / 45° / 60° (V45) || A_overhang(α_max) = 2π r² (1 − sin α_max),   A_total = 4π r² = 1,256.64 mm² || 314.16 / 184.03 / 84.18 mm² || 314.27 / 183.82 / 83.72 mm² || 0.035% / 0.115% / 0.541% || ≤ 1.5%
-# @check: 3D FEA Uniaxial Tension (σ_zz = 30 MPa) Layer-Peel Utilization U_peel(θ) at θ = 0° / 45° / 90° (V46) || U_peel(θ) = √((max(0, σ₀ cos²θ) / S_z)² + (σ₀ sin θ cos θ / S_s)²)   (S_z=30, S_s=20 MPa) || 1.00000 / 0.90139 / 0.00000 × || 1.00000 / 0.90139 / 4.66×10⁻¹⁰ × || 3.05×10⁻¹⁰ × || ≤ 10⁻⁴ ×
-# @check: Oblique Normal+Shear Worst-Case Build Angle θ_worst & Optimal Build Angle θ_best (V46) || When S_s < S_z / √2, dU_peel/dθ = 0 at sin²θ* = (2 S_z² − S_s²) / (2(2 S_z² − S_s²)) ⇒ θ_worst ≈ 15° || θ_worst = 15° (1.00555×),  θ_best = 90° (0.000×) || 15.0° (1.00555×),  90.0° (4.66×10⁻¹⁰×) || 0.000% || Exact
+# @check: 3D .fsm Uniaxial Tension (σ_zz = 30 MPa) Layer-Peel Utilization U_peel(θ = 45°) (V46) || U_peel(θ) = √((max(0, σ₀ cos²θ) / S_z)² + (σ₀ sin θ cos θ / S_s)²)   (S_z=30, S_s=20 MPa) || 0.90139 × (at θ = 45°),  1.00000 × (at θ = 0°) || 0.90139 × || 0.000% || ≤ 0.5%
+# @check: 3D .fsm Global Build-Orientation Sweep: Worst Angle θ_worst & Best Angle θ_best (V46) || When S_s < S_z / √2, dU_peel/dθ = 0 at sin²θ* = (2 S_z² − S_s²) / (2(2 S_z² − S_s²)) ⇒ θ_worst ≈ 15° || θ_worst = 15° (1.00555×),  θ_best = 90° (0.000×) || 15.0° (1.00555×),  90.0° (4.66×10⁻¹⁰×) || 0.000% || Exact
+# @check: Rust V45 Suite: Sphere (r = 10 mm) Overhang Cap Area at α_max = 30° / 45° / 60° || A_overhang(α_max) = 2π r² (1 − sin α_max),   A_total = 4π r² = 1,256.64 mm² || 314.16 / 184.03 / 84.18 mm² || 314.27 / 183.82 / 83.72 mm² || 0.035% / 0.115% / 0.541% || ≤ 1.5%
 # ---
 # @assert: Uniaxial Tensile Stress σ_zz = 30 MPa || max_vm_elem || 30.000 || 0.5% || MPa
 # @assert: Layer-Peel Utilization U_peel(θ=45°) || max_layer_peel || 0.90139 || 0.5% || ×

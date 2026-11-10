@@ -972,7 +972,7 @@ impl Document {
             }
             if let LoadKind::Distributed { expr, dir, total } = &l.kind {
                 let what = format!("load '{}'", l.id);
-                match crate::loaddist::LoadFn::compile(expr) {
+                match crate::loaddist::LoadFn::compile_with_lets(expr, &let_values) {
                     Ok(f) => errs.extend(f.static_checks(&what)),
                     Err(e) => errs.push(format!("{what}: fn: {e}")),
                 }
@@ -1129,6 +1129,14 @@ impl Document {
             }
         }
         for m in &self.custom_materials {
+            if let Some(k) = m.k {
+                if !(k.is_finite() && k > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' k must be a positive finite number",
+                        m.id
+                    ));
+                }
+            }
             if let Some(yz) = m.yield_z {
                 if !(yz.is_finite() && yz > 0.0) {
                     errs.push(format!(

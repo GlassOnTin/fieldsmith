@@ -26,8 +26,10 @@ export interface ContinuumMaterialSpec {
   constitutiveEquation: string;
   /** Key physical parameters displayed in the Shape (1) Inspector and Theory (6) table. */
   parameters: { symbol: string; label: string; value: string; unit: string }[];
+  /** Thermal conductivity k in W/(m·K) for Fourier heat conduction and multiphysics coupling. */
+  thermalConductivityWPerMK?: number;
   /** Underlying Material entry stored in doc.custom_materials so WASM .fsm parser/solver works natively. */
-  fsmMaterial: Material;
+  fsmMaterial: Material & { k?: number };
 }
 
 export const CONTINUUM_PHASE_META: Record<
@@ -407,7 +409,9 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       { symbol: 'σ₀', label: 'Weibull characteristic scale (63.2%)', value: '340.0', unit: 'MPa' },
       { symbol: 'm', label: 'Weibull flaw modulus', value: '10.5', unit: '—' },
       { symbol: 'α', label: 'Cryogenic CTE', value: '2.2 × 10⁻⁶', unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: '120.0', unit: 'W/(m·K)' },
     ],
+    thermalConductivityWPerMK: 120.0,
     fsmMaterial: {
       id: 'sic_jwst',
       name: 'SiC Space-Optics Ceramic (Weibull Brittle)',
@@ -417,63 +421,595 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
       density: 3.1,
       min_wall: 1.0,
       alpha: 2.2e-6,
+      k: 120.0,
       source:
-        'Sintered Silicon Carbide (Boostec SiC space-optics bench class): E = 410 GPa, ν = 0.17, σ₀ = 340 MPa, m = 10.5.',
+        'Sintered Silicon Carbide (Boostec SiC space-optics bench class): E = 410 GPa, ν = 0.17, σ₀ = 340 MPa, m = 10.5, k = 120 W/(m·K).',
+    },
+  },
+  {
+    id: 'al7075',
+    name: 'Aluminium 7075-T6 Aerospace Alloy',
+    phase: 'solid_elastic',
+    phaseLabel: 'High-Strength Aerospace Alloy',
+    badgeColor: '#3b82f6',
+    defaultHexColor: '#94a3b8',
+    constitutiveEquation:
+      'σ = C : (ε(u) − α_7075 (T − T_ref) I),   q = −k_7075 ∇T',
+    parameters: [
+      { symbol: 'E', label: 'Young’s modulus', value: '71.7', unit: 'GPa' },
+      { symbol: 'ν', label: 'Poisson’s ratio', value: '0.33', unit: '—' },
+      { symbol: 'σ_y', label: 'Yield strength', value: '503', unit: 'MPa' },
+      { symbol: 'α', label: 'Thermal expansion (CTE)', value: '23.4 × 10⁻⁶', unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: '155.0', unit: 'W/(m·K)' },
+      { symbol: 'ρ', label: 'Density', value: '2810', unit: 'kg/m³' },
+    ],
+    thermalConductivityWPerMK: 155.0,
+    fsmMaterial: {
+      id: 'al7075',
+      name: 'Aluminium 7075-T6 Aerospace Alloy',
+      e: 71700.0,
+      nu: 0.33,
+      yield_strength: 503.0,
+      density: 2.81,
+      min_wall: 0.4,
+      alpha: 23.4e-6,
+      k: 155.0,
+      source:
+        'AMS-QQ-A-250/12 Aluminium 7075-T6 wrought plate/bar: E = 71.7 GPa, ν = 0.33, Rp0.2 = 503 MPa, ρ = 2.81 g/cm³, CTE = 23.4×10⁻⁶/°C, k = 155 W/(m·K).',
+    },
+  },
+  {
+    id: 'mat_dc04',
+    name: 'DC04 Deep-Drawing Mild Steel (EN 10130)',
+    phase: 'solid_elastic',
+    phaseLabel: 'Forming Sheet Steel · J₂ Plastic',
+    badgeColor: '#3b82f6',
+    defaultHexColor: '#64748b',
+    constitutiveEquation:
+      'σ = C : (ε(u) − ε_p − α (T − T_ref) I),   σ_flow(ε_p) = K ε_p^n',
+    parameters: [
+      { symbol: 'E', label: 'Young’s modulus', value: '210.0', unit: 'GPa' },
+      { symbol: 'ν', label: 'Poisson’s ratio', value: '0.30', unit: '—' },
+      { symbol: 'σ_y', label: 'Yield strength', value: '180', unit: 'MPa' },
+      { symbol: 'α', label: 'Thermal expansion (CTE)', value: '12.0 × 10⁻⁶', unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: '50.0', unit: 'W/(m·K)' },
+      { symbol: 'ρ', label: 'Density', value: '7850', unit: 'kg/m³' },
+    ],
+    thermalConductivityWPerMK: 50.0,
+    fsmMaterial: {
+      id: 'mat_dc04',
+      name: 'DC04 Deep-Drawing Mild Steel (EN 10130)',
+      e: 210000.0,
+      nu: 0.3,
+      yield_strength: 180.0,
+      density: 7.85,
+      min_wall: 0.4,
+      alpha: 12.0e-6,
+      k: 50.0,
+      source:
+        'EN 10130 DC04 (1.0338) cold-rolled low-carbon sheet steel for clinching & forming: E = 210 GPa, ν = 0.30, Rp0.2 = 180 MPa, ρ = 7.85 g/cm³, CTE = 12.0×10⁻⁶/°C, k = 50 W/(m·K).',
+    },
+  },
+  {
+    id: 'peek',
+    name: 'PEEK Semi-Crystalline High-Temp Polymer',
+    phase: 'solid_elastic',
+    phaseLabel: 'High-Performance Thermoplastic',
+    badgeColor: '#3b82f6',
+    defaultHexColor: '#d6d3d1',
+    constitutiveEquation:
+      'σ = C(E, ν) : (ε(u) − α_PEEK (T − T_ref) I),   q = −k_PEEK ∇T',
+    parameters: [
+      { symbol: 'E', label: 'Young’s modulus', value: '3.6', unit: 'GPa' },
+      { symbol: 'ν', label: 'Poisson’s ratio', value: '0.38', unit: '—' },
+      { symbol: 'σ_y', label: 'Yield strength', value: '100', unit: 'MPa' },
+      { symbol: 'α', label: 'Thermal expansion (CTE)', value: '47.0 × 10⁻⁶', unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: '0.25', unit: 'W/(m·K)' },
+      { symbol: 'ρ', label: 'Density', value: '1320', unit: 'kg/m³' },
+    ],
+    thermalConductivityWPerMK: 0.25,
+    fsmMaterial: {
+      id: 'peek',
+      name: 'PEEK High-Temp Polymer',
+      e: 3600.0,
+      nu: 0.38,
+      yield_strength: 100.0,
+      density: 1.32,
+      min_wall: 0.6,
+      alpha: 47.0e-6,
+      k: 0.25,
+      source:
+        'Victrex PEEK 450G / ISO 527 semi-crystalline polyetheretherketone: E = 3.6 GPa, ν = 0.38, σ_y = 100 MPa, ρ = 1.32 g/cm³, CTE = 47×10⁻⁶/°C, k = 0.25 W/(m·K).',
+    },
+  },
+  {
+    id: 'tpu95a',
+    name: 'TPU 95A Flexible Elastomer (FDM)',
+    phase: 'solid_elastic',
+    phaseLabel: 'Flexible Thermoplastic Elastomer',
+    badgeColor: '#3b82f6',
+    defaultHexColor: '#38bdf8',
+    constitutiveEquation:
+      'σ = C(E, ν) : (ε(u) − α_TPU (T − T_ref) I),   q = −k_TPU ∇T',
+    parameters: [
+      { symbol: 'E', label: 'Young’s modulus', value: '0.065', unit: 'GPa' },
+      { symbol: 'ν', label: 'Poisson’s ratio', value: '0.48', unit: '—' },
+      { symbol: 'σ_y', label: 'Tensile yield / tear allow.', value: '18', unit: 'MPa' },
+      { symbol: 'α', label: 'Thermal expansion (CTE)', value: '150.0 × 10⁻⁶', unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: '0.19', unit: 'W/(m·K)' },
+      { symbol: 'ρ', label: 'Density', value: '1220', unit: 'kg/m³' },
+    ],
+    thermalConductivityWPerMK: 0.19,
+    fsmMaterial: {
+      id: 'tpu95a',
+      name: 'TPU 95A Flexible Elastomer (FDM)',
+      e: 65.0,
+      nu: 0.48,
+      yield_strength: 18.0,
+      density: 1.22,
+      min_wall: 0.8,
+      alpha: 150.0e-6,
+      k: 0.19,
+      source:
+        'Thermoplastic polyurethane Shore 95A (UltiMaker / NinjaTek Cheetah 95A class): E ≈ 65 MPa, ν = 0.48, σ_y = 18 MPa, ρ = 1.22 g/cm³, CTE = 150×10⁻⁶/°C, k = 0.19 W/(m·K).',
     },
   },
 ];
 
+/** Exact reference properties for built-in and benchmark custom material IDs across A1–A20 & T1–T19. */
+const KNOWN_MATERIAL_CATALOG: Record<
+  string,
+  Material & { k: number }
+> = {
+  cucrzr: {
+    id: 'cucrzr',
+    name: 'CuCrZr copper alloy (LPBF)',
+    e: 128000.0,
+    nu: 0.34,
+    yield_strength: 420.0,
+    density: 8.91,
+    min_wall: 0.4,
+    alpha: 17.0e-6,
+    k: 320.0,
+    source:
+      'Age-hardened CuCrZr LPBF data sheet class values: E ≈ 128 GPa, Rp0.2 ≈ 420 MPa, density 8.91 g/cm³, CTE 17.0×10⁻⁶/°C, k = 320 W/(m·K).',
+  },
+  cucrzr_ref: {
+    id: 'cucrzr_ref',
+    name: 'CuCrZr (E=128 GPa, nu=0.34)',
+    e: 128000.0,
+    nu: 0.34,
+    yield_strength: 380.0,
+    density: 8.9,
+    min_wall: 0.4,
+    alpha: 17.0e-6,
+    k: 320.0,
+    source: 'CuCrZr Lamé benchmark reference (A4): E = 128 GPa, ν = 0.34, σ_y = 380 MPa, ρ = 8.90 g/cm³, CTE = 17.0×10⁻⁶/°C, k = 320 W/(m·K).',
+  },
+  cucrzr_regen: {
+    id: 'cucrzr_regen',
+    name: 'CuCrZr (E=128 GPa, nu=0.34, a=1.7e-5)',
+    e: 128000.0,
+    nu: 0.34,
+    yield_strength: 380.0,
+    density: 8.9,
+    min_wall: 0.4,
+    alpha: 17.0e-6,
+    k: 320.0,
+    source: 'CuCrZr regenerative cooling liner reference (A5): E = 128 GPa, ν = 0.34, σ_y = 380 MPa, ρ = 8.90 g/cm³, CTE = 17.0×10⁻⁶/°C, k = 320 W/(m·K).',
+  },
+  alsi10mg: {
+    id: 'alsi10mg',
+    name: 'AlSi10Mg (LPBF)',
+    e: 70000.0,
+    nu: 0.33,
+    yield_strength: 230.0,
+    density: 2.67,
+    min_wall: 0.4,
+    alpha: 20.0e-6,
+    k: 150.0,
+    source: 'EOS AlSi10Mg data sheet class values: E = 70 GPa, ν = 0.33, Rp0.2 = 230 MPa, ρ = 2.67 g/cm³, CTE = 20×10⁻⁶/°C, k = 150 W/(m·K).',
+  },
+  alu: {
+    id: 'alu',
+    name: 'Aluminium Alloy (A8 Thermo-Elastic Reference)',
+    e: 70000.0,
+    nu: 0.33,
+    yield_strength: 250.0,
+    density: 2.7,
+    min_wall: 0.4,
+    alpha: 23.0e-6,
+    k: 167.0,
+    source: 'Aluminium 6061-T6 / A8 thermo-elastic benchmark reference: E = 70 GPa, ν = 0.33, σ_y = 250 MPa, ρ = 2.70 g/cm³, CTE = 23.0×10⁻⁶/°C, k = 167 W/(m·K).',
+  },
+  al5754_clinch: {
+    id: 'al5754_clinch',
+    name: 'EN AW-5754-H111 Clinching Aluminium Sheet',
+    e: 70000.0,
+    nu: 0.33,
+    yield_strength: 65.0,
+    density: 2.67,
+    min_wall: 0.4,
+    alpha: 23.0e-6,
+    k: 150.0,
+    source: 'EN AW-5754-H111 (AlMg3) annealed sheet metal for S-Lock clinching (A19/T19): E = 70 GPa, ν = 0.33, σ_y = 65 MPa, ρ = 2.67 g/cm³, CTE = 23.0×10⁻⁶/°C, k = 150 W/(m·K).',
+  },
+  al7075: {
+    id: 'al7075',
+    name: 'Aluminium 7075-T6 Aerospace Alloy',
+    e: 71700.0,
+    nu: 0.33,
+    yield_strength: 503.0,
+    density: 2.81,
+    min_wall: 0.4,
+    alpha: 23.4e-6,
+    k: 155.0,
+    source: 'AMS-QQ-A-250/12 Aluminium 7075-T6 wrought plate/bar: E = 71.7 GPa, ν = 0.33, Rp0.2 = 503 MPa, ρ = 2.81 g/cm³, CTE = 23.4×10⁻⁶/°C, k = 155 W/(m·K).',
+  },
+  ss316l: {
+    id: 'ss316l',
+    name: '316L stainless (LPBF)',
+    e: 180000.0,
+    nu: 0.3,
+    yield_strength: 470.0,
+    density: 7.98,
+    min_wall: 0.4,
+    alpha: 15.7e-6,
+    k: 16.2,
+    source: 'EOS StainlessSteel 316L data sheet: E = 180 GPa, ν = 0.30, Rp0.2 = 470 MPa, ρ = 7.98 g/cm³, CTE = 15.7×10⁻⁶/°C, k = 16.2 W/(m·K).',
+  },
+  ti64: {
+    id: 'ti64',
+    name: 'Ti-6Al-4V (LPBF)',
+    e: 110000.0,
+    nu: 0.34,
+    yield_strength: 960.0,
+    density: 4.41,
+    min_wall: 0.4,
+    alpha: 9.0e-6,
+    k: 6.7,
+    source: 'EOS Ti64 Grade 23 data sheet: E = 110 GPa, ν = 0.34, Rp0.2 = 960 MPa, ρ = 4.41 g/cm³, CTE = 9.0×10⁻⁶/°C, k = 6.7 W/(m·K).',
+  },
+  in718: {
+    id: 'in718',
+    name: 'Inconel 718 (LPBF)',
+    e: 190000.0,
+    nu: 0.29,
+    yield_strength: 980.0,
+    density: 8.19,
+    min_wall: 0.4,
+    alpha: 13.0e-6,
+    k: 11.4,
+    source: 'EOS NickelAlloy IN718 heat-treated LPBF data sheet: E = 190 GPa, Rp0.2 = 980 MPa, ρ = 8.19 g/cm³, CTE = 13.0×10⁻⁶/°C, k = 11.4 W/(m·K).',
+  },
+  mat_dc04: {
+    id: 'mat_dc04',
+    name: 'DC04 Deep-Drawing Mild Steel (EN 10130)',
+    e: 210000.0,
+    nu: 0.3,
+    yield_strength: 180.0,
+    density: 7.85,
+    min_wall: 0.4,
+    alpha: 12.0e-6,
+    k: 50.0,
+    source: 'EN 10130 DC04 (1.0338) cold-rolled sheet steel: E = 210 GPa, ν = 0.30, Rp0.2 = 180 MPa, ρ = 7.85 g/cm³, CTE = 12.0×10⁻⁶/°C, k = 50 W/(m·K).',
+  },
+  steel200: {
+    id: 'steel200',
+    name: 'Steel (E=200 GPa, nu=0.30)',
+    e: 200000.0,
+    nu: 0.3,
+    yield_strength: 250.0,
+    density: 7.85,
+    min_wall: 0.4,
+    alpha: 12.0e-6,
+    k: 45.0,
+    source: 'Structural carbon steel reference (A1/A2): E = 200 GPa, ν = 0.30, σ_y = 250 MPa, ρ = 7.85 g/cm³, CTE = 12.0×10⁻⁶/°C, k = 45 W/(m·K).',
+  },
+  ref_steel: {
+    id: 'ref_steel',
+    name: 'Reference Elastic Steel (E=200 GPa, nu=0.30)',
+    e: 200000.0,
+    nu: 0.3,
+    yield_strength: 350.0,
+    density: 7.85,
+    min_wall: 0.4,
+    alpha: 12.0e-6,
+    k: 45.0,
+    source: 'Reference structural steel (A7): E = 200 GPa, ν = 0.30, σ_y = 350 MPa, ρ = 7.85 g/cm³, CTE = 12.0×10⁻⁶/°C, k = 45 W/(m·K).',
+  },
+  pa12: {
+    id: 'pa12',
+    name: 'PA12 (SLS)',
+    e: 1650.0,
+    nu: 0.4,
+    yield_strength: 45.0,
+    density: 0.93,
+    min_wall: 0.8,
+    alpha: 109.0e-6,
+    k: 0.24,
+    source: 'EOS PA 2200 SLS nylon 12 data sheet: E = 1.65 GPa, ν = 0.40, σ_y = 45 MPa, ρ = 0.93 g/cm³, CTE = 109×10⁻⁶/°C, k = 0.24 W/(m·K).',
+  },
+  pla: {
+    id: 'pla',
+    name: 'PLA (FDM)',
+    e: 2300.0,
+    nu: 0.36,
+    yield_strength: 51.0,
+    density: 1.24,
+    min_wall: 0.8,
+    alpha: 96.0e-6,
+    k: 0.13,
+    source: 'Prusament PLA TDS: E = 2.3 GPa, ν = 0.36, σ_y = 51 MPa, ρ = 1.24 g/cm³, CTE = 96×10⁻⁶/°C, k = 0.13 W/(m·K).',
+  },
+  petg: {
+    id: 'petg',
+    name: 'PETG (FDM)',
+    e: 1500.0,
+    nu: 0.38,
+    yield_strength: 47.0,
+    density: 1.27,
+    min_wall: 0.8,
+    alpha: 70.0e-6,
+    k: 0.20,
+    source: 'Prusament PETG TDS: E = 1.5 GPa, ν = 0.38, σ_y = 47 MPa, ρ = 1.27 g/cm³, CTE = 70×10⁻⁶/°C, k = 0.20 W/(m·K).',
+  },
+  petg_ortho: {
+    id: 'petg_ortho',
+    name: 'Orthotropic Printed PETG (Sz=30 MPa, Ss=20 MPa)',
+    e: 2100.0,
+    nu: 0.35,
+    yield_strength: 50.0,
+    density: 1.27,
+    min_wall: 0.8,
+    alpha: 60.0e-6,
+    yield_z: 30.0,
+    shear_z: 20.0,
+    k: 0.20,
+    source: 'Orthotropic FDM PETG benchmark (A12): E = 2.1 GPa, ν = 0.35, σ_y = 50 MPa, S_z = 30 MPa, S_s = 20 MPa, k = 0.20 W/(m·K).',
+  },
+  abs: {
+    id: 'abs',
+    name: 'ABS (FDM)',
+    e: 2200.0,
+    nu: 0.35,
+    yield_strength: 40.0,
+    density: 1.04,
+    min_wall: 0.8,
+    alpha: 86.0e-6,
+    k: 0.17,
+    source: 'Printed ABS (Prusament ABS class): E = 2.2 GPa, ν = 0.35, σ_y = 40 MPa, ρ = 1.04 g/cm³, CTE = 86×10⁻⁶/°C, k = 0.17 W/(m·K).',
+  },
+  tpu95a: {
+    id: 'tpu95a',
+    name: 'TPU 95A Flexible Elastomer (FDM)',
+    e: 65.0,
+    nu: 0.48,
+    yield_strength: 18.0,
+    density: 1.22,
+    min_wall: 0.8,
+    alpha: 150.0e-6,
+    k: 0.19,
+    source: 'Thermoplastic polyurethane Shore 95A: E = 65 MPa, ν = 0.48, σ_y = 18 MPa, ρ = 1.22 g/cm³, CTE = 150×10⁻⁶/°C, k = 0.19 W/(m·K).',
+  },
+  peek: {
+    id: 'peek',
+    name: 'PEEK High-Temp Polymer',
+    e: 3600.0,
+    nu: 0.38,
+    yield_strength: 100.0,
+    density: 1.32,
+    min_wall: 0.6,
+    alpha: 47.0e-6,
+    k: 0.25,
+    source: 'Victrex PEEK 450G high-temperature thermoplastic: E = 3.6 GPa, ν = 0.38, σ_y = 100 MPa, ρ = 1.32 g/cm³, CTE = 47×10⁻⁶/°C, k = 0.25 W/(m·K).',
+  },
+  paraffin_wax: {
+    id: 'paraffin_wax',
+    name: 'Paraffin Candle Wax C₂₅H₅₂',
+    e: 450.0,
+    nu: 0.38,
+    yield_strength: 12.0,
+    density: 0.9,
+    min_wall: 0.8,
+    alpha: 110.0e-6,
+    k: 0.25,
+    source: 'Paraffin wax (n-pentacosane C₂₅H₅₂): T_melt = 58 °C, L_f = 210 kJ/kg, ρ = 0.90 g/cm³, k = 0.25 W/(m·K).',
+  },
+  molten_tin: {
+    id: 'molten_tin',
+    name: 'Molten Tin Bath Sn(l)',
+    e: 1200.0,
+    nu: 0.45,
+    yield_strength: 18.0,
+    density: 6.5,
+    min_wall: 0.8,
+    alpha: 90.9e-6,
+    k: 32.0,
+    source: 'Pilkington UK5 tin2fe liquid-metal reference: ρ₀ = 6500 kg/m³, β_Sn = 9.09×10⁻⁵ K⁻¹, k = 32 W/(m·K).',
+  },
+  soda_lime_glass: {
+    id: 'soda_lime_glass',
+    name: 'Soda-Lime Float Glass (VFT Melt)',
+    e: 72000.0,
+    nu: 0.22,
+    yield_strength: 65.0,
+    density: 2.5,
+    min_wall: 0.8,
+    alpha: 9.0e-6,
+    k: 1.4,
+    source: 'Pilkington UK5 float2fe soda-lime-silica VFT rheology: E_solid = 72 GPa, ν = 0.22, ρ_g = 2.50 g/cm³, CTE = 9.0×10⁻⁶/°C, k = 1.40 W/(m·K).',
+  },
+};
+
+/** Resolve thermal conductivity k in W/(m·K) for any built-in, multiphysics, or custom material ID. */
+export function resolveThermalConductivityWPerMK(
+  matId: string,
+  phase: ContinuumPhaseId = 'solid_elastic',
+): number {
+  const idLo = matId.trim().toLowerCase();
+  const exact = KNOWN_MATERIAL_CATALOG[idLo];
+  if (exact) return exact.k;
+
+  if (idLo.includes('cucrzr') || idLo.includes('copper') || idLo.startsWith('cu_')) return 320.0;
+  if (idLo.includes('alu') || idLo.includes('al6061')) return 167.0;
+  if (idLo.includes('al7075')) return 155.0;
+  if (idLo.includes('alsi10mg') || idLo.includes('al5754') || idLo.startsWith('al_')) return 150.0;
+  if (idLo.includes('ti64') || idLo.includes('titanium')) return 6.7;
+  if (idLo.includes('in718') || idLo.includes('inconel')) return 11.4;
+  if (idLo.includes('ss316') || idLo.includes('ss304') || idLo.includes('stainless') || idLo.includes('a286') || idLo.includes('17_4ph')) return 16.2;
+  if (idLo.includes('dc04')) return 50.0;
+  if (idLo.includes('steel') || idLo.includes('iron')) return 45.0;
+  if (idLo.includes('sic_jwst')) return 120.0;
+  if (idLo.includes('sic_refractory') || idLo.includes('refractory')) return 2.4;
+  if (idLo.includes('cf_woven') || idLo.includes('cfrp')) return 5.0;
+  if (idLo.includes('molten_tin') || idLo === 'tin' || phase === 'liquid_metal') return 32.0;
+  if (idLo.includes('nbk7')) return 1.11;
+  if (idLo.includes('soda_lime') || idLo.includes('glass') || phase === 'viscous_melt' || phase === 'optical_medium') return 1.4;
+  if (idLo.includes('paraffin') || idLo.includes('wax')) return 0.25;
+  if (idLo.includes('cotton') || idLo.includes('wick')) return 0.06;
+  if (idLo.includes('h2_n2')) return 0.095;
+  if (idLo.includes('jet_a1') || idLo.includes('spray')) return 0.115;
+  if (idLo.includes('air') || phase === 'reactive_gas') return 0.026;
+  if (idLo.includes('peek')) return 0.25;
+  if (idLo.includes('pa12') || idLo.includes('nylon')) return 0.24;
+  if (idLo.includes('petg')) return 0.2;
+  if (idLo.includes('tpu')) return 0.19;
+  if (idLo.includes('abs')) return 0.17;
+  if (idLo.includes('pla')) return 0.13;
+  if (phase === 'phase_change_fuel') return 0.25;
+  return 45.0;
+}
+
 /** Look up rich continuum metadata for any material ID (built-in solid, multiphysics continuum, or custom). */
 export function getContinuumMaterialSpec(doc: Document, matId: string): ContinuumMaterialSpec {
-  const mp = MULTIPHYSICS_CONTINUUM_MATERIALS.find((m) => m.id === matId);
-  if (mp) return mp;
+  const cleanId = matId.trim();
+  const idLo = cleanId.toLowerCase();
+  const customFound = (doc.custom_materials ?? []).find(
+    (m) => m.id === cleanId || m.id.toLowerCase() === idLo,
+  );
+  const mp = MULTIPHYSICS_CONTINUUM_MATERIALS.find(
+    (m) => m.id === cleanId || m.id.toLowerCase() === idLo,
+  );
 
-  const allLib = [...materialLibrary(), ...(doc.custom_materials ?? [])];
-  const found = allLib.find((m) => m.id === matId);
-  const name = found?.name ?? matId;
-  const eGpa = found ? (found.e / 1000).toFixed(1) : '—';
-  const nu = found ? found.nu.toFixed(2) : '—';
-  const ys = found ? found.yield_strength.toFixed(0) : '—';
-  const rho = found ? (found.density * 1000).toFixed(0) : '—';
-  const alphaVal = (found as unknown as { alpha?: number })?.alpha;
-  const cte = alphaVal != null ? `${(alphaVal * 1e6).toFixed(1)} × 10⁻⁶` : '15.0 × 10⁻⁶';
+  let libMats: Material[] = [];
+  try {
+    libMats = materialLibrary();
+  } catch {
+    libMats = [];
+  }
+  const libFound = libMats.find((m) => m.id === cleanId || m.id.toLowerCase() === idLo);
+  const catalogFound = KNOWN_MATERIAL_CATALOG[idLo];
+
+  const resolvedMat: Material = customFound
+    ? {
+        ...(catalogFound ?? libFound ?? mp?.fsmMaterial ?? {}),
+        ...customFound,
+        alpha:
+          customFound.alpha ??
+          catalogFound?.alpha ??
+          libFound?.alpha ??
+          mp?.fsmMaterial.alpha ??
+          15.0e-6,
+      }
+    : libFound
+      ? {
+          ...libFound,
+          alpha: libFound.alpha ?? catalogFound?.alpha ?? 15.0e-6,
+        }
+      : mp
+        ? mp.fsmMaterial
+        : catalogFound ?? {
+            id: cleanId,
+            name: cleanId,
+            e: 70000,
+            nu: 0.33,
+            yield_strength: 230,
+            density: 2.67,
+            min_wall: 0.8,
+            alpha: 20.0e-6,
+            source: 'Built-in solid library',
+          };
+
+  const kVal =
+    (customFound as (Material & { k?: number }) | undefined)?.k ??
+    mp?.thermalConductivityWPerMK ??
+    resolveThermalConductivityWPerMK(cleanId, mp?.phase ?? 'solid_elastic');
+
+  if (mp && !customFound) {
+    const hasKParam = mp.parameters.some((p) => p.symbol.startsWith('k'));
+    return {
+      ...mp,
+      thermalConductivityWPerMK: kVal,
+      parameters: hasKParam
+        ? mp.parameters
+        : [
+            ...mp.parameters,
+            { symbol: 'k', label: 'Thermal conductivity', value: kVal >= 10 ? kVal.toFixed(1) : kVal.toString(), unit: 'W/(m·K)' },
+          ],
+      fsmMaterial: {
+        ...mp.fsmMaterial,
+        k: kVal,
+      },
+    };
+  }
+
+  const name = resolvedMat.name || cleanId;
+  const eGpa = (resolvedMat.e / 1000).toFixed(resolvedMat.e < 1000 ? 3 : 1);
+  const nu = resolvedMat.nu.toFixed(2);
+  const ys = resolvedMat.yield_strength.toFixed(0);
+  const rho = (resolvedMat.density * 1000).toFixed(0);
+  const alphaVal = resolvedMat.alpha ?? catalogFound?.alpha ?? 15.0e-6;
+  const cte = `${(alphaVal * 1e6).toFixed(1)} × 10⁻⁶`;
+  const kFormatted = kVal >= 10 ? kVal.toFixed(1) : kVal >= 1 ? kVal.toFixed(2) : kVal.toString();
 
   return {
-    id: matId,
+    id: cleanId,
     name,
-    phase: 'solid_elastic',
-    phaseLabel: 'Solid Elastic / Thermo-Elastic',
-    badgeColor: '#3b82f6',
-    defaultHexColor: '#94a3b8',
-    constitutiveEquation: 'σ = C(E, ν) : (ε(u) − α (T − T_ref) I),   q = −k ∇T',
+    phase: mp?.phase ?? 'solid_elastic',
+    phaseLabel: mp?.phaseLabel ?? 'Solid Elastic / Thermo-Elastic',
+    badgeColor: mp?.badgeColor ?? '#3b82f6',
+    defaultHexColor: mp?.defaultHexColor ?? '#94a3b8',
+    constitutiveEquation:
+      mp?.constitutiveEquation ?? 'σ = C(E, ν) : (ε(u) − α (T − T_ref) I),   q = −k ∇T',
+    thermalConductivityWPerMK: kVal,
     parameters: [
       { symbol: 'E', label: 'Young’s modulus', value: eGpa, unit: 'GPa' },
       { symbol: 'ν', label: 'Poisson’s ratio', value: nu, unit: '—' },
       { symbol: 'σ_y', label: 'Yield strength', value: ys, unit: 'MPa' },
       { symbol: 'ρ', label: 'Density', value: rho, unit: 'kg/m³' },
       { symbol: 'α', label: 'Thermal expansion (CTE)', value: cte, unit: 'K⁻¹' },
+      { symbol: 'k', label: 'Thermal conductivity', value: kFormatted, unit: 'W/(m·K)' },
     ],
-    fsmMaterial: found ?? {
-      id: matId,
-      name,
-      e: 70000,
-      nu: 0.33,
-      yield_strength: 230,
-      density: 2.67,
-      min_wall: 0.8,
-      source: 'Built-in solid library',
+    fsmMaterial: {
+      ...resolvedMat,
+      alpha: alphaVal,
+      k: kVal,
     },
   };
 }
 
-/** Ensure that if `matId` is one of the multiphysics continuum materials, its `Material` entry
- * is present in `draft.custom_materials` so WASM `parseFsm`/`printFsm`/`analyse` work natively. */
+/** Ensure that if `matId` is one of the multiphysics continuum or extended catalog materials
+ * not in the base WASM library, its `Material` entry is present in `draft.custom_materials`
+ * so WASM `parseFsm`/`printFsm`/`analyse` work natively. */
 export function ensureContinuumMaterialInDoc(draft: Document, matId: string): void {
-  const mp = MULTIPHYSICS_CONTINUUM_MATERIALS.find((m) => m.id === matId);
-  if (!mp) return;
+  const cleanId = matId.trim();
+  let libMats: Material[] = [];
+  try {
+    libMats = materialLibrary();
+  } catch {
+    libMats = [];
+  }
+  if (libMats.some((m) => m.id === cleanId)) return;
+
+  const mp = MULTIPHYSICS_CONTINUUM_MATERIALS.find((m) => m.id === cleanId);
+  const cat = KNOWN_MATERIAL_CATALOG[cleanId.toLowerCase()];
+  const src = mp?.fsmMaterial ?? cat;
+  if (!src) return;
   if (!draft.custom_materials) draft.custom_materials = [];
-  if (!draft.custom_materials.some((m) => m.id === matId)) {
-    draft.custom_materials.push(structuredClone(mp.fsmMaterial));
+  if (!draft.custom_materials.some((m) => m.id === cleanId)) {
+    const { k: _k, ...cleanFsmMat } = structuredClone(src) as Material & { k?: number };
+    draft.custom_materials.push(cleanFsmMat);
   }
 }
 
@@ -664,6 +1200,18 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
     doc.name.toLowerCase().includes('deadcat') ||
     doc.name.toLowerCase().includes('antenna');
 
+  const isFreeSurfaceSph =
+    regime === 'pilkington_uk5_float_bath' ||
+    letNames.has('p_fsi_mpa') ||
+    letNames.has('p_cap_mpa') ||
+    letNames.has('spout_backflow_pct') ||
+    letNames.has('hinze_radius_mm') ||
+    letNames.has('droplet_r_mm') ||
+    letNames.has('jurin_rise_mm') ||
+    doc.name.toLowerCase().includes('free-surface') ||
+    doc.name.toLowerCase().includes('laplace') ||
+    doc.name.toLowerCase().includes('jurin');
+
   const docMatSpec = getContinuumMaterialSpec(doc, doc.material);
 
   return [
@@ -709,23 +1257,34 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
       ],
     },
 
-    // 2. Setup / Results Stage: 3D Quadratic (P2) Linear Elasticity
+    // 2. Setup / Results Stage: 3D Quadratic (P2) Linear Elasticity & J2 Secant Elasto-Plasticity
     {
       id: 'p2_linear_elasticity',
       stage: 'setup',
       stageNumber: 2,
-      title: '3D Quadratic (P2) Navier–Cauchy Linear Elasticity',
-      shortName: '3D P2 Linear Elasticity (Ku = f)',
+      title:
+        readLetParam(doc, 'nonlinear_plastic', 0) > 0
+          ? '3D Quadratic (P2) Navier–Cauchy & J₂ Secant Elasto-Plasticity'
+          : '3D Quadratic (P2) Navier–Cauchy Linear Elasticity',
+      shortName:
+        readLetParam(doc, 'nonlinear_plastic', 0) > 0
+          ? '3D P2 J₂ Secant Elasto-Plasticity (K_sec u = f)'
+          : '3D P2 Linear Elasticity (Ku = f)',
       active: hasElasticSolve,
       triggerSummary: hasElasticSolve
-        ? `Active: ${doc.supports.length} support(s) (${doc.supports.map((s) => s.id).join(', ')}) + ${doc.loads.length} mechanical load(s) / ${doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length} thermal BC(s) in Setup (2).`
+        ? `Active: ${doc.supports.length} support(s) (${doc.supports.map((s) => s.id).join(', ')}) + ${doc.loads.length} mechanical load(s) / ${doc.temperatures.length + doc.convections.length + doc.heat_fluxes.length} thermal BC(s) in Setup (2)${readLetParam(doc, 'nonlinear_plastic', 0) > 0 ? ' with 3D J₂ plasticity enabled' : ''}.`
         : 'Standby: Add at least one Support and one Load or Thermal BC in Setup (2).',
       strongForm:
         '−∇ · σ(u) = f_b  in Ω,   σ(u) = C_e : ε(u),   ε(u) = ½ (∇u + ∇uᵀ),   u = 0 on Γ_D,   σ · n = t̂ on Γ_N',
       weakOrDiscreteForm:
         'Find u_h ∈ V_h^(P2) : ∫_Ω ε(v_h) : C_e : ε(u_h) dΩ = ∫_{Γ_N} v_h · t̂ dΓ + l_th(v_h),   10-node P2 tet + Keast deg-2 quadrature',
       liveParameters: [
-        `Base continuum material: ${docMatSpec.name} (E = ${(docMatSpec.fsmMaterial.e / 1000).toFixed(1)} GPa, ν = ${docMatSpec.fsmMaterial.nu})`,
+        `Base continuum material: ${docMatSpec.name} (E = ${(docMatSpec.fsmMaterial.e / 1000).toFixed(1)} GPa, ν = ${docMatSpec.fsmMaterial.nu}, σ_y = ${docMatSpec.fsmMaterial.yield_strength} MPa)`,
+        `Constitutive law: ${
+          readLetParam(doc, 'nonlinear_plastic', 0) > 0
+            ? `3D J₂ Elasto-Plastic (Hollomon n = ${readLetParam(doc, 'hardening_n', 0.2).toFixed(2)})`
+            : 'Linear Hookean Elasticity'
+        }`,
         `Dirichlet supports Γ_D: ${doc.supports.map((s) => `${s.id} on ${s.region} [fixed=${['x', 'y', 'z'].filter((_, i) => s.fixed[i]).join('')}]`).join('; ') || 'none'}`,
         `Neumann tractions Γ_N: ${
           doc.loads
@@ -760,7 +1319,7 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
         '∫_Ω k_e ∇w_h · ∇T_h dΩ + ∫_{Γ_R} h_c w_h T_h dΓ = ∫_{Γ_R} h_c w_h T_∞ dΓ − ∫_{Γ_q} w_h q_N dΓ  →  f_th = ∫_Ω Bᵀ C_e α_e ΔT_h dΩ',
       liveParameters: hasThermalBcs
         ? [
-            `Reference stress-free temperature T_ref = ${doc.solve.t_ref ?? 20} °C`,
+            `Reference stress-free temperature T_ref = ${doc.solve.t_ref ?? 20} °C, Thermal conductivity k = ${(docMatSpec.thermalConductivityWPerMK ?? resolveThermalConductivityWPerMK(doc.material)).toFixed(2)} W/(m·K)`,
             `Dirichlet temperatures Γ_T: ${doc.temperatures.map((t) => `${t.id} (${t.region}: ${t.celsius} °C)`).join(', ') || 'none'}`,
             `Robin convection Γ_R: ${doc.convections.map((c) => `${c.id} (${c.region}: h=${c.h}, T_∞=${c.t_inf} °C)`).join(', ') || 'none'}`,
             `Neumann heat flux Γ_q: ${doc.heat_fluxes.map((q) => `${q.id} (${q.region}: q=${q.q})`).join(', ') || 'none'}`,
@@ -985,6 +1544,31 @@ export function evaluateDocumentFieldEquations(doc: Document): ActiveFieldEquati
           ]
         : ['Standby operator — add RF antenna parameters to bind live VNA metrics.'],
     },
+
+    // 12. Multi-Regime Free-Surface & Capillary Fluid Dynamics (Boussinesq–Peregrine ↔ DFSPH ↔ MLS-CSF Hinze ↔ Implicit Stokes 1100 °C Spout-Lip Pour)
+    {
+      id: 'multi_regime_free_surface_sph',
+      stage: 'setup',
+      stageNumber: 2,
+      title:
+        'Multi-Regime Free-Surface & Capillary Fluid Dynamics (Boussinesq–Peregrine ↔ DFSPH ↔ MLS-CSF Hinze ↔ Implicit Stokes 1100 °C Spout-Lip Pour)',
+      shortName: 'Multi-Regime Free-Surface Fluid (Potential ↔ DFSPH ↔ MLS-CSF ↔ Implicit Stokes)',
+      active: isFreeSurfaceSph,
+      triggerSummary: isFreeSurfaceSph
+        ? 'Active: Multi-Regime Free-Surface (Re, We, Oh, Bo, Ca) & Capillary FSI / Spout-Lip parameters in Document.'
+        : 'Standby: Click 🌊 SPH in the footer or open T8 / T18 / A15 / A16 to activate multi-regime free-surface physics.',
+      strongForm:
+        'Regime I (Potential): ∂ū/∂t + (ū·∇)ū + g∇η = (h₀²/3)∇(∇·∂ū/∂t);   Regime II–III (DFSPH + MLS-CSF): ρ Du/Dt = −∇p + μ∇²u + γ κ_MLS n̂ δ_s + (∂γ/∂T)∇_s T δ_s;   Regime IV (Oh ≫ 1, Re ≪ 1): −∇·[2μ(T)D(u)] + ∇p = ρg + γ κ_MLS n̂ δ_s',
+      weakOrDiscreteForm:
+        'z_MLS(u,v) = c₀(u² + ½z²) + c₁uv + c₂(v² + ½z²),   κ_MLS = −2(c₀+c₂),   a_Hinze = 0.725(γ/ρ)^{3/5}ε^{−2/5},   h_eq = √(2(−S)ρ_Sn / (ρ_g(ρ_Sn−ρ_g)g)) ≈ 6.84 mm',
+      liveParameters: isFreeSurfaceSph
+        ? [
+            `1100 °C Spout-Lip & Knurl (Regime IV, Oh ≈ 30.2, Re ≈ 0.02): h_eq = 6.84 mm, Heel Backflow = ${readLetParam(doc, 'spout_backflow_pct', 16.4).toFixed(1)}% (94.6% bad surface glass flushed to knurl)`,
+            `Howell Peregrine Wave Air Entrainment (Regimes I→II→III): Hinze bubble radius a_Hinze = ${readLetParam(doc, 'hinze_radius_mm', 1.48).toFixed(2)} mm`,
+            `3D FSI & Capillary Tractions: p_FSI = ${readLetParam(doc, 'p_fsi_mpa', 0.025).toFixed(4)} MPa, p_cap = ${readLetParam(doc, 'p_cap_mpa', 0.012).toFixed(4)} MPa`,
+          ]
+        : ['Standby operator — open the Free-Surface Fluid (🌊 SPH) Workbench to bind live multi-regime parameters.'],
+    },
   ];
 }
 
@@ -1194,10 +1778,10 @@ export function matchedCoupledSystemIdForDoc(doc: Document, sheetId?: string | n
   const docName = (doc.name || '').toLowerCase();
   const hasLet = (k: string) => doc.lets?.some((l) => l.name === k) ?? false;
   const regime = detectCoupledPhysicsRegime(doc);
-  if (sheetId === 'T13' || regime === 'solar_candle' || hasLet('i_solar')) {
+  if (sheetId === 'T13' || regime === 'solar_candle_ignition' || hasLet('i_solar')) {
     return 'solar_candle_ignition_v1';
   }
-  if (sheetId === 'T8' || regime === 'float_bath' || hasLet('h_sill')) {
+  if (sheetId === 'T8' || regime === 'pilkington_uk5_float_bath' || hasLet('h_sill')) {
     return 'pilkington_float_bath_cvd_coater_v1';
   }
   if (
@@ -1234,7 +1818,7 @@ export function matchedCoupledSystemIdForDoc(doc: Document, sheetId?: string | n
   if (sheetId === 'T12' || docName.includes('pem') || docName.includes('electroly')) {
     return 'pem_water_electrolyser_v1';
   }
-  if (regime === 'swirl_combustor' || docName.includes('swirl') || docName.includes('combustor')) {
+  if (regime === 'annular_swirl_spray_combustor' || docName.includes('swirl') || docName.includes('combustor')) {
     return 'annular_swirl_spray_combustor_v1';
   }
   return null;

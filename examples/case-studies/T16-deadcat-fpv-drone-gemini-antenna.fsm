@@ -4,8 +4,8 @@ fieldsmith 1
 # @code: T16
 # @category: case-study
 # @level: Flagship Multi-Physics
-# @title: 4-Inch DeadCat FPV Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA, 50 Ω Smith Chart & 3D Lobe Optimisation
-# @subtitle: Design a 4-inch DeadCat carbon-fibre (CFRP) FPV drone airframe with 4 × 1404 brushless motors, 20×20 mm FC/ESC/ELRS stack, Al 7075 camera cage, 4S LiPo, and 3D-printed TPU/PA12 Gemini dual-band antenna pod. Eliminate CFRP eddy-current absorption, dielectric boot detuning, and nose-on shadow nulls via VNA S₁₁/S₂₁ sweeps, 50 Ω Smith Chart matching, and 3D radiation lobe synthesis.
+# @title: 3D DeadCat CFRP FPV Drone Airframe Structural FEA + Analytic Dual-Band VNA, 50 Ω Smith Chart & Dipole Lobe Workbench
+# @subtitle: Solve 3D P2 structural deflection and stress on a 4-inch DeadCat 3K woven CFRP drone airframe under prop thrust, paired with an analytic/reduced-order RF transmission-line VNA (S₁₁/S₂₁), 50 Ω Smith Chart L-network matcher, Leontovich CFRP eddy-loss, and dipole lobe synthesis workbench.
 # @verification_badge: Verified by V59 (Dual-Band VNA S₁₁/S₂₁ + 50 Ω Smith Chart + 3D Polar Lobes + CFRP Eddy Loss + Auto-Optimiser)
 # @doc_path: docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md
 # @fsm_path: examples/case-studies/T16-deadcat-fpv-drone-gemini-antenna.fsm
@@ -191,15 +191,8 @@ color "#34D399" on gemini_p2_2400mhz_sleeve
 color "#38BDF8" on tpu_boot_cap_p1
 color "#38BDF8" on tpu_boot_cap_p2
 
-group rf_3d_radiation_lobe_envelope {
-  torus lobe_rear_main_toroid major=37.0 minor=10.7 at=(0, -95.3, 26.0) rotate=(12, 0, 0)
-  torus lobe_forward_diffraction_sector major=17.8 minor=5.5 at=(0, -73.3, 30.0) rotate=(-8, 0, 0)
-}
-color "#10B981" on rf_3d_radiation_lobe_envelope
-color "#10B981" on lobe_rear_main_toroid
-color "#10B981" on lobe_forward_diffraction_sector
-
 region rear_standoff_mount = cfrp_bottom_plate.nz
 region top_deck = motor_fr_bell.top + motor_fl_bell.top + motor_rr_bell.top + motor_rl_bell.top + arm_front_right.pz + arm_front_left.pz + arm_rear_right.pz + arm_rear_left.pz + cfrp_top_plate.pz
 support bench_fix rear_standoff_mount fixed=xyz
 load prop_thrust top_deck force=(0, 0, 64)
+solve

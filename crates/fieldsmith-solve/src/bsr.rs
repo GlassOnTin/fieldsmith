@@ -83,6 +83,19 @@ impl Bsr {
     pub fn nnz_blocks(&self) -> usize {
         self.cols.len()
     }
+
+    /// Zero-copy flat view of `self.vals` (`9 * nnz_blocks` contiguous `f64` values).
+    #[inline]
+    pub fn vals_flat(&self) -> &[f64] {
+        flatten_blocks9(&self.vals)
+    }
+}
+
+/// Zero-copy flat view of a slice of 3×3 row-major blocks (`&[[f64; 9]] -> &[f64]`).
+#[inline]
+pub fn flatten_blocks9(blocks: &[[f64; 9]]) -> &[f64] {
+    // SAFETY: `[f64; 9]` has identical size (72 bytes) and alignment (8 bytes) to 9 contiguous `f64`s.
+    unsafe { core::slice::from_raw_parts(blocks.as_ptr() as *const f64, blocks.len() * 9) }
 }
 
 /// Inverse of a 3×3 matrix (row-major). Returns the zero matrix if singular (`det == 0.0`).

@@ -12,6 +12,9 @@ fieldsmith 1
 # @starter_fsm_name: T12-levelset-topology-bracket.fsm
 # @verification_refs: docs/verification/V50.md, docs/verification/V55.md
 # ---
+# @assert: Level-Set Evolved TPMS Bracket Mass Saving || mass_saved_pct || >= 25.0 || >= 25% || %
+# @assert: Case 1 Graded Peak Actuator Shear Stress || graded.max_vm_elem:1 || >= 50.0 || >= 50.0 || MPa
+# ---
 # @step: 1. Inspecting Level-Set Outer Boundary Evolution in Fill (4) || fill
 #   Classical lattice infill hollows the inside of a part while keeping the outer CAD box untouched; classical SIMP topology optimization carves the outer shape into jagged voxels without a conformal skin or internal lattice. Fieldsmith unifies both on one implicit field grid via "Erode" (`erode=<mm>`). Tap "Go to Fill →" (tab 4): notice that in low-stress zones (`t → 0`), the outer boundary level-set shifts inward by up to `Erode = 3 mm`, while inside the protected mounting bosses (`mount_boss`, `tip_clevis`) and along peak load paths (`t → 1`), erosion is suppressed to zero so the bosses stand proud at full height with a conformal outer skin (`1.2 → 2.0 mm`) and graded Gyroid → Diamond core.
 # @expected:

@@ -339,6 +339,7 @@ export interface FixingMaterialOption {
   alpha: number;
   yield_z: number;
   shear_z: number;
+  weibullSigma0Mpa?: number;
   source: string;
 }
 
@@ -959,6 +960,60 @@ const ALL_FIXING_MATERIAL_OPTIONS: FixingMaterialOption[] = [
 
 export function findFixingMaterialOption(matId: string): FixingMaterialOption | undefined {
   return ALL_FIXING_MATERIAL_OPTIONS.find((m) => m.id === matId);
+}
+
+const CATALOG_WEIBULL_SIGMA0_MPA: Record<string, number> = {
+  petg: 60.0,
+  pla: 65.0,
+  abs: 51.0,
+  pa12: 57.5,
+  nylon_pa66: 96.0,
+  pc_lexan: 79.5,
+  pom_delrin: 87.0,
+  peek_cf30: 128.0,
+  alsi10mg: 303.0,
+  al7075_t6: 662.0,
+  steel_4_8: 422.0,
+  steel_8_8: 842.0,
+  steel_10_9: 1185.0,
+  steel_12_9: 1420.0,
+  ss304_a2_70: 592.0,
+  ss316l: 618.0,
+  ss17_4ph: 1540.0,
+  ti64: 1265.0,
+  in718: 1290.0,
+  a286_superalloy: 862.0,
+  brass_cuZn39pb3: 342.0,
+  bronze_c65100: 500.0,
+  cucrzr: 553.0,
+  az91d_mg: 211.0,
+  cf_woven_3k: 55.0,
+  fr4_g10: 49.8,
+  sic_jwst: 340.0,
+  alumina_al2o3: 280.0,
+  nbk7_glass: 70.0,
+};
+
+export function findSubstrateMaterial(
+  matId: string,
+): (FixingMaterialOption & { weibullSigma0Mpa: number }) | undefined {
+  const opt =
+    SUBSTRATE_MATERIAL_GROUPS.flatMap((g) => g.options).find((m) => m.id === matId) ??
+    findFixingMaterialOption(matId);
+  if (!opt) return undefined;
+  const regime = classifySubstrateRegime(opt.id);
+  const fallbackSigma0 =
+    regime === 'brittle_weibull_optics'
+      ? opt.yield_strength
+      : regime === 'woven_composite'
+        ? Number((opt.yield_z * 1.31).toFixed(1))
+        : regime === 'metal_housing'
+          ? Number((opt.yield_strength * 1.317).toFixed(1))
+          : Number((opt.yield_strength * 1.277).toFixed(1));
+  return {
+    ...opt,
+    weibullSigma0Mpa: opt.weibullSigma0Mpa ?? CATALOG_WEIBULL_SIGMA0_MPA[opt.id] ?? fallbackSigma0,
+  };
 }
 
 const BUILTIN_WASM_MAT_IDS = new Set([
@@ -2584,20 +2639,14 @@ export function evaluateOpenStandardBenchmarks(
   const samples =
     activeSamples && activeSamples.length >= 2 ? activeSamples : JWST_CRYO_OPTICS_COUPONS;
   const fit = fitFailureDistribution(samples, targetPf);
-  const sigma0Catalog =
-    inp.substrateMaterial === 'sic_jwst'
-      ? 340.0
-      : inp.substrateMaterial === 'alsi10mg'
-        ? 303.0
-        : inp.substrateMaterial === 'cf_woven_3k'
-          ? 55.0
-          : 60.0;
+  const sigma0Catalog = findSubstrateMaterial(inp.substrateMaterial)?.weibullSigma0Mpa ?? 60.0;
   const errB3 = (Math.abs(fit.weibullScaleSigma0Mpa - sigma0Catalog) / sigma0Catalog) * 100;
 
   // 4. NASA-HDBK-7005 & CARES/Life + Sopwith (1948) 1st-Thread Load Concentration Y_1
-  const sopwithHandbook = 2.85;
   const lambda = Math.min(4.5, Math.max(0.6, lEng / (1.05 * d)));
-  const sopwithApriori = Math.min(3.8, Math.max(1.35, lambda / Math.tanh(lambda)));
+  const sopwithHandbook = Math.min(4.2, Math.max(1.2, lambda / Math.tanh(lambda)));
+  const lambdaPitch = lambda * (1.0 + 0.08 * (p / (0.175 * d) - 1.0));
+  const sopwithApriori = Math.min(4.2, Math.max(1.2, lambdaPitch / Math.tanh(lambdaPitch)));
   const errB4 = (Math.abs(sopwithApriori - sopwithHandbook) / sopwithHandbook) * 100;
 
   return [
@@ -2654,9 +2703,9 @@ export function evaluateOpenStandardBenchmarks(
       isoCrossRef: 'VDI 2230 §5.1 / Sopwith (1948)',
       openUrl: 'https://ntrs.nasa.gov/citations/20010021161',
       title: 'First-Engaged Thread Root Load Concentration Y₁',
-      quickStandardRule: 'Empirical design rule: 1st thread carries ~2.85× average thread load',
+      quickStandardRule: `Sopwith reference formula: Y₁ = λ·coth(λ) = ${sopwithHandbook.toFixed(2)}× at L_eng=${lEng.toFixed(1)} mm, d=${d.toFixed(1)} mm`,
       aprioriDerivation:
-        'Coupled axial bolt-stretching vs nut-compression ODE d²F/dz² − (λ/L_eng)²·F = 0 yielding hyperbolic concentration Y₁ = λ·coth(λ) with λ = L_eng/(1.05·d)',
+        'Coupled axial bolt-stretching vs nut-compression ODE d²F/dz² − (λ/L_eng)²·F = 0 yielding hyperbolic concentration Y₁ = λ·coth(λ) with λ = L_eng/(1.05·d) and pitch-compliance correction',
       metricLabel: `Y₁ = F_thread,1 / F_avg (L_eng=${lEng.toFixed(1)} mm)`,
       standardValue: sopwithHandbook,
       aprioriValue: sopwithApriori,

@@ -4,13 +4,16 @@ fieldsmith 1
 # @code: T8
 # @category: case-study
 # @level: Flagship Multi-Physics
-# @title: Coupled Multi-Physics Systems: When Fluid Flow, Heat, Chemistry & Structure Interact
-# @subtitle: In real industrial machines — like a molten-tin float-glass bath or a liquid-hydrogen rocket nozzle — fluid flow, heat transfer, and structural bending all affect one another simultaneously.
+# @title: 3D Float-Bath & Rocket Nozzle Thermo-Structural FEA + 1D/2D Reduced-Order Coupled Multi-Physics & Adjoint Workbench
+# @subtitle: Combine 3D P2 multi-material thermo-elastic FEA of the refractory float bath and regeneratively cooled nozzle with a fast 1D/2D reduced-order coupled multi-physics and sparse Adjoint sensitivity workbench.
 # @verification_badge: Lesson 8 · Advanced · Coupled Multi-Physics
 # @doc_path: docs/case-studies/T8-float-bath-cvd-coater.md
 # @fsm_path: examples/case-studies/T8-float-bath-cvd-coater.fsm
 # @starter_fsm_name: t8-uk5-float-bath-twin.fsm
 # @verification_refs: docs/verification/V52.md
+# ---
+# @assert: Coater Slot Gravity Load Resultant |F_coater| || resultant_mag:1 || 28000.0 || 0.5% || N
+# @assert: Float-Bath Thermo-Elastic Peak von Mises Stress || max_vm_elem:2 || >= 100.0 || >= 100.0 || MPa
 # ---
 # @step: 1. Assigning Molten Tin & VFT Viscous Glass Continuum Materials in Shape (1) || shape
 #   Click "tin_bath_pool" or "glass_ribbon" in the left Shape (1) tree and inspect the right-hand Inspector: notice the Material dropdown (`[data-testid="node-material"]`) and the "Continuum Phase" card (`[data-testid="node-continuum-card"]`). "tin_bath_pool" is assigned "Molten Tin Bath Sn(l)" (Liquid Metal · VMS + MHD, ρ₀ = 6500 kg/m³, β_Sn = 9.09×10⁻⁵ K⁻¹), "glass_ribbon" is assigned "Soda-Lime Float Glass (VFT Melt)" (log₁₀ η(T) = −2.65 + 4210/(T − 264 °C)), and "refractory_casing" is assigned "Alumino-Silicate / SiC Refractory".
@@ -65,8 +68,6 @@ let i_motor = 260
 let p_h2 = 4.2
 let q_beam = 34
 
-box support_pedestal size=(180, 40, 12) at=(0, 0, 6)
-color "#475569" on support_pedestal
 box refractory_casing size=(bath_len, bath_w, 16) at=(0, 0, 14)
 box tin_pool_cavity size=(200, 42, 10) at=(0, 0, 18) subtract
 material sic_refractory on refractory_casing
@@ -86,7 +87,7 @@ color "#38bdf8" on glass_ribbon
 box cvd_coater_beam size=(14, bath_w + 8, 9) at=(beam_x, 0, 24.5)
 color "#e05a47" on cvd_coater_beam
 
-region casing_base = support_pedestal.nz
+region casing_base = refractory_casing.nz
 region coater_slot = cvd_coater_beam.pz
 region hot_spout = refractory_casing.nx
 support fix_base casing_base fixed=xyz

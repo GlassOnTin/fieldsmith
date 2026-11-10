@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t2-parametric-cantilever.fsm
 # @verification_refs: docs/verification/V23.md, docs/verification/V34.md, docs/verification/V35.md
 # ---
+# @assert: Cantilever Tip Load Resultant |F_z| || resultant_mag || 240.00 || 0.5% || N
+# @assert: Cantilever Tip Deflection δ_tip || max_displacement || 20.40 || 3.0% || mm
+# @assert: Root Bending von Mises Stress σ_vM || max_vm_elem || >= 50.0 || >= 50.0 || MPa
+# ---
 # @step: 1. Why Use Named Variables ("let") Instead of Fixed Numbers? || shape
 #   When designing a beam, changing its length ("span = 80 mm") also means moving its centre position ("at = span / 2") so the left end stays anchored at the wall. By defining named variables ("let span = 80", "let thick = 10"), every formula that references them updates together. Open the Inspector panel (right panel on desktop, or the sliders button below ≡ on mobile) with nothing selected. Change "thick" from 10 to 12 mm and watch the 3D beam thicken immediately.
 # @expected:
@@ -54,3 +58,4 @@ region root = beam.nx
 region tip = beam.px
 support clamp root fixed=xyz
 load push tip force=(0, 0, -tip_force)
+solve

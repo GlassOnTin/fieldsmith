@@ -77,6 +77,10 @@ pub fn local_hostname() -> String {
 }
 
 pub fn max_recommended_dofs_for_host() -> usize {
+    let gpus = fieldsmith_solve::discover_local_gpus();
+    if !gpus.is_empty() {
+        return 2_000_000;
+    }
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -95,6 +99,19 @@ pub fn build_health_payload(ws: &SharedWorkspaceState, listen_port: Option<u16>)
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
+    let gpus: Vec<Value> = fieldsmith_solve::discover_local_gpus()
+        .into_iter()
+        .map(|g| {
+            json!({
+                "index": g.index,
+                "name": g.name,
+                "total_memory_mib": g.total_memory_mib,
+                "free_memory_mib": g.free_memory_mib,
+                "compute_capability": format!("{}.{}", g.compute_capability.0, g.compute_capability.1),
+                "multiprocessor_count": g.multiprocessor_count,
+            })
+        })
+        .collect();
     json!({
         "status": "ok",
         "server": "fieldsmith-compute",
@@ -103,11 +120,12 @@ pub fn build_health_payload(ws: &SharedWorkspaceState, listen_port: Option<u16>)
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "threads": threads,
+        "gpus": gpus,
         "listen_port": listen_port.unwrap_or(0),
         "max_recommended_dofs": max_recommended_dofs_for_host(),
         "workspace_revision": ws.revision,
         "remote_compute_url": ws.remote_compute_url,
-        "capabilities": ["mcp", "workspace", "solve", "coupled_systems", "peer_discovery", "compute_offload"],
+        "capabilities": ["mcp", "workspace", "solve", "coupled_systems", "peer_discovery", "compute_offload", "cuda_gpu_bsr3"],
     })
 }
 
@@ -585,6 +603,27 @@ fn handle_connection(
             let ws = read_workspace_file(&cfg.workspace_path);
             let payload = build_health_payload(&ws, Some(listen_port));
             write_json(&mut stream, 200, &payload)
+        }
+        ("GET", "/api/gpu-benchmark") | ("POST", "/api/gpu-benchmark") => {
+            let incoming: Value = if body_str.trim().is_empty() {
+                json!({})
+            } else {
+                serde_json::from_str(&body_str).unwrap_or_else(|_| json!({}))
+            };
+            let nx = incoming.get("nx").and_then(Value::as_u64).unwrap_or(20) as usize;
+            let ny = incoming.get("ny").and_then(Value::as_u64).unwrap_or(10) as usize;
+            let nz = incoming.get("nz").and_then(Value::as_u64).unwrap_or(10) as usize;
+            let edge_mm = incoming
+                .get("edge_mm")
+                .and_then(Value::as_f64)
+                .unwrap_or(1.5);
+            match fieldsmith_solve::benchmark_large_gpu_fea([nx, ny, nz], edge_mm) {
+                Ok(res) => {
+                    let val = serde_json::to_value(res).unwrap_or_else(|_| json!({}));
+                    write_json(&mut stream, 200, &val)
+                }
+                Err(err) => write_json(&mut stream, 500, &json!({ "error": err })),
+            }
         }
         ("GET", "/api/peers/discover") | ("POST", "/api/peers/discover") => {
             let incoming: Value = if body_str.trim().is_empty() {

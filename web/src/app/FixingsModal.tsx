@@ -16,6 +16,7 @@ import {
   evaluateFixingTorqueEnvelope,
   evaluateOpenStandardBenchmarks,
   evaluateSnapFitMechanics,
+  findFixingMaterialOption,
   findFixingSize,
   fitFailureDistribution,
   insertFixingIntoDocument,
@@ -31,11 +32,13 @@ let fixingsModalSeq = 0;
 let initialFixingKindState: FixingKindId = 'self_tapping_screw';
 let initialHostIdState = '';
 let initialFaceState: Face = 'top';
+let initialModalTabState: 'catalogue' | 'workbench' = 'catalogue';
 
 export function openFixingsCatalogueModal(
   initialKind?: FixingKindId,
   targetHostId?: string,
   targetFace?: Face,
+  initialTab?: 'catalogue' | 'workbench',
 ) {
   if (initialKind) {
     initialFixingKindState = initialKind;
@@ -48,6 +51,7 @@ export function openFixingsCatalogueModal(
   if (targetFace) {
     initialFaceState = targetFace;
   }
+  initialModalTabState = initialTab ?? 'catalogue';
   fixingsModalSeq++;
   fixingsModalOpenState = true;
   ui.emit();
@@ -76,6 +80,7 @@ function isFixingSubNode(n: Node): boolean {
 
 export function FixingsCatalogueModal() {
   useApp();
+  const [modalTab, setModalTab] = useState<'catalogue' | 'workbench'>(initialModalTabState);
   const [selectedKind, setSelectedKind] = useState<FixingKindId>(initialFixingKindState);
   const [sizeName, setSizeName] = useState<string>('M4');
   const [engagementMm, setEngagementMm] = useState<number>(8.0);
@@ -115,6 +120,7 @@ export function FixingsCatalogueModal() {
 
   useEffect(() => {
     if (fixingsModalOpenState) {
+      setModalTab(initialModalTabState);
       setSelectedKind(initialFixingKindState);
       if (initialHostIdState) setHostId(initialHostIdState);
       setHostFace(initialFaceState);
@@ -308,22 +314,24 @@ export function FixingsCatalogueModal() {
         >
           <div>
             <div style={{ fontSize: '15px', fontWeight: 700 }}>
-              🔩 Built-In Engineering Fixings &amp; Snap-Fit Catalogue
+              🔩 Built-In Engineering Fixings, Snap-Fit Catalogue &amp; Sopwith/Weibull Workbench
             </div>
             <div style={{ fontSize: '12px', color: 'var(--fg-dim)', marginTop: '2px' }}>
-              Choose a bolt/fixing, select the <strong>target object &amp; surface</strong> to attach it to, and position it with surface edge dimensions.
+              Choose a bolt/fixing &amp; attach it to a host surface, or inspect <strong>1D Sopwith thread load F(z)</strong> &amp; <strong>Weibull reliability</strong>.
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              type="button"
-              class="btn primary small"
-              data-testid="insert-fixing-header-btn"
-              onClick={handleInsert}
-              style={{ fontWeight: 700, padding: '5px 10px' }}
-            >
-              🔩 Attach {sizeName} {item.shortLabel} to {activeHostId || 'host'}.{hostFace}
-            </button>
+            {modalTab === 'catalogue' && (
+              <button
+                type="button"
+                class="btn primary small"
+                data-testid="insert-fixing-header-btn"
+                onClick={handleInsert}
+                style={{ fontWeight: 700, padding: '5px 10px' }}
+              >
+                🔩 Attach {sizeName} {item.shortLabel} to {activeHostId || 'host'}.{hostFace}
+              </button>
+            )}
             <button
               class="btn ghost small"
               data-testid="close-fixings-modal"
@@ -334,6 +342,49 @@ export function FixingsCatalogueModal() {
           </div>
         </div>
 
+        {/* Top Mode Tab Bar: 1. CAD Fastener Catalogue vs 2. Torque, Sopwith Thread Load F(z) & Weibull Reliability */}
+        <div
+          role="tablist"
+          data-testid="fixings-modal-mode-tabs"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: '8px',
+            marginBottom: '12px',
+            padding: '4px',
+            borderRadius: '8px',
+            background: 'rgba(15, 23, 42, 0.5)',
+            border: '1px solid var(--line)',
+          }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={modalTab === 'catalogue'}
+            class={`btn small ${modalTab === 'catalogue' ? 'primary' : 'ghost'}`}
+            data-testid="fixings-tab-catalogue"
+            onClick={() => setModalTab('catalogue')}
+            style={{ fontWeight: 700, padding: '7px 10px', justifyContent: 'center' }}
+          >
+            🔩 1. CAD Fastener Catalogue &amp; Boss Placement
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={modalTab === 'workbench'}
+            class={`btn small ${modalTab === 'workbench' ? 'primary' : 'ghost'}`}
+            data-testid="fixings-tab-workbench"
+            onClick={() => setModalTab('workbench')}
+            style={{ fontWeight: 700, padding: '7px 10px', justifyContent: 'center' }}
+          >
+            📈 2. Torque, Sopwith Thread Load F(z) &amp; Weibull Reliability
+          </button>
+        </div>
+
+        {modalTab === 'workbench' ? (
+          <FixingTorqueAndWeibullWorkbench />
+        ) : (
+          <>
         {/* 7 Fixing Type Cards (Compact) */}
         <div
           style={{
@@ -1376,6 +1427,8 @@ export function FixingsCatalogueModal() {
             &amp; Auto-Tap Host
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
@@ -1406,13 +1459,98 @@ export function FixingTorqueAndWeibullWorkbench() {
   const [muThread, setMuThread] = useState<number>(0.17);
   const [muHead, setMuHead] = useState<number>(0.19);
   const [useSpreadsheetFitOverride, setUseSpreadsheetFitOverride] = useState<boolean>(true);
+  const [targetPreloadN, setTargetPreloadN] = useState<number | null>(null);
 
   const [samples, setSamples] = useState<FailureSampleRow[]>(() =>
     structuredClone(PLASTIC_BOSS_COUPONS),
   );
 
+  // Sync workbench state from store.doc when mounted or when document name / material / lets change
+  const docLetsSig = (store.doc.lets ?? []).map((l) => `${l.name}:${l.value}`).join('|');
+  const docPreloadLoadVal = useMemo(() => {
+    const ld = (store.doc.loads ?? []).find((l) => l.kind.type === 'preload');
+    return ld && ld.kind.type === 'preload' ? ld.kind.newtons : undefined;
+  }, [store.doc.loads]);
+
+  useEffect(() => {
+    const docName = (store.doc.name ?? '').trim();
+    const docMatRaw = (store.doc.material ?? '').trim().toLowerCase();
+    const getLet = (k: string): number | undefined => {
+      const found = (store.doc.lets ?? []).find((l) => l.name === k);
+      return found && Number.isFinite(found.value) ? found.value : undefined;
+    };
+    const letScrewD = getLet('screw_d');
+    const letEngLen = getLet('eng_len');
+    const letPreloadN = getLet('preload_n');
+    const letBossR = getLet('boss_r');
+
+    const isA13 =
+      docName.toUpperCase().startsWith('A13') ||
+      docName.toLowerCase().includes('a13') ||
+      ui.tutorialSheetId === 'A13';
+
+    const hasDocFastenerSignals =
+      isA13 ||
+      docMatRaw === 'al7075' ||
+      docMatRaw === 'al7075_t6' ||
+      docMatRaw === 'alsi10mg' ||
+      docMatRaw === 'sic_jwst' ||
+      docMatRaw === 'cf_woven_3k' ||
+      docMatRaw === 'pa12' ||
+      letScrewD !== undefined ||
+      letEngLen !== undefined ||
+      letPreloadN !== undefined ||
+      docPreloadLoadVal !== undefined;
+
+    if (!hasDocFastenerSignals) return;
+
+    if (docMatRaw === 'al7075' || docMatRaw === 'al7075_t6' || docMatRaw === 'alsi10mg') {
+      setSettingPreset('metal');
+      setSubstrateMat(docMatRaw === 'alsi10mg' ? 'alsi10mg' : 'al7075_t6');
+      setFastenerMat('ti64');
+      setSamples(structuredClone(METAL_HOUSING_COUPONS));
+    } else if (docMatRaw === 'sic_jwst') {
+      setSettingPreset('jwst');
+      setSubstrateMat('sic_jwst');
+      setFastenerMat('ti64');
+      setSamples(structuredClone(JWST_CRYO_OPTICS_COUPONS));
+    } else if (docMatRaw === 'cf_woven_3k') {
+      setSettingPreset('cfrp');
+      setSubstrateMat('cf_woven_3k');
+      setFastenerMat('ti64');
+      setSamples(structuredClone(CFRP_PEEL_COUPONS));
+    } else if (isA13 || docMatRaw === 'pa12') {
+      setSettingPreset('plastic');
+      setSubstrateMat(docMatRaw === 'pa12' ? 'pa12' : 'petg');
+      setFastenerMat('ti64');
+      setSizeName('M4');
+      setEngagementMm(8.0);
+      setBossOdMm(10.0);
+      setSamples(structuredClone(PLASTIC_BOSS_COUPONS));
+    }
+
+    if (letScrewD !== undefined) {
+      const matched =
+        FIXING_SIZES.reduce((best, cur) =>
+          Math.abs(cur.major_d - letScrewD) < Math.abs(best.major_d - letScrewD) ? cur : best,
+        ) ?? FIXING_SIZES[2];
+      setSizeName(matched.name);
+    }
+    if (letEngLen !== undefined && letEngLen >= 1.5) {
+      setEngagementMm(letEngLen);
+    }
+    if (letBossR !== undefined && letBossR > 1.0) {
+      setBossOdMm(Number((letBossR * 2).toFixed(2)));
+    }
+    const resolvedPreload = letPreloadN ?? docPreloadLoadVal;
+    if (resolvedPreload !== undefined && resolvedPreload > 0) {
+      setTargetPreloadN(resolvedPreload);
+    }
+  }, [store.doc.name, store.doc.material, ui.tutorialSheetId, docLetsSig, docPreloadLoadVal]);
+
   const applySettingPreset = (preset: 'plastic' | 'metal' | 'jwst' | 'cfrp') => {
     setSettingPreset(preset);
+    setTargetPreloadN(null);
     if (preset === 'plastic') {
       setFixingKind('self_tapping_screw');
       setSizeName('M4');
@@ -1592,6 +1730,21 @@ export function FixingTorqueAndWeibullWorkbench() {
     ],
   );
 
+  const activePreloadN = targetPreloadN ?? envelope.recommendedPreloadN;
+  const activeTorqueNm =
+    targetPreloadN != null
+      ? targetPreloadN * envelope.motoshTorqueArmMm * 1e-3 + envelope.threadFormingTorqueNm
+      : envelope.recommendedTorqueNm;
+  const activePreloadRatio = activePreloadN / Math.max(10, envelope.recommendedPreloadN);
+  const activeResidualClampN = Math.max(
+    0,
+    activePreloadN * envelope.creepRetentionFactor + Math.min(0, envelope.thermalPreloadShiftN),
+  );
+  const activeSafeWorkingAxialN =
+    envelope.holdableForces.safeWorkingAxialLoadN * activePreloadRatio;
+  const activeSafeWorkingShearN =
+    envelope.holdableForces.safeWorkingShearLoadN * activePreloadRatio;
+
   const syncTo3dCad = () => {
     const pilotD =
       envelope.substrateRegime === 'plastic_boss'
@@ -1599,8 +1752,8 @@ export function FixingTorqueAndWeibullWorkbench() {
         : sizeSpec.pilot_d_metal;
     const pilotR = Number((pilotD * 0.5).toFixed(2));
     const bossR = Number((bossOdMm * 0.5).toFixed(2));
-    const preloadN = Number(envelope.recommendedPreloadN.toFixed(1));
-    const torqueNm = Number(envelope.recommendedTorqueNm.toFixed(3));
+    const preloadN = Number(activePreloadN.toFixed(1));
+    const torqueNm = Number(activeTorqueNm.toFixed(3));
 
     store.transact(
       `Sync ${sizeName} ${substrateMat.toUpperCase()} fixing envelope (T_rec = ${torqueNm} N·m, F = ${preloadN} N)`,
@@ -1745,7 +1898,7 @@ export function FixingTorqueAndWeibullWorkbench() {
             type="button"
             class="btn small ghost"
             data-testid="t14-open-catalog-btn"
-            onClick={() => openFixingsCatalogueModal(fixingKind)}
+            onClick={() => openFixingsCatalogueModal(fixingKind, undefined, undefined, 'catalogue')}
           >
             📦 Open Fixings Catalogue…
           </button>
@@ -1766,7 +1919,10 @@ export function FixingTorqueAndWeibullWorkbench() {
           <select
             data-testid="t14-fixing-kind"
             value={fixingKind}
-            onChange={(e) => setFixingKind((e.target as HTMLSelectElement).value as FixingKindId)}
+            onChange={(e) => {
+              setFixingKind((e.target as HTMLSelectElement).value as FixingKindId);
+              setTargetPreloadN(null);
+            }}
           >
             {FIXINGS_CATALOGUE.map((f) => (
               <option key={f.id} value={f.id}>
@@ -1781,7 +1937,10 @@ export function FixingTorqueAndWeibullWorkbench() {
           <select
             data-testid="t14-size-select"
             value={sizeName}
-            onChange={(e) => setSizeName((e.target as HTMLSelectElement).value)}
+            onChange={(e) => {
+              setSizeName((e.target as HTMLSelectElement).value);
+              setTargetPreloadN(null);
+            }}
           >
             {FIXING_SIZES.map((s) => (
               <option key={s.name} value={s.name}>
@@ -1796,7 +1955,10 @@ export function FixingTorqueAndWeibullWorkbench() {
           <select
             data-testid="t14-substrate-select"
             value={substrateMat}
-            onChange={(e) => setSubstrateMat((e.target as HTMLSelectElement).value)}
+            onChange={(e) => {
+              setSubstrateMat((e.target as HTMLSelectElement).value);
+              setTargetPreloadN(null);
+            }}
           >
             {SUBSTRATE_MATERIAL_GROUPS.map((grp) => (
               <optgroup key={grp.group} label={grp.group}>
@@ -1815,7 +1977,10 @@ export function FixingTorqueAndWeibullWorkbench() {
           <select
             data-testid="t14-fastener-select"
             value={fastenerMat}
-            onChange={(e) => setFastenerMat((e.target as HTMLSelectElement).value)}
+            onChange={(e) => {
+              setFastenerMat((e.target as HTMLSelectElement).value);
+              setTargetPreloadN(null);
+            }}
           >
             {FASTENER_MATERIAL_GROUPS.map((grp) => (
               <optgroup key={grp.group} label={grp.group}>
@@ -1838,7 +2003,10 @@ export function FixingTorqueAndWeibullWorkbench() {
             step="0.5"
             data-testid="t14-engagement-slider"
             value={engagementMm}
-            onInput={(e) => setEngagementMm(Number((e.target as HTMLInputElement).value))}
+            onInput={(e) => {
+              setEngagementMm(Number((e.target as HTMLInputElement).value));
+              setTargetPreloadN(null);
+            }}
           />
         </label>
 
@@ -1855,6 +2023,7 @@ export function FixingTorqueAndWeibullWorkbench() {
               const g = Number((e.target as HTMLInputElement).value);
               setVibrationG(g);
               setShockG(Math.round(g * 2.5));
+              setTargetPreloadN(null);
             }}
           />
         </label>
@@ -1868,7 +2037,10 @@ export function FixingTorqueAndWeibullWorkbench() {
             step="0.01"
             data-testid="t14-friction-slider"
             value={muThread}
-            onInput={(e) => setMuThread(Number((e.target as HTMLInputElement).value))}
+            onInput={(e) => {
+              setMuThread(Number((e.target as HTMLInputElement).value));
+              setTargetPreloadN(null);
+            }}
           />
         </label>
 
@@ -1877,7 +2049,10 @@ export function FixingTorqueAndWeibullWorkbench() {
           <select
             data-testid="t14-target-pf"
             value={String(targetPf)}
-            onChange={(e) => setTargetPf(Number((e.target as HTMLSelectElement).value))}
+            onChange={(e) => {
+              setTargetPf(Number((e.target as HTMLSelectElement).value));
+              setTargetPreloadN(null);
+            }}
           >
             <option value="0.01">10⁻² (1% Consumer Grade)</option>
             <option value="0.001">10⁻³ (0.1% Industrial)</option>
@@ -2030,18 +2205,39 @@ export function FixingTorqueAndWeibullWorkbench() {
 
         <div>
           <div style={{ fontSize: '10.5px', color: 'var(--fg-dim)' }}>
-            {windowFeasible ? 'RECOMMENDED ASSEMBLY SETPOINT' : 'INFEASIBLE WINDOW (T_min > T_max)'}
+            {targetPreloadN != null
+              ? 'ACTIVE OVERRIDE PRELOAD SETPOINT'
+              : windowFeasible
+                ? 'RECOMMENDED ASSEMBLY SETPOINT'
+                : 'INFEASIBLE WINDOW (T_min > T_max)'}
           </div>
           <div
             data-testid="t14-rec-torque-val"
             style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--mono)' }}
           >
-            {envelope.recommendedTorqueNm.toFixed(3)} N·m ({envelope.recommendedPreloadN.toFixed(0)} N)
+            {activeTorqueNm.toFixed(3)} N·m ({activePreloadN.toFixed(0)} N)
           </div>
           <div style={{ fontSize: '10.5px', color: 'var(--fg-dim)' }}>
             Window Ratio T_max/T_min = {envelope.torqueWindowRatio.toFixed(2)}× · σ₁ ={' '}
-            {envelope.peakPrincipalStressMpa.toFixed(1)} MPa
+            {(envelope.peakPrincipalStressMpa * activePreloadRatio).toFixed(1)} MPa · F_res ={' '}
+            {activeResidualClampN.toFixed(0)} N (Safe F_ax = {activeSafeWorkingAxialN.toFixed(0)} N, F_sh ={' '}
+            {activeSafeWorkingShearN.toFixed(0)} N)
           </div>
+          {targetPreloadN != null && (
+            <div style={{ marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '10px', color: '#38bdf8' }}>
+                Rec: {envelope.recommendedTorqueNm.toFixed(3)} N·m ({envelope.recommendedPreloadN.toFixed(0)} N)
+              </span>
+              <button
+                type="button"
+                class="btn ghost mini"
+                data-testid="t14-reset-recommended-preload"
+                onClick={() => setTargetPreloadN(null)}
+              >
+                Reset to Recommended F_rec
+              </button>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '4px' }}>
@@ -2058,6 +2254,20 @@ export function FixingTorqueAndWeibullWorkbench() {
           </span>
         </div>
       </div>
+
+      {/* 1D Axial Sopwith (1948) Thread-Load F(z), Shear Line-Load q_th(z) & Root Principal Stress σ₁(z) SVG Plot */}
+      <SopwithThreadLoadProfilePlot
+        nominalDMm={sizeSpec.major_d}
+        pitchMm={sizeSpec.pitch}
+        engagementMm={engagementMm}
+        substrateMat={substrateMat}
+        fastenerMat={fastenerMat}
+        preloadN={targetPreloadN ?? envelope.recommendedPreloadN}
+        recommendedPreloadN={envelope.recommendedPreloadN}
+        peakSigma1AtRecMpa={envelope.peakPrincipalStressMpa}
+        allowableStressMpa={distFit.allowableStressAtTargetPfMpa}
+        onChangePreloadN={(nextF) => setTargetPreloadN(nextF)}
+      />
 
       {/* Spreadsheet-Like Failure Sample Probability Fitter + Live Weibull Plot */}
       <div
@@ -2594,5 +2804,307 @@ function WeibullProbabilityPlot({
         ln(−ln(1−P_f))
       </text>
     </svg>
+  );
+}
+
+function SopwithThreadLoadProfilePlot({
+  nominalDMm,
+  pitchMm,
+  engagementMm,
+  substrateMat,
+  fastenerMat,
+  preloadN,
+  recommendedPreloadN,
+  peakSigma1AtRecMpa,
+  allowableStressMpa,
+  onChangePreloadN,
+}: {
+  nominalDMm: number;
+  pitchMm: number;
+  engagementMm: number;
+  substrateMat: string;
+  fastenerMat: string;
+  preloadN: number;
+  recommendedPreloadN: number;
+  peakSigma1AtRecMpa: number;
+  allowableStressMpa: number;
+  onChangePreloadN: (nextF: number | null) => void;
+}) {
+  const subOpt = findFixingMaterialOption(substrateMat);
+  const fastOpt = findFixingMaterialOption(fastenerMat);
+  const eSubMpa = subOpt?.e ?? 1650;
+  const eBoltMpa = fastOpt?.e ?? 110000;
+  const sigmaYieldSubMpa = subOpt?.yield_strength ?? 47;
+  const sigmaLimitMpa = Math.max(8, Math.min(sigmaYieldSubMpa, allowableStressMpa));
+
+  const d = Math.max(1.6, nominalDMm);
+  const p = Math.max(0.25, pitchMm);
+  const lEng = Math.max(1.5 * p, engagementMm);
+  const fPreload = Math.max(10, preloadN);
+
+  // Sopwith (1948) hyperbolic thread-compliance attenuation rate λ (1/mm):
+  // Dimensionless compliance parameter λ·L_eng increases with E_bolt/E_sub stiffness ratio and L_eng/d
+  const stiffnessFactor = Math.min(3.4, Math.max(0.85, 0.52 * Math.pow(eBoltMpa / Math.max(200, eSubMpa), 0.14)));
+  const lambdaMmInv = (stiffnessFactor * 1.15) / Math.max(2.0, d);
+  const lambdaL = Math.max(0.25, lambdaMmInv * lEng);
+  const sinhLambdaL = Math.sinh(lambdaL);
+  const coshLambdaL = Math.cosh(lambdaL);
+
+  // Peak 1st-thread concentration factor K_t = q_th(0) / q_avg = (λ L_eng) coth(λ L_eng)
+  const ktFirstThread = (lambdaL * coshLambdaL) / Math.max(1e-9, sinhLambdaL);
+  const qAvgNPerMm = fPreload / lEng;
+  const qPeakNPerMm = qAvgNPerMm * ktFirstThread;
+
+  // Root principal stress σ₁(z) scales with local thread shear line-load q_th(z)
+  const preloadScale = fPreload / Math.max(10, recommendedPreloadN);
+  const sigma1PeakMpa = Math.max(2, peakSigma1AtRecMpa * preloadScale);
+
+  const nStations = 33;
+  const stations = Array.from({ length: nStations }, (_, i) => {
+    const zMm = (i / (nStations - 1)) * lEng;
+    const u = lambdaMmInv * (lEng - zMm);
+    const fNorm = Math.sinh(u) / Math.max(1e-9, sinhLambdaL);
+    const qRatio = (lambdaL * Math.cosh(u)) / Math.max(1e-9, sinhLambdaL); // q_th(z) / q_avg
+    const qNPerMm = qAvgNPerMm * qRatio;
+    const sigma1Mpa = sigma1PeakMpa * (Math.cosh(u) / Math.max(1e-9, coshLambdaL));
+    return { zMm, fNorm, qRatio, qNPerMm, sigma1Mpa };
+  });
+
+  const w = 680;
+  const h = 185;
+  const padL = 48;
+  const padR = 54;
+  const padT = 20;
+  const padB = 30;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+
+  const yLeftMax = Math.max(2.2, ktFirstThread * 1.12);
+  const yRightMaxMpa = Math.max(sigma1PeakMpa * 1.18, sigmaLimitMpa * 1.25, 25);
+
+  const sx = (z: number) => padL + (z / Math.max(1e-6, lEng)) * plotW;
+  const syLeft = (val: number) =>
+    padT + plotH - (Math.max(0, Math.min(yLeftMax, val)) / yLeftMax) * plotH;
+  const syRight = (mpa: number) =>
+    padT + plotH - (Math.max(0, Math.min(yRightMaxMpa, mpa)) / yRightMaxMpa) * plotH;
+
+  const fPath = stations
+    .map((st, idx) => `${idx === 0 ? 'M' : 'L'}${sx(st.zMm).toFixed(1)},${syLeft(st.fNorm).toFixed(1)}`)
+    .join(' ');
+  const qPath = stations
+    .map((st, idx) => `${idx === 0 ? 'M' : 'L'}${sx(st.zMm).toFixed(1)},${syLeft(st.qRatio).toFixed(1)}`)
+    .join(' ');
+  const sigPath = stations
+    .map((st, idx) => `${idx === 0 ? 'M' : 'L'}${sx(st.zMm).toFixed(1)},${syRight(st.sigma1Mpa).toFixed(1)}`)
+    .join(' ');
+  const yLimitPx = syRight(sigmaLimitMpa);
+
+  return (
+    <div
+      data-testid="t14-sopwith-thread-card"
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: '8px',
+        padding: '10px 12px',
+        background: 'rgba(15, 23, 42, 0.30)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '8px',
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 700, fontSize: '12px' }}>
+            📐 1D Axial Sopwith (1948) Thread-Load Profile F(z), Shear Line-Load q_th(z) &amp; Root Stress σ₁(z)
+          </div>
+          <div style={{ fontSize: '10.5px', color: 'var(--fg-dim)' }}>
+            F(z)/F_preload = sinh(λ(L_eng − z))/sinh(λ L_eng) · 1st-thread concentration K_t ={' '}
+            <strong>{ktFirstThread.toFixed(2)}×</strong> (q_peak = {qPeakNPerMm.toFixed(1)} N/mm vs q_avg ={' '}
+            {qAvgNPerMm.toFixed(1)} N/mm)
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: '11px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)' }}>
+            <span>Preload F_preload: {fPreload.toFixed(0)} N</span>
+            <input
+              type="range"
+              min="50"
+              max={Math.max(2500, Math.round(recommendedPreloadN * 2.2))}
+              step="10"
+              data-testid="t14-sopwith-preload-slider"
+              value={Math.round(fPreload)}
+              onInput={(e) => onChangePreloadN(Number((e.target as HTMLInputElement).value))}
+              style={{ width: '110px' }}
+            />
+          </label>
+          <button
+            type="button"
+            class="btn ghost mini"
+            data-testid="t14-sopwith-preload-reset"
+            onClick={() => onChangePreloadN(null)}
+            title="Reset preload to recommended assembly setpoint"
+          >
+            Reset ({recommendedPreloadN.toFixed(0)} N)
+          </button>
+        </div>
+      </div>
+
+      <svg
+        data-testid="t14-sopwith-thread-svg"
+        viewBox={`0 0 ${w} ${h}`}
+        style={{
+          width: '100%',
+          height: '185px',
+          background: 'rgba(2, 6, 23, 0.6)',
+          borderRadius: '6px',
+          border: '1px solid rgba(148, 163, 184, 0.22)',
+        }}
+      >
+        {/* Horizontal grid lines */}
+        {[0, 0.5, 1.0, 1.5, 2.0].map((v) =>
+          v <= yLeftMax ? (
+            <g key={v}>
+              <line
+                x1={padL}
+                y1={syLeft(v)}
+                x2={w - padR}
+                y2={syLeft(v)}
+                stroke="rgba(148, 163, 184, 0.14)"
+                stroke-dasharray={v === 1.0 ? '3 3' : undefined}
+              />
+              <text x={padL - 5} y={syLeft(v) + 3} fill="#94a3b8" font-size="9" text-anchor="end">
+                {v.toFixed(1)}×
+              </text>
+            </g>
+          ) : null,
+        )}
+
+        {/* Pitch station vertical ticks along engaged depth z in [0, L_eng] */}
+        {Array.from({ length: Math.min(24, Math.floor(lEng / p) + 1) }, (_, k) => {
+          const zPitch = k * p;
+          if (zPitch > lEng) return null;
+          return (
+            <line
+              key={k}
+              x1={sx(zPitch)}
+              y1={padT + plotH - 4}
+              x2={sx(zPitch)}
+              y2={padT + plotH}
+              stroke="rgba(148, 163, 184, 0.35)"
+            />
+          );
+        })}
+
+        {/* Material Yield / Weibull Allowable Stress horizontal limit line (right axis) */}
+        <line
+          x1={padL}
+          y1={yLimitPx}
+          x2={w - padR}
+          y2={yLimitPx}
+          stroke="#ef4444"
+          stroke-dasharray="5 3"
+          stroke-width="1.3"
+        />
+        <text
+          x={w - padR - 4}
+          y={Math.max(padT + 10, yLimitPx - 4)}
+          fill="#f87171"
+          font-size="9"
+          text-anchor="end"
+        >
+          Allowable / Yield Limit σ_allow = {sigmaLimitMpa.toFixed(1)} MPa
+        </text>
+
+        {/* Curve 1: Normalized Axial Bolt Tension F(z) / F_preload */}
+        <path d={fPath} fill="none" stroke="#38bdf8" stroke-width="2.2" />
+
+        {/* Curve 2: Normalized Thread Shear Line-Load q_th(z) / q_avg = (-dF/dz) / (F/L_eng) */}
+        <path d={qPath} fill="none" stroke="#f59e0b" stroke-width="2.2" />
+
+        {/* Curve 3: Local Thread-Root Maximum Principal Stress σ₁(z) [MPa] */}
+        <path d={sigPath} fill="none" stroke="#c084fc" stroke-width="2" stroke-dasharray="3 2" />
+
+        {/* Peak K_t callout dot at First Engaged Thread z = 0 */}
+        <circle
+          cx={sx(0)}
+          cy={syLeft(ktFirstThread)}
+          r="4"
+          fill="#f59e0b"
+          stroke="#020617"
+          stroke-width="1.2"
+        />
+        <text x={sx(0) + 7} y={Math.max(padT + 11, syLeft(ktFirstThread) + 3)} fill="#fbbf24" font-size="9.5" font-weight="700">
+          z=0 (1st Thread): K_t = {ktFirstThread.toFixed(2)}× ({qPeakNPerMm.toFixed(0)} N/mm), σ₁(0) = {sigma1PeakMpa.toFixed(1)} MPa
+        </text>
+
+        {/* Right axis MPa ticks */}
+        {[0, 0.5, 1.0].map((frac, idx) => {
+          const valMpa = frac * yRightMaxMpa;
+          return (
+            <text
+              key={idx}
+              x={w - padR + 5}
+              y={syRight(valMpa) + 3}
+              fill="#c084fc"
+              font-size="9"
+              text-anchor="start"
+            >
+              {valMpa.toFixed(0)} MPa
+            </text>
+          );
+        })}
+
+        {/* X axis ticks */}
+        {[0, 0.25, 0.5, 0.75, 1.0].map((frac, idx) => {
+          const zVal = frac * lEng;
+          return (
+            <text
+              key={idx}
+              x={sx(zVal)}
+              y={h - 14}
+              fill="#94a3b8"
+              font-size="9"
+              text-anchor="middle"
+            >
+              {zVal.toFixed(1)} mm
+            </text>
+          );
+        })}
+
+        <text x={w / 2} y={h - 3} fill="#cbd5e1" font-size="9.5" text-anchor="middle">
+          Engaged Axial Thread Depth z ∈ [0, {lEng.toFixed(1)} mm] (λ·L_eng = {lambdaL.toFixed(2)}, {Math.round(lEng / p)} engaged pitches)
+        </text>
+      </svg>
+
+      {/* Compact Curve Legend */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '12px',
+          fontSize: '10.5px',
+          fontFamily: 'var(--mono)',
+          color: 'var(--fg-dim)',
+        }}
+      >
+        <span style={{ color: '#38bdf8' }}>
+          ━ F(z)/F_preload (Axial Bolt Tension: 1.0 → 0.0)
+        </span>
+        <span style={{ color: '#f59e0b' }}>
+          ━ q_th(z)/q_avg = −dF/dz (Thread Shear Line-Load, Peak K_t = {ktFirstThread.toFixed(2)}× at z = 0)
+        </span>
+        <span style={{ color: '#c084fc' }}>
+          ┅ σ₁(z) Thread-Root Principal Stress (Peak {sigma1PeakMpa.toFixed(1)} MPa vs Limit {sigmaLimitMpa.toFixed(1)} MPa)
+        </span>
+      </div>
+    </div>
   );
 }

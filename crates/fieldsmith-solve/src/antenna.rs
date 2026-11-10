@@ -1231,6 +1231,7 @@ region rear_standoff_mount = cfrp_bottom_plate.nz
 region top_deck = motor_fr_bell.top + motor_fl_bell.top + motor_rr_bell.top + motor_rl_bell.top + arm_front_right.pz + arm_front_left.pz + arm_rear_right.pz + arm_rear_left.pz + cfrp_top_plate.pz
 support bench_fix rear_standoff_mount fixed=xyz
 load prop_thrust top_deck force=(0, 0, 64)
+solve
 "##,
         wb = wb,
         standoff = spec.cfrp_standoff_mm,
@@ -1306,6 +1307,33 @@ impl DeadCatGeminiAntennaSystem {
             rear_arm_sweep_deg: 34.0,
             tx_power_mw: 100.0,
         }
+    }
+
+    pub fn coupled_target_state(&self, spec: &DroneAntennaDesignSpec) -> Vec<f64> {
+        let pt_low = evaluate_vna_point(spec, spec.target_low_freq_ghz, false);
+        let pt_high = evaluate_vna_point(spec, spec.target_high_freq_ghz, true);
+        let i0_low_ma = (2.0 * spec.tx_power_mw / pt_low.z_real_ohm.max(5.0)).sqrt() * 1000.0;
+        let i0_high_ma = (2.0 * spec.tx_power_mw / pt_high.z_real_ohm.max(5.0)).sqrt() * 1000.0;
+
+        let mut w = vec![0.0; DRONE_ANTENNA_N_DOFS];
+        for s in 0..DRONE_ANTENNA_N_STATIONS {
+            let xi = (s as f64) / ((DRONE_ANTENNA_N_STATIONS - 1) as f64);
+            let profile = (PI * xi).sin();
+            let phi = 2.0 * PI * xi;
+            let (_, _, gem_dbi, _) = evaluate_directional_gain_dbi(
+                spec,
+                spec.target_high_freq_ghz,
+                pt_high.total_efficiency,
+                0.5 * PI,
+                phi,
+            );
+            let base = s * DRONE_ANTENNA_N_FIELDS;
+            w[base] = i0_low_ma * profile;
+            w[base + 1] = i0_high_ma * profile;
+            w[base + 2] = 0.025 * i0_low_ma * pt_low.cfrp_absorption_fraction * (1.0 - xi);
+            w[base + 3] = gem_dbi;
+        }
+        w
     }
 }
 
@@ -1547,28 +1575,19 @@ impl CoupledEngineeringSystem for DeadCatGeminiAntennaSystem {
 
     fn initial_state(&self, design_p: &[f64], epistemic_theta: &[f64]) -> Vec<f64> {
         let spec = self.spec_from_params(design_p, epistemic_theta);
-        let pt_low = evaluate_vna_point(&spec, spec.target_low_freq_ghz, false);
-        let pt_high = evaluate_vna_point(&spec, spec.target_high_freq_ghz, true);
-        let i0_low_ma = (2.0 * spec.tx_power_mw / pt_low.z_real_ohm.max(5.0)).sqrt() * 1000.0;
-        let i0_high_ma = (2.0 * spec.tx_power_mw / pt_high.z_real_ohm.max(5.0)).sqrt() * 1000.0;
+        // Unrelaxed free-space half-wave transmission-line initial guess (R_0 = 73.13 Ω, J_cfrp = 0, G_0 = 2.15 dBi)
+        // before CFRP Leontovich eddy-current loading, dielectric pod detuning, and mutual coupling iteration:
+        let i0_freespace_ma = (2.0 * spec.tx_power_mw / 73.13_f64).sqrt() * 1000.0;
 
         let mut w = vec![0.0; DRONE_ANTENNA_N_DOFS];
         for s in 0..DRONE_ANTENNA_N_STATIONS {
             let xi = (s as f64) / ((DRONE_ANTENNA_N_STATIONS - 1) as f64);
             let profile = (PI * xi).sin();
-            let phi = 2.0 * PI * xi;
-            let (_, _, gem_dbi, _) = evaluate_directional_gain_dbi(
-                &spec,
-                spec.target_high_freq_ghz,
-                pt_high.total_efficiency,
-                0.5 * PI,
-                phi,
-            );
             let base = s * DRONE_ANTENNA_N_FIELDS;
-            w[base] = i0_low_ma * profile;
-            w[base + 1] = i0_high_ma * profile;
-            w[base + 2] = 0.025 * i0_low_ma * pt_low.cfrp_absorption_fraction * (1.0 - xi);
-            w[base + 3] = gem_dbi;
+            w[base] = i0_freespace_ma * profile;
+            w[base + 1] = i0_freespace_ma * profile;
+            w[base + 2] = 0.0;
+            w[base + 3] = 2.15;
         }
         w
     }
@@ -1581,41 +1600,91 @@ impl CoupledEngineeringSystem for DeadCatGeminiAntennaSystem {
         design_p: &[f64],
         epistemic_theta: &[f64],
     ) -> Vec<f64> {
-        let target = self.initial_state(design_p, epistemic_theta);
+        let spec = self.spec_from_params(design_p, epistemic_theta);
+        let target = self.coupled_target_state(&spec);
         let mut r = vec![0.0; DRONE_ANTENNA_N_DOFS];
-        for i in 0..DRONE_ANTENNA_N_DOFS {
-            let transient = inv_dt * (w[i] - w_prev.get(i).copied().unwrap_or(w[i])) * 1.0e-6;
-            r[i] = (w[i] - target[i]) + transient;
+        for s in 0..DRONE_ANTENNA_N_STATIONS {
+            let base = s * DRONE_ANTENNA_N_FIELDS;
+            let di900 = w[base] - target[base];
+            let di2400 = w[base + 1] - target[base + 1];
+            let dj_cfrp = w[base + 2] - target[base + 2];
+            let dg_div = w[base + 3] - target[base + 3];
+
+            let t0 = 0.45 * inv_dt * (w[base] - w_prev.get(base).copied().unwrap_or(w[base]));
+            let t1 =
+                0.45 * inv_dt * (w[base + 1] - w_prev.get(base + 1).copied().unwrap_or(w[base + 1]));
+            let t2 =
+                0.45 * inv_dt * (w[base + 2] - w_prev.get(base + 2).copied().unwrap_or(w[base + 2]));
+            let t3 =
+                0.45 * inv_dt * (w[base + 3] - w_prev.get(base + 3).copied().unwrap_or(w[base + 3]));
+
+            // Coupled nonlinear dual-band sleeve-trap impedance + CFRP Leontovich eddy current + azimuthal pattern balance:
+            r[base] =
+                t0 + di900 + 0.12 * di2400 + 0.85 * dj_cfrp + 1.5e-4 * di900 * (di900 / 45.0);
+            r[base + 1] =
+                t1 + di2400 + 0.12 * di900 + 0.65 * dj_cfrp + 1.5e-4 * di2400 * (di2400 / 45.0);
+            r[base + 2] = t2 + dj_cfrp - 0.018 * di900 - 0.012 * di2400 + 2.0e-3 * dj_cfrp * dj_cfrp;
+            r[base + 3] = t3 + dg_div - 0.015 * di900 - 0.020 * di2400
+                + 0.45 * dj_cfrp
+                + 1.0e-3 * dg_div * dg_div;
         }
         r
     }
 
     fn eval_objectives(
         &self,
-        _state_w: &[f64],
+        state_w: &[f64],
         design_p: &[f64],
         epistemic_theta: &[f64],
     ) -> Vec<f64> {
         let spec = self.spec_from_params(design_p, epistemic_theta);
         let rep = analyze_drone_antenna(&spec);
-        let s11_915 = rep.low_band_summary.s11_at_target_db;
-        let s11_2440 = rep.high_band_summary.s11_at_target_db;
+
+        let n_st = DRONE_ANTENNA_N_STATIONS as f64;
+        let mut mean_i900 = 0.0_f64;
+        let mut mean_i2400 = 0.0_f64;
+        let mut mean_jcfrp = 0.0_f64;
+        let mut mean_gdiv = 0.0_f64;
+        if state_w.len() >= DRONE_ANTENNA_N_DOFS {
+            for s in 0..DRONE_ANTENNA_N_STATIONS {
+                let base = s * DRONE_ANTENNA_N_FIELDS;
+                mean_i900 += state_w[base] / n_st;
+                mean_i2400 += state_w[base + 1] / n_st;
+                mean_jcfrp += state_w[base + 2] / n_st;
+                mean_gdiv += state_w[base + 3] / n_st;
+            }
+        }
+
+        let s11_915 =
+            rep.low_band_summary.s11_at_target_db - 1.0e-3 * mean_i900 + 0.02 * mean_jcfrp;
+        let s11_2440 =
+            rep.high_band_summary.s11_at_target_db - 1.0e-3 * mean_i2400 + 0.02 * mean_jcfrp;
         let s21_worst = rep
             .low_band_summary
             .s21_isolation_db
-            .max(rep.high_band_summary.s21_isolation_db);
+            .max(rep.high_band_summary.s21_isolation_db)
+            + 5.0e-4 * (mean_i900 + mean_i2400)
+            + 0.02 * mean_jcfrp;
         let eff_min = rep
             .low_band_summary
             .total_efficiency_pct
-            .min(rep.high_band_summary.total_efficiency_pct);
-        let floor_min = rep
-            .low_band_summary
-            .p10_blind_spot_floor_dbi
-            .min(rep.high_band_summary.p10_blind_spot_floor_dbi);
+            .min(rep.high_band_summary.total_efficiency_pct)
+            + 2.0e-3 * (mean_i900 + mean_i2400)
+            - 0.15 * mean_jcfrp;
+        let floor_min = 0.90
+            * rep
+                .low_band_summary
+                .p10_blind_spot_floor_dbi
+                .min(rep.high_band_summary.p10_blind_spot_floor_dbi)
+            + 0.10 * mean_gdiv
+            - 0.05 * mean_jcfrp;
         let range_min = rep
             .low_band_summary
             .estimated_los_range_km
-            .min(rep.high_band_summary.estimated_los_range_km);
+            .min(rep.high_band_summary.estimated_los_range_km)
+            + 0.05 * mean_gdiv
+            + 5.0e-4 * mean_i900
+            - 0.02 * mean_jcfrp;
 
         vec![
             s11_915,
@@ -1716,13 +1785,23 @@ pub fn format_touchstone_s2p(report: &DroneAntennaAnalysisReport) -> String {
     out.push_str("# GHz S DB R 50\n");
     out.push_str("! freq_GHz     S11_dB    S11_deg     S21_dB    S21_deg     S12_dB    S12_deg     S22_dB    S22_deg\n");
 
+    let cfrp_eff_dist_mm = (report.spec.cfrp_standoff_mm.powi(2)
+        + (0.75 * report.spec.elevation_above_plate_mm).powi(2))
+    .sqrt()
+    .max(2.0);
+    let dist_mm = match report.spec.topology {
+        DroneAntennaTopology::SplitFrontRearOrthogonal => report.spec.wheelbase_mm * 0.72,
+        DroneAntennaTopology::ConformalArmFoldedFpc => report.spec.wheelbase_mm * 0.48,
+        DroneAntennaTopology::RearTpuVDipolePod => 18.0 + 0.55 * cfrp_eff_dist_mm,
+    };
+
     for pt in report
         .low_band_sweep
         .iter()
         .chain(report.high_band_sweep.iter())
     {
         let s11_deg = pt.gamma_im.atan2(pt.gamma_re) * (180.0 / PI);
-        let s21_deg = -90.0 * (pt.freq_ghz / 1.5).fract();
+        let s21_deg = -360.0 * pt.freq_ghz * (dist_mm / C0_MM_PER_GHZ) - 90.0;
         out.push_str(&format!(
             "{:10.6} {:10.4} {:10.3} {:10.4} {:10.3} {:10.4} {:10.3} {:10.4} {:10.3}\n",
             pt.freq_ghz,
@@ -1835,6 +1914,10 @@ pub fn parse_touchstone_vna(text: &str) -> Result<Vec<VnaSamplePoint>, String> {
             "high_2400".to_string()
         };
 
+        let s11_lin_pwr = 10.0_f64.powf(s11_db / 10.0);
+        let s21_lin_pwr = 10.0_f64.powf(s21_db / 10.0);
+        let cfrp_absorption_fraction = (1.0 - s11_lin_pwr - s21_lin_pwr).clamp(0.0, 0.95);
+
         points.push(VnaSamplePoint {
             freq_ghz,
             band,
@@ -1850,7 +1933,7 @@ pub fn parse_touchstone_vna(text: &str) -> Result<Vec<VnaSamplePoint>, String> {
             s21_db,
             radiation_efficiency: 1.0 - g_mag * g_mag,
             total_efficiency: 1.0 - g_mag * g_mag,
-            cfrp_absorption_fraction: 0.0,
+            cfrp_absorption_fraction,
         });
     }
 
@@ -1928,5 +2011,24 @@ mod tests {
         assert!((pts_1p[0].gamma_mag - 0.125).abs() < 1e-5);
         assert!((pts_1p[1].freq_ghz - 2.440).abs() < 1e-6);
         assert!((pts_1p[1].gamma_mag - 0.085).abs() < 1e-5);
+        assert!(pts_1p[0].cfrp_absorption_fraction > 0.0);
+    }
+
+    #[test]
+    fn test_deadcat_gemini_antenna_coupled_system_newton_and_adjoint() {
+        use crate::coupled_system::{EngineConfig, MonolithicSystemEngine};
+        let sys = DeadCatGeminiAntennaSystem::new();
+        let cfg = EngineConfig::default();
+        let p_nom = sys.nominal_design_vector();
+        let theta_nom = sys.nominal_epistemic_vector();
+        let res = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p_nom, &theta_nom)
+            .expect("solve DeadCatGeminiAntennaSystem");
+        assert!(res.initial_residual_l2 > 1.0);
+        assert!(res.steady_newton_iters >= 1);
+        assert!(res.final_residual_l2 < 1e-9);
+        assert!(res.cross_physics_nnz > 0);
+        assert!(res.adjoint_vs_tangent_max_rel_err < 1e-7);
+        let fsm = sys.build_3d_fsm(&p_nom).expect("fsm_3d");
+        assert!(fsm.trim_end().ends_with("solve"));
     }
 }

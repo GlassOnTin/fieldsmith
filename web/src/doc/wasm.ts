@@ -460,6 +460,7 @@ export interface AnalysisMeta {
 export interface AnalysisHandle {
   metaJson(): string;
   nodes(): Float64Array;
+  tets?(): Uint32Array;
   surfaceFacets(): Uint32Array;
   surfaceOwner(): Uint32Array;
   surfaceRegion(): Uint32Array;
@@ -474,6 +475,12 @@ export interface AnalysisHandle {
   vmNodal(ci: number): Float64Array;
   /** Case index must be < `meta.cases.length`. */
   vmElem(ci: number): Float64Array;
+  /** Element-centroid symmetric Cauchy stress tensor per case (6 * n_tets floats: xx, yy, zz, xy, yz, xz). */
+  stressElem?(ci: number): Float64Array;
+  /** Element-centroid equivalent plastic strain per case (n_tets floats, %). */
+  plasticStrainElem?(ci: number): Float64Array;
+  /** Nodal 3D temperature gradient [dT/dx, dT/dy, dT/dz] (°C/mm, 3 * n_nodes floats) on thermal cases. */
+  gradTNodal?(ci: number): Float64Array;
   vmEnvelope(): Float64Array;
   vmElemEnvelope(): Float64Array;
   /** Element-centroid inter-layer peel utilization per case (×). */
@@ -547,6 +554,8 @@ export interface GradedHandle extends AnalysisHandle {
   thermalVmElem(ci: number): Float64Array;
   /** Element-centroid inter-layer peel utilization of one graded thermal case (×). */
   thermalPeelElem(ci: number): Float64Array;
+  thermalStressElem?(ci: number): Float64Array;
+  thermalGradTNodal?(ci: number): Float64Array;
   /** Most-compressive principal stress of one graded mechanical case at the element
    * centroids (MPa, ≤ 0) — the buckling indicator's load measure; direct getter for e2e. */
   sigmaMinElem(ci: number): Float64Array;
@@ -649,6 +658,8 @@ export interface LevelResult {
   label: string;
   meta: AnalysisMeta;
   nodes: Float64Array;
+  /** 4 corner node indices per tetrahedron (4 * n_tets). */
+  tets?: Uint32Array;
   surfaceFacets: Uint32Array;
   surfaceOwner: Uint32Array;
   /** Region index per surface facet (u32::MAX = none); indexes doc.regions. */
@@ -661,10 +672,16 @@ export interface LevelResult {
   u: Float64Array[];
   /** Element-centroid von Mises per case (MPa). */
   vmElem: Float64Array[];
+  /** Element-centroid symmetric Cauchy stress tensor per case (6 * n_tets: xx, yy, zz, xy, yz, xz). */
+  stressElem?: Float64Array[];
+  /** Element-centroid equivalent plastic strain per case (n_tets, %). */
+  plasticStrainElem?: Float64Array[];
   /** Element-centroid inter-layer peel utilization per case (×). */
   peelElem: Float64Array[];
   /** Nodal °C per case; null for mechanical cases (M14). */
   temperature: (Float64Array | null)[];
+  /** Nodal 3D temperature gradient [dT/dx, dT/dy, dT/dz] (°C/mm, 3 * n_nodes) per case; null for mechanical cases. */
+  gradTNodal?: (Float64Array | null)[];
   /** Max over cases of element-centroid von Mises (MPa). */
   vmElemEnvelope: Float64Array;
   /** Max over cases of element-centroid inter-layer peel utilization (×). */
@@ -1057,5 +1074,269 @@ export function optimiseDroneAntennaVnaWasm<TReport = unknown>(
   fsm_3d: string;
 } {
   return JSON.parse(w.optimiseDroneAntennaVna(JSON.stringify(spec), maxIters));
+}
+
+export function exportDroneTouchstoneS2pWasm(spec?: unknown): string {
+  return w.exportDroneTouchstoneS2p(spec ? JSON.stringify(spec) : '');
+}
+
+export function parseTouchstoneVnaWasm<TReport = unknown>(text: string): TReport {
+  return JSON.parse(w.parseTouchstoneVna(text));
+}
+
+export interface SphFluidSpec {
+  scenario: string;
+  auto_switch_regime: boolean;
+  density_kg_m3: number;
+  viscosity_pa_s: number;
+  gas_density_kg_m3?: number;
+  gas_viscosity_pa_s?: number;
+  surface_tension_n_m: number;
+  dgamma_dt_n_m_k: number;
+  contact_angle_deg: number;
+  characteristic_radius_mm: number;
+  droplet_aspect_perturbation: number;
+  tpms_lattice_kind: string;
+  tpms_period_mm: number;
+  tpms_solid_fraction: number;
+  thermal_gradient_delta_k: number;
+  gravity_m_s2: number;
+  reservoir_height_mm: number;
+  steps: number;
+}
+
+export interface RegimeZoneAllocation {
+  zone_name: string;
+  regime_code: string;
+  regime_title: string;
+  governing_operator: string;
+  domain_fraction: number;
+  local_re: number;
+  local_we: number;
+  local_oh: number;
+  local_bo: number;
+  switching_criterion: string;
+}
+
+export interface SpoutLipPourReport {
+  spout_temp_c: number;
+  glass_viscosity_pa_s: number;
+  implicit_stiffness_speedup: number;
+  equilibrium_ribbon_thickness_mm: number;
+  spout_lip_height_mm: number;
+  stagnation_saddle_x_mm: number;
+  heel_wetback_length_mm: number;
+  backflow_diversion_pct: number;
+  rejected_surface_layer_mm: number;
+  bad_glass_to_knurl_rejection_pct: number;
+  knurl_selvedge_width_mm: number;
+  spout_width_y_mm: number;
+  centerline_reverse_velocity_mm_s: number;
+  lateral_exit_velocity_mm_s: number;
+  lateral_to_reverse_flux_ratio: number;
+  heel_lateral_residence_time_s: number;
+  cox_voinov_capillary_number: number;
+  dynamic_contact_angle_deg: number;
+  planform_3d_grid: [number, number, number, number, number, number][];
+}
+
+export interface PeregrineWallImpulsePoint {
+  z_over_h: number;
+  p_impulse_norm: number;
+  u_flip_norm: number;
+}
+
+export interface PeregrineAirPocketPoint {
+  time_ms: number;
+  radius_over_r0: number;
+  gauge_pressure_kpa: number;
+}
+
+export interface PeregrineAirEntrainmentReport {
+  iribarren_number: number;
+  breaker_type: string;
+  plunging_jet_velocity_m_s: number;
+  roller_circulation_m2_s: number;
+  trapped_air_tube_radius_mm: number;
+  turbulent_dissipation_m2_s3: number;
+  hinze_bubble_radius_mm: number;
+  entrained_air_void_fraction_pct: number;
+  sauter_mean_bubble_diam_mm: number;
+  brocchini_peregrine_regime: string;
+  flip_through_jet_velocity_m_s: number;
+  flip_through_amplification_ratio: number;
+  peak_wall_impulse_pa_s: number;
+  min_rebound_gauge_pressure_kpa: number;
+  wall_impulse_profile: PeregrineWallImpulsePoint[];
+  air_pocket_trace: PeregrineAirPocketPoint[];
+}
+
+export interface SphParticleSample {
+  pos_mm: [number, number, number];
+  vel_m_s: [number, number, number];
+  normal: [number, number, number];
+  pressure_pa: number;
+  curvature_inv_mm: number;
+  temperature_c: number;
+  regime_code: string;
+  is_free_surface: boolean;
+  is_contact_line: boolean;
+}
+
+export interface SphTimeSeriesPoint {
+  time_ms: number;
+  droplet_aspect_strain: number;
+  interior_pressure_pa: number;
+  capillary_rise_mm: number;
+  washburn_reference_mm: number;
+  dambreak_surge_norm: number;
+  fsi_baffle_pressure_kpa: number;
+}
+
+export interface SphSimulationReport {
+  spec: SphFluidSpec;
+  primary_regime_code: string;
+  primary_regime_title: string;
+  primary_governing_operator: string;
+  regime_zones: RegimeZoneAllocation[];
+  particle_count: number;
+  smoothing_length_mm: number;
+  dfsph_density_defect_rel: number;
+  pairwise_momentum_drift_ns: number;
+  sph_mean_curvature_inv_mm: number;
+  exact_curvature_inv_mm: number;
+  curvature_rel_error_pct: number;
+  sph_laplace_pressure_pa: number;
+  exact_laplace_pressure_pa: number;
+  laplace_pressure_rel_error_pct: number;
+  sph_rayleigh_period_ms: number;
+  exact_rayleigh_period_ms: number;
+  rayleigh_period_rel_error_pct: number;
+  effective_pore_radius_mm: number;
+  sph_capillary_rise_mm: number;
+  exact_jurin_rise_mm: number;
+  jurin_rise_rel_error_pct: number;
+  tpms_capillary_retention_pa: number;
+  tpms_permeability_mm2: number;
+  reynolds_number: number;
+  bond_number: number;
+  capillary_number: number;
+  weber_number: number;
+  ohnesorge_number: number;
+  marangoni_number: number;
+  marangoni_surface_velocity_m_s: number;
+  density_ratio_l_over_g: number;
+  viscosity_ratio_l_over_g: number;
+  peak_fsi_impact_pressure_kpa: number;
+  total_fsi_baffle_force_n: number;
+  fsi_root_bending_moment_n_mm: number;
+  spout_lip_report: SpoutLipPourReport;
+  peregrine_air_report: PeregrineAirEntrainmentReport;
+  time_series: SphTimeSeriesPoint[];
+  particles: SphParticleSample[];
+}
+
+export function solveFreeSurfaceSphWasm(
+  spec?: Partial<SphFluidSpec>,
+): { report: SphSimulationReport; fsm_3d: string; wall_ms: number } {
+  return JSON.parse(w.solveFreeSurfaceSph(spec ? JSON.stringify(spec) : ''));
+}
+
+export interface GerrisTestCaseResult {
+  id: string;
+  gerris_slug: string;
+  title: string;
+  regime_code: string;
+  citation: string;
+  closed_form_equation: string;
+  metric_name: string;
+  analytic_reference: number;
+  fieldsmith_measured: number;
+  unit: string;
+  rel_error_pct: number;
+  tolerance_pct: number;
+  secondary_summary: string;
+  passed: boolean;
+  profile_samples: [number, number, number][];
+}
+
+export interface EggersPinchoffPoint {
+  z_over_lambda: number;
+  h_initial_over_r0: number;
+  h_pinchoff_over_r0: number;
+  axial_velocity_norm: number;
+  curvature_r0: number;
+}
+
+export interface GerrisTestSuiteReport {
+  total_tests: number;
+  passed_tests: number;
+  all_passed: boolean;
+  max_rel_error_pct: number;
+  cases: GerrisTestCaseResult[];
+  eggers_pinchoff_profile?: EggersPinchoffPoint[];
+  eggers_satellite_drop_radius_over_r0?: number;
+  eggers_min_neck_radius_over_r0?: number;
+}
+
+export function runGerrisTestSuiteWasm(
+  gridN?: number,
+  laplaceNumber?: number,
+): GerrisTestSuiteReport {
+  return JSON.parse(w.runGerrisTestSuite(gridN, laplaceNumber));
+}
+
+export interface SpuriousEddyBenchmarkSpec {
+  droplet_radius_mm: number;
+  resolution_d_over_dx: number;
+  laplace_number: number;
+  density_kg_m3: number;
+  surface_tension_n_m: number;
+  stencil_anisotropy: number;
+  active_scheme: string;
+}
+
+export interface SpuriousEddySchemeResult {
+  scheme_code: string;
+  scheme_title: string;
+  citation: string;
+  basis_formula: string;
+  theoretical_order: string;
+  measured_convergence_order: number;
+  mean_curvature_inv_mm: number;
+  mean_curvature_bias_pct: number;
+  rms_curvature_noise_dimless: number;
+  peak_to_peak_curvature_dimless: number;
+  quadrupolar_m4_amplitude: number;
+  curl_vorticity_source_n_m3: number;
+  max_eddy_velocity_m_s: number;
+  parasitic_capillary_number: number;
+  parasitic_reynolds_number: number;
+  max_eddy_vorticity_inv_s: number;
+  eddy_kinetic_energy_j: number;
+  eddy_to_surface_energy_ratio: number;
+  eddy_vortex_cell_count: number;
+  azimuthal_profile: [number, number, number][];
+  convergence_samples: [number, number, number][];
+}
+
+export interface SpuriousEddyBenchmarkReport {
+  spec: SpuriousEddyBenchmarkSpec;
+  exact_curvature_inv_mm: number;
+  exact_laplace_pressure_pa: number;
+  dynamic_viscosity_pa_s: number;
+  ohnesorge_number: number;
+  viscous_relaxation_time_s: number;
+  capillary_wave_time_s: number;
+  voxel_to_pratt_suppression_ratio: number;
+  parabolic_to_pratt_suppression_ratio: number;
+  schemes: SpuriousEddySchemeResult[];
+  active_eddy_field_grid: [number, number, number, number, number, number][];
+}
+
+export function runSpuriousEddyBenchmarkWasm(
+  spec?: Partial<SpuriousEddyBenchmarkSpec>,
+): SpuriousEddyBenchmarkReport {
+  return JSON.parse(w.runSpuriousEddyBenchmark(spec ? JSON.stringify(spec) : ''));
 }
 

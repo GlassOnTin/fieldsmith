@@ -4,17 +4,17 @@ fieldsmith 1
 # @code: A9
 # @category: analytic
 # @level: Analytic Verification
-# @title: Analytic Benchmark A9: Certified Dual Prager–Synge / Fenchel Compliance Bounds C_h ≤ C_true ≤ C(σ*) (V34 / V35)
-# @subtitle: Verify Galerkin primal compliance lower bound C_h = fᵀ u_h ≤ C_true (V34) and H(div)-equilibrated quadratic stress recovery upper bound C(σ*) (V35) on in-span uniaxial tension and off-span cubic manufactured fields.
-# @verification_badge: Verified by V34 & V35 · Certified Primal–Dual Energy Bracket · PASS (0.001%)
+# @title: Analytic Benchmark A9: 3D Uniaxial Tension Compliance Patch Test & Certified Prager–Synge Dual Bounds (V34 / V35)
+# @subtitle: Verify exact P2 primal compliance C_h = F² L / (E A) = 0.026667 N·mm and uniaxial stress σ_xx = F/A = 0.10 MPa on a 3D kinematically supported tension bar (.fsm), alongside the off-span cubic Galerkin lower bound (V34) and H(div)-equilibrated dual upper bound C(σ*) (V35) in the Rust verification suite.
+# @verification_badge: Verified by V34 & V35 · Exact 3D Compliance Patch + Dual Energy Bracket · PASS (0.000%)
 # @doc_path: docs/analytic-tests/A9-dual-compliance-bounds-prager-synge.md
 # @fsm_path: examples/analytic/A9-dual-compliance-bounds-prager-synge.fsm
 # @starter_fsm_name: a9-dual-compliance-bounds.fsm
 # @verification_refs: docs/verification/V34.md, docs/verification/V35.md
 # ---
-# @check: In-Span Uniaxial Tension Primal Lower Bound C_h & Dual Upper Bound C(σ*) || C_true = F² L / (E A) = c² V / E   (40×10×10 mm bar, F = 10 N, E = 1500 MPa) || 0.02666667 N·mm (Pipeline) / 0.4000000 N·mm (T1) || 0.02666667 N·mm / 0.4000000 N·mm || 0.000% || ≤ 0.0001%
-# @check: Off-Span Cubic Field (T2) Primal Lower Bound C_h ≤ C_true (24 → 192 tets) || C_true − C_h = a(u* − u_h, u* − u_h) ≥ 0   (Strict Galerkin Orthogonality) || 18,432.00 N·mm || 18,430.86 → 18,431.93 N·mm || 0.006% → 0.0004% || C_h ≤ C_true
-# @check: Off-Span Cubic Field (T2) Equilibrated Stress Certificate C(σ*) & Witnesses || J(σ*) = ∫ σ* : S : σ* dV  s.t.  div σ* + b = 0,  ⟦σ* n⟧ = 0,  σ* n|_ΓN = t̄ || 18,432.00 N·mm (Witnesses = 0 N) || 18,431.99 N·mm (Equil 1.04×10⁻⁸ N) || 0.00003% || ≤ 0.01%
+# @check: 3D .fsm Uniaxial Tension Primal Compliance C_h & Axial Stress (40×10×10 mm Bar) || C_true = F² L / (E A) = 10² × 40 / (1500 × 100),  σ_xx = F / A || 0.02666667 N·mm,  0.1000 MPa || 0.02666667 N·mm,  0.1000 MPa || 0.000% || ≤ 0.5%
+# @check: Rust V34 Suite: Off-Span Cubic Field (T2) Primal Lower Bound C_h ≤ C_true (24 → 192 tets) || C_true − C_h = a(u* − u_h, u* − u_h) ≥ 0   (Strict Galerkin Orthogonality) || 18,432.00 N·mm || 18,430.86 → 18,431.93 N·mm || 0.006% → 0.0004% || C_h ≤ C_true
+# @check: Rust V35 Suite: Off-Span Cubic Field (T2) Equilibrated Stress Certificate C(σ*) || J(σ*) = ∫ σ* : S : σ* dV  s.t.  div σ* + b = 0,  ⟦σ* n⟧ = 0,  σ* n|_ΓN = t̄ || 18,432.00 N·mm (Witnesses = 0 N) || 18,431.99 N·mm (Equil 1.04×10⁻⁸ N) || 0.00003% || ≤ 0.01%
 # ---
 # @assert: Exact Primal Compliance C_h = F² L / (E A) || compliance || 0.0266667 || 0.5% || N·mm
 # @assert: Uniaxial Tensile Stress σ_xx = F / A || max_vm_elem || 0.1000 || 0.5% || MPa

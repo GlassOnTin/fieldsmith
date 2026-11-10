@@ -1,0 +1,67 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: A17
+# @code: A17
+# @category: analytic
+# @level: Analytic Verification
+# @title: Analytic Benchmark A17: 3D Capillary Jet Nozzle Structural FEA + Analytic Gerris Surface-Tension Reference Suite (G1–G4, V63)
+# @subtitle: Solve 3D P2 hoop stress on a Ti-6Al-4V capillary jet nozzle under internal Laplace pressure, paired with the companion analytic/reduced-order Gerris surface-tension benchmark suite (Popinet 2009: G1 Laplace jump, G2 Prosperetti damped capillary wave ODE, G3 Rayleigh–Lamb spectrum, and G4 Rayleigh–Plateau Bessel dispersion).
+# @verification_badge: Verified by V63 · Gerris Surface-Tension Suite G1–G4 (Popinet 2009) · 4/4 PASS (< 0.25%)
+# @doc_path: docs/analytic-tests/A17-gerris-capillary-suite-spurious-capwave-plateau.md
+# @fsm_path: examples/analytic/A17-gerris-capillary-suite-spurious-capwave-plateau.fsm
+# @starter_fsm_name: a17-gerris-capillary-suite.fsm
+# @verification_refs: docs/verification/V63.md
+# ---
+# @check: G1 (spurious): Stationary Droplet Laplace Jump & Parasitic Currents (La = 12,000) || Δp = 2γ / R₀ = 72.80 Pa,   Ca_max = μ ‖u_spurious‖_∞ / γ → 0 || 72.8000 Pa (Ca = 0) || 72.7997 Pa (Ca < 10⁻⁷) || 0.0004% || ≤ 0.50%
+# @check: G2 (capwave): Prosperetti (1981) Viscous Damped Standing Capillary Wave || a(t)/a₀ = e^{−2νk²t}[cos(ω_d t) + (2νk²/ω_d)sin(ω_d t)],   ω₀² = γ k³ / ρ || 0.87400 a/a₀ (at t = 2T₀) || 0.87211 a/a₀ || 0.2166% (L₂ RMS) || ≤ 1.00%
+# @check: G3 (oscillation): Rayleigh–Lamb (1879/1932) Mode n = 2..6 Eigenfrequency Spectrum || ω_n² = n(n−1)(n+2) γ / (ρ R₀³),   ω₃/ω₂ = √3.75 = 1.9365 || T₂ = 23.2638 ms || T₂ = 23.2365 ms || 0.1175% || ≤ 1.50%
+# @check: G4 (plateau): Rayleigh–Plateau (1878) Cylindrical Jet Fastest Growth Rate (kR₀ = 0.697) || σ*(x) = √( x [I₁(x)/I₀(x)] (1 − x²) ),   cutoff x_c = k R₀ = 1.0 || σ*_max = 0.34334 || σ*_max = 0.34332 || 0.0065% || ≤ 1.00%
+# ---
+# @assert: Rayleigh–Plateau Jet Containment Hoop Stress σ_vm || max_vm_elem || >= 0.15 || >= 0.15 || MPa
+# @assert: Capillary Nozzle Peak Deflection |u|_max || max_displacement || >= 1e-6 || >= 1e-6 || mm
+# ---
+# @step: 1. Inspect the Gerris G1–G4 Surface-Tension Verification Table & Exact Dispersion Curves || setup
+#   Open the Free-Surface Fluid (🌊 SPH) Workbench or inspect the embedded panel below and click "📐 Gerris Analytic Suite (G1–G8)". Select G1 (`spurious`), G2 (`capwave`), G3 (`oscillation`), and G4 (`plateau`) to inspect the exact analytical curves overlaid with Fieldsmith's numerical trace.
+# @expected:
+#   All four Popinet (2009) surface-tension benchmarks pass with relative error ≤ 0.22% (well inside Gerris's 1.0% threshold).
+# @step: 2. Verify 3D Capillary Jet Nozzle Structural Response in Results (3) || results
+#   Switch to Results (3) to verify the 3D P2 finite-element solution of the Rayleigh–Plateau capillary jet nozzle under internal Laplace capillary pressure.
+# @expected:
+#   All # @assert verification contracts pass.
+# ---
+# @theory_title: Analytic Verification A17 — Popinet (2009) Gerris Surface-Tension Benchmarks (G1–G4)
+# @theory_summary:
+#   Reproduces the four surface-tension verification benchmarks from Popinet (2009, J. Comput. Phys. 228, 5838–5866): (1) balanced-force Laplace equilibrium & parasitic currents, (2) Prosperetti's viscous capillary wave initial-value problem, (3) Lamb's spherical harmonic capillary spectrum, and (4) Lord Rayleigh's modified-Bessel liquid jet instability.
+# @theory_section: A17.1 Well-Balanced CSF & Elimination of Parasitic Currents (G1 `spurious`)
+# @theory_eq:
+#   −∇p + γ κ n̂ δ_s = 0   ⟹   Ca_spurious = μ ‖u‖_∞ / γ ∝ σ(κ_h) R₀ / √La,     La = ρ γ D / μ²
+# @theory_body:
+#   In traditional CSF schemes, discrete mismatch between the pressure gradient operator ∇p and surface curvature κ generates non-physical vortices ("spurious/parasitic currents") that scale as 1/Ca and destroy low-Ohnesorge droplets. Because Fieldsmith's Monge–Pratt quadric MLS basis (u² + ½z², v² + ½z²) reconstructs spherical curvature κ = 2/R₀ to < 0.001%, parasitic capillary currents are suppressed to Ca_max < 10⁻⁷ at La = 12,000.
+# @theory_section: A17.2 Prosperetti (1981) Viscous Capillary Wave & Rayleigh–Plateau (1878) Jet Dispersion (G2 & G4)
+# @theory_eq:
+#   G2 (Prosperetti 1981):   ä + 4 ν k² ȧ + (γ k³ / ρ) a = 0
+#   G4 (Rayleigh 1878):      σ²(k R₀) = (γ / ρ R₀³) · (k R₀) [I₁(k R₀) / I₀(k R₀)] (1 − (k R₀)²)
+# @theory_body:
+#   For a cylindrical liquid column of radius R₀, axial perturbations of wavelength λ > 2πR₀ (wavenumber x = kR₀ < 1) reduce total surface area and grow exponentially at rate σ(x) governed by the ratio of modified Bessel functions I₁(x)/I₀(x), peaking at x_max = 0.6970 (λ ≈ 9.015 R₀) with dimensionless growth rate σ*_max = 0.34334.
+# ---
+# @mcp: Solve A17 Capillary Jet Nozzle via MCP / REST API || solve || {"kind":"solve","dofs":25000}
+#   Execute the 3D P2 finite-element solver on the A17 Rayleigh–Plateau capillary jet nozzle.
+# === END LITERATE HEADER ===
+
+name "A17 — Gerris Surface-Tension Suite: Spurious, Prosperetti Wave & Rayleigh–Plateau Jet (V63)"
+material ti64
+
+let droplet_r_mm = 2.0
+let gamma_n_m = 0.0728
+let plateau_kr_max = 0.6970
+
+cylinder jet_nozzle_outer r=9 h=32 at=(0, 0, 16)
+cylinder jet_bore r=5 h=34 at=(0, 0, 16) subtract
+torus plateau_neck_waist major=9.5 minor=2.0 at=(0, 0, 16) subtract
+
+region flange_mount = jet_nozzle_outer.bottom
+region bore_wall = jet_bore.side
+
+support clamp flange_mount fixed=xyz
+load laplace_bore bore_wall pressure=0.18
+solve modes=6

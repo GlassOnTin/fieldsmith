@@ -12,6 +12,9 @@ fieldsmith 1
 # @starter_fsm_name: T10-multibody-bolted-flange-preload.fsm
 # @verification_refs: docs/verification/V12.md, docs/verification/V53.md
 # ---
+# @assert: Case 1 Cold Bolt Preload + Bore Stress || max_vm_elem:1 || >= 15.0 || >= 15.0 || MPa
+# @assert: Case 2 Hot Bi-Metallic Thermal Mismatch Stress || max_vm_elem:2 || >= 200.0 || >= 200.0 || MPa
+# ---
 # @step: 1. Inspecting a Multi-Material Assembly: CuCrZr Spool on an SS316L Flange || shape
 #   High-heat-flux propulsion and power hardware frequently joins a high-conductivity copper alloy ("CuCrZr", E = 128 GPa, α = 17.0×10⁻⁶ /K, bronze top half) to a structural stainless-steel housing ("SS316L", E = 193 GPa, α = 16.0×10⁻⁶ /K, slate bottom half). In the Model (1) feature tree on the left, click "upper_spool" to open its Node Inspector: notice the "Volume material" dropdown is set to "CuCrZr copper alloy (LPBF)", overriding the document’s default "316L stainless (LPBF)". Each tetrahedron in the 3D mesh automatically inherits the Young’s modulus E_e, thermal expansion α_e, and density ρ_e of the volume containing its centroid.
 # @expected:

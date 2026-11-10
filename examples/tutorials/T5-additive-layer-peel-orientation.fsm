@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t5-additive-peel-arm.fsm
 # @verification_refs: docs/verification/V45.md, docs/verification/V46.md
 # ---
+# @assert: Applied Tip Load Resultant |F_z| || resultant_mag || 450.00 || 0.5% || N
+# @assert: Cantilever Tip Deflection δ_tip || max_displacement || 9.520 || 2.0% || mm
+# @assert: Upright Build (90°, 0°) Layer-Peel Failure (U_peel ≥ 2.0×) || max_layer_peel || >= 2.0 || >= 2.0 || ×
+# ---
 # @step: 1. Why Print Orientation Matters (Wood-Grain Analogy) || results
 #   When a filament 3D printer — called Fused Deposition Modelling (FDM) — prints a part, it lays down continuous plastic strands in horizontal XY layers stacked along the vertical build direction. Just like wood splits easily along its grain, a 3D-printed part is weaker when pulled apart across its layer seams ("Layer Peel") than when pulled along the continuous strands. Tap "Go to Results →" and tap the "Peel" button at the top of the Results card. Notice the white slice lines drawn on the 3D beam: because this part was oriented upright at (90°, 0°), the layer seams run vertically right across the beam, and bending pulls those seams apart!
 # @expected:

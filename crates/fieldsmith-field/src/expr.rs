@@ -780,7 +780,20 @@ pub fn bounds(e: &Expr) -> Aabb {
         Expr::Combine { op, blend, a, b } => {
             let ba = bounds(a);
             match op {
-                Op::Add => ba.union(&bounds(b)).expand(blend * 0.25),
+                Op::Add => {
+                    let bb = bounds(b);
+                    let u = ba.union(&bb);
+                    if *blend <= 0.0 {
+                        u
+                    } else {
+                        let fillet = ba.expand(*blend).intersect(&bb.expand(*blend));
+                        if fillet.is_empty() {
+                            u
+                        } else {
+                            u.union(&fillet.expand(*blend * 0.25))
+                        }
+                    }
+                }
                 Op::Subtract => ba,
                 Op::Intersect => ba.intersect(&bounds(b)),
             }

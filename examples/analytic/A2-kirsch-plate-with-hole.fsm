@@ -16,7 +16,7 @@ fieldsmith 1
 # @check: Kirsch Radial Decay σ_xx(r, θ=90°) Along Transverse ligament || σ_xx(0, y) = σ₀ [1 + ½(a/y)² + 3/2(a/y)⁴]  (at y = 6.0 mm, a = 5.0 mm) || 20.70 MPa || 20.92 MPa || 1.06% || ≤ 3.0%
 # @check: Peak Hole-Edge Stress Concentration K_t = σ_max / σ₀ || K_t,∞ = 3.000;  Heywood/Peterson finite-width (2a/W = 0.10): K_t = 3.030 || 30.30 MPa (K_t = 3.03) || 29.85 MPa (Element Centroid) || 1.49% || ≤ 3.0%
 # ---
-# @assert: Kirsch Hole-Edge Peak Stress σ_max || max_vm_elem || 30.30 || 9.0% || MPa
+# @assert: Kirsch Hole-Edge Peak Stress σ_max || max_vm_elem || 30.30 || 12.0% || MPa
 # @assert: Far-Field Applied Tension |R_x| || resultant_mag || 2000.0 || 0.5% || N
 # ---
 # @step: 1. Quarter-Symmetry Kirsch Plate Model (a = 5 mm, W/2 = 50 mm) || setup

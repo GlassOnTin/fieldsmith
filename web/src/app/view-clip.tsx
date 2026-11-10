@@ -11,9 +11,33 @@ import { viewOverlays } from './App';
 
 function ClipPanel() {
   useApp();
-  if (!store.doc || store.doc.root.length === 0 || ui.vpHudCollapsed) return null;
+  if (
+    !store.doc ||
+    store.doc.root.length === 0 ||
+    ui.vpHudCollapsed ||
+    ui.coordMappingOpen ||
+    ui.freeSurfaceOpen ||
+    ui.mcpSetupOpen ||
+    ui.systemsOpen
+  ) {
+    return null;
+  }
   const clip = ui.clip;
   if (ui.panelMinimized && !clip.on) return null;
+  if (ui.clipDismissed) {
+    return (
+      <button
+        type="button"
+        class="btn small clip-panel"
+        data-testid="clip-restore"
+        title="Show Section plane controls"
+        onClick={() => ui.set('clipDismissed', false)}
+        style={{ padding: '0 8px', height: '24px', fontSize: '11px', gap: '4px' }}
+      >
+        <span>✂ Section{clip.on ? ` (${Math.round(clip.t * 100)}%)` : ''}</span>
+      </button>
+    );
+  }
   const toggleClip = () => {
     const vp = liveViewport;
     const b = vp?.bounds;
@@ -97,6 +121,16 @@ function ClipPanel() {
       <span class="num" data-testid="clip-value">
         {Math.round(clip.t * 100)}%
       </span>
+      <button
+        type="button"
+        class="mini"
+        data-testid="clip-close"
+        title="Dismiss Section plane bar"
+        onClick={() => ui.set('clipDismissed', true)}
+        style={{ marginLeft: '2px', fontSize: '11px', fontWeight: 700 }}
+      >
+        ✕
+      </button>
     </div>
   );
 }

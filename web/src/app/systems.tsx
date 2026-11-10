@@ -17,7 +17,11 @@ import {
   type SimulationRecapEvent,
 } from '../doc/wasm';
 import { store } from '../doc/store';
-import { detectCoupledPhysicsRegime, matchedCoupledSystemIdForDoc } from '../doc/continuum';
+import {
+  detectCoupledPhysicsRegime,
+  matchedCoupledSystemIdForDoc,
+  upsertLetParam,
+} from '../doc/continuum';
 import { viewOverlays } from './App';
 import { extraCommands, openText, viewApi } from './commands';
 import { apiUrl, ui, useApp } from './ui';
@@ -163,8 +167,9 @@ function buildFloatBathFsm(designP: number[]): string {
 name "UK5 Float-Bath & CVD Coater (H_sill=${hSillMm.toFixed(0)}mm, x_beam=${xBeamM.toFixed(1)}m)"
 material ss316l
 custommaterial sic_refractory name="Alumino-Silicate / SiC Refractory" e=95000 nu=0.20 yield=140 density=2.65 wall=1.5 a=0.0000046 source="Fused-cast float-bath refractory"
-custommaterial molten_tin name="Molten Tin Bath Sn(l)" e=1200 nu=0.45 yield=18 density=6.50 wall=0.8 a=0.0000909 source="Pilkington tin2fe liquid metal (Ron Smith JFM 1990)"
-custommaterial soda_lime_glass name="Soda-Lime Float Glass (VFT Melt)" e=72000 nu=0.22 yield=65 density=2.50 wall=0.8 a=0.000009 source="Pilkington float2fe VFT melt log10 eta = -2.65 + 4210/(T-264)"
+custommaterial molten_sn_bath name="Molten Tin Bath Sn(l)" e=1200 nu=0.45 yield=18 density=6.50 wall=0.8 a=0.0000909 source="Pilkington tin2fe liquid metal (Ron Smith JFM 1990)"
+custommaterial sodalime_ribbon name="Soda-Lime Float Glass (VFT Melt)" e=72000 nu=0.22 yield=65 density=2.50 wall=0.8 a=0.000009 source="Pilkington float2fe VFT melt log10 eta = -2.65 + 4210/(T-264)"
+custommaterial graphite_fender name="Graphite Fender / Top-Roll" e=11500 nu=0.21 yield=48 density=1.82 wall=1.0 a=0.0000042 source="Poco graphite bath fender & top-roll attenuator"
 custommaterial h2_n2_gas name="Reducing H2/N2 Bath Atmosphere" e=100 nu=0.30 yield=5 density=0.15 wall=0.8 a=0.000015 source="Forming-gas headspace + SnO/H2 Navier-slip cushion"
 
 let bath_len = ${bathLenMm}
@@ -178,10 +183,6 @@ let p_h2 = ${pH2Pct}
 let q_beam = ${qBeamKw}
 let top_roll_cant = ${topRollCantDeg}
 
-# Central structural support pedestal (isolates fixed base from hot spout thermal expansion)
-box support_pedestal size=(76, 36, 6) at=(0, 0, 3)
-color "#52525b" on support_pedestal
-
 # Refractory casing floor, molten-tin continuum & side walls
 box refractory_casing size=(bath_len + 16, bath_w + 12, 20) at=(0, 0, 14)
 box tin_cavity size=(bath_len - 12, bath_w - 8, 9) at=(0, 0, 21) subtract
@@ -190,7 +191,7 @@ color "#6b665e" on refractory_casing
 
 # Active Molten-Tin Pool Continuum (ρ = 6500 kg/m³, VMS circulation + Lorentz MHD)
 box tin_bath_pool size=(bath_len - 14, bath_w - 10, 4.5) at=(0, 0, 14.5)
-material molten_tin on tin_bath_pool
+material molten_sn_bath on tin_bath_pool
 color "#64748b" on tin_bath_pool
 
 # Downstream Refractory Sill Step (controls bath depth H(x) = ${hSillMm.toFixed(1)} mm)
@@ -200,20 +201,23 @@ color "#c87d3b" on refractory_sill
 
 # Upstream Hot-Spread Glass Zone & Downstream Stretched Glass Ribbon (VFT Viscous Melt)
 box ribbon_hot_spread size=(78, ${hotSpreadWMm}, 6) at=(-58, 0, 17)
-material soda_lime_glass on ribbon_hot_spread
+material sodalime_ribbon on ribbon_hot_spread
 color "#f59e0b" on ribbon_hot_spread
 box glass_ribbon size=(142, ${ribbonWMm}, 5) at=(28, 0, 16.5)
-material soda_lime_glass on glass_ribbon
+material sodalime_ribbon on glass_ribbon
 color "#38bdf8" on glass_ribbon
 
 # Top-Roll Attenuator Shafts engaging ribbon edges in the stretching zone
 box top_roll_north size=(12, 16, 5) at=(-24, 22, 19.5)
 box top_roll_south size=(12, 16, 5) at=(-24, -22, 19.5)
+material graphite_fender on top_roll_north
+material graphite_fender on top_roll_south
 color "#94a3b8" on top_roll_north
 color "#94a3b8" on top_roll_south
 
 # Overhead Water-Cooled CVD Coating Beam Bridge at x = ${xBeamM.toFixed(1)} m (Q_beam = ${qBeamKw.toFixed(0)} kW)
 box cvd_coater_beam size=(14, bath_w + 8, 9) at=(beam_x, 0, 24.5)
+material ss316l on cvd_coater_beam
 color "#e05a47" on cvd_coater_beam
 
 # Linear Electromagnetic Motor Inductors (I_motor = ${iMotorA.toFixed(0)} A)
@@ -222,7 +226,7 @@ box linear_motor_south size=(84, 6, 8) at=(12, -26, 23)
 color "#d9a441" on linear_motor_north
 color "#d9a441" on linear_motor_south
 
-region casing_base = support_pedestal.nz
+region casing_base = refractory_casing.nz
 region coater_slot = cvd_coater_beam.pz
 region hot_spout = refractory_casing.nx
 
@@ -252,12 +256,14 @@ const coupledShared: {
   epistemicTheta: number[];
   bundle: CoupledSolveBundle | null;
   summary: CoupledSystemSummary | null;
+  userModified: boolean;
   overlay: CoupledViewportOverlayConfig;
 } = {
-  designP: [65.0, 28.5, 34.0, 4.2, 260.0, 0.0, 620.0],
+  designP: [65.0, 28.5, 34.0, 4.2, 260.0, 0.0],
   epistemicTheta: [5.0, 92.0, 1.15, 0.42],
   bundle: null,
   summary: null,
+  userModified: false,
   overlay: {
     enabled: true,
     mode: 'glass_temp',
@@ -576,7 +582,14 @@ function populateFloatBath3DGroup(
   // + 3D Top-Roll Attenuator Wheels & Linear Motor Banks
   if (cfg.showCoater) {
     const xBeamM = designP[1] ?? 28.5;
-    const beamPx = toX(xBeamM);
+    const docBeamX =
+      coordSpace === 'fsm_viewport'
+        ? store.doc.lets?.find((l) => l.name === 'beam_x')?.value
+        : undefined;
+    const beamPx =
+      typeof docBeamX === 'number' && Number.isFinite(docBeamX) && docBeamX >= -90 && docBeamX <= 90
+        ? docBeamX
+        : toX(xBeamM);
     const bowArr = vis.coater_beam_bow_mm ?? [];
     const ySpanArr = vis.coater_beam_y_m ?? [];
     const midBowMm = bowArr[0] ?? 0.18;
@@ -1267,6 +1280,424 @@ export const swirlShared: { overlay: SwirlViewportOverlayConfig } = {
   },
 };
 
+function swirlGammaLanczos(z: number): number {
+  const g = 7;
+  const p = [
+    0.99999999999980993,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7,
+  ];
+  if (z < 0.5) {
+    return Math.PI / (Math.sin(Math.PI * z) * swirlGammaLanczos(1 - z));
+  }
+  const zm1 = z - 1;
+  let x = p[0];
+  for (let i = 1; i < g + 2; i++) {
+    x += p[i] / (zm1 + i);
+  }
+  const t = zm1 + g + 0.5;
+  return Math.sqrt(2 * Math.PI) * Math.pow(t, zm1 + 0.5) * Math.exp(-t) * x;
+}
+
+export function computeSwirlCombustorNox(params: {
+  orificeR: number;
+  swirlSlotR: number;
+  swirlOffset: number;
+  linerWall: number;
+  coolantTemp: number;
+  fuelPressureBar: number;
+  equivRatio: number;
+  linerEffusionPorosity?: number;
+  gasDensityKgM3?: number;
+  liquidDensityKgM3?: number;
+  surfaceTensionNM?: number;
+  liquidViscosityPaS?: number;
+  bundle?: CoupledSolveBundle | null;
+}) {
+  const {
+    orificeR,
+    swirlSlotR,
+    swirlOffset,
+    linerWall,
+    coolantTemp,
+    fuelPressureBar,
+    equivRatio,
+  } = params;
+  const linerEffusionPorosity = params.linerEffusionPorosity ?? 0.085;
+  const rhoG = params.gasDensityKgM3 ?? 4.8;
+  const rhoL = params.liquidDensityKgM3 ?? 800.0;
+  const sigmaL = params.surfaceTensionNM ?? 0.026;
+  const muL = params.liquidViscosityPaS ?? 1.35e-3;
+
+  // Stage 1: Taylor (1948) / Rizk–Lefebvre Inviscid Air-Core Vortex
+  const swirlNumber = (swirlOffset * orificeR) / Math.max(0.5, 2.0 * swirlSlotR * swirlSlotR);
+  const sprayHalfAngleDeg = Math.min(72.0, Math.max(22.0, 18.0 + 23.5 * Math.pow(swirlNumber, 0.56)));
+  const thetaRad = (sprayHalfAngleDeg * Math.PI) / 180.0;
+
+  const h0TargetMm =
+    0.295 *
+    Math.pow(orificeR / 2.6, 0.62) *
+    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.28) *
+    Math.pow(1.65 / Math.max(0.35, swirlNumber), 0.42) *
+    Math.pow(rhoL / 800.0, 0.12) *
+    Math.pow(muL / 1.35e-3, 0.08);
+  const sqrtX = Math.min(0.965, Math.max(0.45, 1.0 - h0TargetMm / Math.max(0.8, orificeR)));
+  let airCoreAreaFrac = sqrtX * sqrtX;
+  const h0Mm = orificeR * (1.0 - sqrtX);
+  let filmThicknessUm = h0Mm * 1000.0;
+
+  const rhoHat = rhoG / rhoL;
+  const cv = 0.76 + 0.04 * Math.tanh(swirlNumber - 1.5);
+  const uSheetMs = cv * Math.sqrt((2.0 * Math.max(1.0, fuelPressureBar) * 1e5) / rhoL);
+
+  // Stage 2: 1D Spatial Conical Sheet Thinning & Squire/Senecal Viscous KH Wave Growth
+  const nSteps = 40;
+  const sMaxMm = 25.0;
+  const dsMm = sMaxMm / nSteps;
+  const dsM = dsMm * 1e-3;
+  let sheetProfile: Array<{ sMm: number; hUm: number; khLogAmp: number }> = [];
+
+  let khIntegralN = 0.0;
+  let sheetBreakupLengthMm = sMaxMm;
+  let breakupFilmThicknessUm = filmThicknessUm * 0.22;
+  let kMaxBreakupInvM = 9.0e4;
+  let breakupFound = false;
+
+  for (let i = 0; i <= nSteps; i++) {
+    const sMm = i * dsMm;
+    const rMm = orificeR + sMm * Math.sin(thetaRad);
+    const hMm = (orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rMm);
+    const hM = Math.max(5.0e-6, hMm * 1e-3);
+    const halfH = 0.5 * hM;
+
+    const weGasLocal = (rhoG * uSheetMs * uSheetMs * hM) / sigmaL;
+    const ohSheetLocal = muL / Math.sqrt(rhoL * sigmaL * hM);
+    const kMaxInvM =
+      (rhoG * uSheetMs * uSheetMs) /
+      (2.0 * sigmaL * (1.0 + 2.6 * ohSheetLocal + 0.165 * Math.pow(Math.max(1.0, weGasLocal), 0.62)));
+
+    const khArg = Math.min(10.0, kMaxInvM * halfH);
+    const tanhKh = Math.tanh(khArg);
+    const capCut = Math.max(0.08, 1.0 - (sigmaL * kMaxInvM) / Math.max(1.0, rhoG * uSheetMs * uSheetMs));
+    const viscTerm = (2.0 * muL * kMaxInvM * kMaxInvM) / rhoL;
+    const inviscidSq =
+      ((rhoHat * uSheetMs * uSheetMs * kMaxInvM * kMaxInvM * capCut) / Math.max(1e-4, tanhKh + rhoHat)) * 0.068;
+    const omegaMaxInvS = Math.max(50.0, Math.sqrt(inviscidSq + viscTerm * viscTerm) - 0.35 * viscTerm);
+
+    if (i > 0) {
+      const prevN = khIntegralN;
+      const dN = (omegaMaxInvS / Math.max(5.0, uSheetMs)) * dsM;
+      khIntegralN += dN;
+      if (!breakupFound && khIntegralN >= 12.0) {
+        const frac = (12.0 - prevN) / Math.max(1e-9, dN);
+        sheetBreakupLengthMm = (i - 1 + frac) * dsMm;
+        const rBreakMm = orificeR + sheetBreakupLengthMm * Math.sin(thetaRad);
+        breakupFilmThicknessUm = ((orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rBreakMm)) * 1000.0;
+        kMaxBreakupInvM = kMaxInvM;
+        breakupFound = true;
+      }
+    }
+
+    sheetProfile.push({
+      sMm: Number(sMm.toFixed(3)),
+      hUm: Number((hMm * 1000.0).toFixed(2)),
+      khLogAmp: Number(Math.min(18.0, khIntegralN).toFixed(3)),
+    });
+  }
+
+  if (!breakupFound) {
+    sheetBreakupLengthMm = Math.min(24.5, Math.max(3.0, sMaxMm * (12.0 / Math.max(2.0, khIntegralN))));
+    const rBreakMm = orificeR + sheetBreakupLengthMm * Math.sin(thetaRad);
+    breakupFilmThicknessUm = ((orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rBreakMm)) * 1000.0;
+    const hBreakM = Math.max(5.0e-6, breakupFilmThicknessUm * 1e-6);
+    const weGasBreak = (rhoG * uSheetMs * uSheetMs * hBreakM) / sigmaL;
+    const ohBreak = muL / Math.sqrt(rhoL * sigmaL * hBreakM);
+    kMaxBreakupInvM =
+      (rhoG * uSheetMs * uSheetMs) /
+      (2.0 * sigmaL * (1.0 + 2.6 * ohBreak + 0.165 * Math.pow(Math.max(1.0, weGasBreak), 0.62)));
+  }
+
+  // Stage 3: Dombrowski–Johns Ligament & Weber RP Breakup
+  const hBreakM = Math.max(4.0e-6, breakupFilmThicknessUm * 1e-6);
+  const dLigamentM = Math.sqrt((4.0 * hBreakM) / (Math.PI * Math.max(100.0, kMaxBreakupInvM)));
+  let ligamentDiameterUm = dLigamentM * 1e6;
+  const ohLigament = muL / Math.sqrt(rhoL * sigmaL * Math.max(1e-6, dLigamentM));
+  const d0Um = 1.89 * ligamentDiameterUm * Math.pow(1.0 + 3.0 * ohLigament, 1.0 / 6.0);
+
+  // Stage 4: 16-Bin Villermaux–Marmottant Gamma Droplet Spectrum & Poly-Disperse D^2 Evaporation
+  const weSheet0 = Math.max(
+    1.0,
+    ((rhoG * uSheetMs * uSheetMs * (h0Mm * 1e-3)) / sigmaL) * Math.pow(orificeR / Math.max(0.5, swirlNumber), 2.2),
+  );
+  let villermauxGammaOrderN = 4.0 + 2.5 * Math.pow(weSheet0, -0.15);
+  const dMean1Um =
+    0.85 *
+    d0Um *
+    (villermauxGammaOrderN / (villermauxGammaOrderN + 2.0)) *
+    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.14) *
+    Math.pow(Math.cos((sprayHalfAngleDeg * Math.PI) / 360.0), 0.22);
+  let smdUm = ((villermauxGammaOrderN + 2.0) / villermauxGammaOrderN) * dMean1Um;
+
+  // Query or consume the canonical Rust solver bundle when available:
+  let activeBundle = params.bundle ?? null;
+  if (!activeBundle) {
+    try {
+      activeBundle = solveCoupledSystem(
+        'annular_swirl_spray_combustor_v1',
+        [swirlOffset, swirlSlotR, orificeR, fuelPressureBar, equivRatio, linerEffusionPorosity],
+        [rhoG, rhoL, sigmaL, muL],
+      );
+    } catch {
+      // WASM not yet initialized or running in unit test fallback
+    }
+  }
+
+  let rustSprayAngleDeg = sprayHalfAngleDeg;
+  let rustSwirlNumber = swirlNumber;
+  if (activeBundle) {
+    const swirlRep = (activeBundle as unknown as {
+      swirl_combustor?: {
+        swirl_number?: number;
+        air_core_area_fraction?: number;
+        spray_half_angle_deg?: number;
+        orifice_film_thickness_um?: number;
+        sheet_breakup_length_mm?: number;
+        breakup_film_thickness_um?: number;
+        ligament_diameter_um?: number;
+        smd_d32_um?: number;
+        villermaux_gamma_order_n?: number;
+        large_drop_tail_pct?: number;
+        flame_temp_k?: number;
+        liner_wall_temp_k?: number;
+        exit_nox_ppm?: number;
+        pattern_factor?: number;
+        pressure_loss_pct?: number;
+        sheet_profile?: Array<{ s_mm: number; h_um: number; kh_log_amplification: number }>;
+        droplet_bins?: Array<{ d_um: number; pdf_norm: number; mass_weight: number }>;
+      };
+      scalar_outputs?: Record<string, number>;
+    }).swirl_combustor;
+    const scalars = (activeBundle as unknown as { scalar_outputs?: Record<string, number> }).scalar_outputs;
+    const objs = activeBundle.analysis?.objectives ?? [];
+
+    if (typeof swirlRep?.swirl_number === 'number') rustSwirlNumber = swirlRep.swirl_number;
+    else if (typeof scalars?.swirl_number === 'number') rustSwirlNumber = scalars.swirl_number;
+
+    if (typeof swirlRep?.air_core_area_fraction === 'number') airCoreAreaFrac = swirlRep.air_core_area_fraction;
+    else if (typeof scalars?.air_core_area_fraction === 'number') airCoreAreaFrac = scalars.air_core_area_fraction;
+
+    if (typeof swirlRep?.spray_half_angle_deg === 'number') rustSprayAngleDeg = swirlRep.spray_half_angle_deg;
+    else if (typeof scalars?.spray_half_angle_deg === 'number') rustSprayAngleDeg = scalars.spray_half_angle_deg;
+
+    if (typeof swirlRep?.orifice_film_thickness_um === 'number') filmThicknessUm = swirlRep.orifice_film_thickness_um;
+    else if (typeof scalars?.orifice_film_thickness_um === 'number') filmThicknessUm = scalars.orifice_film_thickness_um;
+
+    if (typeof swirlRep?.sheet_breakup_length_mm === 'number') sheetBreakupLengthMm = swirlRep.sheet_breakup_length_mm;
+    else if (typeof scalars?.sheet_breakup_length_mm === 'number') sheetBreakupLengthMm = scalars.sheet_breakup_length_mm;
+
+    if (typeof swirlRep?.breakup_film_thickness_um === 'number') breakupFilmThicknessUm = swirlRep.breakup_film_thickness_um;
+    else if (typeof scalars?.breakup_film_thickness_um === 'number') breakupFilmThicknessUm = scalars.breakup_film_thickness_um;
+
+    if (typeof swirlRep?.ligament_diameter_um === 'number') ligamentDiameterUm = swirlRep.ligament_diameter_um;
+    else if (typeof scalars?.ligament_diameter_um === 'number') ligamentDiameterUm = scalars.ligament_diameter_um;
+
+    if (typeof swirlRep?.villermaux_gamma_order_n === 'number') villermauxGammaOrderN = swirlRep.villermaux_gamma_order_n;
+    else if (typeof scalars?.villermaux_gamma_order_n === 'number') villermauxGammaOrderN = scalars.villermaux_gamma_order_n;
+
+    if (typeof objs[1] === 'number' && Number.isFinite(objs[1])) smdUm = objs[1];
+    else if (typeof swirlRep?.smd_d32_um === 'number') smdUm = swirlRep.smd_d32_um;
+    else if (typeof scalars?.smd_d32_um === 'number') smdUm = scalars.smd_d32_um;
+
+    if (Array.isArray(swirlRep?.sheet_profile) && swirlRep.sheet_profile.length > 0) {
+      sheetProfile = swirlRep.sheet_profile.map((pt) => ({
+        sMm: Number(pt.s_mm.toFixed(3)),
+        hUm: Number(pt.h_um.toFixed(2)),
+        khLogAmp: Number(pt.kh_log_amplification.toFixed(3)),
+      }));
+    }
+  }
+
+  const nBins = 16;
+  const gammaN = swirlGammaLanczos(villermauxGammaOrderN);
+  const nPowN = Math.pow(villermauxGammaOrderN, villermauxGammaOrderN);
+  const effDMean1Um = (villermauxGammaOrderN / (villermauxGammaOrderN + 2.0)) * smdUm;
+  const rawBins: Array<{ dUm: number; pdfNorm: number; volWeight: number }> = [];
+  let totalVolWeight = 0.0;
+
+  for (let b = 0; b < nBins; b++) {
+    const dOverSmd = 0.2 + b * 0.2;
+    const dUm = dOverSmd * smdUm;
+    const x = dUm / Math.max(1.0, effDMean1Um);
+    const pdfNorm = (nPowN / gammaN) * Math.pow(x, villermauxGammaOrderN - 1.0) * Math.exp(-villermauxGammaOrderN * x);
+    const volWeight = Math.pow(dUm, 3) * (pdfNorm / Math.max(1.0, effDMean1Um));
+    totalVolWeight += volWeight;
+    rawBins.push({ dUm, pdfNorm, volWeight });
+  }
+
+  let tailMassSum = 0.0;
+  let dropletSpectrum: Array<{ dUm: number; pdfNorm: number; massFrac: number }> = rawBins.map((bin) => {
+    const massFrac = bin.volWeight / Math.max(1e-12, totalVolWeight);
+    if (bin.dUm > 2.0 * smdUm) {
+      tailMassSum += massFrac;
+    } else if (bin.dUm > 1.75 * smdUm) {
+      tailMassSum += 0.45 * massFrac;
+    }
+    return {
+      dUm: Number(bin.dUm.toFixed(2)),
+      pdfNorm: Number(bin.pdfNorm.toFixed(4)),
+      massFrac: Number(massFrac.toFixed(4)),
+    };
+  });
+  let largeDropTailPct = Math.min(
+    35.0,
+    Math.max(0.2, tailMassSum * 100.0 * Math.pow(smdUm / 38.0, 0.45)),
+  );
+
+  const kEvapUm2PerMs = 1140.0 * (0.94 + 0.04 * Math.sqrt(Math.max(0.3, rustSwirlNumber)));
+  let tLo = 0.05;
+  let tHi = 20.0;
+  for (let iter = 0; iter < 22; iter++) {
+    const tMid = 0.5 * (tLo + tHi);
+    let remMass = 0.0;
+    for (let b = 0; b < nBins; b++) {
+      const d0Sq = rawBins[b].dUm * rawBins[b].dUm;
+      const remRatioSq = Math.max(0.0, 1.0 - (kEvapUm2PerMs * tMid) / Math.max(1.0, d0Sq));
+      remMass += dropletSpectrum[b].massFrac * Math.pow(remRatioSq, 1.5);
+    }
+    if (remMass > 0.14) {
+      tLo = tMid;
+    } else {
+      tHi = tMid;
+    }
+  }
+  const evapTimeMs = 0.5 * (tLo + tHi);
+
+  const unmixedness = Math.min(
+    0.38,
+    0.018 + 0.075 * Math.pow(evapTimeMs, 0.94) + 0.0022 * largeDropTailPct,
+  );
+  const etaEff = linerEffusionPorosity / (linerEffusionPorosity + 0.045);
+  const tAdiabaticK = 1280.0 + 1020.0 * equivRatio - 260.0 * Math.pow(Math.max(0, equivRatio - 1.02), 2);
+  const diffWeight = Math.min(0.75, 1.95 * unmixedness);
+  const hxCoolingDropK =
+    22.0 *
+    Math.pow(5.0 / Math.max(2.0, linerWall), 0.35) *
+    ((180.0 - coolantTemp) / 120.0) *
+    (0.85 + 0.35 * etaEff);
+  let tFlameEffK = (1.0 - diffWeight) * tAdiabaticK + diffWeight * 2350.0 - hxCoolingDropK;
+  let linerWallTempK =
+    (coolantTemp + 273.15) +
+    (1.0 - 0.64 * etaEff) *
+      (tFlameEffK - (coolantTemp + 273.15)) /
+      (1.0 + 0.85 * Math.pow(5.0 / Math.max(2.0, linerWall), 0.42));
+  const promptNoxPpm = 3.6 * Math.pow(equivRatio, 1.3);
+  const o2RadicalFactor = Math.sqrt(Math.max(0.015, 1.08 - equivRatio));
+  const residenceMs = 3.2;
+  const thermalNoxPpm =
+    6.8e11 * (residenceMs * 1e-3) * o2RadicalFactor * Math.exp(-38200.0 / Math.max(1200.0, tFlameEffK));
+  let totalNoxPpm = promptNoxPpm + thermalNoxPpm;
+  let pressureLossPct = 2.4 + 0.38 * Math.pow(rustSwirlNumber, 0.65) + 0.045 * fuelPressureBar;
+  let patternFactor = Math.min(0.45, Math.max(0.08, 0.11 + 0.55 * unmixedness));
+
+  if (activeBundle) {
+    const swirlRep = (activeBundle as unknown as {
+      swirl_combustor?: {
+        large_drop_tail_pct?: number;
+        flame_temp_k?: number;
+        liner_wall_temp_k?: number;
+        exit_nox_ppm?: number;
+        pattern_factor?: number;
+        pressure_loss_pct?: number;
+        droplet_bins?: Array<{ d_um: number; pdf_norm: number; mass_weight: number }>;
+      };
+      scalar_outputs?: Record<string, number>;
+    }).swirl_combustor;
+    const scalars = (activeBundle as unknown as { scalar_outputs?: Record<string, number> }).scalar_outputs;
+    const objs = activeBundle.analysis?.objectives ?? [];
+    const stVec: number[] =
+      (activeBundle.analysis as unknown as { steady_state?: number[] })?.steady_state ??
+      activeBundle.analysis?.state ??
+      [];
+
+    if (stVec.length >= 8) {
+      let maxTf = 0;
+      let maxTl = 0;
+      const nSt = Math.floor(stVec.length / 4);
+      for (let i = 0; i < nSt; i++) {
+        const tf = stVec[i * 4 + 2] ?? 0;
+        const tl = stVec[i * 4 + 3] ?? 0;
+        if (tf > maxTf) maxTf = tf;
+        if (tl > maxTl) maxTl = tl;
+      }
+      if (maxTf > 300) tFlameEffK = maxTf;
+      if (maxTl > 273.15) linerWallTempK = maxTl;
+    }
+
+    if (typeof swirlRep?.flame_temp_k === 'number') tFlameEffK = swirlRep.flame_temp_k;
+    else if (typeof scalars?.flame_temp_k === 'number') tFlameEffK = scalars.flame_temp_k;
+
+    if (typeof objs[2] === 'number' && Number.isFinite(objs[2])) linerWallTempK = objs[2];
+    else if (typeof swirlRep?.liner_wall_temp_k === 'number') linerWallTempK = swirlRep.liner_wall_temp_k;
+    else if (typeof scalars?.liner_wall_temp_k === 'number') linerWallTempK = scalars.liner_wall_temp_k;
+
+    if (typeof objs[0] === 'number' && Number.isFinite(objs[0])) totalNoxPpm = objs[0];
+    else if (typeof swirlRep?.exit_nox_ppm === 'number') totalNoxPpm = swirlRep.exit_nox_ppm;
+    else if (typeof scalars?.exit_nox_ppm === 'number') totalNoxPpm = scalars.exit_nox_ppm;
+
+    if (typeof objs[3] === 'number' && Number.isFinite(objs[3])) patternFactor = objs[3];
+    else if (typeof swirlRep?.pattern_factor === 'number') patternFactor = swirlRep.pattern_factor;
+    else if (typeof scalars?.pattern_factor === 'number') patternFactor = scalars.pattern_factor;
+
+    if (typeof swirlRep?.large_drop_tail_pct === 'number') largeDropTailPct = swirlRep.large_drop_tail_pct;
+    else if (typeof scalars?.large_drop_tail_pct === 'number') largeDropTailPct = scalars.large_drop_tail_pct;
+
+    if (typeof swirlRep?.pressure_loss_pct === 'number') pressureLossPct = swirlRep.pressure_loss_pct;
+    else if (typeof scalars?.pressure_loss_pct === 'number') pressureLossPct = scalars.pressure_loss_pct;
+
+    if (Array.isArray(swirlRep?.droplet_bins) && swirlRep.droplet_bins.length > 0) {
+      dropletSpectrum = swirlRep.droplet_bins.map((b) => ({
+        dUm: Number(b.d_um.toFixed(2)),
+        pdfNorm: Number(b.pdf_norm.toFixed(4)),
+        massFrac: Number(b.mass_weight.toFixed(4)),
+      }));
+    }
+  }
+
+  const linerHotWallC = Math.round(linerWallTempK - 273.15);
+  const hxPowerKw = 14.5 + 0.052 * (linerHotWallC - coolantTemp) * Math.pow(5.0 / Math.max(2.0, linerWall), 0.3);
+
+  return {
+    swirlNumber: rustSwirlNumber,
+    sprayHalfAngleDeg: rustSprayAngleDeg,
+    filmThicknessUm,
+    smdUm,
+    evapTimeMs,
+    tFlameEffK,
+    adiabaticFlameTempK: tFlameEffK,
+    linerHotWallC,
+    linerWallTempK,
+    totalNoxPpm,
+    noxPpm: totalNoxPpm,
+    hxPowerKw,
+    pressureLossPct,
+    patternFactor,
+    airCoreAreaFrac,
+    sheetBreakupLengthMm,
+    breakupFilmThicknessUm,
+    ligamentDiameterUm,
+    villermauxGammaOrderN,
+    largeDropTailPct,
+    sheetProfile,
+    dropletSpectrum,
+  };
+}
+
 export function computeSwirlMetricsFromDoc() {
   const getLet = (name: string, fallback: number): number => {
     const found = (store.doc.lets ?? []).find((l) => l.name === name);
@@ -1281,35 +1712,15 @@ export function computeSwirlMetricsFromDoc() {
   const fuelPressureBar = swirlShared.overlay.fuelPressureBar;
   const equivRatio = swirlShared.overlay.equivRatio;
 
-  const swirlNumber = (swirlOffset * orificeR) / Math.max(0.5, 2.0 * swirlSlotR * swirlSlotR);
-  const sprayHalfAngleDeg = Math.min(72.0, Math.max(22.0, 18.0 + 23.5 * Math.pow(swirlNumber, 0.56)));
-  const filmThicknessUm =
-    295.0 *
-    Math.pow(orificeR / 2.6, 0.62) *
-    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.28) *
-    Math.pow(1.65 / Math.max(0.35, swirlNumber), 0.42);
-  const smdUm =
-    46.5 *
-    Math.pow(filmThicknessUm / 255.0, 0.38) *
-    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.32) *
-    Math.pow(orificeR / 2.6, 0.28) *
-    Math.pow(Math.cos((sprayHalfAngleDeg * Math.PI) / 360.0), 0.25);
-  const evapTimeMs = (smdUm * smdUm * 1e-3) / 0.9;
-  const unmixedness = Math.min(0.38, 0.02 + 0.085 * Math.pow(evapTimeMs, 0.95));
-  const tAdiabaticK = 1280.0 + 1020.0 * equivRatio - 260.0 * Math.pow(Math.max(0, equivRatio - 1.02), 2);
-  const diffWeight = Math.min(0.75, 1.95 * unmixedness);
-  const hxCoolingDropK = 22.0 * Math.pow(5.0 / Math.max(2.0, linerWall), 0.35) * ((180.0 - coolantTemp) / 120.0);
-  const tFlameEffK = (1.0 - diffWeight) * tAdiabaticK + diffWeight * 2350.0 - hxCoolingDropK;
-  const linerHotWallC = Math.round(
-    coolantTemp + (tFlameEffK - 273.15 - coolantTemp) / (1.0 + 1.85 * Math.pow(5.0 / Math.max(2.0, linerWall), 0.42)),
-  );
-  const promptNoxPpm = 3.6 * Math.pow(equivRatio, 1.3);
-  const o2RadicalFactor = Math.sqrt(Math.max(0.015, 1.08 - equivRatio));
-  const residenceMs = 3.2;
-  const thermalNoxPpm =
-    6.8e11 * (residenceMs * 1e-3) * o2RadicalFactor * Math.exp(-38200.0 / Math.max(1200.0, tFlameEffK));
-  const totalNoxPpm = promptNoxPpm + thermalNoxPpm;
-  const hxPowerKw = 14.5 + 0.052 * (linerHotWallC - coolantTemp) * Math.pow(5.0 / Math.max(2.0, linerWall), 0.3);
+  const solved = computeSwirlCombustorNox({
+    orificeR,
+    swirlSlotR,
+    swirlOffset,
+    linerWall,
+    coolantTemp,
+    fuelPressureBar,
+    equivRatio,
+  });
 
   return {
     orificeR,
@@ -1318,15 +1729,7 @@ export function computeSwirlMetricsFromDoc() {
     chamberR,
     linerWall,
     coolantTemp,
-    swirlNumber,
-    sprayHalfAngleDeg,
-    filmThicknessUm,
-    smdUm,
-    evapTimeMs,
-    tFlameEffK,
-    linerHotWallC,
-    totalNoxPpm,
-    hxPowerKw,
+    ...solved,
   };
 }
 
@@ -1613,12 +2016,14 @@ const candleShared: {
   epistemicTheta: number[];
   bundle: CoupledSolveBundle | null;
   summary: CoupledSystemSummary | null;
+  userModified: boolean;
   overlay: CandleViewportOverlayConfig;
 } = {
   designP: [65.0, 68.0, 68.0, 950.0, 7.5, 0.21],
   epistemicTheta: [1.0, 1.0, 0.115, 0.86],
   bundle: null,
   summary: null,
+  userModified: false,
   overlay: {
     enabled: true,
     volumeMode: 'radiant_flame',
@@ -2266,11 +2671,17 @@ function populateSolarCandle3DGroup(
   }
 }
 
+let lastSyncedDocLetsSig = '';
+
 function syncCoupledViewportOverlay(vp: Viewport) {
   if (!coupledVpHost) {
     coupledVpHost = vp;
     vp.overlays.add(coupledVpGroup);
   }
+  const curLetsSig = `${store.doc.name ?? ''}::${(store.doc.lets ?? [])
+    .map((l) => `${l.name}=${l.value}`)
+    .join(',')}`;
+
   if (isSwirlCombustorDocument()) {
     if (!swirlShared.overlay.enabled) {
       if (coupledVpGroup.children.length > 0) {
@@ -2293,6 +2704,25 @@ function syncCoupledViewportOverlay(vp: Viewport) {
       return;
     }
     ensureCandleSolved();
+    if (curLetsSig !== lastSyncedDocLetsSig) {
+      lastSyncedDocLetsSig = curLetsSig;
+      if (!candleShared.userModified) {
+        const nextP = extractCoupledDesignPFromDoc(
+          'solar_candle_ignition_v1',
+          candleShared.designP,
+        );
+        candleShared.designP = nextP;
+      }
+      try {
+        candleShared.bundle = solveCoupledSystem(
+          'solar_candle_ignition_v1',
+          candleShared.designP,
+          candleShared.epistemicTheta,
+        );
+      } catch {
+        // ignore solve failure before wasm init
+      }
+    }
     const vis = candleShared.bundle?.candle_flame_visual;
     if (!vis) return;
     populateSolarCandle3DGroup(
@@ -2314,6 +2744,25 @@ function syncCoupledViewportOverlay(vp: Viewport) {
     return;
   }
   ensureCoupledSolved();
+  if (curLetsSig !== lastSyncedDocLetsSig) {
+    lastSyncedDocLetsSig = curLetsSig;
+    if (!coupledShared.userModified) {
+      const nextP = extractCoupledDesignPFromDoc(
+        'pilkington_float_bath_cvd_coater_v1',
+        coupledShared.designP,
+      );
+      coupledShared.designP = nextP;
+    }
+    try {
+      coupledShared.bundle = solveCoupledSystem(
+        'pilkington_float_bath_cvd_coater_v1',
+        coupledShared.designP,
+        coupledShared.epistemicTheta,
+      );
+    } catch {
+      // ignore solve failure before wasm init
+    }
+  }
   const vis = coupledShared.bundle?.float_bath_visual;
   if (!vis) return;
 
@@ -2464,6 +2913,7 @@ function CoupledViewportHud() {
     const nextP = [...coupledShared.designP];
     nextP[idx] = val;
     coupledShared.designP = nextP;
+    coupledShared.userModified = true;
     try {
       coupledShared.bundle = solveCoupledSystem(
         'pilkington_float_bath_cvd_coater_v1',
@@ -2514,7 +2964,7 @@ function CoupledViewportHud() {
       {ov.enabled && !ui.vpHudCollapsed && (
         <>
           <div class="seg" style={{ width: '100%', display: 'flex' }}>
-            {BATH_FIELD_TABS.slice(0, 6).map((t) => (
+            {BATH_FIELD_TABS.map((t) => (
               <button
                 key={t.id}
                 style={{ flex: 1, fontSize: '10.5px', padding: '0 4px' }}
@@ -2956,6 +3406,93 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
             </label>
           </div>
 
+          {/* Interactive Combustor Tuning Sliders (Remain accessible when Tutorials drawer is closed) */}
+          <div
+            data-testid="swirl-hud-tuning-controls"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: '6px',
+              padding: '5px 7px',
+              background: 'var(--panel-2)',
+              border: '1px solid var(--line)',
+              borderRadius: '5px',
+              fontSize: '10px',
+            }}
+          >
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span class="num" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Fuel ΔP</span>
+                <strong>{ov.fuelPressureBar.toFixed(1)} bar</strong>
+              </span>
+              <input
+                type="range"
+                min={3}
+                max={25}
+                step={0.5}
+                value={ov.fuelPressureBar}
+                data-testid="swirl-hud-fuel-dp"
+                onInput={(e) => {
+                  ov.fuelPressureBar = parseFloat((e.target as HTMLInputElement).value) || 12;
+                  const nextM = computeSwirlMetricsFromDoc();
+                  store.transact('Update T9 fuel pressure ΔP & liner flame_temp', (draft) => {
+                    upsertLetParam(draft, 'flame_temp', nextM.linerHotWallC);
+                  });
+                  bump();
+                }}
+              />
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span class="num" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Equiv Φ</span>
+                <strong>{ov.equivRatio.toFixed(2)}</strong>
+              </span>
+              <input
+                type="range"
+                min={0.55}
+                max={1.15}
+                step={0.02}
+                value={ov.equivRatio}
+                data-testid="swirl-hud-equiv-phi"
+                onInput={(e) => {
+                  ov.equivRatio = parseFloat((e.target as HTMLInputElement).value) || 0.88;
+                  const nextM = computeSwirlMetricsFromDoc();
+                  store.transact('Update T9 equivalence ratio Φ & liner flame_temp', (draft) => {
+                    upsertLetParam(draft, 'flame_temp', nextM.linerHotWallC);
+                  });
+                  bump();
+                }}
+              />
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span class="num" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Orifice r</span>
+                <strong>{m.orificeR.toFixed(1)} mm</strong>
+              </span>
+              <input
+                type="range"
+                min={1.4}
+                max={4.5}
+                step={0.1}
+                value={m.orificeR}
+                data-testid="swirl-hud-orifice-r"
+                onInput={(e) => {
+                  const nextR = parseFloat((e.target as HTMLInputElement).value) || 2.6;
+                  store.transact(`Set T9 orifice_r = ${nextR.toFixed(1)} mm`, (draft) => {
+                    upsertLetParam(draft, 'orifice_r', Number(nextR.toFixed(2)));
+                  });
+                  const nextM = computeSwirlMetricsFromDoc();
+                  store.transact('Sync T9 liner flame_temp', (draft) => {
+                    upsertLetParam(draft, 'flame_temp', nextM.linerHotWallC);
+                  });
+                  bump();
+                }}
+              />
+            </label>
+          </div>
+
           <div
             style={{
               background: 'var(--panel-2)',
@@ -3069,6 +3606,18 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
 
           <div class="sys-vp-hud-row num" style={{ borderTop: '1px solid var(--line)', paddingTop: '5px', flexWrap: 'wrap', gap: '6px' }}>
             <span>
+              L_b: <strong data-testid="swirl-hud-breakup-mm">{m.sheetBreakupLengthMm.toFixed(1)} mm</strong>
+            </span>
+            <span>
+              d_L: <strong data-testid="swirl-hud-ligament-um">⌀ {m.ligamentDiameterUm.toFixed(1)} μm</strong>
+            </span>
+            <span>
+              n_Γ: <strong data-testid="swirl-hud-gamma-n">{m.villermauxGammaOrderN.toFixed(2)}</strong>
+            </span>
+            <span>
+              Tail(&gt;2D₃₂): <strong data-testid="swirl-hud-tail-pct">{m.largeDropTailPct.toFixed(1)}%</strong>
+            </span>
+            <span>
               D₃₂: <strong>{m.smdUm.toFixed(1)} μm</strong>
             </span>
             <span>
@@ -3081,8 +3630,134 @@ function SwirlCombustorViewportHud({ bump }: { bump: () => void }) {
               Liner/HX: <strong>{m.linerHotWallC} °C</strong> ({m.hxPowerKw.toFixed(1)} kW)
             </span>
           </div>
+
+          <SwirlZaleskiVillermauxCharts m={m} compact />
         </>
       )}
+    </div>
+  );
+}
+
+function SwirlZaleskiVillermauxCharts({
+  m,
+  compact = false,
+}: {
+  m: ReturnType<typeof computeSwirlCombustorNox>;
+  compact?: boolean;
+}) {
+  const sp = m.sheetProfile;
+  const ds = m.dropletSpectrum;
+  const hMax = Math.max(100, m.filmThicknessUm * 1.05);
+  const sMax = 25.0;
+  const sxSheet = (s: number) => 30 + (s / sMax) * 195;
+  const syH = (h: number) => 96 - Math.min(1, Math.max(0, h / hMax)) * 74;
+  const syN = (nVal: number) => 96 - Math.min(1, Math.max(0, nVal / 16.0)) * 74;
+  const hPts = sp.map((p) => `${sxSheet(p.sMm).toFixed(1)},${syH(p.hUm).toFixed(1)}`).join(' ');
+  const nPts = sp.map((p) => `${sxSheet(p.sMm).toFixed(1)},${syN(p.khLogAmp).toFixed(1)}`).join(' ');
+  const lbX = sxSheet(m.sheetBreakupLengthMm);
+  const n12Y = syN(12.0);
+
+  const pdfMax = Math.max(0.5, ...ds.map((b) => b.pdfNorm));
+  const dMax = Math.max(10, ds[ds.length - 1]?.dUm ?? 100);
+  const sxDrop = (d: number) => 28 + (d / dMax) * 197;
+  const syPdf = (p: number) => 96 - Math.min(1, Math.max(0, p / pdfMax)) * 74;
+  const pdfPts = ds.map((b) => `${sxDrop(b.dUm).toFixed(1)},${syPdf(b.pdfNorm).toFixed(1)}`).join(' ');
+  const smdX = sxDrop(m.smdUm);
+  const tailCutX = sxDrop(2.0 * m.smdUm);
+
+  return (
+    <div
+      data-testid="swirl-zaleski-dual-svg"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(240px, 1fr))',
+        gap: '6px',
+        marginTop: '4px',
+      }}
+    >
+      <div
+        style={{
+          padding: '5px 6px',
+          borderRadius: '5px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '2px',
+        }}
+      >
+        <div class="num" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px' }}>
+          <strong>Conical Sheet h(s) &amp; KH N(s)</strong>
+          <span style={{ color: '#22d3ee' }}>L_b={m.sheetBreakupLengthMm.toFixed(1)}mm · d_L=⌀{m.ligamentDiameterUm.toFixed(1)}μm</span>
+        </div>
+        <svg
+          viewBox="0 0 245 112"
+          data-testid="swirl-sheet-breakup-svg"
+          style={{ width: '100%', height: 'auto', background: '#090d16', borderRadius: '4px' }}
+        >
+          <line x1="30" y1="22" x2="225" y2="22" stroke="#1e293b" strokeWidth="0.8" />
+          <line x1="30" y1="96" x2="225" y2="96" stroke="#334155" strokeWidth="1" />
+          <line x1="30" y1={n12Y} x2="225" y2={n12Y} stroke="#f43f5e" strokeWidth="0.9" strokeDasharray="3,2" />
+          <line x1={lbX} y1="18" x2={lbX} y2="96" stroke="#f59e0b" strokeWidth="1.2" strokeDasharray="3,2" />
+          <circle cx={lbX} cy={n12Y} r="2.8" fill="#f43f5e" />
+          <polyline fill="none" stroke="#38bdf8" strokeWidth="1.8" points={hPts} />
+          <polyline fill="none" stroke="#34d399" strokeWidth="1.8" points={nPts} />
+          <text x="32" y="13" fill="#38bdf8" fontSize="7.5" fontFamily="monospace">— h(s)</text>
+          <text x="78" y="13" fill="#34d399" fontSize="7.5" fontFamily="monospace">— N(s)=ln(η/η₀)</text>
+          <text x="165" y="13" fill="#f43f5e" fontSize="7.5" fontFamily="monospace">N(L_b)=12</text>
+          <text x="62" y="108" fill="#94a3b8" fontSize="7.5" fontFamily="monospace">s ∈ [0 .. 25 mm]</text>
+        </svg>
+      </div>
+
+      <div
+        style={{
+          padding: '5px 6px',
+          borderRadius: '5px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '2px',
+        }}
+      >
+        <div class="num" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px' }}>
+          <strong>16-Bin Villermaux Gamma p(d)</strong>
+          <span style={{ color: '#fbbf24' }}>n={m.villermauxGammaOrderN.toFixed(2)} · Tail={m.largeDropTailPct.toFixed(1)}%</span>
+        </div>
+        <svg
+          viewBox="0 0 245 112"
+          data-testid="swirl-villermaux-spectrum-svg"
+          style={{ width: '100%', height: 'auto', background: '#090d16', borderRadius: '4px' }}
+        >
+          <line x1="28" y1="22" x2="225" y2="22" stroke="#1e293b" strokeWidth="0.8" />
+          <line x1="28" y1="96" x2="225" y2="96" stroke="#334155" strokeWidth="1" />
+          {ds.map((b, idx) => {
+            const bx = sxDrop(b.dUm) - 4.5;
+            const by = syPdf(b.pdfNorm);
+            const bh = Math.max(1, 96 - by);
+            const isTail = b.dUm >= 2.0 * m.smdUm;
+            return (
+              <rect
+                key={idx}
+                x={bx}
+                y={by}
+                width="8.5"
+                height={bh}
+                fill={isTail ? 'rgba(244, 63, 94, 0.65)' : 'rgba(56, 189, 248, 0.42)'}
+                stroke={isTail ? '#f43f5e' : '#38bdf8'}
+                strokeWidth="0.6"
+                rx="1"
+              />
+            );
+          })}
+          <polyline fill="none" stroke="#fbbf24" strokeWidth="1.6" points={pdfPts} />
+          <line x1={smdX} y1="18" x2={smdX} y2="96" stroke="#34d399" strokeWidth="1.1" strokeDasharray="3,2" />
+          <line x1={tailCutX} y1="18" x2={tailCutX} y2="96" stroke="#f43f5e" strokeWidth="1.1" strokeDasharray="2,2" />
+          <text x="30" y="13" fill="#34d399" fontSize="7.5" fontFamily="monospace">| D₃₂={m.smdUm.toFixed(1)}μm</text>
+          <text x="112" y="13" fill="#f43f5e" fontSize="7.5" fontFamily="monospace">■ d&gt;2D₃₂ ({m.largeDropTailPct.toFixed(1)}%)</text>
+          <text x="58" y="108" fill="#94a3b8" fontSize="7.5" fontFamily="monospace">d ∈ [0 .. {dMax.toFixed(0)} μm]</text>
+        </svg>
+      </div>
     </div>
   );
 }
@@ -3197,6 +3872,9 @@ function RocketNozzle3DTwin({
     const hThroatMm = designP[0] ?? 1.55;
     const tWallMm = designP[1] ?? 0.95;
     const tTbcUm = designP[2] ?? 145.0;
+    const coolantMdotKgS = designP[3] ?? 0.42;
+    const tTbcMm = tTbcUm * 1e-3;
+    const mdotNorm = Math.max(0, Math.min(1, (coolantMdotKgS - 0.18) / (0.85 - 0.18)));
 
     // Build a 3D De Laval converging-diverging rocket chamber revolution surface along X (-75..+75 mm)
     const nTheta = cutaway ? 36 : 48;
@@ -3205,6 +3883,7 @@ function RocketNozzle3DTwin({
 
     const positions: number[] = [];
     const colors: number[] = [];
+    const tbcPositions: number[] = [];
     const indices: number[] = [];
 
     const radiusAtStation = (i: number): number => {
@@ -3214,16 +3893,19 @@ function RocketNozzle3DTwin({
       return rInner;
     };
 
+    const tbcRadialVisualMm = Math.max(0.25, tTbcMm * 3.2);
     for (let i = 0; i < numStations; i++) {
       const xPos = ((i / (numStations - 1)) - 0.5) * 150;
       const rIn = radiusAtStation(i);
+      const rTbc = Math.max(6.0, rIn - tbcRadialVisualMm);
       const v = state[i * 4 + fieldIdx] ?? 0;
       const [cr, cg, cb] = turboRamp((v - minV) / Math.max(maxV - minV, 1e-6));
       for (let t = 0; t <= nTheta; t++) {
         const ang = thetaStart + (t / nTheta) * thetaSpan;
-        const y = rIn * Math.cos(ang);
-        const z = rIn * Math.sin(ang);
-        positions.push(xPos, y, z);
+        const cosA = Math.cos(ang);
+        const sinA = Math.sin(ang);
+        positions.push(xPos, rIn * cosA, rIn * sinA);
+        tbcPositions.push(xPos, rTbc * cosA, rTbc * sinA);
         colors.push(cr / 255, cg / 255, cb / 255);
       }
     }
@@ -3256,29 +3938,56 @@ function RocketNozzle3DTwin({
       ),
     );
 
+    // Inner YSZ Ceramic Thermal Barrier Coating (TBC) Layer scaled by designP[2] (tTbcUm)
+    if (tTbcUm > 5.0) {
+      const tbcGeom = new THREE.BufferGeometry();
+      tbcGeom.setAttribute('position', new THREE.Float32BufferAttribute(tbcPositions, 3));
+      tbcGeom.setIndex(indices);
+      tbcGeom.computeVertexNormals();
+      ctx.root.add(
+        new THREE.Mesh(
+          tbcGeom,
+          new THREE.MeshStandardMaterial({
+            color: 0xfef3c7,
+            roughness: 0.68,
+            metalness: 0.08,
+            transparent: true,
+            opacity: Math.min(0.88, 0.25 + (tTbcUm / 320.0) * 0.6),
+            side: THREE.DoubleSide,
+          }),
+        ),
+      );
+    }
+
     // Outer structural jacket + TBC ring + Sonic throat indicator plane (x = 0.28 m)
     const throatX = ((0.28 / 0.6) - 0.5) * 150;
     const throatRing = new THREE.Mesh(
-      new THREE.TorusGeometry(21 + tWallMm + hThroatMm * 1.5, 1.8, 16, 48),
+      new THREE.TorusGeometry(
+        21 + tWallMm + tTbcMm * 3.5 + hThroatMm * 1.5,
+        1.5 + tTbcMm * 2.2,
+        16,
+        48,
+      ),
       new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.3, metalness: 0.6 }),
     );
     throatRing.rotation.y = Math.PI / 2;
     throatRing.position.set(throatX, 0, 0);
     ctx.root.add(throatRing);
 
-    // 16 Counter-flow Supercritical-H2 Regenerative Cooling Channels
+    // Counter-flow Supercritical-H2 Regenerative Cooling Channels scaled by hThroatMm & coolantMdotKgS
     if (showChannels) {
-      const nChan = 14;
+      const nChan = Math.max(10, Math.min(24, Math.round(10 + mdotNorm * 12)));
       const arrowPos: number[] = [];
       const arrowCol: number[] = [];
+      const chanRadialOffset = tWallMm * 1.5 + tTbcMm * 2.5 + hThroatMm * (1.15 + 0.55 * mdotNorm);
       for (let c = 0; c < nChan; c++) {
         const ang = thetaStart + ((c + 0.5) / nChan) * thetaSpan;
         for (let i = 0; i < numStations - 1; i++) {
           const x0 = ((i / (numStations - 1)) - 0.5) * 150;
           const x1 = (((i + 1) / (numStations - 1)) - 0.5) * 150;
-          const r0 = radiusAtStation(i) + tWallMm * 1.5 + hThroatMm * 1.4;
-          const r1 = radiusAtStation(i + 1) + tWallMm * 1.5 + hThroatMm * 1.4;
-          const tCool = state[i * 4] ?? 45;
+          const r0 = radiusAtStation(i) + chanRadialOffset;
+          const r1 = radiusAtStation(i + 1) + chanRadialOffset;
+          const tCool = (state[i * 4] ?? 45) - (coolantMdotKgS - 0.42) * 45.0;
           const [cr, cg, cb] = turboRamp((tCool - 35) / 180);
           arrowPos.push(
             x0,
@@ -3302,7 +4011,7 @@ function RocketNozzle3DTwin({
       );
     }
 
-    // Gimbal injector flange (-75 mm) and exit manifold ring (+75 mm)
+    // Gimbal injector flange (-75 mm) and coolant inlet manifold ring (+75 mm)
     const flange = new THREE.Mesh(
       new THREE.TorusGeometry(37, 2.5, 14, 48),
       new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.7 }),
@@ -3311,10 +4020,18 @@ function RocketNozzle3DTwin({
     flange.position.set(-75, 0, 0);
     ctx.root.add(flange);
 
-    void tTbcUm;
+    const inletManifold = new THREE.Mesh(
+      new THREE.TorusGeometry(radiusAtStation(numStations - 1) + tWallMm + hThroatMm * 1.4, 1.6 + mdotNorm * 1.4, 14, 48),
+      new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.35, metalness: 0.65 }),
+    );
+    inletManifold.rotation.y = Math.PI / 2;
+    inletManifold.position.set(75, 0, 0);
+    ctx.root.add(inletManifold);
   }, [state, designP, nozzleMode, showChannels, cutaway]);
 
   const meta = NOZZLE_FIELD_META[nozzleMode];
+  const tTbcUmReadout = designP[2] ?? 145.0;
+  const coolantMdotReadout = designP[3] ?? 0.42;
 
   return (
     <div class="sys-heatmap-wrap" data-testid="rocket-nozzle-3d-twin">
@@ -3343,7 +4060,7 @@ function RocketNozzle3DTwin({
             Cutaway
           </label>
           <span class="num" style={{ color: 'var(--text-2)' }}>
-            {meta.label}: [{minV.toFixed(1)} .. {maxV.toFixed(1)} {meta.unit}]
+            t_TBC={tTbcUmReadout.toFixed(0)} μm · ṁ_H₂={coolantMdotReadout.toFixed(2)} kg/s · {meta.label}: [{minV.toFixed(1)} .. {maxV.toFixed(1)} {meta.unit}]
           </span>
         </div>
       </div>
@@ -3528,6 +4245,7 @@ function SolarCandleViewportHud({
     const nextP = [...candleShared.designP];
     nextP[idx] = val;
     candleShared.designP = nextP;
+    candleShared.userModified = true;
     try {
       candleShared.bundle = solveCoupledSystem(
         'solar_candle_ignition_v1',
@@ -4144,6 +4862,139 @@ function SolarCandle3DTwin({
         style={{ width: '100%', height: '340px', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}
       />
 
+      {/* 1D Axial Plume Profile SVG Chart (T(z), f_v(z), OH*(z), u_z(z) across z = 0 .. H_flame mm) */}
+      {curFrame && vis.z_mm && vis.z_mm.length >= 2 && (() => {
+        const zArr = vis.z_mm;
+        const nPts = zArr.length;
+        const tArr = curFrame.t_sheet_k ?? [];
+        const fvArr = ((curFrame as any).soot_fv_ppm as number[] | undefined) ?? curFrame.fv_soot_ppm ?? [];
+        const ohArr = ((curFrame as any).oh_star_norm as number[] | undefined) ?? curFrame.y_oh_ppm ?? [];
+        const uArr = ((curFrame as any).u_plume_m_s as number[] | undefined) ?? curFrame.u_z_m_s ?? [];
+
+        const zMax = Math.max(10, zArr[nPts - 1] ?? curFrame.flame_height_mm ?? 60);
+        const tMax = Math.max(1200, ...tArr, 2100);
+        const fvMax = Math.max(0.5, ...fvArr, 3.0);
+        const ohMax = Math.max(1.0, ...ohArr);
+        const uMax = Math.max(0.4, ...uArr, 1.0);
+
+        const svgW = 680;
+        const svgH = 155;
+        const padL = 44;
+        const padR = 44;
+        const padT = 18;
+        const padB = 26;
+        const plotW = svgW - padL - padR;
+        const plotH = svgH - padT - padB;
+
+        const sx = (zVal: number) => padL + (Math.max(0, Math.min(zMax, zVal)) / zMax) * plotW;
+        const syNorm = (frac: number) => padT + plotH - Math.max(0, Math.min(1, frac)) * plotH;
+
+        const buildCurve = (arr: number[], minVal: number, maxVal: number) =>
+          zArr
+            .map((zVal, idx) => {
+              const v = arr[idx] ?? minVal;
+              const norm = (v - minVal) / Math.max(1e-9, maxVal - minVal);
+              return `${idx === 0 ? 'M' : 'L'}${sx(zVal).toFixed(1)},${syNorm(norm).toFixed(1)}`;
+            })
+            .join(' ');
+
+        const pathT = buildCurve(tArr, 300, tMax);
+        const pathFv = buildCurve(fvArr, 0, fvMax);
+        const pathOh = buildCurve(ohArr, 0, ohMax);
+        const pathU = buildCurve(uArr, 0, uMax);
+        const hFlameX = sx(curFrame.flame_height_mm);
+
+        return (
+          <div
+            data-testid="solar-candle-axial-profile-card"
+            style={{
+              marginTop: '8px',
+              padding: '8px 10px',
+              background: 'var(--bg-2)',
+              border: '1px solid var(--line)',
+              borderRadius: '6px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', fontSize: '11px' }}>
+              <strong>📈 1D Axial Flame &amp; Plume Profiles across z ∈ [0, {zMax.toFixed(1)} mm] (25 PDE Stations)</strong>
+              <div class="num" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: '10.5px' }}>
+                <span style={{ color: '#fbbf24' }}>━ T(z) Peak {Math.max(300, ...tArr).toFixed(0)} K</span>
+                <span style={{ color: '#f97316' }}>━ f_v(z) Soot Peak {Math.max(0, ...fvArr).toFixed(2)} ppm</span>
+                <span style={{ color: '#38bdf8' }}>━ OH*(z) Peak {Math.max(0, ...ohArr).toFixed(1)} ppm</span>
+                <span style={{ color: '#34d399' }}>┅ u_z(z) Peak {Math.max(0, ...uArr).toFixed(2)} m/s</span>
+              </div>
+            </div>
+            <svg
+              data-testid="solar-candle-axial-profile-svg"
+              viewBox={`0 0 ${svgW} ${svgH}`}
+              style={{
+                width: '100%',
+                height: '155px',
+                background: 'rgba(9, 13, 22, 0.85)',
+                borderRadius: '5px',
+                border: '1px solid rgba(148, 163, 184, 0.2)',
+              }}
+            >
+              {[0, 0.25, 0.5, 0.75, 1.0].map((f, idx) => (
+                <g key={idx}>
+                  <line
+                    x1={padL}
+                    y1={syNorm(f)}
+                    x2={svgW - padR}
+                    y2={syNorm(f)}
+                    stroke="rgba(148, 163, 184, 0.14)"
+                  />
+                  <text x={padL - 5} y={syNorm(f) + 3} fill="#fbbf24" font-size="8.5" text-anchor="end">
+                    {Math.round(300 + f * (tMax - 300))} K
+                  </text>
+                  <text x={svgW - padR + 5} y={syNorm(f) + 3} fill="#34d399" font-size="8.5" text-anchor="start">
+                    {(f * uMax).toFixed(2)} m/s
+                  </text>
+                </g>
+              ))}
+
+              {/* Stoichiometric luminous flame tip H_flame marker */}
+              <line
+                x1={hFlameX}
+                y1={padT}
+                x2={hFlameX}
+                y2={padT + plotH}
+                stroke="#f59e0b"
+                stroke-dasharray="4 3"
+                stroke-width="1.2"
+              />
+              <text x={Math.min(svgW - padR - 45, hFlameX + 4)} y={padT + 10} fill="#fbbf24" font-size="8.5">
+                H_flame = {curFrame.flame_height_mm.toFixed(1)} mm
+              </text>
+
+              <path d={pathT} fill="none" stroke="#fbbf24" stroke-width="2.1" />
+              <path d={pathFv} fill="none" stroke="#f97316" stroke-width="2.0" />
+              <path d={pathOh} fill="none" stroke="#38bdf8" stroke-width="1.9" />
+              <path d={pathU} fill="none" stroke="#34d399" stroke-width="1.9" stroke-dasharray="4 2" />
+
+              {[0, 0.25, 0.5, 0.75, 1.0].map((f, idx) => {
+                const zVal = f * zMax;
+                return (
+                  <text
+                    key={idx}
+                    x={sx(zVal)}
+                    y={svgH - 7}
+                    fill="#94a3b8"
+                    font-size="9"
+                    text-anchor="middle"
+                  >
+                    z = {zVal.toFixed(0)} mm
+                  </text>
+                );
+              })}
+            </svg>
+          </div>
+        );
+      })()}
+
       {/* Time-Dependent Transient Playback Scrubber, Milestone Recap Cards & Real-Time Video Synthesis */}
       {curFrame && (
         <div
@@ -4381,18 +5232,40 @@ function extractCoupledDesignPFromDoc(systemId: string, fallbackP: number[]): nu
   const getLet = (k: string): number | undefined => store.doc.lets?.find((l) => l.name === k)?.value;
   const p = [...fallbackP];
   if (systemId === 'pilkington_float_bath_cvd_coater_v1' && p.length >= 6) {
-    if (getLet('h_sill') !== undefined) p[0] = getLet('h_sill')!;
+    const rollCant = getLet('top_roll_cant') ?? getLet('roll_cant');
+    const hSill = getLet('h_sill');
+    if (hSill !== undefined) {
+      p[0] = hSill;
+    }
+    const beamX = getLet('x_beam') ?? getLet('beam_x');
+    if (beamX !== undefined) p[1] = beamX;
     if (getLet('q_beam') !== undefined) p[2] = getLet('q_beam')!;
     if (getLet('p_h2') !== undefined) p[3] = getLet('p_h2')!;
     if (getLet('i_motor') !== undefined) p[4] = getLet('i_motor')!;
-    if (getLet('roll_cant') !== undefined) p[5] = getLet('roll_cant')!;
+    if (rollCant !== undefined) p[5] = rollCant;
   } else if (systemId === 'regen_nozzle_h2_v1' && p.length >= 4) {
     if (getLet('throat_ch_mm') !== undefined) p[0] = getLet('throat_ch_mm')!;
     if (getLet('liner_wall_mm') !== undefined) p[1] = getLet('liner_wall_mm')!;
     if (getLet('tbc_um') !== undefined) p[2] = getLet('tbc_um')!;
     if (getLet('coolant_mdot_kg_s') !== undefined) p[3] = getLet('coolant_mdot_kg_s')!;
+  } else if (systemId === 'annular_swirl_spray_combustor_v1' && p.length >= 6) {
+    if (getLet('swirl_offset') !== undefined) p[0] = getLet('swirl_offset')!;
+    if (getLet('swirl_slot_r') !== undefined) p[1] = getLet('swirl_slot_r')!;
+    if (getLet('orifice_r') !== undefined) p[2] = getLet('orifice_r')!;
+    if (getLet('fuel_p_bar') !== undefined) p[3] = getLet('fuel_p_bar')!;
+    if (getLet('phi_primary') !== undefined) p[4] = getLet('phi_primary')!;
+    if (getLet('liner_porosity') !== undefined) p[5] = getLet('liner_porosity')!;
   } else if (systemId === 'solar_candle_ignition_v1' && p.length >= 5) {
-    if (getLet('d_lens') !== undefined) p[0] = getLet('d_lens')!;
+    const dLens =
+      getLet('d_lens') ?? (getLet('lens_r') !== undefined ? 2.0 * getLet('lens_r')! : undefined);
+    if (dLens !== undefined) p[0] = dLens;
+    if (getLet('f_lens') !== undefined) p[1] = getLet('f_lens')!;
+    const zLens =
+      getLet('z_lens') ??
+      (getLet('lens_z') !== undefined
+        ? getLet('lens_z')! - 36.0 - (getLet('wick_len') ?? 7.5)
+        : undefined);
+    if (zLens !== undefined) p[2] = zLens;
     if (getLet('i_solar') !== undefined) p[3] = getLet('i_solar')!;
     if (getLet('wick_len') !== undefined) p[4] = getLet('wick_len')!;
   } else if (systemId === 'jwst_fastener_fixing_envelope_v1' && p.length >= 5) {
@@ -4500,15 +5373,31 @@ export function SystemsWorkbench() {
       const sys = cat.find((s) => s.system_id === targetId);
       if (sys) {
         setActiveId(sys.system_id);
-        const baseP =
-          sys.system_id === 'solar_candle_ignition_v1' && candleShared.designP.length === sys.design_parameters.length
+        const preserveBath =
+          sys.system_id === 'pilkington_float_bath_cvd_coater_v1' &&
+          coupledShared.userModified &&
+          coupledShared.designP.length === sys.design_parameters.length;
+        const preserveCandle =
+          sys.system_id === 'solar_candle_ignition_v1' &&
+          candleShared.userModified &&
+          candleShared.designP.length === sys.design_parameters.length;
+        const baseP = preserveBath
+          ? [...coupledShared.designP]
+          : preserveCandle
             ? [...candleShared.designP]
             : sys.design_parameters.map((p) => p.nominal);
-        const p0 = extractCoupledDesignPFromDoc(sys.system_id, baseP);
+        const p0 =
+          preserveBath || preserveCandle
+            ? baseP
+            : extractCoupledDesignPFromDoc(sys.system_id, baseP);
         const th0 =
-          sys.system_id === 'solar_candle_ignition_v1' && candleShared.epistemicTheta.length === sys.epistemic_parameters.length
-            ? [...candleShared.epistemicTheta]
-            : sys.epistemic_parameters.map((t) => t.nominal);
+          sys.system_id === 'pilkington_float_bath_cvd_coater_v1' &&
+          coupledShared.epistemicTheta.length === sys.epistemic_parameters.length
+            ? [...coupledShared.epistemicTheta]
+            : sys.system_id === 'solar_candle_ignition_v1' &&
+                candleShared.epistemicTheta.length === sys.epistemic_parameters.length
+              ? [...candleShared.epistemicTheta]
+              : sys.epistemic_parameters.map((t) => t.nominal);
         setDesignP(p0);
         setEpistemicTheta(th0);
         const res = solveCoupledSystem(sys.system_id, p0, th0);
@@ -4543,11 +5432,13 @@ export function SystemsWorkbench() {
         coupledShared.designP = nextP;
         coupledShared.epistemicTheta = nextTheta;
         coupledShared.bundle = res;
+        coupledShared.userModified = true;
         if (liveViewport) syncCoupledViewportOverlay(liveViewport);
       } else if (sysId === 'solar_candle_ignition_v1') {
         candleShared.designP = nextP;
         candleShared.epistemicTheta = nextTheta;
         candleShared.bundle = res;
+        candleShared.userModified = true;
         if (liveViewport) syncCoupledViewportOverlay(liveViewport);
       }
       void pushWorkspaceState({
@@ -5047,6 +5938,37 @@ export function SystemsWorkbench() {
               {activeId === 'solar_candle_ignition_v1' && bundle.candle_flame_visual && (
                 <SolarCandle3DTwin vis={bundle.candle_flame_visual} designP={designP} />
               )}
+
+              {activeId === 'annular_swirl_spray_combustor_v1' && (() => {
+                const swirlM = computeSwirlCombustorNox({
+                  swirlOffset: designP[0] ?? 6.2,
+                  swirlSlotR: designP[1] ?? 1.35,
+                  orificeR: designP[2] ?? 2.6,
+                  fuelPressureBar: designP[3] ?? 12.0,
+                  equivRatio: designP[4] ?? 0.62,
+                  linerEffusionPorosity: designP[5] ?? 0.085,
+                  linerWall: 4.5,
+                  coolantTemp: 58.0,
+                  gasDensityKgM3: epistemicTheta[0] ?? 4.8,
+                  liquidDensityKgM3: epistemicTheta[1] ?? 800.0,
+                  surfaceTensionNM: epistemicTheta[2] ?? 0.026,
+                  liquidViscosityPaS: epistemicTheta[3] ?? 1.35e-3,
+                  bundle,
+                });
+                return (
+                  <div class="sys-attribution-card" data-testid="systems-swirl-zaleski-card">
+                    <div class="sys-card-bar" style={{ flexWrap: 'wrap', gap: '6px' }}>
+                      <span class="sys-card-title">
+                        Zaleski / Villermaux–Marmottant (2004) 1D Sheet Breakup &amp; 16-Bin Gamma Droplet Spectrum
+                      </span>
+                      <span class="num" style={{ fontSize: '11px', color: 'var(--text-2)' }}>
+                        D₃₂=⌀{swirlM.smdUm.toFixed(1)} μm · t_f={swirlM.filmThicknessUm.toFixed(1)} μm · θ_cone={swirlM.sprayHalfAngleDeg.toFixed(1)}° · L_b={swirlM.sheetBreakupLengthMm.toFixed(1)} mm · d_L=⌀{swirlM.ligamentDiameterUm.toFixed(1)} μm · n={swirlM.villermauxGammaOrderN.toFixed(2)} · Tail(&gt;2D₃₂)={swirlM.largeDropTailPct.toFixed(1)}% · T_flame={swirlM.tFlameEffK.toFixed(0)} K · T_wall={swirlM.linerHotWallC.toFixed(0)} °C · NOx={swirlM.totalNoxPpm.toFixed(1)} ppm
+                      </span>
+                    </div>
+                    <SwirlZaleskiVillermauxCharts m={swirlM} />
+                  </div>
+                );
+              })()}
 
               {track && (
                 <div class="sys-attribution-card">

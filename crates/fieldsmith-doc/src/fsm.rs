@@ -126,7 +126,7 @@ fn tokenize_line(line: &str, lineno: usize) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             out.push(Tok::Ident(chars[start..i].iter().collect()));
-        } else if "(){}[],=.+*/-".contains(c) {
+        } else if "(){}[],=.+*/-^".contains(c) {
             out.push(Tok::Sym(c));
             i += 1;
         } else {
@@ -156,24 +156,40 @@ enum Val {
 // Arithmetic expressions -------------------------------------------------------
 
 /// A numeric expression from `.fsm`: `let w = 4`, `size=(100, 2 * w, w / 2)`,
-/// `temp=80 + w`. Precedence: unary minus, then * and /, then + and −.
+/// `temp=80 + w`. Precedence: atoms/calls, power (^), unary minus, then * and /, then + and −.
 #[derive(Debug, Clone)]
 enum Expr {
     Num(f64),
     Var(String),
+    Call(String, Vec<Expr>),
     Neg(Box<Expr>),
     Bin(char, Box<Expr>, Box<Expr>),
 }
 
-/// Parse a unary operand: `-e` or an atom.
-fn expr_unary(c: &mut Cursor) -> Result<Expr, ParseError> {
-    if c.is_sym('-') {
-        c.next();
-        return Ok(Expr::Neg(Box::new(expr_unary(c)?)));
-    }
+/// Parse an atomic operand: number, identifier, function call `f(a, ...)`, or `(e)`.
+fn expr_atom(c: &mut Cursor) -> Result<Expr, ParseError> {
     match c.next() {
         Some(Tok::Num(v)) => Ok(Expr::Num(v)),
-        Some(Tok::Ident(s)) => Ok(Expr::Var(s)),
+        Some(Tok::Ident(s)) => {
+            if c.is_sym('(') {
+                c.next();
+                let mut args = Vec::new();
+                if !c.is_sym(')') {
+                    loop {
+                        args.push(expr_sum(c)?);
+                        if c.is_sym(',') {
+                            c.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                c.sym(')')?;
+                Ok(Expr::Call(s, args))
+            } else {
+                Ok(Expr::Var(s))
+            }
+        }
         Some(Tok::Sym('(')) => {
             let e = expr_sum(c)?;
             c.sym(')')?;
@@ -181,6 +197,26 @@ fn expr_unary(c: &mut Cursor) -> Result<Expr, ParseError> {
         }
         _ => c.err("expected a value"),
     }
+}
+
+/// Parse a power expression: `atom ('^' unary)?` (right-associative, binds tighter than unary `-`).
+fn expr_power(c: &mut Cursor) -> Result<Expr, ParseError> {
+    let a = expr_atom(c)?;
+    if c.is_sym('^') {
+        c.next();
+        Ok(Expr::Bin('^', Box::new(a), Box::new(expr_unary(c)?)))
+    } else {
+        Ok(a)
+    }
+}
+
+/// Parse a unary operand: `-e` or a power expression.
+fn expr_unary(c: &mut Cursor) -> Result<Expr, ParseError> {
+    if c.is_sym('-') {
+        c.next();
+        return Ok(Expr::Neg(Box::new(expr_unary(c)?)));
+    }
+    expr_power(c)
 }
 
 /// Fold `*` and `/` (left-associative) onto a parsed left operand.
@@ -201,7 +237,7 @@ fn expr_product(c: &mut Cursor) -> Result<Expr, ParseError> {
     expr_products(c, head)
 }
 
-/// Continue a parsed left operand through any remaining products, then sums.
+/// Continue a parsed left operand through any remaining powers, products, then sums.
 fn expr_tail(c: &mut Cursor, left: Expr) -> Result<Expr, ParseError> {
     let mut left = expr_products(c, left)?;
     while matches!(c.peek(), Some(Tok::Sym('+')) | Some(Tok::Sym('-'))) {
@@ -220,10 +256,11 @@ fn expr_sum(c: &mut Cursor) -> Result<Expr, ParseError> {
     expr_tail(c, head)
 }
 
-/// Binding power for the canonical printer: atoms > unary > (products, sums).
+/// Binding power for the canonical printer: atoms/calls > power > unary/products > sums.
 fn expr_prec(e: &Expr) -> u8 {
     match e {
-        Expr::Num(_) | Expr::Var(_) => 3,
+        Expr::Num(_) | Expr::Var(_) | Expr::Call(_, _) => 4,
+        Expr::Bin('^', _, _) => 3,
         Expr::Neg(_) => 2,
         Expr::Bin(op, _, _) => match op {
             '+' | '-' => 1,
@@ -243,8 +280,18 @@ fn expr_txt(e: &Expr) -> String {
             Expr::Var(s) => {
                 let _ = write!(o, "{s}");
             }
+            Expr::Call(name, args) => {
+                let _ = write!(o, "{name}(");
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        let _ = write!(o, ", ");
+                    }
+                    go(a, o);
+                }
+                let _ = write!(o, ")");
+            }
             Expr::Neg(child) => match child.as_ref() {
-                Expr::Num(_) | Expr::Var(_) => {
+                Expr::Num(_) | Expr::Var(_) | Expr::Call(_, _) => {
                     let _ = write!(o, "-");
                     go(child, o);
                 }
@@ -257,9 +304,10 @@ fn expr_txt(e: &Expr) -> String {
             Expr::Bin(op, l, r) => {
                 let p = match op {
                     '+' | '-' => 1,
+                    '^' => 3,
                     _ => 2,
                 };
-                if expr_prec(l) < p {
+                if expr_prec(l) < p || (*op == '^' && expr_prec(l) == p) {
                     let _ = write!(o, "(");
                     go(l, o);
                     let _ = write!(o, ")");
@@ -301,11 +349,48 @@ pub fn eval_expr(text: &str, lets: &[(String, f64)]) -> Result<f64, String> {
     fn eval_tree(e: &Expr, lets: &[(String, f64)]) -> Result<f64, String> {
         Ok(match e {
             Expr::Num(v) => *v,
-            Expr::Var(s) => lets
-                .iter()
-                .find(|(name, _)| name == s)
-                .map(|(_, v)| *v)
-                .ok_or_else(|| format!("no let named '{s}'"))?,
+            Expr::Var(s) => {
+                if let Some((_, v)) = lets.iter().find(|(name, _)| name == s) {
+                    *v
+                } else if s == "pi" {
+                    std::f64::consts::PI
+                } else if s == "e" {
+                    std::f64::consts::E
+                } else {
+                    return Err(format!("no let named '{s}'"));
+                }
+            }
+            Expr::Call(name, args) => {
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(eval_tree(a, lets)?);
+                }
+                match (name.as_str(), vals.as_slice()) {
+                    ("sin", [x]) => x.sin(),
+                    ("cos", [x]) => x.cos(),
+                    ("tan", [x]) => x.tan(),
+                    ("sqrt", [x]) => x.sqrt(),
+                    ("abs", [x]) => x.abs(),
+                    ("exp", [x]) => x.exp(),
+                    ("ln", [x]) => x.ln(),
+                    ("min", [a, b]) => a.min(*b),
+                    ("max", [a, b]) => a.max(*b),
+                    ("pow", [a, b]) => a.powf(*b),
+                    ("sin" | "cos" | "tan" | "sqrt" | "abs" | "exp" | "ln", _) => {
+                        return Err(format!(
+                            "{name} takes 1 argument, given {}",
+                            vals.len()
+                        ));
+                    }
+                    ("min" | "max" | "pow", _) => {
+                        return Err(format!(
+                            "{name} takes 2 arguments, given {}",
+                            vals.len()
+                        ));
+                    }
+                    _ => return Err(format!("unknown function '{name}'")),
+                }
+            }
             Expr::Neg(i) => -eval_tree(i, lets)?,
             Expr::Bin(op, l, r) => {
                 let lv = eval_tree(l, lets)?;
@@ -320,6 +405,7 @@ pub fn eval_expr(text: &str, lets: &[(String, f64)]) -> Result<f64, String> {
                         }
                         lv / rv
                     }
+                    '^' => lv.powf(rv),
                     _ => return Err(format!("unknown operator '{op}'")),
                 }
             }
@@ -368,15 +454,19 @@ impl<'a> Cursor<'a> {
         matches!(self.peek(), Some(Tok::Sym(s)) if *s == c)
     }
     fn value(&mut self) -> Result<Val, ParseError> {
-        // An operator after a number or name (`2 * wall_t`) starts an arithmetic
-        // expression; it is kept as canonical text for the attribute readers, which
-        // evaluate it against the lets and record the consumer.
+        // An operator after a number or name (`2 * wall_t`) or a function call (`cos(0)`)
+        // starts an arithmetic expression; it is kept as canonical text for the attribute
+        // readers, which evaluate it against the lets and record the consumer.
         let follows_op = matches!(
             self.toks.get(self.pos + 1),
-            Some(Tok::Sym(s)) if "+-*/".contains(*s)
+            Some(Tok::Sym(s)) if "+-*/^".contains(*s)
+        );
+        let follows_call = matches!(
+            (self.toks.get(self.pos), self.toks.get(self.pos + 1)),
+            (Some(Tok::Ident(_)), Some(Tok::Sym('(')))
         );
         match self.peek() {
-            Some(Tok::Num(_) | Tok::Ident(_)) if follows_op => {
+            Some(Tok::Num(_) | Tok::Ident(_)) if follows_op || follows_call => {
                 let e = expr_sum(self)?;
                 Ok(Val::Expr { txt: expr_txt(&e) })
             }
@@ -392,9 +482,7 @@ impl<'a> Cursor<'a> {
                     self.next();
                     Ok(Val::Tuple(self.seq(')')?))
                 } else {
-                    self.next();
                     let e = expr_sum(self)?;
-                    self.sym(')')?;
                     Ok(Val::Expr { txt: expr_txt(&e) })
                 }
             }
@@ -524,8 +612,17 @@ impl Attrs {
         comp: Option<usize>,
         txt: &str,
     ) -> Result<f64, ParseError> {
-        if let Ok(v) = eval_expr(txt, &[]) {
-            return Ok(v);
+        let uses_let = tokenize_line(txt, 0)
+            .map(|toks| {
+                toks.iter().any(|t| {
+                    matches!(t, Tok::Ident(s) if self.lets.iter().any(|(name, _)| name == s))
+                })
+            })
+            .unwrap_or(false);
+        if !uses_let {
+            if let Ok(v) = eval_expr(txt, &[]) {
+                return Ok(v);
+            }
         }
         match eval_expr(txt, &self.lets) {
             Ok(v) if v.is_finite() => {
@@ -1069,7 +1166,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 } else if let Some(src) = a.string("fn")? {
                     // Compiled here, so a bad function names its character, not a
                     // distant validate error.
-                    if let Err(e) = crate::loaddist::LoadFn::compile(&src) {
+                    if let Err(e) = crate::loaddist::LoadFn::compile_with_lets(&src, &let_scope(&doc)) {
                         return Err(err(format!("fn: {e}")));
                     }
                     let (dir_v, local_v) = (a.vec3("dir")?, a.vec3("local")?);
@@ -1243,6 +1340,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     // Thermal expansion 1/°C (e.g. 2e-5 for an aluminium class); optional,
                     // and a thermal document refuses a material without one.
                     alpha: a.num("a")?,
+                    k: a.num("k")?,
                     yield_z: a.num("yield_z")?,
                     shear_z: a.num("shear_z")?,
                     source: a
@@ -1464,6 +1562,9 @@ pub fn print(doc: &Document) -> String {
         );
         if let Some(a) = m.alpha {
             line += &format!(" a={}", n(a));
+        }
+        if let Some(k) = m.k {
+            line += &format!(" k={}", n(k));
         }
         if let Some(yz) = m.yield_z {
             line += &format!(" yield_z={}", n(yz));
@@ -3300,5 +3401,32 @@ region bottom = mesh1.p1
             errors.join("\n")
         );
         assert!(count >= 36, "Expected at least 36 .fsm files, found {count}");
+    }
+
+    #[test]
+    fn unified_expressions_and_loaddist_lets() {
+        let src = "\
+fieldsmith 1
+name \"Unified Expr Test\"
+material pla
+let a = 10 * cos(0)
+let b = 2 ^ 3 + sin(pi / 2) + ln(exp(1)) + sqrt(16) + abs(-5) + min(2, 4) + max(1, 3) + pow(2, 3) + tan(0)
+custommaterial custom_cu name=\"Cu\" e=110000 nu=0.34 yield=250 density=8.9e-6 wall=0.8 a=1.7e-5 k=320 source=\"test\"
+box body size=(a, b, 10)
+region top = body.pz
+region bot = body.nz
+support fix bot fixed=xyz
+load press top fn=\"0 < x < a -> b * 0.1\" dir=(0, 0, -1)
+";
+        let doc = parse(src).expect("should parse unified expressions and load fn with lets");
+        assert!((doc.lets[0].value - 10.0).abs() < 1e-12);
+        // b = 8 + 1 + 1 + 4 + 5 + 2 + 3 + 8 + 0 = 32
+        assert!((doc.lets[1].value - 32.0).abs() < 1e-12);
+        assert_eq!(doc.custom_materials[0].k, Some(320.0));
+        assert!(doc.validate().is_empty(), "validate errors: {:?}", doc.validate());
+        let printed = print(&doc);
+        assert!(printed.contains("k=320"), "printed: {printed}");
+        let reparsed = parse(&printed).expect("reparse");
+        assert_eq!(reparsed.custom_materials[0].k, Some(320.0));
     }
 }

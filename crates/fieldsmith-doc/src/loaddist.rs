@@ -24,7 +24,9 @@ use std::f64::consts::{E as EULER, PI};
 pub enum FnName {
     Sin,
     Cos,
+    Tan,
     Exp,
+    Ln,
     Sqrt,
     Abs,
     Min,
@@ -37,7 +39,9 @@ impl FnName {
         Some(match name {
             "sin" => FnName::Sin,
             "cos" => FnName::Cos,
+            "tan" => FnName::Tan,
             "exp" => FnName::Exp,
+            "ln" => FnName::Ln,
             "sqrt" => FnName::Sqrt,
             "abs" => FnName::Abs,
             "min" => FnName::Min,
@@ -49,7 +53,13 @@ impl FnName {
 
     fn arity(self) -> usize {
         match self {
-            FnName::Sin | FnName::Cos | FnName::Exp | FnName::Sqrt | FnName::Abs => 1,
+            FnName::Sin
+            | FnName::Cos
+            | FnName::Tan
+            | FnName::Exp
+            | FnName::Ln
+            | FnName::Sqrt
+            | FnName::Abs => 1,
             FnName::Min | FnName::Max | FnName::Pow => 2,
         }
     }
@@ -58,7 +68,9 @@ impl FnName {
         match self {
             FnName::Sin => "sin",
             FnName::Cos => "cos",
+            FnName::Tan => "tan",
             FnName::Exp => "exp",
+            FnName::Ln => "ln",
             FnName::Sqrt => "sqrt",
             FnName::Abs => "abs",
             FnName::Min => "min",
@@ -108,7 +120,9 @@ impl LoadExpr {
                 match name {
                     FnName::Sin => a(0).sin(),
                     FnName::Cos => a(0).cos(),
+                    FnName::Tan => a(0).tan(),
                     FnName::Exp => a(0).exp(),
+                    FnName::Ln => a(0).ln(),
                     FnName::Sqrt => a(0).sqrt(),
                     FnName::Abs => a(0).abs(),
                     FnName::Min => a(0).min(a(1)),
@@ -140,7 +154,9 @@ impl LoadExpr {
                 Some(match name {
                     FnName::Sin => g[0].sin(),
                     FnName::Cos => g[0].cos(),
+                    FnName::Tan => g[0].tan(),
                     FnName::Exp => g[0].exp(),
+                    FnName::Ln => g[0].ln(),
                     FnName::Sqrt => g[0].sqrt(),
                     FnName::Abs => g[0].abs(),
                     FnName::Min => g[0].min(g[1]),
@@ -174,7 +190,12 @@ impl LoadFn {
     /// and the fault, and surface identically from the parser, `validate` and the
     /// Setup-lens editor.
     pub fn compile(src: &str) -> Result<LoadFn, String> {
-        let toks = tokenize(src)?;
+        Self::compile_with_lets(src, &[])
+    }
+
+    /// Compile the text form with document `let` variables in scope.
+    pub fn compile_with_lets(src: &str, lets: &[(String, f64)]) -> Result<LoadFn, String> {
+        let toks = tokenize(src, lets)?;
         let mut bands = Vec::new();
         let mut start = 0usize;
         for cut in 0..=toks.len() {
@@ -331,7 +352,7 @@ struct TokPos {
     pos: usize,
 }
 
-fn tokenize(src: &str) -> Result<Vec<TokPos>, String> {
+fn tokenize(src: &str, lets: &[(String, f64)]) -> Result<Vec<TokPos>, String> {
     let cs: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
     let mut i = 0usize;
@@ -342,24 +363,30 @@ fn tokenize(src: &str) -> Result<Vec<TokPos>, String> {
             continue;
         }
         let pos = i;
-        if c.is_ascii_alphabetic() {
+        if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < cs.len() && cs[i].is_ascii_alphabetic() {
+            while i < cs.len() && (cs[i].is_ascii_alphanumeric() || cs[i] == '_') {
                 i += 1;
             }
             let name: String = cs[start..i].iter().collect();
             let tok = match name.as_str() {
                 "x" => Tok::Var(true),
                 "y" => Tok::Var(false),
-                "pi" => Tok::Pi,
-                "e" => Tok::E,
-                _ => FnName::parse(&name)
-                    .map(Tok::Fn)
-                    .ok_or_else(|| {
-                        format!(
-                            "at character {start}: unknown name '{name}' (allowed: x, y, pi, e, sin, cos, exp, sqrt, abs, min, max, pow)"
-                        )
-                    })?,
+                _ => {
+                    if let Some(f) = FnName::parse(&name) {
+                        Tok::Fn(f)
+                    } else if let Some((_, v)) = lets.iter().find(|(k, _)| k == &name) {
+                        Tok::Num(*v)
+                    } else if name == "pi" {
+                        Tok::Pi
+                    } else if name == "e" {
+                        Tok::E
+                    } else {
+                        return Err(format!(
+                            "at character {start}: unknown name '{name}' (allowed: x, y, pi, e, sin, cos, tan, exp, ln, sqrt, abs, min, max, pow)"
+                        ));
+                    }
+                }
             };
             toks.push(TokPos { tok, pos: start });
             continue;

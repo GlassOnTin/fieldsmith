@@ -4,13 +4,14 @@ import type { JSX } from 'preact';
 import { store } from '../doc/store';
 import { findNode, kindLabel } from '../doc/types';
 import type { Node, Op } from '../doc/types';
-import { duplicateNode, moveNode, renameId, inheritedColor, removeNodeAndCompanion, ungroupNode } from '../doc/ops';
+import { duplicateNode, moveNode, renameId, inheritedColor, removeNodeAndCompanion } from '../doc/ops';
 import { Icon, ShapeIcon } from './icons';
 import { ui, useApp } from './ui';
 import { openFixingsCatalogueModal } from './FixingsModal';
 import { openSketchWorkbenchModal } from './SketchWorkbench';
 import { openAntennaWorkbenchModal } from './AntennaWorkbench';
 import { extractDroneAntennaSpecFromDoc } from '../doc/antenna-vna';
+import { addShape } from './commands';
 
 const OP_GLYPH = { add: '+', subtract: '−', intersect: '∩' } as const;
 const OP_TITLE = { add: 'Adds material', subtract: 'Cuts material', intersect: 'Keeps only the overlap' } as const;
@@ -118,9 +119,15 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
         });
         if (!ok) ui.notify('A group cannot be moved inside itself.', 'error');
       }}
-      onClick={() => store.select({ kind: 'node', id: node.id })}
+      onClick={() => {
+        store.select({ kind: 'node', id: node.id });
+        if (typeof window !== 'undefined' && window.innerWidth <= 900 && store.lens === 'shape') {
+          ui.set('treeOpen', false);
+          ui.set('inspOpen', true);
+        }
+      }}
       onDblClick={() => ui.set('renaming', node.id)}
-      title={`${kindLabel(node.kind)} · ${OP_TITLE[node.op]}`}
+      title={`${kindLabel(node.kind)} · ${OP_TITLE[node.op]} (Tap to edit settings)`}
     >
       {isGroup ? (
         <span
@@ -172,29 +179,20 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
       <span class="row-name">{ui.renaming === node.id ? <RenameInput id={node.id} onDone={() => ui.set('renaming', null)} /> : node.id}</span>
       {node.blend > 0 && <span class="meta" title="Blend radius">r{node.blend}</span>}
       <span class="row-actions">
-        {isGroup && (
-          <button
-            class="mini"
-            title={`Ungroup ${node.id} (keep ${children.length} child object${children.length === 1 ? '' : 's'})`}
-            data-testid={`ungroup-node-${node.id}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              let kept: Node[] = [];
-              store.transact(`Ungroup ${node.id}`, (d) => {
-                kept = ungroupNode(d, node.id);
-              });
-              if (kept.length > 0) {
-                store.select({ kind: 'node', id: kept[0].id });
-                ui.notify(`Ungrouped ${node.id} (${kept.length} child object${kept.length === 1 ? '' : 's'} kept)`, 'info');
-              } else {
-                store.select(null);
-              }
-            }}
-            style={{ fontSize: '10px', fontWeight: 700, padding: '0 4px' }}
-          >
-            📂
-          </button>
-        )}
+        <button
+          class="mini drawer-only-btn"
+          title={`Edit ${node.id} settings in Inspector`}
+          data-testid={`edit-node-${node.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            store.select({ kind: 'node', id: node.id });
+            ui.set('treeOpen', false);
+            ui.set('inspOpen', true);
+            ui.set('inspCollapsed', false);
+          }}
+        >
+          <Icon.sliders />
+        </button>
         <button
           class="mini"
           title={`Duplicate ${node.id} (Ctrl D)`}
@@ -211,7 +209,7 @@ function NodeRow({ node, depth }: { node: Node; depth: number }) {
           ⧉
         </button>
         <button
-          class="mini"
+          class="mini drawer-only-btn"
           title={`Rename ${node.id} (F2)`}
           data-testid={`rename-node-${node.id}`}
           onClick={(e) => {
@@ -331,7 +329,65 @@ export function Tree() {
           </button>
         </div>
       </div>
-      {doc.root.length === 0 && <div class="hint">No shapes yet. Add one with the + button, or press Ctrl K.</div>}
+      <div
+        data-testid="tree-quick-add-bar"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '4px',
+          padding: '2px 10px 6px',
+          borderBottom: '1px solid var(--line)',
+          marginBottom: '4px',
+        }}
+      >
+        <button
+          type="button"
+          class="btn small"
+          data-testid="tree-quick-add-box"
+          title="Add a Box and open its settings immediately"
+          onClick={() => addShape('box')}
+          style={{ fontSize: '11px', padding: '0 7px', height: '24px' }}
+        >
+          + Box
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="tree-quick-add-cylinder"
+          title="Add a Cylinder and open its settings immediately"
+          onClick={() => addShape('cylinder')}
+          style={{ fontSize: '11px', padding: '0 7px', height: '24px' }}
+        >
+          + Cyl
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="tree-quick-add-sphere"
+          title="Add a Sphere and open its settings immediately"
+          onClick={() => addShape('sphere')}
+          style={{ fontSize: '11px', padding: '0 7px', height: '24px' }}
+        >
+          + Sphere
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="tree-quick-add-cut-hole"
+          title="Add a Boolean Cut Cylinder (hole) and open its settings immediately"
+          onClick={() => addShape('cylinder', { op: 'subtract' })}
+          style={{
+            fontSize: '11px',
+            padding: '0 7px',
+            height: '24px',
+            color: 'var(--danger)',
+            borderColor: 'color-mix(in srgb, var(--danger) 45%, var(--line-strong))',
+          }}
+        >
+          − Cut Hole
+        </button>
+      </div>
+      {doc.root.length === 0 && <div class="hint">No shapes yet. Tap + Box / + Cyl above, or press Ctrl K.</div>}
       {doc.root.map((n) => (
         <NodeRow key={n.id} node={n} depth={0} />
       ))}

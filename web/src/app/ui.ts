@@ -5,7 +5,17 @@ import { store } from '../doc/store';
 type Listener = () => void;
 
 export type GizmoMode = 'translate' | 'rotate';
-export type ResultMode = 'stress' | 'safety' | 'peel' | 'deflection' | 'vectors' | 'temperature';
+export type ResultMode =
+  | 'stress'
+  | 'safety'
+  | 'peel'
+  | 'strain_energy'
+  | 'plastic_strain'
+  | 'deflection'
+  | 'vectors'
+  | 'temperature'
+  | 'heat_flux'
+  | 'flow_field';
 export type ResultColormap = 'viridis' | 'flame' | 'turbo' | 'coolwarm';
 export type ResultInterp = 'p2' | 'p2_wire' | 'p0';
 
@@ -33,6 +43,14 @@ class Ui {
   tutorialCategoryFilter: 'all' | 'tutorial' | 'analytic' | 'case-study' | 'example' = 'all';
   /** MCP & REST API Co-Pilot Setup guide modal from the footer. */
   mcpSetupOpen = false;
+  /** 3D Multi-Regime Free-Surface & Capillary Fluid (SPH) Workbench modal. */
+  freeSurfaceOpen = false;
+  /** 1D–4D Coordinate Mappings, Conformal Wing Potential Flow & N-D Pullback FEM modal. */
+  coordMappingOpen = false;
+  /** Whether the floating Semi-transparent (opacity) overlay bar has been dismissed with its ✕ button. */
+  opacityDismissed = false;
+  /** Whether the floating Section (clip) overlay bar has been dismissed with its ✕ button. */
+  clipDismissed = false;
   /** Compute engine mode: 'wasm' (in-browser WebAssembly), 'native' (local native server / Android JNI host), or 'remote' (external compute server over LAN / Tailscale / SSH). */
   computeMode: 'wasm' | 'native' | 'remote' =
     (typeof window !== 'undefined' &&
@@ -79,8 +97,20 @@ class Ui {
    * set on (doc version + rung label), so a mode switch or a new solve falls back to the
    * auto bounds instead of miscolouring a different result with a stale range. The auto
    * lower bound is 0 for stress/deflection and the data minimum for temperature. */
-  resultsRange: { mode: 'stress' | 'peel' | 'deflection' | 'temperature'; levelKey: string; lo: number; hi: number } | null =
-    null;
+  resultsRange: {
+    mode:
+      | 'stress'
+      | 'peel'
+      | 'strain_energy'
+      | 'plastic_strain'
+      | 'deflection'
+      | 'temperature'
+      | 'heat_flux'
+      | 'flow_field';
+    levelKey: string;
+    lo: number;
+    hi: number;
+  } | null = null;
   // Mode-shape animation (a modal run's shapes in the Results lens; not undoable).
   /** Which mode animates, 0-based; −1 = none — the mesh shows the static results.
    * Reset to −1 after any solve whose run carries fewer shapes. */

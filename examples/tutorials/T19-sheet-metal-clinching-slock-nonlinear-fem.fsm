@@ -1,0 +1,86 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T19
+# @code: T19
+# @category: tutorial
+# @level: Advanced
+# @title: Dialing In Sheet Metal Clinching — 1D Analytic Clinching Process Window (Lee–Kim / Breda) + 3D Parametric S-Lock Pull-Out Secant FEM
+# @subtitle: Explore how shop-floor press-joining dials in bottom coin thickness X between Button Pull-Out (under-clinched) and Neck Fracture (over-clinched) via the 1D analytic clinching process window (Lee–Kim / Breda) coupled with a 3D parametric S-lock pull-out secant FEM model.
+# @verification_badge: Verified by A19 & V53 · 3D J2 Secant Elasto-Plasticity + Lee–Kim Hat-Curve
+# @doc_path: docs/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.md
+# @fsm_path: examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm
+# @starter_fsm_name: t19-sheet-metal-clinching-slock.fsm
+# @verification_refs: docs/verification/V53.md, docs/verification/V60.md
+# ---
+# @check: Optimal Bottom Coin Thickness X* (Transition from Unbuttoning to Neck Fracture) || F_pull(X*) = F_neck(X*)  ⇒  X* = 0.85 mm (t_n = 0.371 mm, t_u^eff = 0.198 mm) || X* = 0.85 mm (Safe Window [0.75, 0.98] mm) || Interactive Process-Window Hat-Curve Match || 0.00% || Exact
+# @check: 3D J2 Secant Plasticity vs. Linear Hookean Notch Concentration K_t || E_sec,e = σ_flow(ε_eq) / ε_eq,   K_σ = K_t^{2n/(n+1)} || Redistributes Peak Punch-Corner Stress Across Neck Wall t_n || Live 3D P2 Secant Iteration + ε_p (%) Field || PASS || Exact
+# ---
+# @assert: Cross-Tension Pull-Out Load Resultant |F_pull| || resultant_mag || 2400.0 || 1.0% || N
+# @assert: 3D Clinch Neck von Mises Stress σ_vM || max_vm_elem || >= 25.0 || >= 25.0 || MPa
+# @assert: Positive Axial Pull-Out Deflection u_max || max_displacement || >= 0.005 || >= 0.005 || mm
+# ---
+# @step: 1. Understand the Shop-Floor Dial-In Parameter: Bottom Thickness X || shape
+#   Open Shape (1). In sheet metal clinching (TOX press-joining), quality control measures the residual compressed bottom coin thickness `X` (here `let X = 0.85` mm for two 1.5 mm Al 5754-O sheets). If the press stops too early (`X > 1.05` mm), the radial interlock `t_u` never fills the die groove and the joint pops apart (**Button Pull-Out**). If the press coins too thin (`X < 0.65` mm), the cylindrical neck `t_n` is stretched paper-thin and snaps (**Neck Fracture**).
+# @expected:
+#   Inspect the 3D clinched lap coupon with its punch pit cavity, thinned neck wall, and extruded lower die button.
+# @step: 2. Explore the Analytic Hat-Curve & 3D Nonlinear Elasto-Plasticity in Results (3) || results
+#   Switch to Results (3). In the **Sheet Metal Clinching & Nonlinear J₂ Plasticity Explorer** card, drag the **Bottom Thickness X** slider across the Under-Clinched, Optimal (`X* ≈ 0.85 mm`), and Over-Clinched regimes. Click **`🧬 Plastic Strain ε_p`** in the Continuum Fields bar to colour the 3D mesh by equivalent plastic strain (%).
+# @expected:
+#   Observe the live Lee–Kim (2010) hat-curve `F_joint(X) = min(F_neck(X), F_pull(X))` and see the plastic strain ring concentrated around the clinch neck root.
+# @step: 3. Go Beyond the Analytic Model: Peel Angle, Punch Fillet Triaxiality & Springback || results
+#   Still in Results (3), adjust the **Service Load Angle θ_load** (`0° Cross-Tension` → `45° Mixed Peel` → `90° Lap-Shear`) and **Punch Corner Fillet r_p**, and toggle **`⚡ 3D J₂ Secant Plasticity`** vs **`Linear Hookean`**. Notice how 1D analytic theory ignores 3D notch triaxiality (`K_t`), elastic springback loss (`Δt_u`), and non-axisymmetric peel arc localization.
+# @expected:
+#   The explorer quantifies the exact gap between 1D Lee–Kim theory, 3D Linear Elastic FEM (unredistributed notch spike), and 3D Nonlinear Elasto-Plastic J2 FEM (`K_σ = K_t^{2n/(n+1)}`).
+# ---
+# @theory_title: Chapter 19 — Dialing In Sheet Metal Clinching: Analytic Plasticity vs. 3D Nonlinear FEM
+# @theory_summary:
+#   Explains why sheet metal clinching is the classic testbed for bridging fast closed-form plasticity (upper-bound slab extrusion + Lee–Kim failure envelopes) with 3D nonlinear elasto-plastic finite elements (Hencky–Ilyushin J2 secant iteration and Neuber–Glinka notch redistribution).
+# @theory_section: 19.1 Why Clinching Has an Optimal Bottom Thickness Window X*
+# @theory_eq:
+#   t_n(X) = c (t₁ / (t₁ + t₂)) + α_n(X)   [Monotonically increases with X]
+#   t_u(X) = u_0 + β_u (X_fill − X)^1.35   [Monotonically decreases with X]
+#   F_joint(X) = min( F_neck(t_n(X)),  F_pull(t_u(X)) )
+# @theory_body:
+#   Because neck thickness t_n(X) and undercut interlock t_u(X) move in opposite directions as the punch coins the bottom to thickness X, plotting joint strength F_joint against X produces a characteristic "hat curve". Dialing in a clinching press consists of finding the intersection X* where F_pull(X*) = F_neck(X*).
+# @theory_section: 19.2 Where 3D Nonlinear Elasto-Plasticity Goes Beyond the Analytic Model
+# @theory_eq:
+#   σ_flow(ε_eq) = σ_y (ε_eq / ε_y)^n,   E_sec,e = σ_flow(ε_eq,e) / ε_eq,e
+#   K_t = 1 + 1.45 √(t_n / r_p),   K_σ = K_t^{2n/(n+1)},   t_u^eff = t_u − (σ̄_f / E)(R_p + t_n)
+# @theory_body:
+#   Linear Hookean elasticity over-predicts peak stress at the sharp punch-to-neck fillet by the full geometric concentration factor K_t. Fieldsmith's 3D J2 secant elasto-plastic solver iteratively softens yielded elements (E_sec,e < E_0) using `assemble_pcg_multi`, redistributing stress across the neck ligament and recovering the physical plastic strain field ε_p(x).
+# ---
+# @mcp: Load T19 Sheet Metal Clinching Tutorial via API || load_fsm || {"fsm":"@SELF"}
+#   Load the T19 Sheet Metal Clinching S-Lock model into the active workspace.
+# === END LITERATE HEADER ===
+
+name "T19 — Dialing In Sheet Metal Clinching S-Lock (Analytic & 3D J2 FEM)"
+let X = 0.85
+let Rp = 2.6
+let c_die = 0.75
+let r_fillet = 0.30
+let t1 = 1.5
+let t2 = 1.5
+let F_pull = 2400
+let nonlinear_plastic = 1
+let hardening_n = 0.20
+let K_hollomon = 390
+let sigma_uts = 240
+let mu_clinch = 0.18
+let load_angle_deg = 0
+
+custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67
+material al5754_clinch
+
+# Overlapping clinched flange Coupon (distinct lower die sheet + upper punch sheet + S-Lock button & annular die groove)
+box lower_sheet size=(26, 22, t2 + 0.5) at=(-2, 0, 0.5 * (t2 + 0.5))
+box upper_sheet size=(26, 22, t1 + 0.5) at=(2, 0, t2 + 0.5 * (t1 + 0.5))
+cylinder die_button r=Rp + c_die + 1.8 h=2.0 at=(0, 0, 1.0)
+torus die_ring_groove major=Rp + c_die + 0.5 minor=0.55 at=(0, 0, 0.25) subtract
+cylinder upper_boss r=Rp + c_die + 1.4 h=2.8 at=(0, 0, t1 + t2 + 1.2)
+cylinder punch_pit r=Rp h=3.8 - X at=(0, 0, t1 + t2 + 1.6) subtract
+
+region lower_clamp = lower_sheet.nx + lower_sheet.px
+region upper_pull_ring = upper_boss.top + upper_boss.side
+support die_fixture lower_clamp fixed=xyz
+load cross_tension upper_pull_ring force=(0, 0, F_pull) case="Cross-Tension Pull-Out"
+solve

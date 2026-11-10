@@ -208,6 +208,7 @@ fn save_reload_resolve_is_bit_identical() {
         yield_strength: 50.0,
         min_wall: 0.8,
         alpha: None,
+        k: None,
         yield_z: Some(30.0),
         shear_z: Some(25.0),
         source: "test".into(),

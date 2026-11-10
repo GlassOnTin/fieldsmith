@@ -7,7 +7,12 @@
 // (`solveDroneAntennaVnaWasm` and `optimiseDroneAntennaVnaWasm`).
 
 import type { Document } from './types';
-import { optimiseDroneAntennaVnaWasm, solveDroneAntennaVnaWasm } from './wasm';
+import {
+  exportDroneTouchstoneS2pWasm,
+  optimiseDroneAntennaVnaWasm,
+  parseTouchstoneVnaWasm,
+  solveDroneAntennaVnaWasm,
+} from './wasm';
 
 export const C0_MM_PER_GHZ = 299.792458;
 export const MU0_H_PER_M = 4.0e-7 * Math.PI;
@@ -248,8 +253,8 @@ export function buildDeadCatDroneFsmText(
     return baseFsm;
   }
 
-  const podY = -58.0 - spec.cfrp_standoff_mm;
-  const podZ = 8.0 + spec.elevation_above_plate_mm;
+  const rearPodY = -58.0 - spec.cfrp_standoff_mm;
+  const rearPodZ = 8.0 + spec.elevation_above_plate_mm;
   const activeSummary =
     spec.overlay_band === 'low_900' ? report.low_band_summary : report.high_band_summary;
   const gFront = activeSummary.yaw_horizon_cut[18]?.gemini_combined_gain_dbi ?? -3.0;
@@ -261,10 +266,37 @@ export function buildDeadCatDroneFsmText(
   const rFront = Math.min(68.0, Math.max(16.0, 42.0 + gFront * 3.8));
   const lobeColor = report.all_targets_met ? '#10B981' : '#F43F5E';
 
+  let mainLobeAt: [number, number, number] = [0.0, rearPodY - rRear * 0.22, rearPodZ];
+  let secondaryLobeAt: [number, number, number] = [0.0, rearPodY + rFront * 0.35, rearPodZ + 4.0];
+  let mainLobeRot: [number, number, number] = [12, 0, 0];
+  let secondaryLobeRot: [number, number, number] = [-8, 0, 0];
+
+  if (spec.topology === 'conformal_arm_folded_fpc') {
+    const wb = Math.min(220.0, Math.max(140.0, spec.wheelbase_mm ?? 172.0));
+    const armR = 0.5 * wb;
+    const rAng = ((spec.rear_arm_sweep_deg ?? 34.0) * Math.PI) / 180.0;
+    const rmX = armR * Math.cos(rAng);
+    const rmY = -18.0 - (armR - 10.0) * Math.sin(rAng);
+    const armFeedX = 0.5 * (6.0 + rmX);
+    const armFeedY = 0.5 * (-18.0 + rmY) - 0.35 * spec.cfrp_standoff_mm;
+    const armFeedZ = 6.0 + 0.5 * spec.elevation_above_plate_mm;
+    mainLobeAt = [armFeedX, armFeedY, armFeedZ];
+    secondaryLobeAt = [-armFeedX, armFeedY, armFeedZ];
+    mainLobeRot = [8, 10, -(spec.rear_arm_sweep_deg ?? 34.0)];
+    secondaryLobeRot = [8, -10, spec.rear_arm_sweep_deg ?? 34.0];
+  } else if (spec.topology === 'split_front_rear_orthogonal') {
+    const frontCanopyY = 46.0 + 0.45 * spec.cfrp_standoff_mm;
+    const frontCanopyZ = 22.0 + 0.65 * spec.elevation_above_plate_mm;
+    mainLobeAt = [0.0, rearPodY - rRear * 0.18, rearPodZ];
+    secondaryLobeAt = [0.0, frontCanopyY + rFront * 0.18, frontCanopyZ];
+    mainLobeRot = [12, 0, 0];
+    secondaryLobeRot = [-10, 0, 90];
+  }
+
   const lobeGroupFsm = `
 group rf_3d_radiation_lobe_envelope {
-  torus lobe_rear_main_toroid major=${(rRear * 0.72).toFixed(1)} minor=${(rSide * 0.24).toFixed(1)} at=(0, ${(podY - rRear * 0.22).toFixed(1)}, ${podZ.toFixed(1)}) rotate=(12, 0, 0)
-  torus lobe_forward_diffraction_sector major=${(rFront * 0.58).toFixed(1)} minor=${(rFront * 0.18).toFixed(1)} at=(0, ${(podY + rFront * 0.35).toFixed(1)}, ${(podZ + 4.0).toFixed(1)}) rotate=(-8, 0, 0)
+  torus lobe_rear_main_toroid major=${(rRear * 0.72).toFixed(1)} minor=${(rSide * 0.24).toFixed(1)} at=(${mainLobeAt[0].toFixed(1)}, ${mainLobeAt[1].toFixed(1)}, ${mainLobeAt[2].toFixed(1)}) rotate=(${mainLobeRot[0]}, ${mainLobeRot[1]}, ${mainLobeRot[2].toFixed(1)})
+  torus lobe_forward_diffraction_sector major=${(rFront * 0.58).toFixed(1)} minor=${(rFront * 0.18).toFixed(1)} at=(${secondaryLobeAt[0].toFixed(1)}, ${secondaryLobeAt[1].toFixed(1)}, ${secondaryLobeAt[2].toFixed(1)}) rotate=(${secondaryLobeRot[0]}, ${secondaryLobeRot[1]}, ${secondaryLobeRot[2].toFixed(1)})
 }
 color "${lobeColor}" on rf_3d_radiation_lobe_envelope
 color "${lobeColor}" on lobe_rear_main_toroid
@@ -305,16 +337,27 @@ export function extractDroneAntennaSpecFromDoc(
 /** Format a DroneAntennaAnalysisReport as an industry-standard Touchstone 2-port `.s2p` file
  *  (`# GHz S DB R 50`, `VISION.md §5.2 Pillar IV.4`). */
 export function formatTouchstoneS2p(report: DroneAntennaAnalysisReport): string {
+  try {
+    return exportDroneTouchstoneS2pWasm(report.spec);
+  } catch {
+    // Fallback when WASM is not yet initialized
+  }
   const lines: string[] = [
     '! Fieldsmith VNA Touchstone 2-Port Scattering Matrix (.s2p)',
     `! Topology: ${report.spec.topology} | d_cfrp=${report.spec.cfrp_standoff_mm.toFixed(1)} mm | L_900=${report.spec.low_band_arm_length_mm.toFixed(1)} mm | L_2400=${report.spec.high_band_arm_length_mm.toFixed(1)} mm | skew=${report.spec.diversity_skew_deg.toFixed(1)} deg`,
     '# GHz S DB R 50',
     '! freq_GHz     S11_dB    S11_deg     S21_dB    S21_deg     S12_dB    S12_deg     S22_dB    S22_deg',
   ];
+  const distMm =
+    report.spec.topology === 'split_front_rear_orthogonal'
+      ? 140.0 + report.spec.cfrp_standoff_mm
+      : report.spec.topology === 'conformal_arm_folded_fpc'
+        ? 95.0 + report.spec.cfrp_standoff_mm
+        : Math.max(12.0, 28.0 + 0.35 * report.spec.cfrp_standoff_mm);
   const allPts = [...report.low_band_sweep, ...report.high_band_sweep];
   for (const pt of allPts) {
     const s11Deg = (Math.atan2(pt.gamma_im, pt.gamma_re) * 180.0) / Math.PI;
-    const s21Deg = -90.0 * ((pt.freq_ghz / 1.5) % 1.0);
+    const s21Deg = -360.0 * pt.freq_ghz * (distMm / C0_MM_PER_GHZ) - 90.0;
     lines.push(
       `${pt.freq_ghz.toFixed(6).padStart(10)} ${pt.s11_db.toFixed(4).padStart(10)} ${s11Deg.toFixed(3).padStart(10)} ${pt.s21_db.toFixed(4).padStart(10)} ${s21Deg.toFixed(3).padStart(10)} ${pt.s21_db.toFixed(4).padStart(10)} ${s21Deg.toFixed(3).padStart(10)} ${pt.s11_db.toFixed(4).padStart(10)} ${s11Deg.toFixed(3).padStart(10)}`,
     );
@@ -325,6 +368,11 @@ export function formatTouchstoneS2p(report: DroneAntennaAnalysisReport): string 
 /** Parse an industry-standard Touchstone `.s1p` or `.s2p` bench VNA trace into `VnaSamplePoint[]`
  *  for direct overlay on the 50 Ω Smith Chart and VNA return-loss plots (`VISION.md §5.2 Pillar IV.4`). */
 export function parseTouchstoneVna(text: string): VnaSamplePoint[] {
+  try {
+    return parseTouchstoneVnaWasm<VnaSamplePoint[]>(text);
+  } catch {
+    // Fallback when WASM is not yet initialized
+  }
   let freqScaleToGhz = 1.0;
   let formatMode: 'DB' | 'MA' | 'RI' = 'DB';
   let z0 = Z0_OHM;
@@ -388,6 +436,11 @@ export function parseTouchstoneVna(text: string): VnaSamplePoint[] {
       else if (formatMode === 'MA') s21Db = 20 * Math.log10(Math.max(1e-6, nums[3]));
       else s21Db = 20 * Math.log10(Math.max(1e-6, Math.hypot(nums[3], nums[4])));
     }
+    const s11LinPwr = Math.pow(10, s11Db / 10);
+    const s21LinPwr = Math.pow(10, s21Db / 10);
+    const cfrpAbsorptionFraction = Math.max(0.0, Math.min(0.95, 1.0 - s11LinPwr - s21LinPwr));
+    const radiationEfficiency = Math.max(0.05, 1.0 - cfrpAbsorptionFraction * 0.45);
+    const totalEfficiency = Math.max(0.01, (1.0 - s11LinPwr) * radiationEfficiency);
     pts.push({
       freq_ghz: freqGhz,
       band: freqGhz < 1.5 ? 'low_900' : 'high_2400',
@@ -401,9 +454,9 @@ export function parseTouchstoneVna(text: string): VnaSamplePoint[] {
       s11_db: s11Db,
       vswr,
       s21_db: s21Db,
-      radiation_efficiency: 1 - gMag * gMag,
-      total_efficiency: 1 - gMag * gMag,
-      cfrp_absorption_fraction: 0,
+      radiation_efficiency: radiationEfficiency,
+      total_efficiency: totalEfficiency,
+      cfrp_absorption_fraction: cfrpAbsorptionFraction,
     });
   }
   return pts;

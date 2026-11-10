@@ -93,7 +93,7 @@ function v5Report(r) {
   return ok;
 }
 
-const server = await createServer({ root, logLevel: 'error', server: { port: 0, strictPort: false } });
+const server = await createServer({ root, logLevel: 'error', server: { port: 0, strictPort: false, watch: { usePolling: true, interval: 10000 } } });
 await server.listen();
 const url = server.resolvedUrls.local[0];
 // Headless runs on the software rasteriser (that is what must stay portable); headed runs

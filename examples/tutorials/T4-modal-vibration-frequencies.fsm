@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t4-modal-tuning-fork.fsm
 # @verification_refs: docs/verification/V13.md
 # ---
+# @assert: Fundamental Rocking Mode 1 Frequency f₁ || mode_1 || 2680.0 || 3.0% || Hz
+# @assert: Fundamental Rocking Mode 2 Frequency f₂ || mode_2 || 2680.0 || 3.0% || Hz
+# @assert: Symmetric Pedestal Doublet Split |f₂ − f₁| / f̄ || mode_split_12_pct || <= 1.0 || <= 1.0 || %
+# ---
 # @step: 1. What Are Natural Frequencies and Mode Shapes? || shape
 #   If you pluck a ruler held over the edge of a desk, it vibrates back and forth at a specific pitch — its fundamental natural frequency (measured in Hz, or cycles per second). If a motor, fan, or vehicle engine shakes a bracket at that exact frequency, vibrations amplify dramatically (resonance). Here we have a 3D-printed aluminium (AlSi10Mg) optical sensor pedestal. Open the Inspector with nothing selected to see "Modes = On (Count = 4)".
 # @expected:

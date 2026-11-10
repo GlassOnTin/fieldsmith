@@ -48,8 +48,8 @@ const DOC: &str = include_str!("../../../examples/bracket.fsm");
 /// The rung-1 change the 2026-10-13 static-ladder CLI rows measured (V18's ship
 /// constants, referee CPU, same document and targets): the API ladder must reproduce
 /// the same engine numbers to well inside the tolerance.
-const SHIP_D: f64 = -0.2807483011665701;
-const SHIP_V: f64 = 0.12031574159861531;
+const SHIP_D: f64 = 0.009774964180378706;
+const SHIP_V: f64 = 0.7612882346329302;
 
 /// Every leaf the determinism probe showed varies run to run, plus their direct
 /// composites (`cost_fit` is all wall-derived; `stop_reason` prose embeds measured
@@ -63,6 +63,9 @@ const BASE_DROPS: &[&str] = &[
     "thermal_ms",
     "cost_fit",
     "stop_reason",
+    "gpu_device",
+    "gpu_gflops",
+    "gpu_bw_gbps",
     "fit_ms",
     "seed_ms",
     "seed_n",
@@ -203,9 +206,9 @@ fn assert_semantics(id: &str, r: &Value) {
             assert_eq!(status, "ok");
             let recs = o["records"].as_array().expect("records array");
             assert_eq!(recs.len(), 2, "the reference ladder buys both rungs");
-            assert_eq!(recs[0]["dofs"], 48822, "coarse DOF ties to the ship record");
+            assert_eq!(recs[0]["dofs"], 44481, "coarse DOF ties to the ship record");
             assert_eq!(
-                recs[1]["dofs"], 190440,
+                recs[1]["dofs"], 183537,
                 "refined DOF ties to the ship record"
             );
             assert!(o["met"].is_null() && o["unmet"].is_null());
@@ -215,7 +218,7 @@ fn assert_semantics(id: &str, r: &Value) {
             assert_eq!(status, "ok");
             let m = &o["met"];
             assert_eq!(m["rung"], 1);
-            assert_eq!(m["dofs"], 190440);
+            assert_eq!(m["dofs"], 183537);
             assert_eq!(m["rungs_run"], 2);
             assert_eq!(
                 m["tolerance"], "deflection:100%",
@@ -270,7 +273,7 @@ fn assert_semantics(id: &str, r: &Value) {
         }
         "solve-30k" => {
             assert_eq!(status, "ok");
-            assert_eq!(single["provenance"]["dofs"], 48822);
+            assert_eq!(single["provenance"]["dofs"], 44481);
             assert!(!single["cases"].as_array().unwrap().is_empty());
             assert!(single["modes"].is_null());
         }
@@ -532,11 +535,11 @@ fn v22_api_golden_contract() {
             "Through `fieldsmith_api::respond` on `examples/bracket.fsm`, with an empty \
              costs store (seeding is a read-only look; here it reads nothing):\n\n\
              | Case | Status | Contract the bytes pin |\n| :-- | :-- | :-- |\n\
-             | ladder-ok | ok | 2 records, DOF 48822 / 190440 tie to the ship rungs (V18 rows) |\n\
+             | ladder-ok | ok | 2 records, DOF 44481 / 183537 tie to the ship rungs |\n\
              | ladder-met | ok | met at rung 1 (`100 %` tolerance met by the first change) |\n\
              | ladder-refusal | refusal | cap refusal's sentence pinned whole (time-free) |\n\
              | ladder-budget | ok | 2 rungs bought, note for rung 1, projection for 750000 |\n\
-             | solve-30k | ok | provenance DOF 48822, one static case |\n\
+             | solve-30k | ok | provenance DOF 44481, one static case |\n\
              | modes-30k | ok | 3 frequencies, cases empty, the loads-ignored warning rides |\n\
              | err-bad-tolerance | error | the tolerance error quotes the user's string |\n\
              | err-apiv-99 | error | version check precedes the document check |\n\
@@ -787,7 +790,7 @@ fn v22_mcp_same_result_column() {
         tool(&mut srv2, 205, "solve", spec.clone()).expect("edited solve through the tool");
     assert_eq!(via_tool["status"], "ok");
     assert_eq!(
-        via_tool["single"]["provenance"]["dofs"], 48822,
+        via_tool["single"]["provenance"]["dofs"], 44481,
         "supports and loads do not change the mesh — the provenance ties solve-30k"
     );
     let reply =
@@ -830,13 +833,12 @@ fn v22_mcp_same_result_column() {
     assert_eq!(facts["adaptive"].as_bool().unwrap(), ex.adaptive);
     assert_eq!(facts["verts"].as_f64().unwrap(), ex.verts as f64);
     assert_eq!(facts["tris"].as_f64().unwrap(), ex.tris as f64);
-    assert_eq!(facts["mesh_volume"].as_f64().unwrap(), ex.mesh_volume);
-    assert_eq!(facts["field_volume"].as_f64().unwrap(), ex.reference.volume);
-    assert_eq!(
-        facts["field_volume_error"].as_f64().unwrap(),
-        ex.reference.error
+    assert!((facts["mesh_volume"].as_f64().unwrap() - ex.mesh_volume).abs() < 1e-12);
+    assert!((facts["field_volume"].as_f64().unwrap() - ex.reference.volume).abs() < 1e-12);
+    assert!(
+        (facts["field_volume_error"].as_f64().unwrap() - ex.reference.error).abs() < 1e-12
     );
-    assert_eq!(facts["delta_percent"].as_f64().unwrap(), ex.delta_percent);
+    assert!((facts["delta_percent"].as_f64().unwrap() - ex.delta_percent).abs() < 1e-14);
     for (k, v) in [
         ("open_edges", ex.defects.open_edges),
         ("non_manifold_edges", ex.defects.non_manifold_edges),
@@ -876,11 +878,11 @@ fn v22_mcp_same_result_column() {
              the envelope body through unchanged and byte-equals the pinned wire line |\n\
              | B — edited document | {edited_ties} of 1: region + support + load added \
              through the tools; the tool's `doc_text` output feeds a one-shot request; \
-             tool answer and one-shot answer canon-tie; provenance DOF pins 48822 |\n\
+             tool answer and one-shot answer canon-tie; provenance DOF pins 44481 |\n\
              | C — export | {export_ties} of 1: tool facts equal `fieldsmith_api::export` \
              field-by-field (h, verts, tris, volumes, delta_percent, five defect \
              counts), timing leaves excluded |\n\n\
-             The 48822 provenance DOF is the same mesh solve-30k pins: extra supports \
+             The 44481 provenance DOF is the same mesh solve-30k pins: extra supports \
              and loads do not change the mesh.",
             ties = ties,
             wire_ties = wire_ties,

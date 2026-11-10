@@ -335,9 +335,42 @@ pub fn region_facets_exact(
     let tol_corner = 1e-6 * h.max(1.0);
     let tol_centroid = 0.25 * h;
     let rules = rules_for(doc, id)?;
-    Ok((0..facets.len())
+    let mut exact: Vec<usize> = (0..facets.len())
         .filter(|&i| chain_hit(&rules, &facets[i], mesh, tol_corner, tol_centroid))
-        .collect())
+        .collect();
+    if exact.is_empty() {
+        // Fallback when a named face is narrower than the coarse marching-tetrahedra cell size `h`
+        // (e.g. a thin sheet edge with `round > 0` or a narrow annular boss rim at `Resolution::Coarse`
+        // where every boundary triangle straddles a fillet/rim corner): claim boundary facets whose
+        // centroid rides both the shape zero-set and the named face carrier within `0.45 * h` with
+        // an aligned outward normal (`dot >= 0.7`). Genuinely interior/buried regions (`ghost`) stay
+        // far from every boundary facet (`|d.v| >> h`) and remain empty.
+        let tol_fallback = 0.45 * h.max(1.0);
+        exact = (0..facets.len())
+            .filter(|&i| {
+                let f = &facets[i];
+                let c = f.centroid(mesh);
+                let n = f.normal(mesh);
+                rules.iter().any(|r| {
+                    let d = expr::eval(&r.e, c);
+                    if d.v.abs() > tol_fallback {
+                        return false;
+                    }
+                    let Some(gap) = expr::face_carrier_gap(&r.e, r.face, c) else {
+                        return false;
+                    };
+                    if gap > tol_fallback {
+                        return false;
+                    }
+                    let Some(cn) = carrier_normal(&r.e, r.face, c) else {
+                        return false;
+                    };
+                    cn[0] * n[0] + cn[1] * n[1] + cn[2] * n[2] >= 0.7
+                })
+            })
+            .collect();
+    }
+    Ok(exact)
 }
 
 /// Indices of the facets that belong to region `id`, exact chain plus the second pass.

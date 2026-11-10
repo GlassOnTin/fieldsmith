@@ -80,6 +80,11 @@ export function addShape(type: ShapeType, opts: { at?: Vec3; op?: 'add' | 'subtr
     insertNode(d, n, sel, !!target && target.kind.type === 'group' && !!opts.inside);
   });
   store.select({ kind: 'node', id });
+  ui.set('menu', null);
+  if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+    ui.set('treeOpen', false);
+    ui.set('inspOpen', true);
+  }
   return id;
 }
 

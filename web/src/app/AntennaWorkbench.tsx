@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { store } from '../doc/store';
-import { parseFsm } from '../doc/wasm';
+import { exportDroneTouchstoneS2pWasm, parseFsm, solveDroneAntennaVnaWasm } from '../doc/wasm';
 import { viewApi } from './commands';
 import { ui, useApp } from './ui';
 import {
@@ -1097,20 +1097,21 @@ export function AntennaWorkbenchModal() {
   };
 
   const handleLoadSampleBenchVna = () => {
-    const baseS2p = formatTouchstoneS2p(report);
-    const lines = baseS2p.split('\n').map((line, idx) => {
-      const t = line.trim();
-      if (!t || t.startsWith('!') || t.startsWith('#')) return line;
-      const cols = t.split(/\s+/).map(Number);
-      if (cols.length < 3 || cols.some(Number.isNaN)) return line;
-      const f = cols[0];
-      const s11Db = Math.min(-0.4, cols[1] + 1.6 + 0.7 * Math.sin(idx * 0.45));
-      const s11Ang = cols[2] + (f < 1.5 ? 9.5 : 14.0);
-      const s21Db = cols[3] != null ? cols[3] + 0.8 : -18.0;
-      const s21Ang = cols[4] != null ? cols[4] - 6.0 : -45.0;
-      return `${f.toFixed(6)}  ${s11Db.toFixed(4)}  ${s11Ang.toFixed(3)}  ${s21Db.toFixed(4)}  ${s21Ang.toFixed(3)}  ${s21Db.toFixed(4)}  ${s21Ang.toFixed(3)}  ${s11Db.toFixed(4)}  ${s11Ang.toFixed(3)}`;
-    });
-    const pts = parseTouchstoneVna(lines.join('\n'));
+    const benchSpec: DroneAntennaDesignSpec = {
+      ...spec,
+      cfrp_standoff_mm: 11.5,
+      elevation_above_plate_mm: 6.0,
+      match_series_nh: 0.0,
+      match_shunt_pf: 0.0,
+    };
+    let s2pText: string;
+    try {
+      solveDroneAntennaVnaWasm<DroneAntennaAnalysisReport>(benchSpec);
+      s2pText = exportDroneTouchstoneS2pWasm(benchSpec);
+    } catch {
+      s2pText = formatTouchstoneS2p(analyzeDroneAntenna(benchSpec));
+    }
+    const pts = parseTouchstoneVna(s2pText);
     setBenchSweep(pts);
     setBenchFileName('sample-nanovna-bench.s2p');
     ui.notify(`Loaded sample NanoVNA bench trace (${pts.length} pts) onto Smith Chart & VNA Plot`, 'info', 4000);

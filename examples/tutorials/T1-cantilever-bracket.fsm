@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t1-cantilever-bracket.fsm
 # @verification_refs: docs/verification/V1.md, docs/verification/V2.md
 # ---
+# @assert: Applied 15°-Angled Pin Pull Resultant |F| || resultant_mag || 400.02 || 0.5% || N
+# @assert: Fillet Peak Element von Mises Stress σ_vM || max_vm_elem || 17.50 || 12.0% || MPa
+# @assert: Safe PETG Yield Margin (σ_vM ≤ 47 MPa) || max_vm_elem || <= 47.0 || <= 47.0 || MPa
+# ---
 # @step: 1. How Parts Are Built: Adding Blocks, Subtracting Holes & Rounding Corners || shape
 #   We want to hang a 400 Newton weight (about 40 kg) from a plastic wall bracket made of PETG (Polyethylene Terephthalate Glycol, a tough, common 3D-printing plastic). In Fieldsmith, you build parts like a sculptor: you start with simple blocks ("base" and "upright") and add them together, then subtract three cylinders ("hole_l", "hole_r", "load_pin") to drill bolt holes. Open the Shapes tree (top-left ≡ on mobile) and select "upright". Notice "Blend = 8 mm": a sharp 90° inside corner concentrates stress and cracks easily, so an 8 mm smooth fillet rounds that inner corner to spread the load.
 # @expected:
@@ -23,7 +27,7 @@ fieldsmith 1
 # @step: 3. Checking Stress, Deflection, 3D Volumetric Iso-Shells & Real-Time Video || results
 #   Tap "Go to Results →" (or tab 3). To compute stress inside a 3D shape, Fieldsmith divides the bracket into thousands of tiny 4-sided pyramids (tetrahedra) and solves twice — first on a Coarse mesh, then on a finer Refined mesh — so you can verify the numbers settle. Compare the Peak von Mises stress against PETG’s yield strength (47 MPa). Try switching the "Colourmap" (`[data-testid="results-colormap"]`) to "Flame" or "Turbo", toggle "3D Volume" (`[data-testid="results-volume-toggle"]`) to see glowing volumetric stress shells inside the fillet, click the 4 Milestone Recap pills (`1. Unloaded (0%)` → `4. Full Load (100%)`), and click "🎬 Render Video" (`[data-testid="results-render-video"]`) to record a real-time 30 fps `.webm` video!
 # @expected:
-#   Peak von Mises stress settles around ~37.9 MPa (safely below the 47 MPa yield limit of PETG), tip deflection is ~0.72 mm, and "🎬 Render Video" produces an upright 560×704 `.webm` video with embedded telemetry.
+#   Peak element-centroid von Mises stress settles around ~21 MPa (~25 MPa nodal, safely below the 47 MPa yield limit of PETG), tip deflection is ~0.51–0.73 mm across coarse-to-medium meshes, and "🎬 Render Video" produces an upright 560×704 `.webm` video with embedded telemetry.
 # ---
 # @theory_title: Chapter 1 — Distance-Field Solid Modelling & Quadratic Finite Elements
 # @theory_summary:
@@ -61,3 +65,4 @@ region mount = hole_l.side + hole_r.side
 region pin = load_pin.side
 support bolt mount fixed=xyz
 load pull pin force=(103.5, 0, -386.4)
+solve

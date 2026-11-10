@@ -3,7 +3,7 @@ import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import { containerOf, findNode, kindLabel, walk } from '../doc/types';
-import type { Document, Face, Modifier, Node, NodeKind, Op } from '../doc/types';
+import type { Document, Face, Material, Modifier, Node, NodeKind, Op } from '../doc/types';
 import { materialLibrary, validateWithWarnings } from '../doc/wasm';
 import {
   MODIFIER_LABEL,
@@ -28,6 +28,8 @@ import {
   ensureContinuumMaterialInDoc,
   evaluateDocumentFieldEquations,
   getContinuumMaterialSpec,
+  readLetParam,
+  upsertLetParam,
   type ContinuumPhaseId,
 } from '../doc/continuum';
 import { Fragment } from 'preact';
@@ -37,6 +39,7 @@ import { ui, useApp } from './ui';
 import { SketchCanvas } from './Sketch';
 import { openSketchWorkbenchModal } from './SketchWorkbench';
 import { openFixingsCatalogueModal } from './FixingsModal';
+import { addShape } from './commands';
 import {
   FASTENER_MATERIAL_GROUPS,
   inspectFixingGroupStack,
@@ -1633,12 +1636,42 @@ function DocumentInspector() {
   ensureContinuumMaterialInDoc(doc, doc.material);
   const { errors: problems, warnings } = validateWithWarnings(doc);
   const mats = [
+    ...(doc.custom_materials ?? []),
     ...materials(),
-    ...doc.custom_materials,
     ...MULTIPHYSICS_CONTINUUM_MATERIALS.map((m) => m.fsmMaterial),
   ];
-  const mat = mats.find((m) => m.id === doc.material);
+  const mat = mats.find((m) => m.id === doc.material) ?? getContinuumMaterialSpec(doc, doc.material).fsmMaterial;
+  const isCustomMat = (doc.custom_materials ?? []).some((m) => m.id === doc.material);
+  const isJ2Plastic = readLetParam(doc, 'nonlinear_plastic', 0) > 0;
+  const hardeningN = readLetParam(doc, 'hardening_n', 0.2);
   const activeEqs = evaluateDocumentFieldEquations(doc).filter((e) => e.active);
+
+  const editOrCreateCustomMaterial = (label: string, mutate: (target: Material) => void) => {
+    store.transact(label, (d) => {
+      const customList = d.custom_materials ?? (d.custom_materials = []);
+      let target = customList.find((m) => m.id === d.material);
+      if (!target) {
+        const baseSpec = getContinuumMaterialSpec(d, d.material);
+        const { k: _k, ...baseClean } = structuredClone(baseSpec.fsmMaterial);
+        let newId = `${d.material}_custom`;
+        let suffix = 2;
+        while (customList.some((m) => m.id === newId)) {
+          newId = `${d.material}_custom${suffix++}`;
+        }
+        target = {
+          ...baseClean,
+          id: newId,
+          name: `${baseClean.name} (Custom)`,
+          alpha: baseClean.alpha ?? 15.0e-6,
+          source: baseClean.source || 'User custom material',
+        };
+        customList.push(target);
+        d.material = newId;
+      }
+      mutate(target);
+    });
+  };
+
   const addNewLet = () => {
     store.transact('Add parameter', (d) => {
       const lets = d.lets ?? (d.lets = []);
@@ -1659,35 +1692,126 @@ function DocumentInspector() {
       <DroneAntennaInspectorCard doc={doc} />
       <div class="field-grid">
         <label class="plain">Material</label>
-        <select
-          class="select"
-          value={doc.material}
-          data-testid="material"
-          onChange={(e) =>
-            store.transact('Set material', (d) => {
-              const v = (e.target as HTMLSelectElement).value;
-              ensureContinuumMaterialInDoc(d, v);
-              d.material = v;
-            })
-          }
-        >
-          <ContinuumSelectOptions doc={doc} />
-        </select>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <select
+            class="select"
+            style={{ flex: 1, minWidth: 0 }}
+            value={doc.material}
+            data-testid="material"
+            onChange={(e) =>
+              store.transact('Set material', (d) => {
+                const v = (e.target as HTMLSelectElement).value;
+                ensureContinuumMaterialInDoc(d, v);
+                d.material = v;
+              })
+            }
+          >
+            <ContinuumSelectOptions doc={doc} />
+          </select>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="create-custom-material-btn"
+            title={
+              isCustomMat
+                ? 'Fork another custom material copy in doc.custom_materials'
+                : 'Fork and edit a custom material in doc.custom_materials'
+            }
+            onClick={() => editOrCreateCustomMaterial('Create custom material', () => {})}
+            style={{ fontSize: '10.5px', padding: '3px 7px', whiteSpace: 'nowrap' }}
+          >
+            {isCustomMat ? 'Custom ✓' : '+ Custom'}
+          </button>
+        </div>
       </div>
       <ContinuumConstitutiveCard doc={doc} matId={doc.material} testId="doc-continuum-card" />
       {mat && (
         <>
-          <div class="field-grid" style={{ fontSize: '12px' }}>
-            <label class="plain">Young’s modulus</label>
-            <span class="num">{mat.e.toLocaleString()} MPa</span>
-            <label class="plain">Poisson’s ratio</label>
-            <span class="num">{mat.nu}</span>
-            <label class="plain">Yield strength</label>
-            <span class="num">{mat.yield_strength} MPa</span>
-            <label class="plain">Density</label>
-            <span class="num">{mat.density} g/cm³</span>
-            <label class="plain">Minimum wall</label>
-            <span class="num">{mat.min_wall} mm</span>
+          <div class="field-grid" style={{ fontSize: '12px', marginTop: '6px' }}>
+            <label class="plain" title="Young's elastic modulus E (MPa) — editing creates/updates custommaterial">
+              Young’s modulus (MPa)
+            </label>
+            <NumberInput
+              value={mat.e}
+              min={1}
+              step={100}
+              testId="mat-e"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set Youngs modulus E', (m) => {
+                  m.e = Math.max(1e-3, v);
+                })
+              }
+            />
+            <label class="plain" title="Poisson's ratio ν (-1 < ν < 0.5)">
+              Poisson’s ratio ν
+            </label>
+            <NumberInput
+              value={mat.nu}
+              min={0.01}
+              max={0.495}
+              step={0.01}
+              testId="mat-nu"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set Poissons ratio nu', (m) => {
+                  m.nu = Math.max(0.001, Math.min(0.499, v));
+                })
+              }
+            />
+            <label class="plain" title="0.2% proof / yield strength σ_y (MPa)">
+              Yield strength (MPa)
+            </label>
+            <NumberInput
+              value={mat.yield_strength}
+              min={0.1}
+              step={5}
+              testId="mat-yield"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set yield strength', (m) => {
+                  m.yield_strength = Math.max(0.1, v);
+                })
+              }
+            />
+            <label class="plain" title="Mass density ρ (g/cm³)">
+              Density (g/cm³)
+            </label>
+            <NumberInput
+              value={mat.density}
+              min={0.01}
+              step={0.05}
+              testId="mat-density"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set material density', (m) => {
+                  m.density = Math.max(0.001, v);
+                })
+              }
+            />
+            <label class="plain" title="Linear thermal expansion coefficient α (1/°C, e.g. 2.3e-5)">
+              CTE α (1/°C)
+            </label>
+            <NumberInput
+              value={mat.alpha ?? 15.0e-6}
+              step={1e-6}
+              testId="mat-alpha"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set thermal expansion alpha', (m) => {
+                  m.alpha = v;
+                })
+              }
+            />
+            <label class="plain" title="Minimum printable wall / feature thickness (mm)">
+              Minimum wall (mm)
+            </label>
+            <NumberInput
+              value={mat.min_wall}
+              min={0.1}
+              step={0.1}
+              testId="mat-min-wall"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set minimum wall', (m) => {
+                  m.min_wall = Math.max(0.05, v);
+                })
+              }
+            />
           </div>
           <details class="hint" style={{ marginTop: '4px' }}>
             <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Material source datasheet</summary>
@@ -1764,6 +1888,54 @@ function DocumentInspector() {
             title="First n natural frequencies; the Seg above skips the modal run"
           />
         )}
+        <NumRow
+          label="Ref. Temp T_ref"
+          unit="°C"
+          step={5}
+          get={(d) => d.solve.t_ref ?? 20}
+          set={(d, v) => (d.solve.t_ref = v)}
+          undoLabel="Set reference temperature tref"
+          testId="solve-tref"
+          title="Stress-free reference temperature T_ref (°C) for thermal strain ε_th = α·(T − T_ref)"
+        />
+        <label class="plain">Constitutive Law</label>
+        <Seg<'linear' | 'j2_plastic'>
+          value={isJ2Plastic ? 'j2_plastic' : 'linear'}
+          options={[
+            { value: 'linear', label: 'Linear Hookean', title: 'Standard 3D linear elastic Hooke law' },
+            {
+              value: 'j2_plastic',
+              label: '3D J₂ Elasto-Plastic',
+              title: 'Iterative 3D J₂ secant plasticity with Hollomon power-law strain hardening',
+            },
+          ]}
+          onChange={(v) =>
+            store.transact('Set constitutive law', (d) => {
+              upsertLetParam(d, 'nonlinear_plastic', v === 'j2_plastic' ? 1 : 0);
+              if (v === 'j2_plastic' && !d.lets?.some((l) => l.name === 'hardening_n')) {
+                upsertLetParam(d, 'hardening_n', 0.2);
+              }
+            })
+          }
+          testId="solve-constitutive-law"
+        />
+        {isJ2Plastic && (
+          <>
+            <label class="plain">Hardening Exponent n</label>
+            <NumberInput
+              value={hardeningN}
+              min={0.01}
+              max={0.8}
+              step={0.02}
+              testId="solve-hardening-n"
+              onChange={(v) =>
+                store.transact('Set hardening exponent n', (d) => {
+                  upsertLetParam(d, 'hardening_n', Math.max(0.01, Math.min(1.0, v)));
+                })
+              }
+            />
+          </>
+        )}
       </div>
       <div class="section-label" style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span>Parameters (let)</span>
@@ -1794,6 +1966,24 @@ function DocumentInspector() {
                         applyAddr(d, parseAddr(l.name), v);
                         const slot = d.lets?.find((x) => x.name === l.name);
                         if (slot) slot.expr = String(v);
+                        if (
+                          ['droplet_r_mm', 'resolution_d_dx', 'laplace_la', 'stencil_anisotropy'].includes(l.name) &&
+                          (d.loads ?? []).some((ld) => ld.id === 'laplace_jump' && ld.kind.type === 'pressure')
+                        ) {
+                          const getVal = (k: string, fb: number) =>
+                            d.lets?.find((x) => x.name === k)?.value ?? fb;
+                          const r0 = Math.max(0.2, getVal('droplet_r_mm', 2.0));
+                          const resN = Math.max(6, getVal('resolution_d_dx', 24));
+                          const la = getVal('laplace_la', 12000);
+                          const anis = getVal('stencil_anisotropy', 0.15);
+                          const effP =
+                            (0.22 / r0) *
+                            (1 +
+                              (0.2 + anis) *
+                                Math.pow(24 / resN, 1.2) *
+                                (0.5 + 0.5 * (la / 12000)));
+                          applyAddr(d, parseAddr('laplace_jump.mpa'), Number(effP.toFixed(4)));
+                        }
                       })
                     }
                   />
@@ -1866,6 +2056,172 @@ function DocumentInspector() {
 /** Inspectors for non-node selections, contributed by later lenses. */
 export const inspectors: Record<string, (id: string) => JSX.Element | null> = {};
 
+function InspectorQuickSwitchAndAddBar() {
+  const doc = store.doc;
+  const sel = store.selection;
+  const currentVal = sel ? `${sel.kind}:${sel.id}` : 'doc';
+
+  const flatNodes: Array<{ node: Node; depth: number }> = [];
+  const collectNodes = (list: Node[], depth: number) => {
+    for (const n of list) {
+      flatNodes.push({ node: n, depth });
+      if (n.kind.type === 'group') collectNodes(n.kind.children, depth + 1);
+    }
+  };
+  collectNodes(doc.root, 0);
+
+  return (
+    <div
+      data-testid="inspector-quick-shape-bar"
+      style={{
+        padding: '6px 10px',
+        borderBottom: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '5px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+          Editing:
+        </span>
+        <select
+          class="select"
+          data-testid="inspector-target-select"
+          value={currentVal}
+          style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: '11.5px', height: '25px' }}
+          onChange={(e) => {
+            const v = (e.target as HTMLSelectElement).value;
+            if (!v || v === 'doc') {
+              store.select(null);
+              return;
+            }
+            const colon = v.indexOf(':');
+            if (colon > 0) {
+              const kind = v.slice(0, colon) as any;
+              const id = v.slice(colon + 1);
+              store.select({ kind, id });
+            }
+          }}
+        >
+          <option value="doc">📄 Document &amp; Material ({doc.name})</option>
+          {flatNodes.length > 0 && (
+            <optgroup label={`Shapes (${flatNodes.length})`}>
+              {flatNodes.map(({ node, depth }) => {
+                const indent = '\u00A0\u00A0'.repeat(depth);
+                const opSym = node.op === 'subtract' ? '−' : node.op === 'intersect' ? '∩' : '+';
+                return (
+                  <option key={node.id} value={`node:${node.id}`}>
+                    {indent}{opSym} {node.id} ({kindLabel(node.kind)})
+                  </option>
+                );
+              })}
+            </optgroup>
+          )}
+          {doc.regions.length > 0 && (
+            <optgroup label={`Regions (${doc.regions.length})`}>
+              {doc.regions.map((r) => (
+                <option key={r.id} value={`region:${r.id}`}>
+                  ◉ {r.id} ({r.selectors.length} face{r.selectors.length === 1 ? '' : 's'})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {doc.supports.length > 0 && (
+            <optgroup label={`Supports (${doc.supports.length})`}>
+              {doc.supports.map((s) => (
+                <option key={s.id} value={`support:${s.id}`}>
+                  ⛨ {s.id} on {s.region}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {doc.loads.length > 0 && (
+            <optgroup label={`Loads (${doc.loads.length})`}>
+              {doc.loads.map((l) => (
+                <option key={l.id} value={`load:${l.id}`}>
+                  ↓ {l.id} ({l.kind.type} on {l.region})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {doc.temperatures.length > 0 && (
+            <optgroup label={`Temperatures (${doc.temperatures.length})`}>
+              {doc.temperatures.map((t) => (
+                <option key={t.id} value={`temperature:${t.id}`}>
+                  ° {t.id} ({t.celsius} °C on {t.region})
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="insp-quick-add-box"
+          title="Add a Box and edit its settings here immediately"
+          onClick={() => addShape('box')}
+          style={{ fontSize: '10.5px', padding: '0 6px', height: '22px' }}
+        >
+          + Box
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="insp-quick-add-cylinder"
+          title="Add a Cylinder and edit its settings here immediately"
+          onClick={() => addShape('cylinder')}
+          style={{ fontSize: '10.5px', padding: '0 6px', height: '22px' }}
+        >
+          + Cyl
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="insp-quick-add-sphere"
+          title="Add a Sphere and edit its settings here immediately"
+          onClick={() => addShape('sphere')}
+          style={{ fontSize: '10.5px', padding: '0 6px', height: '22px' }}
+        >
+          + Sphere
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          data-testid="insp-quick-add-cut-hole"
+          title="Add a Boolean Cut Cylinder (hole) and edit its settings here immediately"
+          onClick={() => addShape('cylinder', { op: 'subtract' })}
+          style={{
+            fontSize: '10.5px',
+            padding: '0 6px',
+            height: '22px',
+            color: 'var(--danger)',
+            borderColor: 'color-mix(in srgb, var(--danger) 45%, var(--line-strong))',
+          }}
+        >
+          − Cut Hole
+        </button>
+        <button
+          type="button"
+          class="btn small ghost"
+          data-testid="insp-quick-add-more"
+          title="More shapes & fixings (Capsule, Torus, Extrude, Revolve, Loft, Bolts…)"
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            ui.set('menu', { kind: 'add', x: Math.max(8, r.left - 80), y: r.bottom + 4 });
+          }}
+          style={{ fontSize: '10.5px', padding: '0 6px', height: '22px', marginLeft: 'auto' }}
+        >
+          + More…
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Inspector() {
   useApp();
   const s = store.selection;
@@ -1876,5 +2232,10 @@ export function Inspector() {
   } else if (s && inspectors[s.kind]) {
     body = inspectors[s.kind](s.id);
   }
-  return body ?? <DocumentInspector />;
+  return (
+    <>
+      <InspectorQuickSwitchAndAddBar />
+      {body ?? <DocumentInspector />}
+    </>
+  );
 }

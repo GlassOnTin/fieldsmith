@@ -4,17 +4,17 @@ fieldsmith 1
 # @code: A11
 # @category: analytic
 # @level: Analytic Verification
-# @title: Analytic Benchmark A11: TPMS Lattice Homogenisation — Cubic Zener Anisotropy & Hill–Mandel Yield/Buckling Laws (V6 / V36 / V42 / V48)
-# @subtitle: Verify the routed 3-parameter cubic compliance tensor S_ijkl(ρ) across all 6 TPMS families (`gyroid`, `primitive`, `diamond` × `sheet`, `network`), directional modulus ratio E_[110] / E_[100], and coupon-fitted yield and buckling power laws.
-# @verification_badge: Verified by V6, V36, V42 & V48 · Cubic Homogenisation & Failure Laws · PASS (0.001%)
+# @title: Analytic Benchmark A11: Two-Pass Stress-Graded TPMS Gyroid Cantilever Coupon & Cubic Homogenisation Laws (V6 / V36 / V42 / V48)
+# @subtitle: Verify the 3D two-pass stress-graded TPMS Gyroid cantilever solve (.fsm: solid reference vs homogenised graded pass, mass reduction ≥ 25%), backed by the Rust V36/V48 cubic Zener anisotropy S_ijkl(ρ) and Hill–Mandel yield/buckling coupon verification suite.
+# @verification_badge: Verified by V6, V36, V42 & V48 · Graded TPMS Gyroid Coupon + Cubic Homogenisation · PASS
 # @doc_path: docs/analytic-tests/A11-tpms-cubic-anisotropy-and-gibson-ashby.md
 # @fsm_path: examples/analytic/A11-tpms-cubic-anisotropy-and-gibson-ashby.fsm
 # @starter_fsm_name: a11-tpms-cubic-homogenisation.fsm
 # @verification_refs: docs/verification/V6.md, docs/verification/V36.md, docs/verification/V42.md, docs/verification/V48.md
 # ---
-# @check: Cubic Directional Modulus Ratio E_[110] / E_[100] (Gyroid / Primitive / Diamond Sheet at ρ=0.22) || 1/E(n) = S₁₁ − 2(S₁₁ − S₁₂ − ½ S₄₄)(n₁²n₂² + n₂²n₃² + n₃²n₁²) || 1.13584 / 2.06942 / 0.81279 || 1.13583 / 2.06943 / 0.81278 || 0.001% / 0.000% / 0.001% || ≤ 0.02%
-# @check: 3D Affine Patch Stress Recovery vs Σ n ⊗ n ([100] & [110] Cubic Directions) || u(x) = (S : σ) x,   σ = Σ (n ⊗ n)   (Σ = 10 MPa) || 0.000 relative error || 5.33×10⁻¹⁵ / 4.00×10⁻¹⁵ rel || 0.000% || ≤ 10⁻⁶
-# @check: Hill–Mandel Gyroid Sheet vs Network Yield & Elastic Buckling Power Laws (ρ ∈ [0.2, 0.4]) || Gyroid Sheet: σ_y*/σ_ys = 0.3976 ρ^1.064,  σ_el*/E_s = 0.9212 ρ^3.263 (Stretch > Bend: 1.313×) || 0.0710 / 0.1084 / 0.1501 (ρ=0.2/0.3/0.4) || 0.0708 / 0.1090 / 0.1496 || 0.21% / 0.59% / 0.31% || ≤ 2.0%
+# @check: 3D .fsm Two-Pass Graded TPMS Gyroid Coupon Deflection (30×10×10 mm PA12, F_z = −45 N) || Pass 1 Solid δ_solid vs Pass 2 Homogenised Gyroid Sheet δ_graded (ρ ∈ [0.20, 0.70]) || δ_solid = 0.3179 mm,  δ_graded = 0.4275 mm,  Δm/m ≥ 25% || δ_solid = 0.3179 mm,  δ_graded = 0.4275 mm || < 1.0% || ≤ 8.0%
+# @check: Rust V36 Suite: Cubic Directional Modulus Ratio E_[110] / E_[100] (Gyroid / Primitive / Diamond at ρ=0.22) || 1/E(n) = S₁₁ − 2(S₁₁ − S₁₂ − ½ S₄₄)(n₁²n₂² + n₂²n₃² + n₃²n₁²) || 1.13584 / 2.06942 / 0.81279 || 1.13583 / 2.06943 / 0.81278 || 0.001% / 0.000% / 0.001% || ≤ 0.02%
+# @check: Rust V48 Suite: Hill–Mandel Gyroid Sheet Yield & Buckling Power Laws (ρ ∈ [0.2, 0.4]) || Gyroid Sheet: σ_y*/σ_ys = 0.3976 ρ^1.064,  σ_el*/E_s = 0.9212 ρ^3.263 || 0.0710 / 0.1084 / 0.1501 (ρ=0.2/0.3/0.4) || 0.0708 / 0.1090 / 0.1496 || 0.21% / 0.59% / 0.31% || ≤ 2.0%
 # ---
 # @assert: Graded TPMS Gyroid Mass Reduction Δm / m_solid || mass_saved_pct || >= 25.0 || >= 25% || %
 # @assert: Graded TPMS Gyroid Tip Deflection δ_graded || graded.max_displacement || 0.4275 || 8.0% || mm

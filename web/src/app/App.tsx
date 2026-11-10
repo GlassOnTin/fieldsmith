@@ -78,7 +78,7 @@ function ViewTools() {
       <button
         class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
         data-testid="open-tutorials-drawer"
-        title="Tutorials, Analytic Verification Tests (A1–A14) & Case Studies (T1–T17)"
+        title="Tutorials, Analytic Verification Tests (A1–A20) & Case Studies (T1–T19)"
         onClick={() => runCommand('tutorials.open')}
       >
         <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -157,50 +157,168 @@ function EmptyState() {
             Open .fsm…
           </button>
         </div>
-        <p style={{ margin: '14px 0 6px', fontSize: '12px' }}>Or explore analytic verification benchmarks, guided tutorials &amp; case studies:</p>
-        <div class="actions">
-          <button
-            class="btn small primary"
-            onClick={() => {
-              ui.set('tutorialMinimised', false);
-              ui.set('tutorialCategoryFilter', 'analytic');
-              ui.set('tutorialContentsOpen', true);
-              ui.set('tutorialsOpen', true);
+
+        {/* Compact 1-line Starter Models & Collapsed Contents Index */}
+        <div
+          style={{
+            marginTop: '12px',
+            paddingTop: '10px',
+            borderTop: '1px solid var(--line)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '5px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-3)', marginRight: '2px' }}>Starter:</span>
+            {EXAMPLES.map((e) => (
+              <button key={e.id} class="btn small" onClick={() => openText(e.text, `${e.id}.fsm`)} data-testid={`example-${e.id}`}>
+                {e.label}
+              </button>
+            ))}
+          </div>
+
+          <details
+            data-testid="empty-suites-contents"
+            style={{
+              background: 'var(--panel-2)',
+              border: '1px solid var(--line)',
+              borderRadius: '6px',
+              padding: '6px 9px',
+              fontSize: '11.5px',
             }}
-            data-testid="empty-open-analytic-tests"
-            style={{ background: '#0891b2', borderColor: '#06b6d4', color: '#fff' }}
           >
-            📐 Analytic Tests (A1–A14)
-          </button>
-          <button
-            class="btn small primary"
-            onClick={() => {
-              ui.set('tutorialMinimised', false);
-              ui.set('tutorialCategoryFilter', 'tutorial');
-              ui.set('tutorialContentsOpen', true);
-              ui.set('tutorialsOpen', true);
-            }}
-            data-testid="empty-open-tutorials"
-          >
-            📘 Guided Tutorials (T1–T15)
-          </button>
-          <button
-            class="btn small"
-            onClick={() => {
-              ui.set('tutorialMinimised', false);
-              ui.set('tutorialCategoryFilter', 'case-study');
-              ui.set('tutorialContentsOpen', true);
-              ui.set('tutorialsOpen', true);
-            }}
-            data-testid="empty-open-case-studies"
-          >
-            🚀 Case Studies (T8–T17)
-          </button>
-          {EXAMPLES.map((e) => (
-            <button key={e.id} class="btn small" onClick={() => openText(e.text, `${e.id}.fsm`)} data-testid={`example-${e.id}`}>
-              {e.label}
-            </button>
-          ))}
+            <summary
+              data-testid="empty-suites-summary"
+              style={{
+                cursor: 'pointer',
+                userSelect: 'none',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '6px',
+                fontWeight: 600,
+                color: 'var(--text-2)',
+              }}
+            >
+              <span>📚 Contents: Analytic Tests &amp; Tutorials</span>
+              <span
+                style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '4px' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  class="btn small primary"
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'analytic');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                  data-testid="empty-open-analytic-tests"
+                  style={{
+                    background: '#0891b2',
+                    borderColor: '#06b6d4',
+                    color: '#fff',
+                    padding: '1px 7px',
+                    fontSize: '10.5px',
+                  }}
+                >
+                  📐 Analytic (20)
+                </button>
+                <button
+                  type="button"
+                  class="btn small primary"
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'tutorial');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                  data-testid="empty-open-tutorials"
+                  style={{ padding: '1px 7px', fontSize: '10.5px' }}
+                >
+                  📘 Tutorials (10)
+                </button>
+                <button
+                  type="button"
+                  class="btn small"
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'case-study');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                  data-testid="empty-open-case-studies"
+                  style={{ padding: '1px 7px', fontSize: '10.5px' }}
+                >
+                  🚀 Cases (9)
+                </button>
+              </span>
+            </summary>
+            <div
+              style={{
+                marginTop: '7px',
+                paddingTop: '6px',
+                borderTop: '1px solid var(--line)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                fontSize: '11px',
+                color: 'var(--text-2)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                <span><strong>Track 0 (A1–A20)</strong>: Elasticity, Thermal, Gerris &amp; Capillary Benchmarks</span>
+                <button
+                  type="button"
+                  class="btn ghost small"
+                  style={{ padding: '0 6px', fontSize: '10.5px', color: '#22d3ee' }}
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'analytic');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                >
+                  Index →
+                </button>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                <span><strong>Tracks I–II (T1–T7)</strong>: CSG Foundations, Thermal &amp; Modal FEA</span>
+                <button
+                  type="button"
+                  class="btn ghost small"
+                  style={{ padding: '0 6px', fontSize: '10.5px' }}
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'tutorial');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                >
+                  Index →
+                </button>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                <span><strong>Tracks III–IV (T8–T19)</strong>: Multiphysics, Fasteners, RF VNA, SPH &amp; Clinching</span>
+                <button
+                  type="button"
+                  class="btn ghost small"
+                  style={{ padding: '0 6px', fontSize: '10.5px' }}
+                  onClick={() => {
+                    ui.set('tutorialMinimised', false);
+                    ui.set('tutorialCategoryFilter', 'case-study');
+                    ui.set('tutorialContentsOpen', true);
+                    ui.set('tutorialsOpen', true);
+                  }}
+                >
+                  Index →
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -347,12 +465,33 @@ export function App() {
             </svg>
           </button>
           <button
-            class="btn ghost icon"
+            class="btn ghost small drawer-only-btn"
+            title="Switch directly to Inspector settings"
+            data-testid="tree-switch-to-insp"
+            onClick={() => {
+              ui.set('treeOpen', false);
+              ui.set('inspOpen', true);
+            }}
+            style={{ fontSize: '11px', padding: '0 6px', height: '24px' }}
+          >
+            ⚙ Edit →
+          </button>
+          <button
+            class="btn ghost icon desktop-only-btn"
             title="Collapse left sidebar ([)"
             data-testid="collapse-tree-btn"
             onClick={() => runCommand('view.toggleTree')}
           >
             <Icon.sidebarLeft />
+          </button>
+          <button
+            class="btn ghost icon drawer-only-btn"
+            title="Close Shapes drawer"
+            data-testid="close-tree-drawer"
+            onClick={() => ui.set('treeOpen', false)}
+            style={{ fontWeight: 700, fontSize: '13px' }}
+          >
+            ✕
           </button>
         </div>
         <div class="panel-body">
@@ -401,16 +540,37 @@ export function App() {
       <aside class={`panel insp-panel${ui.inspOpen ? ' open' : ''}`}>
         <div class="panel-head">
           <span class="title">Inspector</span>
+          <button
+            class="btn ghost small drawer-only-btn"
+            title="Switch to Shapes & Boundary Tree"
+            data-testid="insp-switch-to-tree"
+            onClick={() => {
+              ui.set('inspOpen', false);
+              ui.set('treeOpen', true);
+            }}
+            style={{ fontSize: '11px', padding: '0 6px', height: '24px' }}
+          >
+            ← Tree
+          </button>
           <button class="btn ghost small" title="Command palette (Ctrl K)" onClick={() => ui.set('paletteOpen', true)} data-testid="palette-button">
             <span class="kbd">Ctrl K</span>
           </button>
           <button
-            class="btn ghost icon"
+            class="btn ghost icon desktop-only-btn"
             title="Collapse Inspector sidebar (])"
             data-testid="collapse-insp-btn"
             onClick={() => runCommand('view.toggleInsp')}
           >
             <Icon.sidebarRight />
+          </button>
+          <button
+            class="btn ghost icon drawer-only-btn"
+            title="Close Inspector drawer"
+            data-testid="close-insp-drawer"
+            onClick={() => ui.set('inspOpen', false)}
+            style={{ fontWeight: 700, fontSize: '13px' }}
+          >
+            ✕
           </button>
         </div>
         <div class="panel-body">

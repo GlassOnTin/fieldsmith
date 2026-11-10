@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t7-underdesigned-arm.fsm
 # @verification_refs: docs/verification/V22-MCP.md, docs/verification/V51.md
 # ---
+# @assert: Applied Tip Load Resultant |F_z| || resultant_mag || 450.00 || 0.5% || N
+# @assert: Pre-Synthesis 8 mm Arm Tip Deflection δ_tip || max_displacement || 31.35 || 2.0% || mm
+# @assert: Pre-Synthesis Yield & Peel Exceedance (U_peel ≥ 4.5×) || max_layer_peel || >= 4.5 || >= 4.5 || ×
+# ---
 # @step: 1. Diagnose Why the Initial Design Fails || results
 #   This starter part is an 8 mm thin PETG arm carrying a heavy 450 N tip load, and it is set to print standing on end at (90°, 0°). Tap "Go to Results →" to inspect the damage: the Peak von Mises stress exceeds PETG’s 47 MPa yield strength, and the inter-layer peel utilization is well over 1.0× (meaning the printed layers will split apart before the plastic even yields).
 # @expected:

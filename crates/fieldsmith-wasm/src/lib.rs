@@ -702,6 +702,16 @@ impl AnalysisOut {
         Float64Array::from(&flat[..])
     }
 
+    /// Tetrahedral elements, 4 corner node ids each (`[tet[0], tet[1], tet[2], tet[3]]`).
+    #[wasm_bindgen(js_name = tets)]
+    pub fn tets(&self) -> Uint32Array {
+        let mut flat = Vec::with_capacity(self.a.mesh.tets.len() * 4);
+        for tet in &self.a.mesh.tets {
+            flat.extend_from_slice(&tet[..4]);
+        }
+        Uint32Array::from(&flat[..])
+    }
+
     /// Surface facets, 6 node ids each (corners, then midsides 01, 12, 20).
     #[wasm_bindgen(js_name = surfaceFacets)]
     pub fn surface_facets(&self) -> Uint32Array {
@@ -756,6 +766,31 @@ impl AnalysisOut {
     #[wasm_bindgen(js_name = vmElem)]
     pub fn vm_elem(&self, case: usize) -> Float64Array {
         Float64Array::from(&self.a.cases[case].vm_elem[..])
+    }
+
+    /// Element-centroid symmetric Cauchy stress tensor of one case (MPa), 6 per element
+    /// (`[xx, yy, zz, xy, yz, xz]`).
+    #[wasm_bindgen(js_name = stressElem)]
+    pub fn stress_elem(&self, case: usize) -> Float64Array {
+        let flat: Vec<f64> = self.a.cases[case]
+            .stress_elem
+            .iter()
+            .flat_map(|s| s.iter().copied())
+            .collect();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Element-centroid equivalent plastic strain of one case (`%`).
+    #[wasm_bindgen(js_name = plasticStrainElem)]
+    pub fn plastic_strain_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.a.cases[case].plastic_strain_elem[..])
+    }
+
+    /// Nodal 3D temperature gradient `[dT/dx, dT/dy, dT/dz]` (`°C/mm`, `3 * nn` floats)
+    /// of one case; empty when the case is mechanical.
+    #[wasm_bindgen(js_name = gradTNodal)]
+    pub fn grad_t_nodal(&self, case: usize) -> Float64Array {
+        Float64Array::from(self.a.cases[case].grad_t_nodal.as_deref().unwrap_or(&[]))
     }
 
     /// Max over cases of nodal von Mises (MPa).
@@ -1004,6 +1039,16 @@ impl GradedOut {
         Float64Array::from(&flat[..])
     }
 
+    /// Tetrahedral elements, 4 corner node ids each (`[tet[0], tet[1], tet[2], tet[3]]`).
+    #[wasm_bindgen(js_name = tets)]
+    pub fn tets(&self) -> Uint32Array {
+        let mut flat = Vec::with_capacity(self.base.mesh.tets.len() * 4);
+        for tet in &self.base.mesh.tets {
+            flat.extend_from_slice(&tet[..4]);
+        }
+        Uint32Array::from(&flat[..])
+    }
+
     /// Surface facets, 6 node ids each (corners, then midsides 01, 12, 20).
     #[wasm_bindgen(js_name = surfaceFacets)]
     pub fn surface_facets(&self) -> Uint32Array {
@@ -1062,6 +1107,63 @@ impl GradedOut {
     #[wasm_bindgen(js_name = vmElem)]
     pub fn vm_elem(&self, case: usize) -> Float64Array {
         Float64Array::from(&self.g.cases[case].vm_elem[..])
+    }
+
+    /// Graded element-centroid symmetric Cauchy stress tensor of one case (MPa), 6 per element.
+    #[wasm_bindgen(js_name = stressElem)]
+    pub fn stress_elem(&self, case: usize) -> Float64Array {
+        let flat: Vec<f64> = self.g.cases[case]
+            .stress_elem
+            .iter()
+            .flat_map(|s| s.iter().copied())
+            .collect();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Graded element-centroid equivalent plastic strain of one case (`%`).
+    #[wasm_bindgen(js_name = plasticStrainElem)]
+    pub fn plastic_strain_elem(&self, case: usize) -> Float64Array {
+        Float64Array::from(&self.g.cases[case].plastic_strain_elem[..])
+    }
+
+    /// Nodal 3D temperature gradient of one mechanical case (always empty on mechanical slots).
+    #[wasm_bindgen(js_name = gradTNodal)]
+    pub fn grad_t_nodal(&self, case: usize) -> Float64Array {
+        Float64Array::from(
+            self.g
+                .cases
+                .get(case)
+                .and_then(|c| c.grad_t_nodal.as_deref())
+                .unwrap_or(&[]),
+        )
+    }
+
+    /// Graded element-centroid stress tensor of one thermal case (MPa), 6 per element.
+    #[wasm_bindgen(js_name = thermalStressElem)]
+    pub fn thermal_stress_elem(&self, case: usize) -> Float64Array {
+        let flat: Vec<f64> = self
+            .g
+            .thermal_cases
+            .get(case)
+            .map(|c| {
+                c.stress_elem
+                    .iter()
+                    .flat_map(|s| s.iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Float64Array::from(&flat[..])
+    }
+
+    /// Graded nodal 3D temperature gradient of one thermal case (`°C/mm`, `3 * nn` floats).
+    #[wasm_bindgen(js_name = thermalGradTNodal)]
+    pub fn thermal_grad_t_nodal(&self, case: usize) -> Float64Array {
+        let g = self
+            .g
+            .thermal_cases
+            .get(case)
+            .and_then(|c| c.grad_t_nodal.as_deref());
+        Float64Array::from(g.unwrap_or(&[]))
     }
 
     /// Graded most-compressive principal stress of one case at the element centroids
@@ -1921,4 +2023,79 @@ pub fn parse_touchstone_vna_wasm(touchstone_text: &str) -> Result<String, JsValu
     use fieldsmith_solve::antenna::parse_touchstone_vna;
     let pts = parse_touchstone_vna(touchstone_text).map_err(js_err)?;
     to_json(&pts)
+}
+
+/// Evaluate the 3D Multi-Regime Free-Surface & Capillary Fluid Simulation Suite:
+/// Automatically switches/blends between:
+/// - Regime I: Boussinesq–Peregrine (1967) Dispersive Potential Wave (`peregrine_potential`),
+/// - Regime II: Divergence-Free SPH (`DFSPH`, Bender & Koschier 2017) Plunging Jet & FSI (`inertial_dfsph`),
+/// - Regime III: MLS-Curvature CSF + Akinci Cohesion + Hinze Bubble + Young–Dupré SDF Wetting (`capillary_mls_sph`),
+/// - Regime IV: Implicit Stokes–Trouton Visco-Capillary (`implicit_stokes_visco_capillary`, $Oh \gg 1, Re \ll 1$)
+///   for **1100 °C Float-Bath Spout-Lip Pour & Reverse-Flow Heel to Ribbon Knurl**.
+#[wasm_bindgen(js_name = solveFreeSurfaceSph)]
+pub fn solve_free_surface_sph_wasm(spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_solve::sph_surface_tension::{
+        build_sph_fsi_3d_fsm, solve_free_surface_sph, SphFluidSpec,
+    };
+    let t0 = clock();
+    let spec: SphFluidSpec = if spec_json.trim().is_empty() {
+        SphFluidSpec::default()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid SphFluidSpec JSON: {e}")))?
+    };
+    let report = solve_free_surface_sph(&spec);
+    let fsm_3d = build_sph_fsi_3d_fsm(&report);
+    let wall_ms = clock() - t0;
+    to_json(&serde_json::json!({
+        "report": report,
+        "fsm_3d": fsm_3d,
+        "wall_ms": wall_ms,
+    }))
+}
+
+/// Execute the 8 canonical Gerris Flow Solver (`gerris-stable/test/`) analytic verification
+/// benchmarks (`G1` spurious, `G2` capwave, `G3` oscillation, `G4` plateau, `G5` poiseuille,
+/// `G6` couette, `G7` reynolds, `G8` parabola).
+#[wasm_bindgen(js_name = runGerrisTestSuite)]
+pub fn run_gerris_test_suite(
+    grid_n: Option<usize>,
+    laplace_number: Option<f64>,
+) -> Result<String, JsValue> {
+    use fieldsmith_solve::sph_surface_tension::run_gerris_analytic_test_suite_with_params;
+    let suite = run_gerris_analytic_test_suite_with_params(
+        grid_n.unwrap_or(64),
+        laplace_number.unwrap_or(12000.0),
+    );
+    to_json(&suite)
+}
+
+/// Alias with explicit `runGerrisTestSuiteWasm` JS binding name.
+#[wasm_bindgen(js_name = runGerrisTestSuiteWasm)]
+pub fn run_gerris_test_suite_wasm(
+    grid_n: Option<usize>,
+    laplace_number: Option<f64>,
+) -> Result<String, JsValue> {
+    run_gerris_test_suite(grid_n, laplace_number)
+}
+
+/// Execute the **Spurious Capillary Eddies & Surface-Tension Geometry Approximation Benchmark**
+/// across all 5 canonical curvature approximation schemes (`voxel_staircase_csf`, `kernel_color_csf`,
+/// `monge_parabolic_mls`, `height_function_vof`, `pratt_quadric_mls`), returning the measured
+/// curvature variance $\sigma^*_\kappa$, curl vorticity source, parasitic Capillary number $Ca_{\max}$,
+/// eddy kinetic energy $E_{\text{eddy}}$, log-log convergence curves, and the 2D equatorial
+/// 8-vortex velocity & vorticity field.
+#[wasm_bindgen(js_name = runSpuriousEddyBenchmark)]
+pub fn run_spurious_eddy_benchmark_wasm(spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_solve::sph_surface_tension::{
+        run_spurious_eddy_geometry_benchmark, SpuriousEddyBenchmarkSpec,
+    };
+    let spec: SpuriousEddyBenchmarkSpec = if spec_json.trim().is_empty() {
+        SpuriousEddyBenchmarkSpec::default()
+    } else {
+        serde_json::from_str(spec_json)
+            .map_err(|e| js_err(format!("invalid SpuriousEddyBenchmarkSpec JSON: {e}")))?
+    };
+    let report = run_spurious_eddy_geometry_benchmark(&spec);
+    to_json(&report)
 }

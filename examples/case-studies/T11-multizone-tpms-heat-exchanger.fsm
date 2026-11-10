@@ -12,6 +12,9 @@ fieldsmith 1
 # @starter_fsm_name: T11-multizone-lattice-coldplate.fsm
 # @verification_refs: docs/verification/V36.md, docs/verification/V54.md
 # ---
+# @assert: Multi-Zone Primitive-to-Diamond Mass Saving || mass_saved_pct || >= 25.0 || >= 25% || %
+# @assert: Case 1 Graded Bending & Shear Peak Stress || graded.max_vm_elem:1 || >= 30.0 || >= 30.0 || MPa
+# ---
 # @step: 1. Inspecting a Multi-Zone Lattice: Coarse Primitive → Fine Diamond in Fill (4) || fill
 #   Why settle for a single unit-cell size or a single TPMS family across an entire component? In thermal-structural hardware like an AlSi10Mg cold-plate bracket, lightly loaded regions benefit from a coarse, open "Primitive" (Schwarz-P) cell ("Cell = 8 mm") for low pressure drop and low mass, whereas high-stress bending/shear zones need a fine, shear-stiff "Diamond" cell ("Min cell = 4 mm", "Morph to = Diamond") with a thickened outer shell ("Skin = 1.2 mm → Max skin = 2.2 mm"). Tap "Go to Fill →" (tab 4): notice the cutaway view immediately shows the smooth, seamless transition from large 8 mm Primitive cells to fine 4 mm Diamond cells without any sharp interface!
 # @expected:

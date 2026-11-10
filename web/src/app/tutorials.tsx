@@ -14,10 +14,20 @@ import {
 import { parseFsm, printFsm } from '../doc/wasm';
 import { EXAMPLES, extraCommands, newDocument, openFile, openText, viewApi } from './commands';
 import { viewOverlays, statusItems } from './App';
+import { analysis } from './analysis';
 import { markWorkspaceRevisionSeen, swirlShared } from './systems';
 import { apiUrl, ui, useApp } from './ui';
 import { FixingTorqueAndWeibullWorkbench } from './FixingsModal';
 import { SketchWorkbench } from './SketchWorkbench';
+import {
+  FreeSurfaceModal,
+  FreeSurfaceWorkbench,
+  openFreeSurfaceModal,
+} from './FreeSurfaceModal';
+import {
+  CoordMappingModal,
+  openCoordMappingModal,
+} from './CoordMappingModal';
 import {
   openAntennaWorkbenchModal,
   syncDeadCatDroneToDocument,
@@ -39,6 +49,8 @@ import {
   getFsmPathForSheet,
   getVerificationRefsForSheet,
   getCategoryLabel,
+  evaluateLiterateAssertOnLevel,
+  findMatchingLiterateSheet,
   type TutorialStep,
   type TheorySection,
   type McpFlowStep,
@@ -158,7 +170,14 @@ export function loadTutorialSheetModel(sheetId: string, openSystemsIfFlagged = f
     ui.set('systemsOpen', true);
   } else {
     ui.set('systemsOpen', false);
-    store.setLens('shape');
+    if (sheet.id === 'A15') {
+      ui.set('resultsRampPlay', true);
+      if (store.lens !== 'theory') {
+        store.setLens('results');
+      }
+    } else if (store.lens !== 'theory') {
+      store.setLens('shape');
+    }
   }
   if (ok) {
     ui.notify(`Loaded ${sheet.code}: ${sheet.title}`);
@@ -202,7 +221,32 @@ export function toggleTutorialsDrawer() {
   }
 }
 
-function computeSwirlCombustorNox(params: {
+function gammaLanczos(z: number): number {
+  const g = 7;
+  const p = [
+    0.99999999999980993,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7,
+  ];
+  if (z < 0.5) {
+    return Math.PI / (Math.sin(Math.PI * z) * gammaLanczos(1 - z));
+  }
+  const zm1 = z - 1;
+  let x = p[0];
+  for (let i = 1; i < g + 2; i++) {
+    x += p[i] / (zm1 + i);
+  }
+  const t = zm1 + g + 0.5;
+  return Math.sqrt(2 * Math.PI) * Math.pow(t, zm1 + 0.5) * Math.exp(-t) * x;
+}
+
+export function computeSwirlCombustorNox(params: {
   orificeR: number;
   swirlSlotR: number;
   swirlOffset: number;
@@ -212,27 +256,185 @@ function computeSwirlCombustorNox(params: {
   equivRatio: number;
 }) {
   const { orificeR, swirlSlotR, swirlOffset, linerWall, coolantTemp, fuelPressureBar, equivRatio } = params;
+
+  // Stage 1: Taylor (1948) / Rizk–Lefebvre Inviscid Air-Core Vortex
   // Geometric Swirl Number S_g = (R_offset * r_orifice) / (n_ports * r_slot^2) with n_ports = 2
   const swirlNumber = (swirlOffset * orificeR) / Math.max(0.5, 2.0 * swirlSlotR * swirlSlotR);
-  // Hollow-cone spray half-angle (deg)
+  // Hollow-cone spray half-angle (deg & rad)
   const sprayHalfAngleDeg = Math.min(72.0, Math.max(22.0, 18.0 + 23.5 * Math.pow(swirlNumber, 0.56)));
-  // Air-core liquid film thickness at the orifice lip (um)
-  const filmThicknessUm =
-    295.0 *
+  const thetaRad = (sprayHalfAngleDeg * Math.PI) / 180.0;
+
+  // Orifice exit film thickness h_0 = r_o * (1 - sqrt(X)) where X = A_air / A_o is Taylor air-core area fraction
+  const h0TargetMm =
+    0.295 *
     Math.pow(orificeR / 2.6, 0.62) *
     Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.28) *
     Math.pow(1.65 / Math.max(0.35, swirlNumber), 0.42);
-  // Lefebvre Sauter Mean Diameter D_32 (um)
-  const smdUm =
-    46.5 *
-    Math.pow(filmThicknessUm / 255.0, 0.38) *
-    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.32) *
-    Math.pow(orificeR / 2.6, 0.28) *
-    Math.pow(Math.cos((sprayHalfAngleDeg * Math.PI) / 360.0), 0.25);
-  // D^2-law droplet evaporation time tau_evap = D_32^2 / K_evap (ms, with K_evap = 0.90 mm^2/s)
-  const evapTimeMs = (smdUm * smdUm * 1e-3) / 0.9;
-  // Mixture-fraction unmixedness s_phi driven by slow droplet evaporation
-  const unmixedness = Math.min(0.38, 0.02 + 0.085 * Math.pow(evapTimeMs, 0.95));
+  const sqrtX = Math.min(0.965, Math.max(0.45, 1.0 - h0TargetMm / Math.max(0.8, orificeR)));
+  const airCoreAreaFrac = sqrtX * sqrtX;
+  const h0Mm = orificeR * (1.0 - sqrtX);
+  const filmThicknessUm = h0Mm * 1000.0;
+
+  // Liquid Jet-A / kerosene & high-pressure combustor gas properties
+  const rhoL = 800.0; // kg/m^3
+  const rhoG = 4.8; // kg/m^3 (combustor primary zone gas)
+  const rhoHat = rhoG / rhoL;
+  const sigmaL = 0.026; // N/m
+  const muL = 1.35e-3; // Pa*s
+  const cv = 0.76 + 0.04 * Math.tanh(swirlNumber - 1.5);
+  const uSheetMs = cv * Math.sqrt((2.0 * Math.max(1.0, fuelPressureBar) * 1e5) / rhoL);
+
+  // Stage 2: 1D Spatial Conical Sheet Thinning & Squire (1953) / Senecal (1999) Viscous KH Wave Growth
+  const nSteps = 40;
+  const sMaxMm = 25.0;
+  const dsMm = sMaxMm / nSteps;
+  const dsM = dsMm * 1e-3;
+  const sheetProfile: Array<{ sMm: number; hUm: number; khLogAmp: number }> = [];
+
+  let khIntegralN = 0.0;
+  let sheetBreakupLengthMm = sMaxMm;
+  let breakupFilmThicknessUm = filmThicknessUm * 0.22;
+  let kMaxBreakupInvM = 9.0e4;
+  let breakupFound = false;
+
+  for (let i = 0; i <= nSteps; i++) {
+    const sMm = i * dsMm;
+    const rMm = orificeR + sMm * Math.sin(thetaRad);
+    const hMm = (orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rMm);
+    const hM = Math.max(5.0e-6, hMm * 1e-3);
+    const halfH = 0.5 * hM;
+
+    const weGasLocal = (rhoG * uSheetMs * uSheetMs * hM) / sigmaL;
+    const ohSheetLocal = muL / Math.sqrt(rhoL * sigmaL * hM);
+    // Squire / Senecal viscous sinuous maximum-growth wavenumber k_max(s) [1/m]
+    const kMaxInvM =
+      (rhoG * uSheetMs * uSheetMs) /
+      (2.0 * sigmaL * (1.0 + 2.6 * ohSheetLocal + 0.165 * Math.pow(Math.max(1.0, weGasLocal), 0.62)));
+
+    const khArg = Math.min(10.0, kMaxInvM * halfH);
+    const tanhKh = Math.tanh(khArg);
+    const capCut = Math.max(0.08, 1.0 - (sigmaL * kMaxInvM) / Math.max(1.0, rhoG * uSheetMs * uSheetMs));
+    const viscTerm = (2.0 * muL * kMaxInvM * kMaxInvM) / rhoL;
+    const inviscidSq =
+      ((rhoHat * uSheetMs * uSheetMs * kMaxInvM * kMaxInvM * capCut) / Math.max(1e-4, tanhKh + rhoHat)) * 0.068;
+    const omegaMaxInvS = Math.max(50.0, Math.sqrt(inviscidSq + viscTerm * viscTerm) - 0.35 * viscTerm);
+
+    if (i > 0) {
+      const prevN = khIntegralN;
+      const dN = (omegaMaxInvS / Math.max(5.0, uSheetMs)) * dsM;
+      khIntegralN += dN;
+      if (!breakupFound && khIntegralN >= 12.0) {
+        const frac = (12.0 - prevN) / Math.max(1e-9, dN);
+        sheetBreakupLengthMm = (i - 1 + frac) * dsMm;
+        const rBreakMm = orificeR + sheetBreakupLengthMm * Math.sin(thetaRad);
+        breakupFilmThicknessUm = ((orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rBreakMm)) * 1000.0;
+        kMaxBreakupInvM = kMaxInvM;
+        breakupFound = true;
+      }
+    }
+
+    sheetProfile.push({
+      sMm: Number(sMm.toFixed(3)),
+      hUm: Number((hMm * 1000.0).toFixed(2)),
+      khLogAmp: Number(Math.min(18.0, khIntegralN).toFixed(3)),
+    });
+  }
+
+  if (!breakupFound) {
+    sheetBreakupLengthMm = Math.min(24.5, Math.max(3.0, sMaxMm * (12.0 / Math.max(2.0, khIntegralN))));
+    const rBreakMm = orificeR + sheetBreakupLengthMm * Math.sin(thetaRad);
+    breakupFilmThicknessUm = ((orificeR * h0Mm * Math.cos(thetaRad)) / Math.max(0.2, rBreakMm)) * 1000.0;
+    const hBreakM = Math.max(5.0e-6, breakupFilmThicknessUm * 1e-6);
+    const weGasBreak = (rhoG * uSheetMs * uSheetMs * hBreakM) / sigmaL;
+    const ohBreak = muL / Math.sqrt(rhoL * sigmaL * hBreakM);
+    kMaxBreakupInvM =
+      (rhoG * uSheetMs * uSheetMs) /
+      (2.0 * sigmaL * (1.0 + 2.6 * ohBreak + 0.165 * Math.pow(Math.max(1.0, weGasBreak), 0.62)));
+  }
+
+  // Stage 3: Dombrowski–Johns (1963) Ligament Formation & Weber (1931) Viscous RP Breakup
+  const hBreakM = Math.max(4.0e-6, breakupFilmThicknessUm * 1e-6);
+  const dLigamentM = Math.sqrt((4.0 * hBreakM) / (Math.PI * Math.max(100.0, kMaxBreakupInvM)));
+  const ligamentDiameterUm = dLigamentM * 1e6;
+  const ohLigament = muL / Math.sqrt(rhoL * sigmaL * Math.max(1e-6, dLigamentM));
+  const d0Um = 1.89 * ligamentDiameterUm * Math.pow(1.0 + 3.0 * ohLigament, 1.0 / 6.0);
+
+  // Stage 4: 16-Bin Villermaux–Marmottant (2004) Gamma Droplet Spectrum & Poly-Disperse D^2 Evaporation
+  const weSheet0 = Math.max(
+    1.0,
+    ((rhoG * uSheetMs * uSheetMs * (h0Mm * 1e-3)) / sigmaL) * Math.pow(orificeR / Math.max(0.5, swirlNumber), 2.2),
+  );
+  const villermauxGammaOrderN = 4.0 + 2.5 * Math.pow(weSheet0, -0.15);
+  // Couple Dombrowski–Johns ligament scale d_0 with aerodynamic secondary stripping
+  const dMean1Um =
+    0.85 *
+    d0Um *
+    (villermauxGammaOrderN / (villermauxGammaOrderN + 2.0)) *
+    Math.pow(12.0 / Math.max(2.0, fuelPressureBar), 0.14) *
+    Math.pow(Math.cos((sprayHalfAngleDeg * Math.PI) / 360.0), 0.22);
+  const smdUm = ((villermauxGammaOrderN + 2.0) / villermauxGammaOrderN) * dMean1Um;
+
+  const nBins = 16;
+  const gammaN = gammaLanczos(villermauxGammaOrderN);
+  const nPowN = Math.pow(villermauxGammaOrderN, villermauxGammaOrderN);
+  const rawBins: Array<{ dUm: number; pdfNorm: number; volWeight: number }> = [];
+  let totalVolWeight = 0.0;
+
+  for (let b = 0; b < nBins; b++) {
+    const dOverSmd = 0.2 + b * 0.2; // spans 0.20 * D_32 .. 3.20 * D_32
+    const dUm = dOverSmd * smdUm;
+    const x = dUm / Math.max(1.0, dMean1Um);
+    const pdfNorm = (nPowN / gammaN) * Math.pow(x, villermauxGammaOrderN - 1.0) * Math.exp(-villermauxGammaOrderN * x);
+    const volWeight = Math.pow(dUm, 3) * (pdfNorm / Math.max(1.0, dMean1Um));
+    totalVolWeight += volWeight;
+    rawBins.push({ dUm, pdfNorm, volWeight });
+  }
+
+  let tailMassSum = 0.0;
+  const dropletSpectrum: Array<{ dUm: number; pdfNorm: number; massFrac: number }> = rawBins.map((bin) => {
+    const massFrac = bin.volWeight / Math.max(1e-12, totalVolWeight);
+    if (bin.dUm > 2.0 * smdUm) {
+      tailMassSum += massFrac;
+    } else if (bin.dUm > 1.75 * smdUm) {
+      tailMassSum += 0.45 * massFrac;
+    }
+    return {
+      dUm: Number(bin.dUm.toFixed(2)),
+      pdfNorm: Number(bin.pdfNorm.toFixed(4)),
+      massFrac: Number(massFrac.toFixed(4)),
+    };
+  });
+  const largeDropTailPct = Math.min(
+    35.0,
+    Math.max(0.2, tailMassSum * 100.0 * Math.pow(smdUm / 38.0, 0.45)),
+  );
+
+  // Integrate poly-disperse Godsave/Spalding D^2-law evaporation across all 16 Gamma bins
+  // Find 90% mass evaporation time tau_evap,90 where remaining liquid mass fraction = 0.10
+  const kEvapUm2PerMs = 1140.0 * (0.94 + 0.04 * Math.sqrt(Math.max(0.3, swirlNumber)));
+  let tLo = 0.05;
+  let tHi = 20.0;
+  for (let iter = 0; iter < 22; iter++) {
+    const tMid = 0.5 * (tLo + tHi);
+    let remMass = 0.0;
+    for (let b = 0; b < nBins; b++) {
+      const d0Sq = rawBins[b].dUm * rawBins[b].dUm;
+      const remRatioSq = Math.max(0.0, 1.0 - (kEvapUm2PerMs * tMid) / Math.max(1.0, d0Sq));
+      remMass += dropletSpectrum[b].massFrac * Math.pow(remRatioSq, 1.5);
+    }
+    if (remMass > 0.14) {
+      tLo = tMid;
+    } else {
+      tHi = tMid;
+    }
+  }
+  const evapTimeMs = 0.5 * (tLo + tHi);
+
+  // Mixture-fraction unmixedness s_phi driven by poly-disperse evaporation time & large-droplet tail
+  const unmixedness = Math.min(
+    0.38,
+    0.018 + 0.075 * Math.pow(evapTimeMs, 0.94) + 0.0022 * largeDropTailPct,
+  );
   // Homogeneous lean adiabatic flame temp vs stoichiometric diffusion-pocket temp (2350 K)
   const tAdiabaticK = 1280.0 + 1020.0 * equivRatio - 260.0 * Math.pow(Math.max(0, equivRatio - 1.02), 2);
   const diffWeight = Math.min(0.75, 1.95 * unmixedness);
@@ -251,6 +453,8 @@ function computeSwirlCombustorNox(params: {
   const totalNoxPpm = promptNoxPpm + thermalNoxPpm;
   // Heat-exchanger thermal recovery power (kW)
   const hxPowerKw = 14.5 + 0.052 * (linerHotWallC - coolantTemp) * Math.pow(5.0 / Math.max(2.0, linerWall), 0.3);
+  const pressureLossPct = 2.4 + 0.38 * Math.pow(swirlNumber, 0.65) + 0.045 * fuelPressureBar;
+  const patternFactor = Math.min(0.45, Math.max(0.08, 0.11 + 0.55 * unmixedness));
 
   return {
     swirlNumber,
@@ -259,9 +463,22 @@ function computeSwirlCombustorNox(params: {
     smdUm,
     evapTimeMs,
     tFlameEffK,
+    adiabaticFlameTempK: tFlameEffK,
     linerHotWallC,
+    linerWallTempK: linerHotWallC + 273.15,
     totalNoxPpm,
+    noxPpm: totalNoxPpm,
     hxPowerKw,
+    pressureLossPct,
+    patternFactor,
+    airCoreAreaFrac,
+    sheetBreakupLengthMm,
+    breakupFilmThicknessUm,
+    ligamentDiameterUm,
+    villermauxGammaOrderN,
+    largeDropTailPct,
+    sheetProfile,
+    dropletSpectrum,
   };
 }
 
@@ -393,6 +610,28 @@ function SwirlAtomiserNoxPredictor() {
           <strong>{metrics.swirlNumber.toFixed(2)}</strong> ({metrics.sprayHalfAngleDeg.toFixed(0)}° cone)
         </div>
         <div>
+          <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Air-Core &amp; Lip Film</div>
+          <strong>X={(metrics.airCoreAreaFrac * 100).toFixed(0)}%</strong> (h₀={metrics.filmThicknessUm.toFixed(0)} μm)
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Sheet Breakup L_b</div>
+          <strong data-testid="t9-sheet-breakup-mm">{metrics.sheetBreakupLengthMm.toFixed(1)} mm</strong> (h_b={metrics.breakupFilmThicknessUm.toFixed(0)} μm)
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Ligament Diam d_L</div>
+          <strong data-testid="t9-ligament-diam-um">⌀ {metrics.ligamentDiameterUm.toFixed(1)} μm</strong>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Villermaux Order n</div>
+          <strong data-testid="t9-villermaux-n">{metrics.villermauxGammaOrderN.toFixed(2)}</strong>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Large-Drop Tail (&gt;2D₃₂)</div>
+          <strong data-testid="t9-large-drop-tail-pct" style={{ color: metrics.largeDropTailPct <= 4.5 ? 'var(--ok)' : 'var(--warn)' }}>
+            {metrics.largeDropTailPct.toFixed(1)}%
+          </strong>
+        </div>
+        <div>
           <div style={{ color: 'var(--text-3)', fontSize: '10px' }}>Droplet SMD (D₃₂)</div>
           <strong data-testid="t9-smd-readout">{metrics.smdUm.toFixed(1)} μm</strong>
         </div>
@@ -409,6 +648,136 @@ function SwirlAtomiserNoxPredictor() {
           <strong>{metrics.linerHotWallC} °C</strong> ({metrics.hxPowerKw.toFixed(1)} kW)
         </div>
       </div>
+
+      {/* Dual Mini-SVG: 1D Conical Sheet Thinning + Squire KH Wave Growth & 16-Bin Villermaux-Marmottant Gamma Spectrum */}
+      {(() => {
+        const sp = metrics.sheetProfile;
+        const ds = metrics.dropletSpectrum;
+        const hMax = Math.max(100, metrics.filmThicknessUm * 1.05);
+        const sMax = 25.0;
+        const sxSheet = (s: number) => 34 + (s / sMax) * 204;
+        const syH = (h: number) => 112 - Math.min(1, Math.max(0, h / hMax)) * 88;
+        const syN = (nVal: number) => 112 - Math.min(1, Math.max(0, nVal / 16.0)) * 88;
+        const hPts = sp.map((p) => `${sxSheet(p.sMm).toFixed(1)},${syH(p.hUm).toFixed(1)}`).join(' ');
+        const nPts = sp.map((p) => `${sxSheet(p.sMm).toFixed(1)},${syN(p.khLogAmp).toFixed(1)}`).join(' ');
+        const lbX = sxSheet(metrics.sheetBreakupLengthMm);
+        const n12Y = syN(12.0);
+
+        const pdfMax = Math.max(0.5, ...ds.map((b) => b.pdfNorm));
+        const dMax = Math.max(10, ds[ds.length - 1]?.dUm ?? 100);
+        const sxDrop = (d: number) => 32 + (d / dMax) * 206;
+        const syPdf = (p: number) => 112 - Math.min(1, Math.max(0, p / pdfMax)) * 88;
+        const pdfPts = ds.map((b) => `${sxDrop(b.dUm).toFixed(1)},${syPdf(b.pdfNorm).toFixed(1)}`).join(' ');
+        const smdX = sxDrop(metrics.smdUm);
+        const tailCutX = sxDrop(2.0 * metrics.smdUm);
+
+        return (
+          <div
+            data-testid="t9-zaleski-dual-svg"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(235px, 1fr))',
+              gap: '8px',
+              margin: '2px 0',
+            }}
+          >
+            {/* Left SVG: Conical Sheet Thinning h(s) & Squire KH Wave Amplification N(s) */}
+            <div
+              style={{
+                padding: '6px 8px',
+                borderRadius: '5px',
+                background: 'var(--panel)',
+                border: '1px solid var(--line)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
+                <strong>1D Conical Sheet h(s) &amp; Squire KH Growth N(s)</strong>
+                <span class="num" style={{ color: '#22d3ee' }}>L_b = {metrics.sheetBreakupLengthMm.toFixed(1)} mm</span>
+              </div>
+              <svg
+                viewBox="0 0 265 132"
+                data-testid="t9-sheet-breakup-svg"
+                style={{ width: '100%', height: 'auto', background: '#090d16', borderRadius: '4px', border: '1px solid var(--line)' }}
+              >
+                <line x1="34" y1="24" x2="238" y2="24" stroke="#1e293b" strokeWidth="0.8" />
+                <line x1="34" y1="68" x2="238" y2="68" stroke="#1e293b" strokeWidth="0.8" />
+                <line x1="34" y1="112" x2="238" y2="112" stroke="#334155" strokeWidth="1" />
+                {/* Breakup threshold N = 12 horizontal dashed line & L_b vertical marker */}
+                <line x1="34" y1={n12Y} x2="238" y2={n12Y} stroke="#f43f5e" strokeWidth="1" strokeDasharray="3,2" />
+                <line x1={lbX} y1="20" x2={lbX} y2="112" stroke="#f59e0b" strokeWidth="1.3" strokeDasharray="3,2" />
+                <circle cx={lbX} cy={n12Y} r="3.2" fill="#f43f5e" stroke="#fff" strokeWidth="1" />
+                {/* Sheet thickness h(s) [um] */}
+                <polyline fill="none" stroke="#38bdf8" strokeWidth="2" points={hPts} />
+                {/* Squire KH log amplification N(s) = ln(eta/eta_0) */}
+                <polyline fill="none" stroke="#34d399" strokeWidth="1.9" points={nPts} />
+                <text x="4" y="28" fill="#38bdf8" fontSize="7.5" fontFamily="monospace">{hMax.toFixed(0)}μm</text>
+                <text x="4" y="112" fill="#94a3b8" fontSize="7.5" fontFamily="monospace">0</text>
+                <text x="240" y={n12Y + 3} fill="#f43f5e" fontSize="7.5" fontFamily="monospace">N=12</text>
+                <text x="36" y="14" fill="#38bdf8" fontSize="8" fontFamily="monospace">— h(s) Film</text>
+                <text x="108" y="14" fill="#34d399" fontSize="8" fontFamily="monospace">— N(s)=ln(η/η₀)</text>
+                <text x="192" y="14" fill="#f59e0b" fontSize="8" fontFamily="monospace">| L_b={metrics.sheetBreakupLengthMm.toFixed(1)}mm</text>
+                <text x="72" y="126" fill="#94a3b8" fontSize="8" fontFamily="monospace">Streamwise Coordinate s [0 .. 25 mm]</text>
+              </svg>
+            </div>
+
+            {/* Right SVG: 16-Bin Villermaux-Marmottant (2004) Gamma Droplet Size Spectrum */}
+            <div
+              style={{
+                padding: '6px 8px',
+                borderRadius: '5px',
+                background: 'var(--panel)',
+                border: '1px solid var(--line)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
+                <strong>16-Bin Villermaux–Marmottant Gamma p(d)</strong>
+                <span class="num" style={{ color: '#fbbf24' }}>n = {metrics.villermauxGammaOrderN.toFixed(2)} · Tail {metrics.largeDropTailPct.toFixed(1)}%</span>
+              </div>
+              <svg
+                viewBox="0 0 265 132"
+                data-testid="t9-villermaux-spectrum-svg"
+                style={{ width: '100%', height: 'auto', background: '#090d16', borderRadius: '4px', border: '1px solid var(--line)' }}
+              >
+                <line x1="32" y1="24" x2="238" y2="24" stroke="#1e293b" strokeWidth="0.8" />
+                <line x1="32" y1="68" x2="238" y2="68" stroke="#1e293b" strokeWidth="0.8" />
+                <line x1="32" y1="112" x2="238" y2="112" stroke="#334155" strokeWidth="1" />
+                {/* 16 Histogram bars (highlighting d > 2*D_32 diffusion-flame NOx tail in coral red) */}
+                {ds.map((b, idx) => {
+                  const bx = sxDrop(b.dUm) - 5;
+                  const by = syPdf(b.pdfNorm);
+                  const bh = Math.max(1, 112 - by);
+                  const isTail = b.dUm >= 2.0 * metrics.smdUm;
+                  return (
+                    <rect
+                      key={idx}
+                      x={bx}
+                      y={by}
+                      width="9.5"
+                      height={bh}
+                      fill={isTail ? 'rgba(244, 63, 94, 0.65)' : 'rgba(56, 189, 248, 0.42)'}
+                      stroke={isTail ? '#f43f5e' : '#38bdf8'}
+                      strokeWidth="0.7"
+                      rx="1"
+                    />
+                  );
+                })}
+                <polyline fill="none" stroke="#fbbf24" strokeWidth="1.8" points={pdfPts} />
+                <line x1={smdX} y1="20" x2={smdX} y2="112" stroke="#34d399" strokeWidth="1.2" strokeDasharray="3,2" />
+                <line x1={tailCutX} y1="20" x2={tailCutX} y2="112" stroke="#f43f5e" strokeWidth="1.2" strokeDasharray="2,2" />
+                <text x="35" y="14" fill="#34d399" fontSize="8" fontFamily="monospace">| D₃₂={metrics.smdUm.toFixed(1)}μm</text>
+                <text x="118" y="14" fill="#f43f5e" fontSize="8" fontFamily="monospace">■ d&gt;2D₃₂ NOx Tail ({metrics.largeDropTailPct.toFixed(1)}%)</text>
+                <text x="64" y="126" fill="#94a3b8" fontSize="8" fontFamily="monospace">Droplet Diameter d [0 .. {dMax.toFixed(0)} μm]</text>
+              </svg>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Interactive Nozzle & Combustor Sliders */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '6px 12px', fontSize: '11px' }}>
@@ -706,6 +1075,26 @@ function TutorialsContentsPage({
   const setCategoryFilter = (cat: 'all' | TutorialCategory | 'example') =>
     ui.set('tutorialCategoryFilter', cat);
   const [trackFilter, setTrackFilter] = useState<'all' | TutorialTrackId>('all');
+  /** Default to collapsed Table of Contents ('contents') so 100s of tests scan cleanly without wall-of-cards clutter. */
+  const [viewMode, setViewMode] = useState<'contents' | 'cards'>('contents');
+  /** Set of sheet IDs expanded inline in 'contents' mode. */
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
+  /** Set of track IDs collapsed at the section header level. */
+  const [collapsedTracks, setCollapsedTracks] = useState<Set<string>>(() => new Set());
+
+  const toggleRowExpanded = (id: string) => {
+    const next = new Set(expandedRows);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedRows(next);
+  };
+
+  const toggleTrackCollapsed = (trackId: string) => {
+    const next = new Set(collapsedTracks);
+    if (next.has(trackId)) next.delete(trackId);
+    else next.add(trackId);
+    setCollapsedTracks(next);
+  };
 
   const q = searchQuery.trim().toLowerCase();
 
@@ -754,128 +1143,166 @@ function TutorialsContentsPage({
   const tutorialCount = TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'tutorial').length;
   const analyticCount = TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'analytic').length;
   const caseStudyCount = TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'case-study').length;
+  const allTracksCollapsed = collapsedTracks.size >= TUTORIAL_TRACKS.length;
 
   return (
     <div
       data-testid="tutorials-contents-page"
       style={{
-        padding: '14px 16px 28px',
+        padding: '10px 14px 20px',
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: '16px',
+        gap: '10px',
         flex: 1,
       }}
     >
-      {/* Top Directory Banner + Search, Category & Track Filter Bar */}
+      {/* Compact Contents Header Bar: Search, Category Pills, Track Filter & View Toggle */}
       <div
         data-testid="tutorial-contents-filter-bar"
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: '10px',
-          padding: '12px 14px',
-          borderRadius: '8px',
+          gap: '7px',
+          padding: '9px 12px',
+          borderRadius: '7px',
           background: 'var(--panel-2)',
           border: '1px solid var(--line-strong)',
         }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-          <div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text)' }}>
-              Guided Tutorials, Analytic Verification Benchmarks &amp; Multiphysics Case Studies ({totalCount} Total)
-            </div>
-            <div style={{ fontSize: '11.5px', color: 'var(--text-2)', marginTop: '2px' }}>
-              Categorised into <strong>Guided Tutorials</strong> (<code>docs/tutorials/</code>), <strong>Analytic Verification Tests</strong> (<code>docs/analytic-tests/</code> + <code>docs/verification/V*.md</code>), <strong>Multiphysics Case Studies</strong> (<code>docs/case-studies/</code>), and <strong>Starter Examples</strong> (<code>examples/</code>).
-            </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>
+              📚 Contents Index ({totalCount} Benchmarks, Tutorials &amp; Examples)
+            </strong>
+            <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>
+              Click any row to open · click <code>▸</code> to expand details
+            </span>
           </div>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="search"
               class="text-input"
-              placeholder="Search tutorials, analytic tests (Lame, Kirsch, V60), or materials…"
+              placeholder="Filter by code (A20, T18), keyword, PDE, or material…"
               value={searchQuery}
               data-testid="tutorial-contents-search"
               onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-              style={{ width: 'min(340px, 75vw)', fontSize: '12px', padding: '5px 10px', background: 'var(--panel)' }}
+              style={{ width: 'min(270px, 65vw)', fontSize: '11.5px', padding: '4px 8px', background: 'var(--panel)' }}
             />
             {searchQuery && (
               <button
                 type="button"
                 class="btn ghost small"
                 onClick={() => setSearchQuery('')}
+                style={{ padding: '2px 6px', fontSize: '11px' }}
               >
                 Clear
               </button>
             )}
+            <button
+              type="button"
+              class="btn small"
+              data-testid="tutorial-contents-collapse-all"
+              title={allTracksCollapsed ? 'Expand all track sections' : 'Collapse all track sections to headers'}
+              onClick={() => {
+                if (allTracksCollapsed) {
+                  setCollapsedTracks(new Set());
+                } else {
+                  setCollapsedTracks(new Set(TUTORIAL_TRACKS.map((t) => t.id)));
+                }
+              }}
+              style={{ padding: '2px 7px', fontSize: '11px' }}
+            >
+              {allTracksCollapsed ? '▾ Expand Tracks' : '▸ Collapse Tracks'}
+            </button>
+            <button
+              type="button"
+              class={`btn small ${viewMode === 'contents' ? 'primary' : ''}`}
+              data-testid="tutorial-contents-view-toggle"
+              title="Toggle between Compact Table of Contents List (default) and Detailed Cards"
+              onClick={() => setViewMode(viewMode === 'contents' ? 'cards' : 'contents')}
+              style={{ padding: '2px 7px', fontSize: '11px' }}
+            >
+              {viewMode === 'contents' ? '⊞ Detailed Cards' : '☰ Contents List'}
+            </button>
           </div>
         </div>
 
-        {/* Top-Level Category Filter Pills */}
+        {/* Single Compact Filter Strip: Categories + Track Dropdown/Pills */}
         <div
-          data-testid="tutorial-category-filter"
-          style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '6px',
+          }}
         >
-          <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
-            CATEGORY:
-          </span>
-          {(
-            [
-              { id: 'all', label: `All (${totalCount})` },
-              { id: 'tutorial', label: `📘 Guided Tutorials (${tutorialCount})` },
-              { id: 'analytic', label: `📐 Analytic Verification Tests (${analyticCount})` },
-              { id: 'case-study', label: `🚀 Multiphysics Case Studies (${caseStudyCount})` },
-              { id: 'example', label: `📦 Starter .fsm Examples (${EXAMPLES.length})` },
-            ] as const
-          ).map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              class={`btn small ${categoryFilter === c.id ? 'primary' : ''}`}
-              data-testid={`tutorial-cat-${c.id}`}
-              onClick={() => {
-                setCategoryFilter(c.id);
-                setTrackFilter('all');
-              }}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Track Filter Pills */}
-        <div
-          data-testid="tutorial-track-filter"
-          style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', alignItems: 'center' }}
-        >
-          <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
-            TRACK:
-          </span>
-          <button
-            type="button"
-            class={`btn small ${trackFilter === 'all' ? 'primary' : ''}`}
-            data-testid="tutorial-track-all"
-            onClick={() => setTrackFilter('all')}
+          <div
+            data-testid="tutorial-category-filter"
+            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}
           >
-            All Tracks ({totalCount})
-          </button>
-          {TUTORIAL_TRACKS.map((tr) => {
-            const count =
-              tr.id === 'examples'
-                ? EXAMPLES.length
-                : TUTORIAL_SHEETS.filter((s) => getTrackForSheet(s.id) === tr.id).length;
-            return (
+            {(
+              [
+                { id: 'all', label: `All (${totalCount})` },
+                { id: 'analytic', label: `📐 Analytic (${analyticCount})` },
+                { id: 'tutorial', label: `📘 Tutorials (${tutorialCount})` },
+                { id: 'case-study', label: `🚀 Case Studies (${caseStudyCount})` },
+                { id: 'example', label: `📦 Examples (${EXAMPLES.length})` },
+              ] as const
+            ).map((c) => (
               <button
-                key={tr.id}
+                key={c.id}
                 type="button"
-                class={`btn small ${trackFilter === tr.id ? 'primary' : ''}`}
-                data-testid={`tutorial-track-${tr.id}`}
-                onClick={() => setTrackFilter(tr.id)}
+                class={`btn small ${categoryFilter === c.id ? 'primary' : ''}`}
+                data-testid={`tutorial-cat-${c.id}`}
+                onClick={() => {
+                  setCategoryFilter(c.id);
+                  setTrackFilter('all');
+                }}
+                style={{ padding: '2px 7px', fontSize: '11px' }}
               >
-                {tr.number}: {tr.title.split(',')[0].split('(')[0].trim()} ({count})
+                {c.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
+
+          <div
+            data-testid="tutorial-track-filter"
+            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}
+          >
+            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
+              TRACK:
+            </span>
+            <button
+              type="button"
+              class={`btn small ${trackFilter === 'all' ? 'primary' : ''}`}
+              data-testid="tutorial-track-all"
+              onClick={() => setTrackFilter('all')}
+              style={{ padding: '1px 6px', fontSize: '10.5px' }}
+            >
+              All
+            </button>
+            {TUTORIAL_TRACKS.map((tr) => {
+              const count =
+                tr.id === 'examples'
+                  ? EXAMPLES.length
+                  : TUTORIAL_SHEETS.filter((s) => getTrackForSheet(s.id) === tr.id).length;
+              return (
+                <button
+                  key={tr.id}
+                  type="button"
+                  class={`btn small ${trackFilter === tr.id ? 'primary' : ''}`}
+                  data-testid={`tutorial-track-${tr.id}`}
+                  onClick={() => setTrackFilter(tr.id)}
+                  title={`${tr.number}: ${tr.title}`}
+                  style={{ padding: '1px 6px', fontSize: '10.5px' }}
+                >
+                  {tr.number.replace('Track ', 'T-')} ({count})
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -890,104 +1317,169 @@ function TutorialsContentsPage({
 
         if (trackSheets.length === 0) return null;
         const trackAccentText = `color-mix(in srgb, ${track.accent} 65%, var(--text))`;
+        const isTrackCollapsed = collapsedTracks.has(track.id) && !q;
 
         return (
-          <div key={track.id} data-testid={`contents-section-${track.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div
+          <div
+            key={track.id}
+            data-testid={`contents-section-${track.id}`}
+            style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
+          >
+            {/* Collapsible Track Section Header */}
+            <button
+              type="button"
+              data-testid={`contents-track-toggle-${track.id}`}
+              onClick={() => toggleTrackCollapsed(track.id)}
               style={{
                 display: 'flex',
-                alignItems: 'baseline',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: '8px',
-                borderBottom: `1px solid color-mix(in srgb, ${track.accent} 35%, var(--line))`,
-                paddingBottom: '4px',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: `color-mix(in srgb, ${track.accent} 8%, var(--panel-2))`,
+                border: `1px solid color-mix(in srgb, ${track.accent} 32%, var(--line-strong))`,
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: 'var(--text)',
               }}
             >
-              <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', minWidth: 0 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: trackAccentText }}>
+                  {isTrackCollapsed ? '▸' : '▾'}
+                </span>
                 <span
                   style={{
-                    fontSize: '10.5px',
+                    fontSize: '10px',
                     fontWeight: 700,
-                    padding: '2px 7px',
+                    padding: '1px 6px',
                     borderRadius: '4px',
-                    background: `color-mix(in srgb, ${track.accent} 15%, var(--panel-2))`,
+                    background: `color-mix(in srgb, ${track.accent} 18%, var(--panel-2))`,
                     color: trackAccentText,
-                    border: `1px solid color-mix(in srgb, ${track.accent} 35%, var(--line-strong))`,
-                    marginRight: '8px',
+                    border: `1px solid color-mix(in srgb, ${track.accent} 38%, var(--line-strong))`,
                     fontFamily: 'var(--mono)',
                   }}
                 >
                   {track.number.toUpperCase()}
                 </span>
-                <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{track.title}</strong>
+                <strong style={{ fontSize: '12.5px', color: 'var(--text)' }}>{track.title}</strong>
               </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{track.subtitle}</span>
-            </div>
+              <span
+                class="num"
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: trackAccentText,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {trackSheets.length} {trackSheets.length === 1 ? 'item' : 'items'}
+              </span>
+            </button>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
-                gap: '10px',
-              }}
-            >
-              {trackSheets.map(({ sheet: s, info }) => {
-                const isActive = ui.tutorialSheetId === s.id;
-                const cat = getCategoryForSheet(s);
-                const docPath = getDocPathForSheet(s);
-                const vRefs = getVerificationRefsForSheet(s);
-                return (
-                  <div
-                    key={s.id}
-                    data-testid={`contents-card-${s.id}`}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      gap: '8px',
-                      padding: '11px 13px',
-                      borderRadius: '8px',
-                      background: isActive
-                        ? `color-mix(in srgb, ${track.accent} 8%, var(--panel-2))`
-                        : 'var(--panel-2)',
-                      border: isActive
-                        ? `1.5px solid ${track.accent}`
-                        : '1px solid var(--line-strong)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                      {/* Card Top Badges */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            {!isTrackCollapsed && viewMode === 'contents' && (
+              <div
+                data-testid={`contents-toc-list-${track.id}`}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line-strong)',
+                  background: 'var(--panel-2)',
+                  overflow: 'hidden',
+                }}
+              >
+                {trackSheets.map(({ sheet: s, info }, rowIdx) => {
+                  const isActive = ui.tutorialSheetId === s.id;
+                  const isExpanded = expandedRows.has(s.id);
+                  const docPath = getDocPathForSheet(s);
+                  const vRefs = getVerificationRefsForSheet(s);
+                  return (
+                    <div
+                      key={s.id}
+                      data-testid={`contents-card-${s.id}`}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        borderBottom: rowIdx < trackSheets.length - 1 ? '1px solid var(--line)' : 'none',
+                        background: isActive
+                          ? `color-mix(in srgb, ${track.accent} 10%, var(--panel-2))`
+                          : 'transparent',
+                      }}
+                    >
+                      {/* Compact Single-Line Table of Contents Row */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          padding: '5px 8px',
+                          minHeight: '30px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+                          <button
+                            type="button"
+                            class="btn ghost small"
+                            data-testid={`contents-expand-${s.id}`}
+                            title={isExpanded ? 'Collapse item summary' : 'Expand description, materials & governing PDEs'}
+                            onClick={() => toggleRowExpanded(s.id)}
+                            style={{
+                              padding: '0 4px',
+                              minWidth: '18px',
+                              height: '20px',
+                              fontSize: '10px',
+                              fontFamily: 'var(--mono)',
+                              color: 'var(--text-3)',
+                            }}
+                          >
+                            {isExpanded ? '▾' : '▸'}
+                          </button>
                           <span
                             style={{
-                              fontSize: '11.5px',
+                              fontSize: '10.5px',
                               fontWeight: 800,
-                              padding: '2px 7px',
+                              padding: '1px 6px',
+                              minWidth: '34px',
+                              textAlign: 'center',
                               borderRadius: '4px',
                               background: track.accent,
                               color: '#fff',
                               fontFamily: 'var(--mono)',
+                              flexShrink: 0,
                             }}
                           >
                             {s.code}
                           </span>
-                          <span
+                          <button
+                            type="button"
+                            data-testid={`tutorial-sheet-${s.id}`}
+                            onClick={() => onSelectSheet(s.id)}
+                            title={`${s.code}: ${s.title} — ${s.subtitle}`}
                             style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              padding: '2px 6px',
-                              borderRadius: '5px',
-                              background: 'var(--panel)',
-                              border: '1px solid var(--line)',
-                              color: 'var(--text-2)',
+                              background: 'transparent',
+                              border: 'none',
+                              padding: 0,
+                              margin: 0,
+                              color: 'var(--text)',
+                              fontWeight: isActive ? 700 : 600,
+                              fontSize: '12px',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              flex: 1,
                             }}
                           >
-                            {getCategoryLabel(cat)}
-                          </span>
-                          {vRefs.map((vr) => (
+                            {s.title}
+                          </button>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                          {vRefs.length > 0 && (
                             <span
-                              key={vr}
                               style={{
                                 fontSize: '9.5px',
                                 fontWeight: 700,
@@ -998,141 +1490,319 @@ function TutorialsContentsPage({
                                 color: 'var(--ok)',
                                 border: '1px solid color-mix(in srgb, var(--ok) 38%, var(--line))',
                               }}
-                              title={`Automated Verification Report: ${vr}`}
+                              title={`Verified: ${vRefs.join(', ')}`}
                             >
-                              ✓ {vr.replace('docs/verification/', '').replace('.md', '')}
+                              ✓ {vRefs[0].replace('docs/verification/', '').replace('.md', '')}
+                              {vRefs.length > 1 ? `+${vRefs.length - 1}` : ''}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            class="btn small primary"
+                            data-testid={`contents-open-${s.id}`}
+                            onClick={() => onSelectSheet(s.id)}
+                            style={{ padding: '1px 7px', fontSize: '10.5px' }}
+                          >
+                            Open →
+                          </button>
+                          <button
+                            type="button"
+                            class="btn small"
+                            data-testid={`contents-load-only-${s.id}`}
+                            title="Load this .fsm model directly into the 3D viewport"
+                            onClick={() => onLoadSheetModelOnly(s.id)}
+                            style={{ padding: '1px 6px', fontSize: '10.5px' }}
+                          >
+                            3D
+                          </button>
+                          <button
+                            type="button"
+                            class="btn ghost small"
+                            data-testid={`contents-md-${s.id}`}
+                            title={`Read full repository Markdown (${docPath})`}
+                            onClick={() => onOpenSheetMarkdown(s.id)}
+                            style={{ padding: '1px 5px', fontSize: '10.5px' }}
+                          >
+                            📄
+                          </button>
+                          <button
+                            type="button"
+                            class="btn ghost small"
+                            data-testid={`contents-theory-${s.id}`}
+                            title="Load model and inspect governing equations in Theory (6)"
+                            onClick={() => onOpenSheetTheory(s.id)}
+                            style={{ padding: '1px 5px', fontSize: '10.5px', fontFamily: 'var(--mono)' }}
+                          >
+                            𝑓(x)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* On-Demand Inline Expanded Details Drawer */}
+                      {isExpanded && (
+                        <div
+                          data-testid={`contents-details-${s.id}`}
+                          style={{
+                            padding: '6px 12px 9px 32px',
+                            borderTop: '1px dashed var(--line)',
+                            background: 'var(--panel)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '5px',
+                            fontSize: '11px',
+                          }}
+                        >
+                          <div style={{ color: 'var(--text-2)', lineHeight: 1.4 }}>{s.subtitle}</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+                            {info.materials.map((m) => (
+                              <span
+                                key={m.id}
+                                style={{
+                                  fontSize: '9.5px',
+                                  fontWeight: 600,
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  background: `color-mix(in srgb, ${m.color} 13%, var(--panel-2))`,
+                                  color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
+                                  border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
+                                }}
+                              >
+                                ◆ {m.name}
+                              </span>
+                            ))}
+                            {info.activeEquations.map((eq) => (
+                              <span
+                                key={eq.id}
+                                style={{
+                                  fontSize: '9.5px',
+                                  fontFamily: 'var(--mono)',
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  background: 'var(--panel-2)',
+                                  color: 'var(--text-2)',
+                                  border: '1px solid var(--line)',
+                                }}
+                              >
+                                <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
+                              </span>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                            <span>
+                              {info.shapeCount} shapes · {info.regionCount} regions · {s.userSteps.length} steps · {s.mcpSteps.length} API tools
+                            </span>
+                            <code>{docPath} · {s.starterFsmName}</code>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!isTrackCollapsed && viewMode === 'cards' && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))',
+                  gap: '10px',
+                }}
+              >
+                {trackSheets.map(({ sheet: s, info }) => {
+                  const isActive = ui.tutorialSheetId === s.id;
+                  const cat = getCategoryForSheet(s);
+                  const docPath = getDocPathForSheet(s);
+                  const vRefs = getVerificationRefsForSheet(s);
+                  return (
+                    <div
+                      key={s.id}
+                      data-testid={`contents-card-${s.id}`}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        padding: '11px 13px',
+                        borderRadius: '8px',
+                        background: isActive
+                          ? `color-mix(in srgb, ${track.accent} 8%, var(--panel-2))`
+                          : 'var(--panel-2)',
+                        border: isActive
+                          ? `1.5px solid ${track.accent}`
+                          : '1px solid var(--line-strong)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span
+                              style={{
+                                fontSize: '11.5px',
+                                fontWeight: 800,
+                                padding: '2px 7px',
+                                borderRadius: '4px',
+                                background: track.accent,
+                                color: '#fff',
+                                fontFamily: 'var(--mono)',
+                              }}
+                            >
+                              {s.code}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '2px 6px',
+                                borderRadius: '5px',
+                                background: 'var(--panel)',
+                                border: '1px solid var(--line)',
+                                color: 'var(--text-2)',
+                              }}
+                            >
+                              {getCategoryLabel(cat)}
+                            </span>
+                            {vRefs.map((vr) => (
+                              <span
+                                key={vr}
+                                style={{
+                                  fontSize: '9.5px',
+                                  fontWeight: 700,
+                                  fontFamily: 'var(--mono)',
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
+                                  color: 'var(--ok)',
+                                  border: '1px solid color-mix(in srgb, var(--ok) 38%, var(--line))',
+                                }}
+                                title={`Automated Verification Report: ${vr}`}
+                              >
+                                ✓ {vr.replace('docs/verification/', '').replace('.md', '')}
+                              </span>
+                            ))}
+                          </div>
+                          <code style={{ fontSize: '10px', color: 'var(--text-3)' }} title={`Repo Markdown: ${docPath}`}>
+                            {docPath}
+                          </code>
+                        </div>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>
+                          {s.title}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: 'var(--text-2)', lineHeight: 1.4 }}>
+                          {s.subtitle}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                          {info.materials.map((m) => (
+                            <span
+                              key={m.id}
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                background: `color-mix(in srgb, ${m.color} 13%, var(--panel))`,
+                                color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
+                                border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
+                              }}
+                              title={`Continuum Phase: ${m.phaseLabel}`}
+                            >
+                              ◆ {m.name}
+                            </span>
+                          ))}
+                          {info.fillSummary && (
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
+                                color: 'var(--ok)',
+                                border: '1px solid color-mix(in srgb, var(--ok) 40%, var(--line-strong))',
+                              }}
+                            >
+                              ❖ TPMS: {info.fillSummary}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {info.activeEquations.map((eq) => (
+                            <span
+                              key={eq.id}
+                              style={{
+                                fontSize: '9.5px',
+                                fontFamily: 'var(--mono)',
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                background: 'var(--panel)',
+                                color: 'var(--text-2)',
+                                border: '1px solid var(--line)',
+                              }}
+                            >
+                              <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
                             </span>
                           ))}
                         </div>
-                        <code style={{ fontSize: '10px', color: 'var(--text-3)' }} title={`Repo Markdown: ${docPath}`}>
-                          {docPath}
-                        </code>
                       </div>
-
-                      {/* Title & Subtitle */}
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>
-                        {s.title}
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: 'var(--text-2)', lineHeight: 1.4 }}>
-                        {s.subtitle}
-                      </div>
-
-                      {/* Auto-Detected Continuum Materials */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                        {info.materials.map((m) => (
-                          <span
-                            key={m.id}
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: `color-mix(in srgb, ${m.color} 13%, var(--panel))`,
-                              color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
-                              border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
-                            }}
-                            title={`Continuum Phase: ${m.phaseLabel}`}
-                          >
-                            ◆ {m.name}
+                      <div
+                        style={{
+                          borderTop: '1px solid var(--line)',
+                          paddingTop: '7px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                        }}
+                      >
+                        <div style={{ fontSize: '10.5px', color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                          <span>
+                            {info.shapeCount} shapes · {info.regionCount} regions · {s.userSteps.length} steps · {s.mcpSteps.length} API tools
                           </span>
-                        ))}
-                        {info.fillSummary && (
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
-                              color: 'var(--ok)',
-                              border: '1px solid color-mix(in srgb, var(--ok) 40%, var(--line-strong))',
-                            }}
+                          <span>{s.starterFsmName}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            class="btn small primary"
+                            data-testid={`contents-open-${s.id}`}
+                            onClick={() => onSelectSheet(s.id)}
+                            style={{ flex: 1 }}
                           >
-                            ❖ TPMS: {info.fillSummary}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Auto-Detected Active Field Equations */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                        {info.activeEquations.map((eq) => (
-                          <span
-                            key={eq.id}
-                            style={{
-                              fontSize: '9.5px',
-                              fontFamily: 'var(--mono)',
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: 'var(--panel)',
-                              color: 'var(--text-2)',
-                              border: '1px solid var(--line)',
-                            }}
+                            Open Guided ({s.code}) →
+                          </button>
+                          <button
+                            type="button"
+                            class="btn small"
+                            data-testid={`contents-md-${s.id}`}
+                            title={`Read full repository Markdown (${docPath})`}
+                            onClick={() => onOpenSheetMarkdown(s.id)}
                           >
-                            <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
-                          </span>
-                        ))}
+                            📄 Markdown
+                          </button>
+                          <button
+                            type="button"
+                            class="btn small"
+                            data-testid={`contents-load-only-${s.id}`}
+                            title="Load this .fsm model directly into the 3D viewport and close the tutorials drawer"
+                            onClick={() => onLoadSheetModelOnly(s.id)}
+                          >
+                            Load 3D
+                          </button>
+                          <button
+                            type="button"
+                            class="btn small"
+                            data-testid={`contents-theory-${s.id}`}
+                            title="Load this model and inspect its live governing equations in Theory (6)"
+                            onClick={() => onOpenSheetTheory(s.id)}
+                          >
+                            Theory (6)
+                          </button>
+                        </div>
                       </div>
                     </div>
-
-                    {/* Metadata + Action Buttons Footer */}
-                    <div
-                      style={{
-                        borderTop: '1px solid var(--line)',
-                        paddingTop: '7px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '6px',
-                      }}
-                    >
-                      <div style={{ fontSize: '10.5px', color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                        <span>
-                          {info.shapeCount} shapes · {info.regionCount} regions · {s.userSteps.length} steps · {s.mcpSteps.length} API tools
-                        </span>
-                        <span>{s.starterFsmName}</span>
-                      </div>
-                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          class="btn small primary"
-                          data-testid={`contents-open-${s.id}`}
-                          onClick={() => onSelectSheet(s.id)}
-                          style={{ flex: 1 }}
-                        >
-                          Open Guided ({s.code}) →
-                        </button>
-                        <button
-                          type="button"
-                          class="btn small"
-                          data-testid={`contents-md-${s.id}`}
-                          title={`Read full repository Markdown (${docPath})`}
-                          onClick={() => onOpenSheetMarkdown(s.id)}
-                        >
-                          📄 Markdown
-                        </button>
-                        <button
-                          type="button"
-                          class="btn small"
-                          data-testid={`contents-load-only-${s.id}`}
-                          title="Load this .fsm model directly into the 3D viewport and close the tutorials drawer"
-                          onClick={() => onLoadSheetModelOnly(s.id)}
-                        >
-                          Load 3D
-                        </button>
-                        <button
-                          type="button"
-                          class="btn small"
-                          data-testid={`contents-theory-${s.id}`}
-                          title="Load this model and inspect its live governing equations in Theory (6)"
-                          onClick={() => onOpenSheetTheory(s.id)}
-                        >
-                          Theory (6)
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })}
@@ -1147,69 +1817,83 @@ function TutorialsContentsPage({
         if (exampleRows.length === 0) return null;
         const tr = TUTORIAL_TRACKS.find((t) => t.id === 'examples')!;
         const trAccentText = `color-mix(in srgb, ${tr.accent} 65%, var(--text))`;
+        const isTrackCollapsed = collapsedTracks.has(tr.id) && !q;
 
         return (
-          <div data-testid="contents-section-examples" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div
+          <div data-testid="contents-section-examples" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <button
+              type="button"
+              data-testid="contents-track-toggle-examples"
+              onClick={() => toggleTrackCollapsed(tr.id)}
               style={{
                 display: 'flex',
-                alignItems: 'baseline',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: '8px',
-                borderBottom: `1px solid color-mix(in srgb, ${tr.accent} 35%, var(--line))`,
-                paddingBottom: '4px',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: `color-mix(in srgb, ${tr.accent} 8%, var(--panel-2))`,
+                border: `1px solid color-mix(in srgb, ${tr.accent} 32%, var(--line-strong))`,
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: 'var(--text)',
               }}
             >
-              <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: trAccentText }}>
+                  {isTrackCollapsed ? '▸' : '▾'}
+                </span>
                 <span
                   style={{
-                    fontSize: '10.5px',
+                    fontSize: '10px',
                     fontWeight: 700,
-                    padding: '2px 7px',
+                    padding: '1px 6px',
                     borderRadius: '4px',
-                    background: `color-mix(in srgb, ${tr.accent} 15%, var(--panel-2))`,
+                    background: `color-mix(in srgb, ${tr.accent} 18%, var(--panel-2))`,
                     color: trAccentText,
-                    border: `1px solid color-mix(in srgb, ${tr.accent} 35%, var(--line-strong))`,
-                    marginRight: '8px',
+                    border: `1px solid color-mix(in srgb, ${tr.accent} 38%, var(--line-strong))`,
                     fontFamily: 'var(--mono)',
                   }}
                 >
                   {tr.number.toUpperCase()}
                 </span>
-                <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>{tr.title}</strong>
+                <strong style={{ fontSize: '12.5px', color: 'var(--text)' }}>{tr.title}</strong>
               </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-2)' }}>{tr.subtitle}</span>
-            </div>
+              <span class="num" style={{ fontSize: '11px', fontWeight: 600, color: trAccentText }}>
+                {exampleRows.length} items
+              </span>
+            </button>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                gap: '10px',
-              }}
-            >
-              {exampleRows.map(({ ex, info }) => (
-                <div
-                  key={ex.id}
-                  data-testid={`contents-card-example-${ex.id}`}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    padding: '10px 12px',
-                    borderRadius: '8px',
-                    background: 'var(--panel-2)',
-                    border: '1px solid var(--line-strong)',
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {!isTrackCollapsed && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line-strong)',
+                  background: 'var(--panel-2)',
+                  overflow: 'hidden',
+                }}
+              >
+                {exampleRows.map(({ ex, info }, idx) => (
+                  <div
+                    key={ex.id}
+                    data-testid={`contents-card-example-${ex.id}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      padding: '5px 10px',
+                      borderBottom: idx < exampleRows.length - 1 ? '1px solid var(--line)' : 'none',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                       <span
                         style={{
-                          fontSize: '10px',
+                          fontSize: '9.5px',
                           fontWeight: 700,
-                          padding: '2px 6px',
+                          padding: '1px 5px',
                           borderRadius: '4px',
                           background: `color-mix(in srgb, ${tr.accent} 15%, var(--panel))`,
                           color: trAccentText,
@@ -1217,110 +1901,76 @@ function TutorialsContentsPage({
                           fontFamily: 'var(--mono)',
                         }}
                       >
-                        EXAMPLE .FSM
+                        .FSM
                       </span>
+                      <strong style={{ fontSize: '12px', color: 'var(--text)' }}>{ex.label}</strong>
                       <code style={{ fontSize: '10.5px', color: 'var(--text-3)' }}>examples/{ex.id}.fsm</code>
+                      {info.materials[0] && (
+                        <span style={{ fontSize: '10px', color: 'var(--text-2)' }}>· {info.materials[0].name}</span>
+                      )}
                     </div>
-                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text)' }}>{ex.label}</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                      {info.materials.map((m) => (
-                        <span
-                          key={m.id}
-                          style={{
-                            fontSize: '10px',
-                            fontWeight: 600,
-                            padding: '1px 6px',
-                            borderRadius: '4px',
-                            background: `color-mix(in srgb, ${m.color} 13%, var(--panel))`,
-                            color: `color-mix(in srgb, ${m.color} 68%, var(--text))`,
-                            border: `1px solid color-mix(in srgb, ${m.color} 38%, var(--line-strong))`,
-                          }}
-                        >
-                          ◆ {m.name}
-                        </span>
-                      ))}
-                      {info.activeEquations.map((eq) => (
-                        <span
-                          key={eq.id}
-                          style={{
-                            fontSize: '9.5px',
-                            fontFamily: 'var(--mono)',
-                            padding: '1px 6px',
-                            borderRadius: '4px',
-                            background: 'var(--panel)',
-                            color: 'var(--text-2)',
-                            border: '1px solid var(--line)',
-                          }}
-                        >
-                          <span style={{ color: 'var(--ok)', fontWeight: 700 }}>●</span> {eq.shortName}
-                        </span>
-                      ))}
+                    <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        class="btn small primary"
+                        data-testid={`contents-load-example-${ex.id}`}
+                        onClick={() => {
+                          openText(ex.text, `${ex.id}.fsm`);
+                          viewApi.fit(false);
+                          ui.set('tutorialsOpen', false);
+                        }}
+                        style={{ padding: '1px 8px', fontSize: '10.5px' }}
+                      >
+                        Open 3D →
+                      </button>
+                      <button
+                        type="button"
+                        class="btn ghost small"
+                        data-testid={`contents-theory-example-${ex.id}`}
+                        onClick={() => {
+                          openText(ex.text, `${ex.id}.fsm`);
+                          viewApi.fit(false);
+                          ui.set('tutorialsOpen', false);
+                          store.setLens('theory');
+                        }}
+                        style={{ padding: '1px 6px', fontSize: '10.5px', fontFamily: 'var(--mono)' }}
+                      >
+                        𝑓(x)
+                      </button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '5px', paddingTop: '4px' }}>
-                    <button
-                      type="button"
-                      class="btn small primary"
-                      data-testid={`contents-load-example-${ex.id}`}
-                      onClick={() => {
-                        openText(ex.text, `${ex.id}.fsm`);
-                        viewApi.fit(false);
-                        ui.set('tutorialsOpen', false);
-                      }}
-                      style={{ flex: 1 }}
-                    >
-                      Open {ex.id}.fsm in 3D →
-                    </button>
-                    <button
-                      type="button"
-                      class="btn small"
-                      data-testid={`contents-theory-example-${ex.id}`}
-                      onClick={() => {
-                        openText(ex.text, `${ex.id}.fsm`);
-                        viewApi.fit(false);
-                        ui.set('tutorialsOpen', false);
-                        store.setLens('theory');
-                      }}
-                    >
-                      Theory (6)
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}
 
-      {/* Extensibility & Public Example / Analytic Benchmark Submission Card */}
+      {/* Compact Single-Line Extensibility & Custom Model Footer Bar */}
       <div
         data-testid="contents-extensibility-card"
         style={{
-          padding: '12px 14px',
-          borderRadius: '8px',
+          padding: '8px 12px',
+          borderRadius: '6px',
           background: 'color-mix(in srgb, #06b6d4 6%, var(--panel-2))',
-          border: '1.5px dashed color-mix(in srgb, #06b6d4 45%, var(--line-strong))',
+          border: '1px dashed color-mix(in srgb, #06b6d4 45%, var(--line-strong))',
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
-          gap: '10px',
+          gap: '8px',
         }}
       >
-        <div style={{ maxWidth: '640px' }}>
-          <strong style={{ fontSize: '12.5px', color: 'var(--text)' }}>
-            ➕ Submit a Public Example, Tutorial or Basilisk-Style Analytic Verification Benchmark
-          </strong>
-          <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
-            Package your currently open <code>.fsm</code> model (and live solved FEA metrics) into a literate <code>docs/analytic-tests/*.md</code>, <code>docs/tutorials/*.md</code>, <code>docs/case-studies/*.md</code>, or <code>examples/*.fsm</code> bundle + Rust verification test stub (<code>crates/fieldsmith-verify/tests/vXX_*.rs</code>). See <code>docs/CONTRIBUTING_EXAMPLES.md</code>.
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '11.5px', color: 'var(--text-2)' }}>
+          <strong>➕ Contribute or Load Custom Model</strong> (<code>docs/CONTRIBUTING_EXAMPLES.md</code>)
+        </span>
+        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
           <button
             type="button"
             class="btn small primary"
             data-testid="contents-submit-example-btn"
             onClick={onOpenSubmitBuilder}
+            style={{ padding: '2px 8px', fontSize: '11px' }}
           >
             ➕ Package &amp; Submit Current Model…
           </button>
@@ -1332,8 +1982,9 @@ function TutorialsContentsPage({
               ui.set('tutorialsOpen', false);
               openFile();
             }}
+            style={{ padding: '2px 8px', fontSize: '11px' }}
           >
-            Open Custom .fsm File…
+            Open Custom .fsm…
           </button>
           <button
             type="button"
@@ -1344,6 +1995,7 @@ function TutorialsContentsPage({
               ui.set('tutorialsOpen', false);
               store.setLens('shape');
             }}
+            style={{ padding: '2px 8px', fontSize: '11px' }}
           >
             + New Blank Model
           </button>
@@ -2018,6 +2670,17 @@ function TutorialsDrawer() {
     }
   };
 
+  const activeMatchedSheet = findMatchingLiterateSheet(store.doc.name);
+  const activeLvl =
+    activeMatchedSheet?.id === sheet.id && analysis.launchedFor === store.docVersion
+      ? analysis.latest
+      : null;
+  const liveAssertResults =
+    activeLvl && sheet.asserts
+      ? sheet.asserts.map((a) => evaluateLiterateAssertOnLevel(a, activeLvl))
+      : null;
+  const livePassCount = liveAssertResults ? liveAssertResults.filter((r) => r.passed).length : 0;
+
   const renderUserColumn = () => (
     <div class="tut-col-body" data-testid="tutorial-col-user">
       <div class="tut-col-head">1. Step-by-Step User Tutorial</div>
@@ -2032,7 +2695,7 @@ function TutorialsDrawer() {
         >
           <div class="tut-step-top" style={{ marginBottom: '6px' }}>
             <strong style={{ color: '#06b6d4' }}>
-              📐 Closed-Form Analytic Reference vs Fieldsmith P2 FEA
+              📐 Closed-Form Analytic Reference Table (@check notes in .fsm)
             </strong>
             <span
               class="num"
@@ -2041,13 +2704,13 @@ function TutorialsDrawer() {
                 fontWeight: 700,
                 padding: '2px 7px',
                 borderRadius: '4px',
-                background: 'color-mix(in srgb, var(--ok) 18%, var(--panel))',
-                color: 'var(--ok)',
+                background: 'var(--bg-2)',
+                color: 'var(--text-2)',
               }}
             >
               {getVerificationRefsForSheet(sheet)
                 .map((r) => r.replace('docs/verification/', '').replace('.md', ''))
-                .join(' · ') || 'ANALYTIC PASS'}
+                .join(' · ') || 'REFERENCE TABLE'}
             </span>
           </div>
           <div style={{ overflowX: 'auto' }}>
@@ -2065,8 +2728,8 @@ function TutorialsDrawer() {
                   <th style={{ padding: '4px 6px' }}>Quantity</th>
                   <th style={{ padding: '4px 6px' }}>Closed-Form Formula</th>
                   <th style={{ padding: '4px 6px', textAlign: 'right' }}>Analytic Ref</th>
-                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Fieldsmith FEA</th>
-                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Diff / Margin</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Doc Baseline</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Ref Note</th>
                 </tr>
               </thead>
               <tbody>
@@ -2077,10 +2740,10 @@ function TutorialsDrawer() {
                       {row.formula}
                     </td>
                     <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700 }}>{row.analyticRef}</td>
-                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 600, color: 'var(--text-2)' }}>
                       {row.measuredFea}
                     </td>
-                    <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--ok)', fontWeight: 700 }}>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--text-2)', fontWeight: 600 }}>
                       {row.relError}
                     </td>
                   </tr>
@@ -2090,53 +2753,132 @@ function TutorialsDrawer() {
           </div>
         </div>
       )}
-      {sheet.asserts && sheet.asserts.length > 0 && (
-        <div
-          class="tut-step-card"
-          data-testid="tutorial-assert-contracts-card"
-          style={{
-            borderColor: 'color-mix(in srgb, var(--ok) 45%, var(--line))',
-            background: 'color-mix(in srgb, var(--ok) 6%, var(--panel))',
-          }}
-        >
-          <div class="tut-step-top" style={{ marginBottom: '6px' }}>
-            <strong style={{ color: 'var(--ok)' }}>
-              ✓ Executable @assert Contracts (fieldsmith solve --verify)
-            </strong>
-            <span class="num" style={{ fontSize: '10px', color: 'var(--text-2)' }}>
-              {sheet.asserts.length} contract{sheet.asserts.length === 1 ? '' : 's'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '11px' }}>
-            {sheet.asserts.map((asrt, idx) => (
-              <div
-                key={idx}
-                class="num"
+      {sheet.asserts && sheet.asserts.length > 0 && (() => {
+        const isLiveAllPass = liveAssertResults !== null && livePassCount === liveAssertResults.length;
+        const borderColor =
+          liveAssertResults === null
+            ? 'var(--line-strong)'
+            : isLiveAllPass
+            ? 'color-mix(in srgb, var(--ok) 45%, var(--line))'
+            : 'color-mix(in srgb, var(--err) 45%, var(--line))';
+        const bgColor =
+          liveAssertResults === null
+            ? 'var(--panel-2)'
+            : isLiveAllPass
+            ? 'color-mix(in srgb, var(--ok) 6%, var(--panel))'
+            : 'color-mix(in srgb, var(--err) 6%, var(--panel))';
+        return (
+          <div
+            class="tut-step-card"
+            data-testid="tutorial-assert-contracts-card"
+            style={{
+              borderColor,
+              background: bgColor,
+            }}
+          >
+            <div class="tut-step-top" style={{ marginBottom: '6px' }}>
+              <strong
                 style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: '8px',
-                  flexWrap: 'wrap',
-                  padding: '3px 6px',
-                  background: 'var(--bg-2)',
-                  borderRadius: '4px',
+                  color:
+                    liveAssertResults === null
+                      ? 'var(--text)'
+                      : isLiveAllPass
+                      ? 'var(--ok)'
+                      : 'var(--err)',
                 }}
               >
-                <span style={{ fontWeight: 600, color: 'var(--text)' }}>
-                  {asrt.label} <code style={{ fontSize: '10px', color: 'var(--text-2)' }}>({asrt.metric})</code>
-                </span>
-                <span style={{ color: 'var(--ok)', fontWeight: 700 }}>
-                  target {asrt.target} {asrt.unit} (tol {asrt.tolerance})
-                </span>
+                {liveAssertResults === null
+                  ? '⏳ Executable @assert Contracts (Load & solve model to verify live)'
+                  : isLiveAllPass
+                  ? `✓ Live Verified @assert Contracts (${livePassCount}/${liveAssertResults.length} PASS on ${activeLvl?.label})`
+                  : `✗ Live @assert Contracts (${livePassCount}/${liveAssertResults.length} PASS on ${activeLvl?.label})`}
+              </strong>
+              <span class="num" style={{ fontSize: '10px', color: 'var(--text-2)' }}>
+                {sheet.asserts.length} contract{sheet.asserts.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '11px' }}>
+              {sheet.asserts.map((asrt, idx) => {
+                const ev = liveAssertResults ? liveAssertResults[idx] : null;
+                const u = asrt.unit ? ` ${asrt.unit}` : '';
+                return (
+                  <div
+                    key={idx}
+                    class="num"
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      flexWrap: 'wrap',
+                      padding: '3px 6px',
+                      background: 'var(--bg-2)',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                      {asrt.label} <code style={{ fontSize: '10px', color: 'var(--text-2)' }}>({asrt.metric})</code>
+                    </span>
+                    {ev ? (
+                      <span style={{ color: ev.passed ? 'var(--ok)' : 'var(--err)', fontWeight: 700 }}>
+                        live {ev.liveValue != null ? ev.liveValue.toPrecision(4) : 'N/A'}
+                        {u} vs {asrt.target}
+                        {u} ({ev.errorOrMargin}) {ev.passed ? 'PASS' : 'FAIL'}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>
+                        target {asrt.target} {asrt.unit} (tol {asrt.tolerance}) — awaiting live solve
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+      {sheet.id === 'T9' && <SwirlAtomiserNoxPredictor />}
+      {(sheet.id === 'T14' || sheet.id === 'A13') && <FixingTorqueAndWeibullWorkbench />}
+      {sheet.id === 'T15' && <SketchWorkbench embedded />}
+      {(sheet.id === 'T16' || sheet.id === 'A14') && <DroneAntennaTutorialCard />}
+      {(sheet.id === 'T18' || sheet.id === 'A15' || sheet.id === 'A16' || sheet.id === 'A17' || sheet.id === 'A18' || sheet.id === 'A20') && (
+        <div class="tut-step-card" style={{ borderColor: '#38bdf8' }}>
+          <FreeSurfaceWorkbench
+            embedded
+            initialScenario={
+              sheet.id === 'A15'
+                ? 'droplet_oscillation_a15'
+                : sheet.id === 'A16'
+                  ? 'capillary_rise_a16'
+                  : sheet.id === 'T18'
+                    ? 'dambreak_fsi_t18'
+                    : undefined
+            }
+            initialGerrisMode={sheet.id === 'A17' || sheet.id === 'A18'}
+            initialGerrisCaseId={sheet.id === 'A18' ? 'G5' : 'G1'}
+            initialSpuriousEddyMode={sheet.id === 'A20'}
+          />
+        </div>
+      )}
+      {sheet.id === 'T8' && (
+        <div class="tut-step-card" style={{ borderColor: '#f59e0b' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <strong>🔥 1100 °C Float-Bath Spout-Lip Pour &amp; Reverse-Flow Heel to Knurl (Regime IV)</strong>
+              <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
+                Simulate the high-viscosity (μ ≈ 795 Pa·s, Oh ≈ 30 ≫ 1, Re ≈ 0.02 ≪ 1) spout-lip pour, sub-spout stagnation saddle, and partial back-flow pushing bad surface glass out to the ribbon knurl.
               </div>
-            ))}
+            </div>
+            <button
+              type="button"
+              class="btn small primary"
+              data-testid="t8-open-spout-sph-btn"
+              onClick={() => openFreeSurfaceModal('spout_lip_knurl_1100c')}
+            >
+              🔥 Open 1100 °C Spout-Lip &amp; Knurl Free-Surface Workbench →
+            </button>
           </div>
         </div>
       )}
-      {sheet.id === 'T9' && <SwirlAtomiserNoxPredictor />}
-      {sheet.id === 'T14' && <FixingTorqueAndWeibullWorkbench />}
-      {sheet.id === 'T15' && <SketchWorkbench embedded />}
-      {(sheet.id === 'T16' || sheet.id === 'A14') && <DroneAntennaTutorialCard />}
       {sheet.userSteps.map((st, i) => (
         <div key={i} class="tut-step-card">
           <div class="tut-step-top">
@@ -2527,26 +3269,31 @@ function TutorialsDrawer() {
           </div>
         </div>
 
-        {/* Sheet selector strip (Category quick-filters + filtered sheets) */}
-        <div class="tut-sheet-strip" role="tablist" aria-label="Tutorial Sheets">
+        {/* Compact Sheet Selector Strip: Category Contents Tabs + Scalable Quick-Jump Dropdown */}
+        <div
+          class="tut-sheet-strip"
+          role="tablist"
+          aria-label="Tutorial Sheets"
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}
+        >
           <button
             type="button"
             data-testid="tutorial-sheet-contents"
             class={`tut-sheet-pill${isContentsOpen && ui.tutorialCategoryFilter === 'all' ? ' active' : ''}`}
-            title="View full Tutorials, Analytic Tests & Examples Contents Page"
+            title="View collapsed Table of Contents for all Tutorials, Analytic Tests & Examples"
             onClick={() => {
               ui.set('tutorialCategoryFilter', 'all');
               ui.set('tutorialContentsOpen', true);
             }}
           >
             <strong>📚 All</strong>
-            <span>Index ({TUTORIAL_SHEETS.length + EXAMPLES.length})</span>
+            <span>Contents ({TUTORIAL_SHEETS.length + EXAMPLES.length})</span>
           </button>
           <button
             type="button"
             data-testid="tutorial-sheet-analytic-index"
             class={`tut-sheet-pill${isContentsOpen && ui.tutorialCategoryFilter === 'analytic' ? ' active' : ''}`}
-            title="Filter to Closed-Form Analytic Verification Tests (A1–A14 · Basilisk / Gerris style)"
+            title="Filter Contents to Closed-Form Analytic Verification Tests (A1–A20)"
             onClick={() => {
               ui.set('tutorialCategoryFilter', 'analytic');
               ui.set('tutorialContentsOpen', true);
@@ -2554,63 +3301,133 @@ function TutorialsDrawer() {
             style={{ borderColor: '#06b6d4' }}
           >
             <strong style={{ color: '#22d3ee' }}>📐 Analytic</strong>
-            <span>Tests (A1–A14)</span>
+            <span>Tests ({TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'analytic').length})</span>
           </button>
           <button
             type="button"
             data-testid="tutorial-sheet-tutorials-index"
             class={`tut-sheet-pill${isContentsOpen && ui.tutorialCategoryFilter === 'tutorial' ? ' active' : ''}`}
-            title="Filter to Step-by-Step Guided Tutorials (T1–T7, T14–T15)"
+            title="Filter Contents to Step-by-Step Guided Tutorials"
             onClick={() => {
               ui.set('tutorialCategoryFilter', 'tutorial');
               ui.set('tutorialContentsOpen', true);
             }}
           >
             <strong>📘 Tutorials</strong>
-            <span>Guided (9)</span>
+            <span>Guided ({TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'tutorial').length})</span>
           </button>
           <button
             type="button"
             data-testid="tutorial-sheet-casestudies-index"
             class={`tut-sheet-pill${isContentsOpen && ui.tutorialCategoryFilter === 'case-study' ? ' active' : ''}`}
-            title="Filter to Multiphysics & Open-Hardware Case Studies (T8–T13, T16–T17)"
+            title="Filter Contents to Multiphysics & Open-Hardware Case Studies"
             onClick={() => {
               ui.set('tutorialCategoryFilter', 'case-study');
               ui.set('tutorialContentsOpen', true);
             }}
           >
             <strong>🚀 Cases</strong>
-            <span>Studies (8)</span>
+            <span>Studies ({TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'case-study').length})</span>
           </button>
-          {TUTORIAL_SHEETS.filter(
-            (s) =>
-              ui.tutorialCategoryFilter === 'all' ||
-              ui.tutorialCategoryFilter === 'example' ||
-              getCategoryForSheet(s) === ui.tutorialCategoryFilter,
-          ).map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              data-testid={`tutorial-sheet-${s.id}`}
-              class={`tut-sheet-pill${!isContentsOpen && s.id === sheet.id ? ' active' : ''}`}
-              title={`${s.code}: ${s.title} (${s.level})`}
-              onClick={() => {
-                ui.set('tutorialSheetId', s.id);
-                ui.set('tutorialContentsOpen', false);
-                loadTutorialSheetModel(s.id, false);
-              }}
-              style={s.id.startsWith('A') ? { borderColor: 'rgba(6, 182, 212, 0.55)' } : undefined}
-            >
-              <strong style={s.id.startsWith('A') ? { color: '#22d3ee' } : undefined}>{s.code}</strong>
-              <span>
-                {s.level === 'Flagship Multi-Physics'
-                  ? 'Multi-Physics'
-                  : s.level === 'Analytic Verification'
-                    ? 'Analytic'
-                    : s.level}
-              </span>
-            </button>
-          ))}
+
+          {/* Scalable Quick-Jump Select Menu (scales cleanly to 100s of tests/tutorials) */}
+          <select
+            class="select"
+            data-testid="tutorial-sheet-select"
+            aria-label="Jump to sheet"
+            value={isContentsOpen ? '' : sheet.id}
+            onChange={(e) => {
+              const id = (e.target as HTMLSelectElement).value;
+              if (!id) {
+                ui.set('tutorialContentsOpen', true);
+                return;
+              }
+              ui.set('tutorialSheetId', id);
+              ui.set('tutorialContentsOpen', false);
+              loadTutorialSheetModel(id, false);
+            }}
+            style={{
+              maxWidth: 'min(340px, 65vw)',
+              fontSize: '11.5px',
+              padding: '3px 8px',
+              height: '28px',
+              background: 'var(--panel)',
+            }}
+          >
+            <option value="">Jump to sheet ({TUTORIAL_SHEETS.length} available)…</option>
+            <optgroup label="Analytic Verification Benchmarks (A1–A20)">
+              {TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'analytic').map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.code}: {s.title}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Guided Tutorials">
+              {TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'tutorial').map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.code}: {s.title}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Multiphysics Case Studies">
+              {TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'case-study').map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.code}: {s.title}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+
+          {!isContentsOpen && (() => {
+            const curIdx = TUTORIAL_SHEETS.findIndex((s) => s.id === sheet.id);
+            const prevSheet = curIdx > 0 ? TUTORIAL_SHEETS[curIdx - 1] : null;
+            const nextSheet =
+              curIdx >= 0 && curIdx < TUTORIAL_SHEETS.length - 1 ? TUTORIAL_SHEETS[curIdx + 1] : null;
+            return (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: 'auto' }}>
+                {prevSheet && (
+                  <button
+                    type="button"
+                    class="btn small"
+                    data-testid="tutorial-prev-sheet"
+                    title={`Previous: ${prevSheet.code} — ${prevSheet.title}`}
+                    onClick={() => {
+                      ui.set('tutorialSheetId', prevSheet.id);
+                      loadTutorialSheetModel(prevSheet.id, false);
+                    }}
+                    style={{ padding: '2px 6px', fontSize: '11px' }}
+                  >
+                    ◀ {prevSheet.code}
+                  </button>
+                )}
+                <span
+                  data-testid={`tutorial-sheet-${sheet.id}`}
+                  class="tut-sheet-pill active"
+                  style={sheet.id.startsWith('A') ? { borderColor: 'rgba(6, 182, 212, 0.55)' } : undefined}
+                >
+                  <strong style={sheet.id.startsWith('A') ? { color: '#22d3ee' } : undefined}>
+                    {sheet.code}
+                  </strong>
+                  <span>Active</span>
+                </span>
+                {nextSheet && (
+                  <button
+                    type="button"
+                    class="btn small"
+                    data-testid="tutorial-next-sheet"
+                    title={`Next: ${nextSheet.code} — ${nextSheet.title}`}
+                    onClick={() => {
+                      ui.set('tutorialSheetId', nextSheet.id);
+                      loadTutorialSheetModel(nextSheet.id, false);
+                    }}
+                    style={{ padding: '2px 6px', fontSize: '11px' }}
+                  >
+                    {nextSheet.code} ▶
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {!isContentsOpen && (
@@ -2960,8 +3777,9 @@ function McpSetupModal() {
               class="btn small"
               data-testid="close-mcp-setup"
               onClick={() => ui.set('mcpSetupOpen', false)}
+              style={{ fontWeight: 700 }}
             >
-              Close
+              ✕ Close
             </button>
           </div>
         </div>
@@ -3240,6 +4058,8 @@ function TutorialsOverlayHost() {
     <>
       <TutorialsDrawer />
       <McpSetupModal />
+      <FreeSurfaceModal />
+      <CoordMappingModal />
     </>
   );
 }
@@ -3255,9 +4075,29 @@ function TutorialsStatusItem() {
       <span class="sep">|</span>
       <button
         class="btn ghost small"
+        data-testid="footer-free-surface-sph"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#38bdf8' }}
+        title="Open 3D Multi-Regime Free-Surface &amp; Capillary Fluid Workbench (1100 °C Spout-Lip Heel, Peregrine Wave Air Entrainment, Young–Laplace &amp; TPMS Wick)"
+        onClick={() => openFreeSurfaceModal()}
+      >
+        🌊 SPH
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
+        data-testid="footer-coord-mapping"
+        style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#a855f7' }}
+        title="Open 1D–4D Coordinate Mappings &amp; Pullback FEM Suite (Polar, Cylindrical, Spherical, Confocal Elliptic, Parabolic, Toroidal &amp; 4D Hyperspherical)"
+        onClick={() => openCoordMappingModal()}
+      >
+        🌐 Coord
+      </button>
+      <span class="sep">|</span>
+      <button
+        class="btn ghost small"
         data-testid="footer-analytic-tests"
         style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#22d3ee' }}
-        title="Open Closed-Form Analytic Verification Benchmarks (A1–A14)"
+        title="Open Closed-Form Analytic Verification Benchmarks Contents (A1–A20 · Gerris / Basilisk)"
         onClick={() => {
           ui.set('tutorialMinimised', false);
           ui.set('tutorialCategoryFilter', 'analytic');
@@ -3265,17 +4105,17 @@ function TutorialsStatusItem() {
           ui.set('tutorialsOpen', true);
         }}
       >
-        📐 A1–A14
+        📐 A1–A20
       </button>
       <span class="sep">|</span>
       <button
         class="btn ghost small"
         data-testid="footer-tutorials"
         style={{ height: '20px', padding: '0 5px', fontSize: '11px' }}
-        title="Open Guided Tutorials &amp; Multiphysics Case Studies (T1–T17)"
+        title="Open Guided Tutorials &amp; Multiphysics Case Studies Contents (T1–T19)"
         onClick={toggleTutorialsDrawer}
       >
-        📘 T1–T17
+        📘 T1–T19
       </button>
       <span class="sep">|</span>
       <button
@@ -3300,8 +4140,14 @@ extraCommands.push(() => [
   {
     id: 'tutorials.open',
     group: 'Help & Theory',
-    label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T17 · A1–A14)',
+    label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T18 · A1–A16)',
     run: () => toggleTutorialsDrawer(),
+  },
+  {
+    id: 'sph.open',
+    group: 'Physics & Solvers',
+    label: 'Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench (1100 °C Spout Lip · Peregrine Wave · SPH)',
+    run: () => openFreeSurfaceModal(),
   },
   {
     id: 'mcp.setup',

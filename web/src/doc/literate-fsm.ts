@@ -281,6 +281,8 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T15: 'docs/tutorials/T15-parametric-2d-sketch-constraints.md',
   T16: 'docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md',
   T17: 'docs/case-studies/T17-regenerative-rocket-nozzle.md',
+  T18: 'docs/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.md',
+  T19: 'docs/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -295,6 +297,11 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A12: 'docs/analytic-tests/A12-additive-overhang-and-layer-peel.md',
   A13: 'docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md',
   A14: 'docs/analytic-tests/A14-rf-smith-chart-vswr-dipole-lobes.md',
+  A15: 'docs/analytic-tests/A15-young-laplace-droplet-and-rayleigh-lamb.md',
+  A16: 'docs/analytic-tests/A16-jurin-capillary-rise-and-tpms-gyroid-wick.md',
+  A17: 'docs/analytic-tests/A17-gerris-capillary-suite-spurious-capwave-plateau.md',
+  A18: 'docs/analytic-tests/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.md',
+  A19: 'docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -315,6 +322,8 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T15: 'examples/tutorials/T15-parametric-2d-sketch-constraints.fsm',
   T16: 'examples/case-studies/T16-deadcat-fpv-drone-gemini-antenna.fsm',
   T17: 'examples/case-studies/T17-regenerative-rocket-nozzle.fsm',
+  T18: 'examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm',
+  T19: 'examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -329,6 +338,11 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A12: 'examples/analytic/A12-additive-overhang-and-layer-peel.fsm',
   A13: 'examples/analytic/A13-fastener-thread-torque-and-weibull.fsm',
   A14: 'examples/analytic/A14-rf-smith-chart-vswr-dipole-lobes.fsm',
+  A15: 'examples/analytic/A15-young-laplace-droplet-and-rayleigh-lamb.fsm',
+  A16: 'examples/analytic/A16-jurin-capillary-rise-and-tpms-gyroid-wick.fsm',
+  A17: 'examples/analytic/A17-gerris-capillary-suite-spurious-capwave-plateau.fsm',
+  A18: 'examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm',
+  A19: 'examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -349,6 +363,8 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T15: ['docs/verification/V4.md'],
   T16: ['docs/verification/V42.md'],
   T17: ['docs/verification/V60.md', 'docs/verification/V20.md'],
+  T18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
+  T19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -363,6 +379,11 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A12: ['docs/verification/V45.md', 'docs/verification/V46.md'],
   A13: ['docs/verification/V53.md'],
   A14: ['docs/verification/V42.md'],
+  A15: ['docs/verification/V60.md'],
+  A16: ['docs/verification/V36.md', 'docs/verification/V54.md'],
+  A17: ['docs/verification/V60.md'],
+  A18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
+  A19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

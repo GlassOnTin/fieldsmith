@@ -58,7 +58,9 @@ function pack(
     thermalU?: (i: number) => Float64Array;
     thermalVmElem?: (i: number) => Float64Array;
     thermalPeelElem?: (i: number) => Float64Array;
+    thermalStressElem?: (i: number) => Float64Array;
     thermalTemperature?: (i: number) => Float64Array;
+    thermalGradTNodal?: (i: number) => Float64Array;
   },
   keep = false,
   t0 = performance.now(),
@@ -66,14 +68,22 @@ function pack(
   const meta = JSON.parse(out.metaJson());
   const u: Float64Array[] = [];
   const vmElem: Float64Array[] = [];
+  const stressElem: Float64Array[] = [];
+  const plasticStrainElem: Float64Array[] = [];
   const peelElem: Float64Array[] = [];
   const temperature: (Float64Array | null)[] = [];
+  const gradTNodal: (Float64Array | null)[] = [];
   for (let c = 0; c < meta.cases.length; c++) {
     u.push(out.u(c).slice());
-    vmElem.push(out.vmElem(c).slice());
+    const vm = out.vmElem(c).slice();
+    vmElem.push(vm);
+    stressElem.push(out.stressElem ? out.stressElem(c).slice() : new Float64Array(vm.length * 6));
+    plasticStrainElem.push(out.plasticStrainElem ? out.plasticStrainElem(c).slice() : new Float64Array(vm.length));
     peelElem.push(out.peelElem(c).slice());
     const t = out.temperature(c);
-    temperature.push(t.length ? t : null);
+    temperature.push(t.length ? t.slice() : null);
+    const gt = out.gradTNodal ? out.gradTNodal(c) : new Float64Array(0);
+    gradTNodal.push(gt.length ? gt.slice() : null);
   }
   // Fill levels: the wasm meta keeps the graded thermal cases in `thermal_cases` while
   // the solid level's thermal cases ride its own `cases`. Pack them into the same level
@@ -88,10 +98,15 @@ function pack(
       throw new Error(`level '${label}': meta carries thermal case '${thermalCases[i].name}' but the handle has no thermal getters`);
     }
     u.push(out.thermalU(i).slice());
-    vmElem.push(out.thermalVmElem(i).slice());
-    peelElem.push(out.thermalPeelElem ? out.thermalPeelElem(i).slice() : new Float64Array(vmElem[0]?.length ?? 0));
+    const vm = out.thermalVmElem(i).slice();
+    vmElem.push(vm);
+    stressElem.push(out.thermalStressElem ? out.thermalStressElem(i).slice() : new Float64Array(vm.length * 6));
+    plasticStrainElem.push(new Float64Array(vm.length));
+    peelElem.push(out.thermalPeelElem ? out.thermalPeelElem(i).slice() : new Float64Array(vm.length));
     const t = out.thermalTemperature(i);
-    temperature.push(t.length ? t : null);
+    temperature.push(t.length ? t.slice() : null);
+    const gt = out.thermalGradTNodal ? out.thermalGradTNodal(i) : new Float64Array(0);
+    gradTNodal.push(gt.length ? gt.slice() : null);
   }
   if (thermalCases.length) {
     meta.cases = [...meta.cases, ...thermalCases];
@@ -106,6 +121,7 @@ function pack(
     }
   }
   const nodes = out.nodes().slice();
+  const tets = out.tets ? out.tets().slice() : undefined;
   // The mode shapes (solid handle only — the graded handle has none): one concatenated
   // buffer, block k the shape of mode k. Every shape matches the mesh's node count.
   let modeShapes: Float64Array | null = null;
@@ -134,6 +150,7 @@ function pack(
     label,
     meta,
     nodes,
+    tets,
     surfaceFacets: out.surfaceFacets().slice(),
     surfaceOwner: out.surfaceOwner().slice(),
     surfaceRegion: out.surfaceRegion().slice(),
@@ -141,8 +158,11 @@ function pack(
     regionFacetOffsets: out.regionFacetOffsets().slice(),
     u,
     vmElem,
+    stressElem,
+    plasticStrainElem,
     peelElem,
     temperature,
+    gradTNodal,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     peelElemEnvelope: out.peelElemEnvelope().slice(),
     modeShapes,
@@ -156,8 +176,24 @@ function pack(
 
 /** The message carries the buffers by transfer, so nothing is copied across the boundary. */
 function transfersOf(r: LevelResult): ArrayBuffer[] {
-  const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [r.nodes, r.surfaceFacets, r.surfaceOwner, r.surfaceRegion, r.regionFacetSets, r.regionFacetOffsets, r.vmElemEnvelope, r.peelElemEnvelope, ...r.u, ...r.vmElem, ...r.peelElem];
+  const ls: (Uint8Array | Float64Array | Uint32Array | Float32Array)[] = [
+    r.nodes,
+    r.surfaceFacets,
+    r.surfaceOwner,
+    r.surfaceRegion,
+    r.regionFacetSets,
+    r.regionFacetOffsets,
+    r.vmElemEnvelope,
+    r.peelElemEnvelope,
+    ...r.u,
+    ...r.vmElem,
+    ...(r.stressElem ?? []),
+    ...(r.plasticStrainElem ?? []),
+    ...r.peelElem,
+  ];
+  if (r.tets) ls.push(r.tets);
   for (const t of r.temperature) if (t) ls.push(t);
+  for (const g of r.gradTNodal ?? []) if (g) ls.push(g);
   if (r.modeShapes) ls.push(r.modeShapes);
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
   return ls.map((a) => a.buffer as ArrayBuffer);
@@ -252,16 +288,23 @@ async function run(doc: Document) {
   // Setup validation before wasm: an incomplete study is not a failure, and the badge
   // renders these as a neutral hint rather than the red 'analysis failed'. Temperature,
   // convection or heat-flux statements run without loads: the thermal cases drive them.
+  const hasSupports = doc.supports.length > 0;
+  const hasLoads = doc.loads.length > 0;
+  const hasThermal =
+    doc.temperatures.length > 0 ||
+    doc.convections.length > 0 ||
+    doc.heat_fluxes.length > 0;
+  const hasModal = doc.solve?.modes != null && doc.solve.modes > 0;
   if (
-    !doc.supports.length ||
-    (!doc.loads.length && !doc.temperatures.length && !doc.convections.length && !doc.heat_fluxes.length)
+    (!hasSupports && (!hasThermal || hasLoads)) ||
+    (!hasLoads && !hasThermal && !hasModal)
   ) {
     post({
       type: 'error',
       kind: 'setup',
-      message: !doc.supports.length
-        ? 'add a support: the part needs something to hold it'
-        : 'add a load or a fixed temperature, convection or heat flux',
+      message: !hasSupports
+        ? 'add a support (or add a temperature / convection / heat flux for pure thermal conduction)'
+        : 'add a load, temperature, convection, heat flux, or enable modal frequencies',
     });
     return;
   }

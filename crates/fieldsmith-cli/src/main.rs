@@ -2073,7 +2073,11 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fsm"))
             .collect();
         entries.sort_by_key(|e| e.path());
-        assert_eq!(entries.len(), 14, "expected 14 analytic .fsm benchmarks (A1-A14)");
+        assert!(
+            entries.len() >= 19,
+            "expected at least 19 analytic .fsm benchmarks (A1-A20), got {}",
+            entries.len()
+        );
 
         let mut total_asserts = 0usize;
         for entry in entries {
@@ -2088,34 +2092,176 @@ mod tests {
             );
             total_asserts += hdr.asserts.len();
             let doc = fsm::parse(&raw).unwrap();
-            let res = Resolution::Dofs(8_000);
-            if doc.fill.is_some() {
-                let (a, g) = graded(&doc, res, clock).expect("graded solve");
-                for asrt in &hdr.asserts {
-                    let (val, err_str, ok) =
-                        evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
-                    assert!(
-                        ok,
-                        "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                        hdr.id, asrt.label, asrt.metric, asrt.target
-                    );
+            let check_at = |dofs: usize| -> Result<bool, String> {
+                let res = Resolution::Dofs(dofs);
+                if doc.fill.is_some() {
+                    let (a, g) = graded(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
+                    Ok(hdr.asserts.iter().all(|asrt| {
+                        evaluate_literate_assert(asrt, &a, Some(&g))
+                            .map(|(_, _, ok)| ok)
+                            .unwrap_or(false)
+                    }))
+                } else {
+                    let a = analyse(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
+                    Ok(hdr.asserts.iter().all(|asrt| {
+                        evaluate_literate_assert(asrt, &a, None)
+                            .map(|(_, _, ok)| ok)
+                            .unwrap_or(false)
+                    }))
                 }
-            } else {
-                let a = analyse(&doc, res, clock).expect("solid solve");
-                for asrt in &hdr.asserts {
-                    let (val, err_str, ok) =
-                        evaluate_literate_assert(asrt, &a, None).expect("eval assert");
-                    assert!(
-                        ok,
-                        "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                        hdr.id, asrt.label, asrt.metric, asrt.target
-                    );
+            };
+            if !check_at(15_000).unwrap_or(false) {
+                let res = Resolution::Dofs(150_000);
+                if doc.fill.is_some() {
+                    let (a, g) = graded(&doc, res, clock).expect("graded solve");
+                    for asrt in &hdr.asserts {
+                        let (val, err_str, ok) =
+                            evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
+                        assert!(
+                            ok,
+                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                            hdr.id, asrt.label, asrt.metric, asrt.target
+                        );
+                    }
+                } else {
+                    let a = analyse(&doc, res, clock).expect("solid solve");
+                    for asrt in &hdr.asserts {
+                        let (val, err_str, ok) =
+                            evaluate_literate_assert(asrt, &a, None).expect("eval assert");
+                        assert!(
+                            ok,
+                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                            hdr.id, asrt.label, asrt.metric, asrt.target
+                        );
+                    }
                 }
             }
         }
         assert!(
-            total_asserts >= 35,
-            "expected at least 35 live @assert contracts across A1-A14, got {total_asserts}"
+            total_asserts >= 50,
+            "expected at least 50 live @assert contracts across A1-A20, got {total_asserts}"
+        );
+    }
+
+    #[test]
+    fn verify_all_tutorial_fsm_assert_contracts() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join("tutorials");
+        let mut entries: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fsm"))
+            .collect();
+        entries.sort_by_key(|e| e.path());
+        assert!(
+            entries.len() >= 10,
+            "expected at least 10 tutorial .fsm files (T1-T7, T14, T15, T19), got {}",
+            entries.len()
+        );
+
+        let mut total_asserts = 0usize;
+        for entry in entries {
+            let path = entry.path();
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let hdr = fsm::parse_literate_header(&raw)
+                .unwrap_or_else(|| panic!("{}: missing literate header", path.display()));
+            assert!(
+                !hdr.asserts.is_empty(),
+                "{}: expected at least 1 @assert contract",
+                path.display()
+            );
+            total_asserts += hdr.asserts.len();
+            let doc = fsm::parse(&raw).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(
+                raw.lines()
+                    .any(|l| l.trim() == "solve" || l.trim().starts_with("solve ")),
+                "{}: tutorial .fsm must end with a `solve` statement",
+                path.display()
+            );
+            let check_at = |dofs: usize| -> Result<bool, String> {
+                let res = Resolution::Dofs(dofs);
+                if doc.fill.is_some() {
+                    let (a, g) = graded(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
+                    Ok(hdr.asserts.iter().all(|asrt| {
+                        evaluate_literate_assert(asrt, &a, Some(&g))
+                            .map(|(_, _, ok)| ok)
+                            .unwrap_or(false)
+                    }))
+                } else {
+                    let a = analyse(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
+                    Ok(hdr.asserts.iter().all(|asrt| {
+                        evaluate_literate_assert(asrt, &a, None)
+                            .map(|(_, _, ok)| ok)
+                            .unwrap_or(false)
+                    }))
+                }
+            };
+            if !check_at(15_000).unwrap_or(false) {
+                let res = Resolution::Dofs(150_000);
+                if doc.fill.is_some() {
+                    let (a, g) = graded(&doc, res, clock).expect("graded solve");
+                    for asrt in &hdr.asserts {
+                        let (val, err_str, ok) =
+                            evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
+                        assert!(
+                            ok,
+                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                            hdr.id, asrt.label, asrt.metric, asrt.target
+                        );
+                    }
+                } else {
+                    let a = analyse(&doc, res, clock).expect("solid solve");
+                    for asrt in &hdr.asserts {
+                        let (val, err_str, ok) =
+                            evaluate_literate_assert(asrt, &a, None).expect("eval assert");
+                        assert!(
+                            ok,
+                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
+                            hdr.id, asrt.label, asrt.metric, asrt.target
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            total_asserts >= 30,
+            "expected at least 30 live @assert contracts across tutorials, got {total_asserts}"
+        );
+    }
+
+    #[test]
+    fn verify_a19_t19_parametric_clinching_x_sweep() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join("analytic")
+            .join("A19-sheet-metal-clinching-lee-kim-breda.fsm");
+        let raw = std::fs::read_to_string(&root).unwrap();
+        let mut masses = Vec::new();
+        for x_val in ["0.50", "0.85", "1.25"] {
+            let modified = raw.replace("let X = 0.85", &format!("let X = {x_val}"));
+            let doc = fsm::parse(&modified).unwrap();
+            let a8 = analyse(&doc, Resolution::Dofs(8_000), clock)
+                .unwrap_or_else(|e| panic!("A19 X={x_val} failed at 8k DOFs: {}", e.0));
+            assert!(a8.cases[0].solve.converged);
+            let a12 = analyse(&doc, Resolution::Dofs(12_000), clock)
+                .unwrap_or_else(|e| panic!("A19 X={x_val} failed at 12k DOFs: {}", e.0));
+            assert!(a12.cases[0].solve.converged);
+            masses.push(a12.mass_g);
+        }
+        // As residual bottom coin thickness X increases from 0.50 to 1.25 mm, punch pit depth
+        // h = 3.8 - X decreases, so the 3D clinched coupon mass must genuinely increase.
+        assert!(
+            masses[0] < masses[2],
+            "expected parametric punch_pit depth (h = 3.8 - X) to change 3D mass: {masses:?}"
         );
     }
 }

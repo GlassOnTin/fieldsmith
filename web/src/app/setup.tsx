@@ -19,8 +19,14 @@ import { NumberInput, NumRow, VecRow, Seg } from './fields';
 import {
   detectCoupledPhysicsRegime,
   evaluateDocumentFieldEquations,
+  getContinuumMaterialSpec,
+  readLetParam,
   upsertLetParam,
 } from '../doc/continuum';
+import { openFreeSurfaceModal } from './FreeSurfaceModal';
+import { openCoordMappingModal } from './CoordMappingModal';
+import { openFixingsCatalogueModal } from './FixingsModal';
+import { openAntennaWorkbenchModal } from './AntennaWorkbench';
 import { ui, useApp } from './ui';
 import { Icon } from './icons';
 import { analysis } from './analysis';
@@ -540,6 +546,10 @@ function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection' | '
     else d.heat_fluxes.push({ id, region: rid, q: 1e-3, case: 'Thermal 1' });
   });
   store.select({ kind, id });
+  if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+    ui.set('treeOpen', false);
+    ui.set('inspOpen', true);
+  }
 }
 
 export function deleteAnalysis(
@@ -764,30 +774,42 @@ function addMultiphysicsPresetBc(
   store.transact(`Add ${preset} multiphysics BC`, (d) => {
     const rid = ensureDefaultRegion(d);
     const regime = detectCoupledPhysicsRegime(d);
+    const matSpec = getContinuumMaterialSpec(d, d.material);
 
     if (preset === 'vft_pull') {
-      upsertLetParam(d, 'u_pull', 0.16);
+      const uPull = readLetParam(d, 'u_pull', 0.16);
+      upsertLetParam(d, 'u_pull', uPull);
       if (regime === 'pilkington_uk5_float_bath') {
-        upsertLetParam(d, 'h_sill', 65);
-        upsertLetParam(d, 'top_roll_cant', 0);
+        upsertLetParam(d, 'h_sill', readLetParam(d, 'h_sill', 65));
+        upsertLetParam(d, 'top_roll_cant', readLetParam(d, 'top_roll_cant', 0));
         if (rid && !d.temperatures.some((t) => t.id === 'spout_hot')) {
           const id = freshId(d, 'spout_hot');
           d.temperatures.push({
             id,
             region: rid,
-            celsius: 1050,
+            celsius: readLetParam(d, 't_spout_c', 1050),
             case: 'Float Bath Thermal',
           });
           selAfter = { kind: 'temperature', id };
         }
       } else if (rid) {
+        const pullForceN = readLetParam(
+          d,
+          'F_pull',
+          Math.max(40, Math.min(500, Math.round(matSpec.fsmMaterial.yield_strength * 1.8))),
+        );
+        const meltTempC = readLetParam(
+          d,
+          'T_melt_c',
+          matSpec.phase === 'viscous_melt' ? 650 : Math.round((d.solve.t_ref ?? 20) + 450),
+        );
         if (!d.loads.some((l) => l.id.includes('viscous_pull'))) {
           const id = freshId(d, 'viscous_pull');
           d.loads.push({
             id,
             region: rid,
             case: 'Viscous Pull & Creep',
-            kind: { type: 'force', vector: [120, 0, 0] },
+            kind: { type: 'force', vector: [pullForceN, 0, 0] },
           });
           selAfter = { kind: 'load', id };
         }
@@ -795,28 +817,41 @@ function addMultiphysicsPresetBc(
           d.temperatures.push({
             id: freshId(d, 'melt_hot'),
             region: rid,
-            celsius: 650,
+            celsius: meltTempC,
             case: 'Viscous Pull & Creep',
           });
         }
       }
     } else if (preset === 'em_lorentz') {
+      const iCur = readLetParam(
+        d,
+        'i_current',
+        readLetParam(d, 'i_motor', regime === 'pilkington_uk5_float_bath' ? 260 : 250),
+      );
+      const bField = readLetParam(d, 'b_field', 0.8);
       if (regime === 'pilkington_uk5_float_bath') {
-        upsertLetParam(d, 'i_motor', 260);
-        upsertLetParam(d, 'p_h2', 4.2);
-        upsertLetParam(d, 'q_beam', 34);
+        upsertLetParam(d, 'i_motor', iCur);
+        upsertLetParam(d, 'p_h2', readLetParam(d, 'p_h2', 4.2));
+        upsertLetParam(d, 'q_beam', readLetParam(d, 'q_beam', 34));
       } else {
-        upsertLetParam(d, 'i_current', 250);
-        upsertLetParam(d, 'b_field', 0.8);
+        upsertLetParam(d, 'i_current', iCur);
+        upsertLetParam(d, 'b_field', bField);
       }
       if (rid) {
+        const pMagMpa = Number(
+          Math.max(0.1, Math.min(25, 1.5 * (iCur / 250) * (bField / 0.8))).toFixed(3),
+        );
+        const kCond = matSpec.thermalConductivityWPerMK ?? 45;
+        const qJoule = Number(
+          Math.max(0.01, Math.min(2.5, 0.12 * (iCur / 250) ** 2 * Math.min(2.0, 45 / Math.max(5, kCond)))).toFixed(3),
+        );
         if (!d.loads.some((l) => l.id.includes('lorentz_force'))) {
           const id = freshId(d, 'lorentz_force');
           d.loads.push({
             id,
             region: rid,
             case: 'EM Lorentz & Joule',
-            kind: { type: 'pressure', mpa: 1.5 },
+            kind: { type: 'pressure', mpa: pMagMpa },
           });
           selAfter = { kind: 'load', id };
         }
@@ -824,28 +859,34 @@ function addMultiphysicsPresetBc(
           d.heat_fluxes.push({
             id: freshId(d, 'joule_heating'),
             region: rid,
-            q: 0.12,
+            q: qJoule,
             case: 'EM Lorentz & Joule',
           });
         }
       }
     } else if (preset === 'optical_beam') {
+      const iBeam = readLetParam(d, 'i_beam', readLetParam(d, 'i_solar', 1000));
+      const fLens = readLetParam(d, 'f_lens', 60);
+      const dLens = readLetParam(d, 'd_lens', 44);
       if (regime === 'solar_candle_ignition') {
-        upsertLetParam(d, 'i_solar', 1000);
+        upsertLetParam(d, 'i_solar', iBeam);
       } else {
-        upsertLetParam(d, 'i_beam', 1000);
+        upsertLetParam(d, 'i_beam', iBeam);
       }
-      upsertLetParam(d, 'f_lens', 60);
-      upsertLetParam(d, 'd_lens', 44);
+      upsertLetParam(d, 'f_lens', fLens);
+      upsertLetParam(d, 'd_lens', dLens);
       if (rid && !d.heat_fluxes.some((f) => f.id.includes('optical') || f.id.includes('solar'))) {
         const id = freshId(
           d,
           regime === 'solar_candle_ignition' ? 'solar_caustic_flux' : 'optical_beam_flux',
         );
+        const qFocal = Number(
+          (0.285 * (iBeam / 1000) * Math.max(0.25, (dLens / 44) ** 2)).toFixed(4),
+        );
         d.heat_fluxes.push({
           id,
           region: rid,
-          q: 0.285,
+          q: qFocal,
           case:
             regime === 'solar_candle_ignition'
               ? '1. Solar Focal Heating & Buoyant Plume'
@@ -854,21 +895,24 @@ function addMultiphysicsPresetBc(
         selAfter = { kind: 'heatflux', id };
       }
     } else if (preset === 'combustor_spray') {
-      upsertLetParam(d, 'swirl_number', 0.72);
+      const swirlN = readLetParam(d, 'swirl_number', 0.72);
+      const mDot = readLetParam(d, 'm_dot_fuel', readLetParam(d, 'm_dot_jet', 1.85));
+      upsertLetParam(d, 'swirl_number', swirlN);
       if (regime === 'annular_swirl_spray_combustor') {
-        upsertLetParam(d, 'm_dot_fuel', 1.85);
+        upsertLetParam(d, 'm_dot_fuel', mDot);
       } else {
-        upsertLetParam(d, 'm_dot_jet', 1.85);
+        upsertLetParam(d, 'm_dot_jet', mDot);
       }
       if (rid && !d.temperatures.some((t) => t.id.includes('flame') || t.id.includes('thermal_jet'))) {
         const id = freshId(
           d,
           regime === 'annular_swirl_spray_combustor' ? 'flame_liner_hot' : 'thermal_jet_hot',
         );
+        const tFlame = Math.round(readLetParam(d, 'T_flame_c', 650 + 92 * mDot));
         d.temperatures.push({
           id,
           region: rid,
-          celsius: 820,
+          celsius: tFlame,
           case:
             regime === 'annular_swirl_spray_combustor'
               ? '1. Combustor Thermal & Pressure'
@@ -887,8 +931,86 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
   const eqs = evaluateDocumentFieldEquations(doc);
   const activeEqs = eqs.filter((e) => e.active);
   const hasCoupledRegime = Boolean(detectCoupledPhysicsRegime(doc));
+  const isJ2Plastic = readLetParam(doc, 'nonlinear_plastic', 0) > 0;
+  const hardeningN = readLetParam(doc, 'hardening_n', 0.2);
+
   return (
     <div data-testid="setup-multiphysics-section" style={{ marginTop: '10px', padding: '0 6px 8px' }}>
+      <div
+        class="card"
+        data-testid="setup-constitutive-thermal-card"
+        style={{
+          padding: '7px 9px',
+          marginBottom: '8px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          borderRadius: '6px',
+        }}
+      >
+        <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text)', marginBottom: '6px' }}>
+          Constitutive &amp; Thermal Regime
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr auto',
+            gap: '5px 8px',
+            alignItems: 'center',
+            fontSize: '11px',
+          }}
+        >
+          <span style={{ color: 'var(--text-2)' }}>3D J₂ Plasticity</span>
+          <Seg<'linear' | 'j2'>
+            value={isJ2Plastic ? 'j2' : 'linear'}
+            options={[
+              { value: 'linear', label: 'Linear' },
+              { value: 'j2', label: '3D J₂ Plastic' },
+            ]}
+            onChange={(v) =>
+              store.transact('Set 3D J2 plasticity', (d) => {
+                upsertLetParam(d, 'nonlinear_plastic', v === 'j2' ? 1 : 0);
+                if (v === 'j2' && !d.lets?.some((l) => l.name === 'hardening_n')) {
+                  upsertLetParam(d, 'hardening_n', 0.2);
+                }
+              })
+            }
+            testId="setup-j2-plastic-toggle"
+          />
+          {isJ2Plastic && (
+            <>
+              <span style={{ color: 'var(--text-2)' }}>Hardening n</span>
+              <div style={{ width: '90px' }}>
+                <NumberInput
+                  value={hardeningN}
+                  min={0.01}
+                  max={0.8}
+                  step={0.02}
+                  testId="setup-hardening-n"
+                  onChange={(v) =>
+                    store.transact('Set hardening exponent n', (d) => {
+                      upsertLetParam(d, 'hardening_n', Math.max(0.01, Math.min(1.0, v)));
+                    })
+                  }
+                />
+              </div>
+            </>
+          )}
+          <span style={{ color: 'var(--text-2)' }}>Ref. Temp T_ref (°C)</span>
+          <div style={{ width: '90px' }}>
+            <NumberInput
+              value={doc.solve.t_ref ?? 20}
+              step={5}
+              testId="setup-tref"
+              onChange={(v) =>
+                store.transact('Set reference temperature tref', (d) => {
+                  d.solve.t_ref = v;
+                })
+              }
+            />
+          </div>
+        </div>
+      </div>
+
       <details open={hasCoupledRegime} style={{ marginBottom: '8px' }}>
         <summary
           class="section-label"
@@ -936,6 +1058,56 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             style={{ fontSize: '10px', padding: '4px 6px' }}
           >
             + Swirl / Thermal Jet
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="open-systems-workbench-setup"
+            title="Open Coupled 1D/2D Engineering PDE Systems Workbench"
+            onClick={() => ui.set('systemsOpen', true)}
+            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#f59e0b', color: '#f59e0b' }}
+          >
+            ⚡ Coupled PDE Workbench
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="open-free-surface-sph-setup"
+            title="Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench (1100 °C Spout-Lip Heel to Knurl, Howell Peregrine Wave Air Entrainment, Young–Laplace & TPMS Wicking)"
+            onClick={() => openFreeSurfaceModal()}
+            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#38bdf8', color: '#38bdf8' }}
+          >
+            🌊 Free-Surface &amp; Capillary Workbench
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="open-fixings-workbench-setup"
+            title="Open Engineering Fixings, Fastener Torque & Weibull Preload Workbench"
+            onClick={() => openFixingsCatalogueModal()}
+            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#10b981', color: '#10b981' }}
+          >
+            🔩 Fastener &amp; Weibull Workbench
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="open-antenna-workbench-setup"
+            title="Open Dual-Band RF VNA Scattering, 50 Ω Smith Chart & 3D Lobe Workbench"
+            onClick={() => openAntennaWorkbenchModal()}
+            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#a855f7', color: '#a855f7' }}
+          >
+            📡 RF VNA &amp; Smith Chart Workbench
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="open-coord-mapping-setup"
+            title="Open 1D–4D Coordinate Mappings & Pullback FEM Suite (Polar, Cylindrical, Spherical, Confocal Elliptic, Parabolic, Toroidal & 4D Hyperspherical)"
+            onClick={() => openCoordMappingModal()}
+            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#22d3ee', color: '#22d3ee' }}
+          >
+            🌐 1D–4D Coordinate Mappings &amp; Pullback FEM
           </button>
         </div>
       </details>
@@ -1289,6 +1461,12 @@ function SupportInspector({ id }: { id: string }) {
       if (t) t.fixed[i] = v;
     });
   };
+  const applyFixedPreset = (label: string, preset: [boolean, boolean, boolean]) => {
+    store.transact(label, (d) => {
+      const t = d.supports.find((x) => x.id === id);
+      if (t) t.fixed = [...preset];
+    });
+  };
   return (
     <div class="insp" data-inspector="support">
       <div class="insp-heading">
@@ -1325,6 +1503,49 @@ function SupportInspector({ id }: { id: string }) {
               {'XYZ'[i]}
             </label>
           ))}
+        </div>
+        <label class="plain">Presets</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="support-preset-xyz"
+            title="Clamp all 3 displacement DOFs (u_x = u_y = u_z = 0)"
+            onClick={() => applyFixedPreset('Clamp all support DOFs', [true, true, true])}
+            style={{ fontSize: '10px', padding: '2px 6px' }}
+          >
+            Clamp All (xyz)
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="support-preset-x-sym"
+            title="X-plane symmetry / roller boundary condition (u_x = 0)"
+            onClick={() => applyFixedPreset('Set X-symmetry support', [true, false, false])}
+            style={{ fontSize: '10px', padding: '2px 6px' }}
+          >
+            X-Sym (u_x=0)
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="support-preset-y-sym"
+            title="Y-plane symmetry / roller boundary condition (u_y = 0)"
+            onClick={() => applyFixedPreset('Set Y-symmetry support', [false, true, false])}
+            style={{ fontSize: '10px', padding: '2px 6px' }}
+          >
+            Y-Sym (u_y=0)
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            data-testid="support-preset-z-sym"
+            title="Z-plane symmetry / axial roller boundary condition (u_z = 0)"
+            onClick={() => applyFixedPreset('Set Z-symmetry support', [false, false, true])}
+            style={{ fontSize: '10px', padding: '2px 6px' }}
+          >
+            Z-Sym (u_z=0)
+          </button>
         </div>
       </div>
       <div class="hint">
@@ -1594,6 +1815,18 @@ function LoadInspector({ id }: { id: string }) {
               testId="load-case"
               title="Named load case; the Results lens can switch between cases"
             />
+            <div style={{ gridColumn: '1 / -1', marginTop: '4px' }}>
+              <button
+                type="button"
+                class="btn small"
+                data-testid="load-open-fixings-calculator"
+                title="Open Fastener Torque, Thread Shear & Weibull Preload Calculator"
+                onClick={() => openFixingsCatalogueModal()}
+                style={{ width: '100%', fontSize: '11px', borderColor: '#10b981', color: '#10b981' }}
+              >
+                🔩 Open Fastener Torque &amp; Weibull Calculator →
+              </button>
+            </div>
           </>
         )}
       </div>

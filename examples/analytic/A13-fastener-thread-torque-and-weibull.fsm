@@ -4,8 +4,8 @@ fieldsmith 1
 # @code: A13
 # @category: analytic
 # @level: Analytic Verification
-# @title: Analytic Benchmark A13: Fastener Inclined-Plane Thread Torque Envelope [T_min, T_max] & Weibull Regression (V57)
-# @subtitle: Verify Kellermann–Klein / VDI 2230 thread-plus-collar torque decomposition T = F [½ d₂ tan(ψ + ρ') + μ_b r_b] against NASA-STD-5020B, ECSS-E-ST-32-08C, and Bossard boss-tapping benchmarks plus closed-form Weibull MLE/OLS regression.
+# @title: Analytic Benchmark A13: 3D Boss Preload FEA + 1D Kellermann–Klein Thread Torque & Weibull Regression Workbench (V57)
+# @subtitle: Solve 3D P2 bearing and clamping stress in a Ti-6Al-4V / PA12 counterbored boss (`preload=1250 N`), paired with the 1D Kellermann–Klein / VDI 2230 thread-plus-collar torque formula T(F) and 2-parameter Weibull OLS regression (V57).
 # @verification_badge: Verified by V57 · NASA/ECSS/VDI 2230 Fastener Standards · PASS (< 0.1%)
 # @doc_path: docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md
 # @fsm_path: examples/analytic/A13-fastener-thread-torque-and-weibull.fsm
@@ -54,7 +54,7 @@ material ti64 on screw_shank
 material ti64 on screw_head
 
 region base_mount = boss_plate.nz
-region washer_seat = counterbore.bottom + screw_head.top
+region washer_seat = screw_head.top
 support mount_fix base_mount fixed=xyz
-load clamp_preload washer_seat preload=1250 axis=(0, 0, -1)
+load clamp_preload washer_seat preload=1250
 solve

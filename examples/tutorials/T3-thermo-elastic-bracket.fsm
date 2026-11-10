@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t3-thermo-elastic-bracket.fsm
 # @verification_refs: docs/verification/V19.md, docs/verification/V20.md
 # ---
+# @assert: Case 1 (Mechanical) Pin Load Resultant |F| || resultant_mag:Mechanical || 400.02 || 0.5% || N
+# @assert: Case 2 (Thermal) Hot Exhaust Pin Temperature T_max || max_temp:Thermal || 220.00 || 0.5% || °C
+# @assert: Case 2 (Thermal) Restrained Expansion Stress σ_vM || max_vm_elem:Thermal || >= 100.0 || >= 100.0 || MPa
+# ---
 # @step: 1. Why Heating a Bolted Part Creates Stress || setup
 #   Almost all metals and plastics expand slightly when heated. If a part floats freely in space and warms up uniformly, it grows slightly larger with zero internal stress. But if the part is bolted down to a cold frame ("mount" held at 20 °C) while its upper port touches a hot exhaust pipe ("load_pin" at 220 °C), the hot metal tries to expand against the cold bolts. Switch to Setup (2) to inspect the two separate load cases on this 316L stainless-steel bracket: "Mechanical" (400 N force) and "Thermal" (20 °C to 220 °C temperature difference).
 # @expected:

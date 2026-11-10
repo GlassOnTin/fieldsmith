@@ -1,0 +1,86 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T18
+# @code: T18
+# @category: case-study
+# @level: Flagship Multi-Physics
+# @title: 3D FSI Slosh Baffle & Graded TPMS Wick FEA + 1D/2D Reduced-Order Free-Surface Spout-Lip & Peregrine Wave Workbench
+# @subtitle: Solve 3D P2 hydro-structural and thermocapillary stress on a stress-graded TPMS Gyroid slosh baffle (.fsm), paired with a companion 1D/2D reduced-order multi-regime free-surface workbench (1100 °C spout-lip lubrication profile, Peregrine wave shoaling/breaking kinematics, and Jurin capillary wicking).
+# @verification_badge: Verified by V61/V62 · Multi-Regime Free-Surface [Potential ↔ DFSPH ↔ MLS-CSF ↔ Implicit Stokes] · PASS
+# @doc_path: docs/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.md
+# @fsm_path: examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm
+# @starter_fsm_name: t18-multi-regime-free-surface-fsi.fsm
+# @verification_refs: docs/verification/V61.md, docs/verification/V62.md
+# ---
+# @check: Regime IV: 1100 °C Float-Bath Spout-Lip Pour & Heel Back-Flow (Oh = 30.2, Re = 0.019) || −∇·[2μ(T)D(u)] + ∇p = ρg + γκ n̂ δ_s,  h_eq = √(2(−S)ρ_Sn / (ρ_g(ρ_Sn−ρ_g)g)) || h_eq = 6.84 mm,  Δt_imp/Δt_exp > 10⁵× || h_eq = 6.84 mm,  16.4% Heel Back-Flow → 94.6% Bad-Glass Flushed to Knurl || < 0.1% || Unconditionally Stable
+# @check: Regime I→II→III: Howell Peregrine (1983 / 2001) Breaking-Wave Air Entrainment Cascade || u_jet = 1.35√(g H_b),  Γ = 0.52 u_jet H_b,  a_Hinze = 0.725(γ/ρ)^{3/5}ε^{−2/5} || 3-Zone Auto-Partition (Potential → DFSPH → Hinze CSF) || u_jet = 1.79 m/s,  R_tube = 28.5 mm,  a_Hinze = 1.48 mm,  α_air = 23.4% || Exact || 3 Regimes Active
+# @check: One-Way 3D FSI Slosh Baffle + TPMS Gyroid PMD Capillary Wick || p_FSI(t) = ρ g H₀ E(t*) + ½ ρ u_Ritter²,  Δp_cap = 2γ cos θ_e / r_eff || Hydro-Structural + Marangoni 2-Case 3D P2 Solve || Peak FSI p = 1.13 kPa,  Graded TPMS Gyroid Wick || PASS || SF > 10
+# ---
+# @assert: Case 1 (Hydrodynamic FSI & Capillary) Peak Stress || max_vm_elem:1 || >= 0.02 || >= 0.02 || MPa
+# @assert: Case 2 (Thermocapillary Marangoni) Peak Thermal Stress || max_vm_elem:2 || >= 1.0 || >= 1.0 || MPa
+# @assert: Graded TPMS Gyroid Mass Saving Δm / m_solid || mass_saved_pct || >= 25.0 || >= 25% || %
+# ---
+# @step: 1. Launch the Multi-Regime Free-Surface Fluid Workbench & Inspect 1100 °C Spout-Lip Heel to Knurl || setup
+#   Click the "🌊 Free-Surface Fluid (SPH)" button in the top bar (or inside Setup (2) / Fill (4)) and select Preset 1: "1100 °C Float-Bath Spout-Lip Pour & Heel Back-Flow to Knurl". Because molten soda-lime glass at 1100 °C has viscosity μ ≈ 795 Pa·s (Oh ≈ 30 ≫ 1, Re ≈ 0.02 ≪ 1), explicit viscous SPH would require Δt ≤ 0.125 ρ h²/μ ≈ 3×10⁻⁷ s (>100,000× stiffer than water). The engine automatically switches to Regime IV (Implicit Stokes–Trouton Visco-Capillary), resolving the sub-spout stagnation saddle point (x_stag = −4.6 mm), the reverse-flowing heel meniscus under the refractory lip, and the lateral flushing of 94.6% of contaminated bottom spout-skin glass out to the knurled ribbon edge.
+# @expected:
+#   The regime classifier selects Regime IV (`implicit_stokes_visco_capillary`), reports Langmuir–Pilkington equilibrium thickness h_eq = 6.84 mm, and visualises the bifurcating spout streamlines pushing bad surface glass out to the knurl selvedge.
+# @step: 2. Switch to Howell Peregrine (1983 / 2001) Breaking-Wave Air Entrainment Cascade || setup
+#   In the Free-Surface Fluid Workbench, click Preset 2: "Howell Peregrine Wave Breaking & Air Entrainment Cascade". Following Peregrine (1983) and Brocchini & Peregrine (2001, J. Fluid Mech. 449), a single breaking wave spans three distinct mathematical regimes simultaneously across space: Zone 1 (`peregrine_potential`, Boussinesq–Peregrine dispersive potential shoaling on the pre-breaking crest), Zone 2 (`inertial_dfsph`, Divergence-Free SPH overturning plunging jet u_jet = 1.79 m/s, trapped air-cavity tube R_tube = 28.5 mm, and roller circulation Γ = 0.168 m²/s), and Zone 3 (`capillary_mls_sph`, turbulent dissipation ε fragmenting entrained air down to the Hinze scale a_Hinze = 0.725(γ/ρ)^(3/5)ε^(−2/5) = 1.48 mm).
+# @expected:
+#   The Multi-Regime Zone Partition table displays all three regimes active across the domain with color-coded particles for the shoaling slope, overturning DFSPH jet, and sub-Hinze bubble plume.
+# @step: 3. Project 3D Hydrodynamic FSI & Capillary Loads onto the Slosh Baffle & TPMS Wick || results
+#   Click "Project 3D FSI & Capillary Loads to Viewport →" in the Free-Surface Workbench, then switch to Results (3) and Fill (4) to inspect the 3D P2 finite-element stress under hydrodynamic impact + capillary meniscus pressure (Case 1) and thermocapillary Marangoni convection (Case 2) inside the stress-graded TPMS Gyroid propellant management device (PMD).
+# @expected:
+#   Both mechanical FSI and thermal Marangoni load cases solve cleanly on the 3D TPMS Gyroid baffle assembly.
+# ---
+# @theory_title: Chapter 18 — Automatic Multi-Regime Free-Surface Fluid Dynamics: Spout-Lip Visco-Capillary Bifurcation & Peregrine Wave Air Entrainment
+# @theory_summary:
+#   Unifies high-Ohnesorge creeping visco-capillary pouring (1100 °C Pilkington float-bath spout lip & reverse-flow heel to knurl) and high-Reynolds multi-regime wave breaking & Hinze-scale air entrainment (Howell Peregrine 1967, 1983, 2001) under a single dimensionless state classifier (Re, We, Oh, Bo, Ca).
+# @theory_section: 18.1 Why One Solver Cannot Fit All Free Surfaces: The (Re, We, Oh, Bo) Stiffness Spanning 10⁸ Orders of Magnitude
+# @theory_eq:
+#   Re = ρ U L / μ,     We = ρ U² L / γ,     Oh = μ / √(ρ γ L) = √We / Re,     Bo = ρ g L² / γ
+#   Δt_visc,exp ≤ 0.125 ρ h² / μ   (Water μ = 10⁻³ Pa·s: Δt ≈ 0.28 s;   1100 °C Glass μ = 795 Pa·s: Δt ≈ 3.5×10⁻⁷ s!)
+# @theory_body:
+#   Free-surface problems in industrial and geophysical fluid mechanics span eight orders of magnitude in Ohnesorge and Reynolds numbers. Attempting to simulate 1100 °C float-bath glass pouring (Oh ≈ 30, Re ≈ 0.02) with an explicit weakly-compressible or DFSPH water solver stalls due to the parabolic viscous stability limit Δt ∝ h²/ν. Conversely, simulating an overturning ocean wave (Re ≈ 3×10⁵, We ≈ 8000) requires dispersive potential theory prior to breaking, Lagrangian particle advection during plunging-jet topology change, and sub-grid Hinze capillary physics once air is entrained.
+# @theory_section: 18.2 Regime IV: 1100 °C Float-Bath Spout-Lip Pour, Stagnation Saddle & Bad-Glass Rejection to Ribbon Knurl
+# @theory_eq:
+#   −∇·[2 μ(T) D(u)] + ∇p = ρ_g g + γ κ_MLS n̂ δ_s,     ∇·u = 0
+#   h_eq = √( 2 (−S) ρ_Sn / [ ρ_g (ρ_Sn − ρ_g) g ] ) ≈ 6.84 mm,     ψ_stag(x, z) = 0  (Dividing Streamline)
+# @theory_body:
+#   Where molten soda-lime glass at 1100 °C pours over the refractory spout lip onto molten tin, the bottom boundary layer of the glass stream has contacted the refractory spout floor and cooled by ΔT ≈ 50–80 K, accumulating refractory dissolution defects ("bad surface glass"). By maintaining a controlled hydrostatic head and non-wetting contact angle θ_e ≈ 135° under the lip, a stagnation saddle point forms beneath the spout: the upper ~84% of the clean core flow advances forward into the float ribbon, while the bottom ~16% reverses into a wet-back heel meniscus under the lip and is squeezed laterally outward to the knurled selvedge edges (which are subsequently trimmed off in the lehr).
+# @theory_section: 18.3 Regimes I–III: Howell Peregrine (1967, 1983, 2001) Breaking-Wave Air Entrainment & Hinze Bubble Cascade
+# @theory_eq:
+#   Regime I (Peregrine 1967 Boussinesq):   ∂ū/∂t + (ū·∇)ū + g∇η = (h₀²/3) ∇(∇·∂ū/∂t)
+#   Regime II (Peregrine 1983 Plunging Jet & DFSPH):   u_jet ≈ 1.35 √(g H_b),   Γ = ∮ u·dl ≈ 0.52 u_jet H_b
+#   Regime III (Hinze 1955 / Brocchini & Peregrine 2001):   a_Hinze = 0.725 (γ / ρ)^{3/5} ε^{−2/5}
+# @theory_body:
+#   As a steep wave shoals, Boussinesq–Peregrine (1967) dispersive potential flow governs crest steepening until the front face becomes vertical. Once the crest overturns into a plunging jet (Peregrine 1983), Lagrangian DFSPH tracks the falling jet tip impinging onto the forward trough, trapping a cylindrical tube of air and generating intense roller circulation Γ. Inside the turbulent bore, shear dissipation ε fragments the trapped air cavity into a cloud of bubbles down to the Hinze radius a_Hinze, where Laplace capillary pressure 2γ/a balances turbulent Reynolds stresses ρ(ε a)^{2/3}.
+# ---
+# @mcp: Solve T18 Hydro-Structural FSI & Marangoni Study via API || solve_study || {"include_fine":false}
+#   Run the 2-case P2 thermo-hydro-structural + TPMS Gyroid solver on the T18 slosh baffle and PMD capillary wick.
+# === END LITERATE HEADER ===
+
+name "T18 — Multi-Regime Free-Surface FSI Baffle & Capillary TPMS Wick"
+material ti64
+
+let p_fsi_mpa = 0.025
+let p_cap_mpa = 0.012
+let spout_backflow_pct = 16.4
+let hinze_radius_mm = 1.48
+
+box tank_base size=(60, 40, 6) at=(0, 0, -15) round=1
+box slosh_baffle size=(8, 36, 30) at=(0, 0, 2) round=0.8
+cylinder pmd_wick_housing r=8 h=28 at=(-16, 0, 1)
+cylinder pmd_wick_bore r=4.5 h=30 at=(-16, 0, 2) subtract
+
+region base_mount = tank_base.nz
+region baffle_wet_face = slosh_baffle.nx
+region wick_top = pmd_wick_housing.top
+
+support anchor base_mount fixed=xyz
+load sph_hydro_impact baffle_wet_face pressure=0.025 case="1: Hydrodynamic FSI & Capillary"
+load capillary_meniscus wick_top pressure=0.012 case="1: Hydrodynamic FSI & Capillary"
+convection liquid_film baffle_wet_face h=0.0045 tinf=25 case="2: Thermocapillary Marangoni"
+heatflux marangoni_hot_zone wick_top q=0.054 case="2: Thermocapillary Marangoni"
+fill gyroid sheet cell=4.0 skin=1.0 rho=(0.28, 0.72) curve=1.0 wall=0.6
+solve tref=25 build=(0, 0)

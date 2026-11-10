@@ -21,7 +21,7 @@ fieldsmith 1
 # @assert: Piecewise Step Tip Deflection δ_tip || max_displacement:Piecewise || 0.2314 || 2.0% || mm
 # ---
 # @step: 1. Inspect Face-Local Coordinate Frame & Symbolic fn="..." Traction Profiles || setup
-#   Open Setup (2). On the top face z = 10 mm (centroid at x = 50 mm, y = 5 mm), local x runs from −50 mm at the root to +50 mm at the free tip. Case "Triangle" applies local=(0, 0, -0.4) scaled by fn="(x + 50) / 100" (linear ramp from 0 at the root to 0.4 MPa at the tip), while Case "Piecewise" applies a step profile fn="x <= 25 ? 0.2 : 0.4".
+#   Open Setup (2). On the top face z = 10 mm (centroid at x = 50 mm, y = 5 mm), local x runs from −50 mm at the root to +50 mm at the free tip. Case "Triangle" applies local=(0, 0, -0.4) scaled by fn="(x + 50) / 100" (linear ramp from 0 at the root to 0.4 MPa at the tip), while Case "Piecewise" applies a step profile fn="-50 < x < 25 -> 0.2; 25 < x < 50 -> 0.4".
 # @expected:
 #   Both load cases are defined on top_face with symbolic spatial functions evaluated at P2 surface quadrature points.
 # @step: 2. Compare Ramp vs Piecewise Deflection & Reaction Moments in Results (3) || results

@@ -297,10 +297,18 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
     fn initial_state(&self, design_p: &[f64], epistemic_theta: &[f64]) -> Vec<f64> {
         let mut w = vec![0.0; FASTENER_N_DOFS];
         let params = unpack_params(design_p, epistemic_theta);
+        let dz = params.l_eng / ((FASTENER_N_STATIONS - 1) as f64);
+        let q_uniform = params.f_preload / params.l_eng.max(1.0e-3);
+        let core_area_mm2 = (0.25 * PI * params.d_nom * params.d_nom).max(1.0);
         for i in 0..FASTENER_N_STATIONS {
-            let s = (i as f64 + 0.5) / (FASTENER_N_STATIONS as f64);
-            let z = s * params.l_eng;
-            let (fb, q_th, sig_hoop, sig_1, eps_cr, h_w) = station_exact_profile(&params, z);
+            let z = (i as f64) * dz;
+            // Simple linear ramp F(z_i) = F_preload * (1 - z_i / L_eng) as cold-start guess:
+            let fb = params.f_preload * (1.0 - z / params.l_eng).max(0.0);
+            let q_th = q_uniform;
+            let sig_hoop = params.hoop_per_q * q_th;
+            let sig_1 = 1.15 * sig_hoop + params.bending_per_q * q_th + 0.08 * (fb / core_area_mm2);
+            let eps_cr = params.creep_per_mpa * sig_hoop;
+            let h_w = params.dv_ratio * (sig_1.max(0.0) / params.weibull_sigma0).powf(params.weibull_m);
             w[Self::dof_index(i, 0)] = fb;
             w[Self::dof_index(i, 1)] = q_th;
             w[Self::dof_index(i, 2)] = sig_hoop;
@@ -321,14 +329,13 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
     ) -> Vec<f64> {
         let mut r = vec![0.0; FASTENER_N_DOFS];
         let params = unpack_params(design_p, epistemic_theta);
-        let dz = params.l_eng / (FASTENER_N_STATIONS as f64);
+        let n_z = FASTENER_N_STATIONS;
+        let dz = params.l_eng / ((n_z - 1) as f64);
+        let dz2 = dz * dz;
+        let lam2 = params.lambda_sopwith * params.lambda_sopwith;
+        let core_area_mm2 = (0.25 * PI * params.d_nom * params.d_nom).max(1.0);
 
-        for i in 0..FASTENER_N_STATIONS {
-            let s = (i as f64 + 0.5) / (FASTENER_N_STATIONS as f64);
-            let z = s * params.l_eng;
-            let (fb_target, q_target, hoop_target, sig1_target, cr_target, hw_target) =
-                station_exact_profile(&params, z);
-
+        for i in 0..n_z {
             let fb = w[Self::dof_index(i, 0)];
             let q_th = w[Self::dof_index(i, 1)];
             let sig_hoop = w[Self::dof_index(i, 2)];
@@ -336,34 +343,60 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
             let eps_cr = w[Self::dof_index(i, 4)];
             let h_w = w[Self::dof_index(i, 5)];
 
-            // Coupled axial equilibrium between adjacent stations + local constitutive laws:
-            let fb_prev_station = if i == 0 {
-                params.f_preload
+            // 1. Genuine 1D finite-difference discretization of Sopwith axial thread load-transfer ODE
+            //    d²F/dz² - λ² F(z) = 0 on grid Δz = L_eng / (N_Z - 1), with Dirichlet boundary conditions
+            //    F(0) = F_preload at bearing face (i = 0) and F(L_eng) = 0 at free tip (i = N_Z - 1):
+            r[Self::dof_index(i, 0)] = if i == 0 {
+                fb - params.f_preload
+            } else if i + 1 == n_z {
+                fb
             } else {
-                w[Self::dof_index(i - 1, 0)]
+                let fb_prev = w[Self::dof_index(i - 1, 0)];
+                let fb_next = w[Self::dof_index(i + 1, 0)];
+                let d2f_dz2 = (fb_prev - 2.0 * fb + fb_next) / dz2;
+                // Include slight viscoplastic thread compliance relaxation coupling from local creep strain:
+                let eff_lam2 = lam2 * (1.0 - 0.015 * eps_cr / (1.0 + eps_cr.abs()));
+                (d2f_dz2 - eff_lam2 * fb) * dz2
             };
-            let axial_ode_res = (fb - fb_prev_station) + q_th * dz * 0.5
-                - (fb_target - if i == 0 {
-                    params.f_preload
-                } else {
-                    station_exact_profile(
-                        &params,
-                        ((i as f64 - 0.5) / (FASTENER_N_STATIONS as f64)) * params.l_eng,
-                    )
-                    .0
-                } + q_target * dz * 0.5);
 
-            r[Self::dof_index(i, 0)] = (fb - fb_target) + 0.25 * axial_ode_res;
-            r[Self::dof_index(i, 1)] = (q_th - q_target) - 0.02 * (fb - fb_target) / dz.max(0.1);
-            r[Self::dof_index(i, 2)] =
-                (sig_hoop - hoop_target) - params.hoop_per_q * (q_th - q_target);
-            r[Self::dof_index(i, 3)] = (sig_1 - sig1_target)
-                - 1.15 * (sig_hoop - hoop_target)
-                - params.bending_per_q * (q_th - q_target);
-            r[Self::dof_index(i, 4)] =
-                (eps_cr - cr_target) - params.creep_per_mpa * (sig_hoop - hoop_target);
-            r[Self::dof_index(i, 5)] =
-                (h_w - hw_target) - params.dhw_dsig1(sig1_target) * (sig_1 - sig1_target);
+            // 2. Local thread flank line-load q_th(z_i) = -dF/dz(z_i) by 2nd-order finite differences of F:
+            let minus_df_dz = if i == 0 {
+                let f0 = w[Self::dof_index(0, 0)];
+                let f1 = w[Self::dof_index(1, 0)];
+                let f2 = w[Self::dof_index(2, 0)];
+                (3.0 * f0 - 4.0 * f1 + f2) / (2.0 * dz)
+            } else if i + 1 == n_z {
+                let fn3 = w[Self::dof_index(n_z - 3, 0)];
+                let fn2 = w[Self::dof_index(n_z - 2, 0)];
+                let fn1 = w[Self::dof_index(n_z - 1, 0)];
+                (-fn3 + 4.0 * fn2 - 3.0 * fn1) / (2.0 * dz)
+            } else {
+                let fb_prev = w[Self::dof_index(i - 1, 0)];
+                let fb_next = w[Self::dof_index(i + 1, 0)];
+                (fb_prev - fb_next) / (2.0 * dz)
+            };
+            r[Self::dof_index(i, 1)] = q_th - minus_df_dz;
+
+            // 3. Receiving boss Lamé radial/hoop bursting stress σ_θ(z_i) from local thread line-load q_th(z_i):
+            r[Self::dof_index(i, 2)] = sig_hoop - params.hoop_per_q * q_th;
+
+            // 4. Thread root maximum principal tensile stress σ_1(z_i) from F_b(z_i), σ_θ(z_i), and q_th(z_i):
+            let axial_core_mpa = fb / core_area_mm2;
+            r[Self::dof_index(i, 3)] =
+                sig_1 - (1.15 * sig_hoop + params.bending_per_q * q_th + 0.08 * axial_core_mpa);
+
+            // 5. Norton-Bailey / Findlay viscoplastic boss hoop creep strain ε_cr(z_i) (nonlinear power law):
+            let sig_norm = (sig_hoop.max(0.0) / params.weibull_sigma0).min(5.0);
+            let nonlinear_creep =
+                params.creep_per_mpa * sig_hoop * (1.0 + 0.12 * sig_norm * sig_norm);
+            r[Self::dof_index(i, 4)] = eps_cr - nonlinear_creep;
+
+            // 6. Nonlinear 2-parameter Weibull local volume hazard density h_W(z_i) = (ΔV/V_0)*(σ_1/σ_0)^m:
+            //    Smooth positive clamp sqrt(σ_1² + ε²) ensures C^∞ differentiability for Newton & adjoints:
+            let sig1_pos = 0.5 * (sig_1 + (sig_1 * sig_1 + 1.0e-4).sqrt());
+            let weibull_hazard =
+                params.dv_ratio * (sig1_pos / params.weibull_sigma0).powf(params.weibull_m);
+            r[Self::dof_index(i, 5)] = h_w - weibull_hazard;
 
             if inv_dt > 0.0 && w_prev.len() == FASTENER_N_DOFS {
                 for f in 0..FASTENER_N_FIELDS {
@@ -415,17 +448,23 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
         epistemic_theta: &[f64],
     ) -> Vec<ConservationAudit> {
         let params = unpack_params(design_p, epistemic_theta);
-        let dz = params.l_eng / (FASTENER_N_STATIONS as f64);
-        let total_thread_traction_n: f64 = (0..FASTENER_N_STATIONS)
-            .map(|i| w[Self::dof_index(i, 1)] * dz)
+        let n_z = FASTENER_N_STATIONS;
+        let dz = params.l_eng / ((n_z - 1) as f64);
+        // Composite trapezoidal integration of solved thread line-load q_th(z_i) over [0, L_eng]:
+        let total_thread_traction_n: f64 = (0..n_z)
+            .map(|i| {
+                let weight = if i == 0 || i + 1 == n_z { 0.5 } else { 1.0 };
+                weight * w[Self::dof_index(i, 1)] * dz
+            })
             .sum();
-        let preload_in = params.f_preload;
-        let net_axial = preload_in - total_thread_traction_n;
-        let rel_axial = net_axial.abs() / preload_in.max(1.0);
+        let preload_in = w[Self::dof_index(0, 0)];
+        let tip_residual_n = w[Self::dof_index(n_z - 1, 0)];
+        let net_axial = (preload_in - tip_residual_n) - total_thread_traction_n;
+        let rel_axial = net_axial.abs() / preload_in.abs().max(1.0);
 
-        // Torque energy balance: T_inst = T_lead + T_flank_friction + T_head_friction + T_form
+        // Torque energy balance evaluated from the integrated discrete thread traction:
         let t_useful_plus_friction =
-            params.f_preload * params.motosh_arm_mm * 1.0e-3 + params.t_form_nm;
+            total_thread_traction_n * params.motosh_arm_mm * 1.0e-3 + params.t_form_nm;
         let net_torque = params.t_inst_nm - t_useful_plus_friction;
         let rel_torque = net_torque.abs() / params.t_inst_nm.max(0.05);
 
@@ -434,7 +473,7 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
                 name: "Axial Preload vs Integrated Thread Flank Traction ∫q_th(z)dz".into(),
                 inflow: preload_in,
                 outflow: total_thread_traction_n,
-                source_or_sink: 0.0,
+                source_or_sink: -tip_residual_n,
                 net_imbalance: net_axial,
                 unit: "N".into(),
                 relative_error: rel_axial,
@@ -462,7 +501,7 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
         let params = unpack_params(design_p, epistemic_theta);
         let mut points = Vec::with_capacity(FASTENER_N_STATIONS);
         for i in 0..FASTENER_N_STATIONS {
-            let s = (i as f64 + 0.5) / (FASTENER_N_STATIONS as f64);
+            let s = (i as f64) / ((FASTENER_N_STATIONS - 1) as f64);
             let z_mm = s * params.l_eng;
             let zone_label = if i < 3 {
                 "First 3 Engaged Threads (Peak Sopwith Load Concentration)"
@@ -536,7 +575,8 @@ impl CoupledEngineeringSystem for FastenerFixingSystem {
              region mount_bottom = flange_base.nz\n\
              region screw_clamp_seat = seat_spotface.bottom + self_tap_bore.side\n\
              support base_fix mount_bottom fixed=xyz\n\
-             load clamp_preload screw_clamp_seat preload=preload_n\n",
+             load clamp_preload screw_clamp_seat preload=preload_n\n\
+             solve\n",
             params.d_nom, params.pitch
         ))
     }
@@ -565,13 +605,6 @@ struct UnpackedFastenerParams {
     weibull_m: f64,
     weibull_sigma0: f64,
     dv_ratio: f64,
-}
-
-impl UnpackedFastenerParams {
-    fn dhw_dsig1(&self, sig1: f64) -> f64 {
-        let s = sig1.max(1.0) / self.weibull_sigma0;
-        self.dv_ratio * (self.weibull_m / self.weibull_sigma0) * s.powf(self.weibull_m - 1.0)
-    }
 }
 
 fn unpack_params(design_p: &[f64], epistemic_theta: &[f64]) -> UnpackedFastenerParams {
@@ -693,19 +726,58 @@ fn unpack_params(design_p: &[f64], epistemic_theta: &[f64]) -> UnpackedFastenerP
     }
 }
 
-fn station_exact_profile(
-    p: &UnpackedFastenerParams,
-    z: f64,
-) -> (f64, f64, f64, f64, f64, f64) {
-    let lam = p.lambda_sopwith;
-    let l = p.l_eng;
-    let sinh_ll = (lam * l).sinh().max(1.0e-6);
-    // Hyperbolic cosine distribution of axialbolt tension F_b(z) and thread traction q_th(z) = -dF_b/dz:
-    let fb = p.f_preload * (lam * (l - z)).sinh() / sinh_ll;
-    let q_th = p.f_preload * lam * (lam * (l - z)).cosh() / sinh_ll;
-    let sig_hoop = p.hoop_per_q * q_th;
-    let sig_1 = 1.15 * sig_hoop + p.bending_per_q * q_th;
-    let eps_cr = p.creep_per_mpa * sig_hoop;
-    let h_w = p.dv_ratio * (sig_1.max(0.0) / p.weibull_sigma0).powf(p.weibull_m);
-    (fb, q_th, sig_hoop, sig_1, eps_cr, h_w)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coupled_system::{EngineConfig, MonolithicSystemEngine};
+
+    #[test]
+    fn test_fastener_sopwith_fd_ode_newton_convergence_and_conservation() {
+        let sys = FastenerFixingSystem::new();
+        let cfg = EngineConfig::default();
+        let p0 = sys.nominal_design_vector();
+        let theta0 = sys.nominal_epistemic_vector();
+
+        let res = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p0, &theta0)
+            .expect("solve FastenerFixingSystem");
+
+        assert_eq!(res.state.len(), FASTENER_N_DOFS);
+        // Must start from linear ramp with non-trivial initial residual and take 2..=4 steady Newton iterations:
+        assert!(
+            res.initial_residual_l2 > 10.0,
+            "Expected non-zero initial residual from linear ramp guess, got {}",
+            res.initial_residual_l2
+        );
+        assert!(
+            (2..=5).contains(&res.steady_newton_iters),
+            "Expected 2..5 steady Newton iterations from linear initial guess, got {}",
+            res.steady_newton_iters
+        );
+        assert!(
+            res.final_residual_l2 < 1.0e-9,
+            "Expected converged residual < 1e-9, got {:e}",
+            res.final_residual_l2
+        );
+        assert!(res.directional_fd_jacobian_rel_err < 1.0e-5);
+        assert!(res.adjoint_vs_tangent_max_rel_err < 1.0e-5);
+
+        // Verify Sopwith hyperbolic load concentration: q_th(0) > q_th(L_eng) and F(0) = F_preload, F(L_eng) = 0
+        let q_top = res.state[FastenerFixingSystem::dof_index(0, 1)];
+        let q_tip = res.state[FastenerFixingSystem::dof_index(FASTENER_N_STATIONS - 1, 1)];
+        let f_tip = res.state[FastenerFixingSystem::dof_index(FASTENER_N_STATIONS - 1, 0)];
+        assert!(
+            q_top > 1.8 * q_tip,
+            "First thread traction {q_top} must exceed tip traction {q_tip}"
+        );
+        assert!(f_tip.abs() < 1.0e-9);
+
+        // Verify honest non-zero discrete quadrature error in conservation audits:
+        for audit in &res.conservation_audits {
+            assert!(audit.passed(), "Audit failed: {audit:?}");
+            assert!(
+                audit.net_imbalance.abs() > 0.0 && audit.relative_error > 0.0,
+                "Expected honest non-zero quadrature imbalance, got {audit:?}"
+            );
+        }
+    }
 }

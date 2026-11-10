@@ -9,8 +9,32 @@ import { viewOverlays } from './App';
 
 function OpacityPanel() {
   useApp();
-  if (store.lens === 'results' || store.doc.root.length === 0 || ui.vpHudCollapsed) return null;
+  if (
+    store.lens === 'results' ||
+    store.doc.root.length === 0 ||
+    ui.vpHudCollapsed ||
+    ui.coordMappingOpen ||
+    ui.freeSurfaceOpen ||
+    ui.mcpSetupOpen ||
+    ui.systemsOpen
+  ) {
+    return null;
+  }
   if (ui.panelMinimized && ui.bodyAlpha >= 0.999) return null;
+  if (ui.opacityDismissed) {
+    return (
+      <button
+        type="button"
+        class="btn small opacity-panel"
+        data-testid="opacity-restore"
+        title="Show Semi-transparent opacity slider"
+        onClick={() => ui.set('opacityDismissed', false)}
+        style={{ padding: '0 8px', height: '24px', fontSize: '11px', gap: '4px' }}
+      >
+        <span>◐ {Math.round(ui.bodyAlpha * 100)}%</span>
+      </button>
+    );
+  }
   return (
     <div class="opacity-panel" data-testid="opacity-panel">
       <span class="plain">Semi-transparent</span>
@@ -27,6 +51,16 @@ function OpacityPanel() {
       <span class="num" data-testid="opacity-value">
         {Math.round(ui.bodyAlpha * 100)}%
       </span>
+      <button
+        type="button"
+        class="mini"
+        data-testid="opacity-close"
+        title="Dismiss Semi-transparent bar"
+        onClick={() => ui.set('opacityDismissed', true)}
+        style={{ marginLeft: '2px', fontSize: '11px', fontWeight: 700 }}
+      >
+        ✕
+      </button>
     </div>
   );
 }

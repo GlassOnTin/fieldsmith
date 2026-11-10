@@ -79,6 +79,12 @@ pub struct CaseResult {
     /// build-orientation evaluation.
     #[serde(skip)]
     pub stress_elem: Vec<Stress>,
+    /// Equivalent plastic strain at each element centroid (`%`, `0.0` on elastic/linear cases).
+    #[serde(skip)]
+    pub plastic_strain_elem: Vec<f64>,
+    /// Nodal 3D temperature gradient `[∂T/∂x, ∂T/∂y, ∂T/∂z]` (`°C/mm`, `3 * nn` floats) on thermal cases.
+    #[serde(skip)]
+    pub grad_t_nodal: Option<Vec<f64>>,
     /// Nodal inter-layer peel utilization `√((max(0, σ_nn)/S_z)² + (τ_nt/S_s)²)` (dimensionless).
     #[serde(skip)]
     pub peel_nodal: Vec<f64>,
@@ -590,7 +596,9 @@ pub fn case_force_report(
         }
         let dist: Option<Dist> = match &l.kind {
             LoadKind::Distributed { expr, dir, total } => {
-                let f = LoadFn::compile(expr)
+                let lets: Vec<(String, f64)> =
+                    doc.lets.iter().map(|l| (l.name.clone(), l.value)).collect();
+                let f = LoadFn::compile_with_lets(expr, &lets)
                     .map_err(|e| SetupError(format!("load '{}': fn: {e}", l.id)))?;
                 let frame = face_frame(mesh, facets, &fs);
                 if frame.rms > regions::FACE_FRAME_RMS_FRACTION * frame.extent {
@@ -1006,6 +1014,8 @@ pub fn run_case(
         von_mises: vm,
         sigma_min_elem,
         stress_elem,
+        plastic_strain_elem: vec![0.0; mesh.tets.len()],
+        grad_t_nodal: None,
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
@@ -1015,6 +1025,134 @@ pub fn run_case(
         temperature: None,
         conduction: None,
     })
+}
+
+/// 3D Nonlinear Elasto-Plastic ($J_2$ Deformation / Ramberg–Osgood–Hollomon Secant-Modulus)
+/// case solver: performs a linear Hookean trial solve first, and if any element exceeds
+/// `yield_strength` ($\sigma_{\text{vM},e} > \sigma_y$), runs damped secant-modulus iterations
+/// updating each yielded element's effective Young's modulus
+/// $E_{\text{sec},e} = \sigma_{\text{flow}}(\varepsilon_{\text{eq},e}) / \varepsilon_{\text{eq},e}$
+/// along the power-law hardening curve $\sigma_{\text{flow}} = \sigma_y (\varepsilon_{\text{eq}} / \varepsilon_y)^n$.
+#[allow(clippy::too_many_arguments)]
+pub fn run_case_elastoplastic(
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    yield_strength: f64,
+    yield_elem: &[f64],
+    hardening_n: f64,
+    fixed: &[u8],
+    force: Vec<f64>,
+    name: String,
+    equilibrate: bool,
+    prescribed: &dyn Fn([V3; 3]) -> Option<V3>,
+) -> Result<CaseResult, SetupError> {
+    let base_mat = Material::iso(young.to_vec(), poisson);
+    let mut cur_case = run_case(
+        mesh,
+        &base_mat,
+        fixed,
+        force.clone(),
+        name.clone(),
+        equilibrate,
+        prescribed,
+    )?;
+    let any_yielded = (0..mesh.tets.len()).any(|e| {
+        let sy_e = yield_elem.get(e).copied().unwrap_or(yield_strength);
+        sy_e > 0.0 && cur_case.vm_elem[e] > sy_e
+    });
+    if !any_yielded {
+        return Ok(cur_case);
+    }
+    let n_hard = hardening_n.clamp(0.02, 0.60);
+    let mut e_sec = young.to_vec();
+    let mut plastic_strain_elem = vec![0.0f64; mesh.tets.len()];
+    let mut total_iters = cur_case.solve.iterations;
+    let n_passes = 3usize;
+    for pass in 0..n_passes {
+        let mut any_updated = false;
+        for (e, &e0) in young.iter().enumerate() {
+            let vm = cur_case.vm_elem[e];
+            let sy_e = yield_elem.get(e).copied().unwrap_or(yield_strength);
+            if sy_e > 0.0 && vm > sy_e && e0 > 0.0 {
+                let eps_y = (sy_e / e0).max(1e-12);
+                // Neuber energy-consistent local strain estimate from current secant state:
+                // sigma * eps = vm^2 / e_sec => eps_eq / eps_y = (vm / sigma_y)^(2 / (n + 1))
+                let over = (vm / sy_e).max(1.0);
+                let eps_ratio =
+                    ((e0 / e_sec[e].max(0.02 * e0)) * over.powf(2.0 / (n_hard + 1.0))).max(1.0);
+                let eps_eq = eps_y * eps_ratio;
+                let sigma_flow = sy_e * eps_ratio.powf(n_hard);
+                let e_target = (sigma_flow / eps_eq).clamp(0.03 * e0, e0);
+                e_sec[e] = 0.25 * e_sec[e] + 0.75 * e_target;
+                plastic_strain_elem[e] = ((eps_eq - sigma_flow / e0).max(0.0)) * 100.0;
+                any_updated = true;
+            }
+        }
+        if !any_updated {
+            break;
+        }
+        let sec_mat = Material::iso(e_sec.clone(), poisson);
+        let next_case = run_case(
+            mesh,
+            &sec_mat,
+            fixed,
+            force.clone(),
+            name.clone(),
+            equilibrate && pass + 1 == n_passes,
+            prescribed,
+        )?;
+        total_iters += next_case.solve.iterations;
+        cur_case = next_case;
+    }
+    cur_case.plastic_strain_elem = plastic_strain_elem;
+    cur_case.solve.iterations = total_iters;
+    Ok(cur_case)
+}
+
+/// Recover 3D nodal temperature gradients `[∂T/∂x, ∂T/∂y, ∂T/∂z]` (`°C/mm`, `3 * nn` floats)
+/// by evaluating the exact quadratic P2 basis gradient at each of the 10 nodes of every
+/// tetrahedron and volume-averaging onto the mesh nodes.
+pub fn compute_nodal_temperature_gradient(mesh: &P2Mesh, t: &[f64]) -> Vec<f64> {
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let nn = mesh.nodes.len();
+    let pts = P2Tetrahedron.nodal_coordinates();
+    let ref_grads: Vec<Vec<[f64; 3]>> = pts
+        .iter()
+        .map(|xi| P2Tetrahedron.evaluate_gradients(xi))
+        .collect();
+    let mut acc = vec![0.0f64; 3 * nn];
+    let mut w = vec![0.0f64; nn];
+    for (e, tet) in mesh.tets.iter().enumerate() {
+        let vol = mesh.tet_volume(e).abs();
+        let map = fieldsmith_solve::assemble::element_map(mesh, e);
+        for (a, g_ref) in ref_grads.iter().enumerate() {
+            let mut gx = 0.0f64;
+            let mut gy = 0.0f64;
+            let mut gz = 0.0f64;
+            for b in 0..10 {
+                let gp = map.transform_gradient(&g_ref[b]);
+                let tb = t[tet[b] as usize];
+                gx += tb * gp[0];
+                gy += tb * gp[1];
+                gz += tb * gp[2];
+            }
+            let n = tet[a] as usize;
+            acc[3 * n] += vol * gx;
+            acc[3 * n + 1] += vol * gy;
+            acc[3 * n + 2] += vol * gz;
+            w[n] += vol;
+        }
+    }
+    for n in 0..nn {
+        let wn = w[n];
+        if wn > 0.0 {
+            acc[3 * n] /= wn;
+            acc[3 * n + 1] /= wn;
+            acc[3 * n + 2] /= wn;
+        }
+    }
+    acc
 }
 
 /// Solve one thermal case: steady conduction from the case's temperature regions,
@@ -1045,6 +1183,7 @@ pub fn run_thermal_case(
     let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
     let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
         .map_err(SetupError)?;
+    let grad_t = compute_nodal_temperature_gradient(mesh, &t);
     // ε_th = α·(T − t_ref): the reference temperature is the stress-free one.
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
@@ -1088,6 +1227,8 @@ pub fn run_thermal_case(
         von_mises: vm,
         sigma_min_elem,
         stress_elem,
+        plastic_strain_elem: vec![0.0; mesh.tets.len()],
+        grad_t_nodal: Some(grad_t),
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
@@ -1121,6 +1262,36 @@ pub fn run_thermal_case_multi(
     let flux = case_heat_fluxes(doc, mesh, facets, &name, h)?;
     let (t, creport) = solve_conduction(mesh, &d, k, &robin, &flux, SolverOptions::default())
         .map_err(SetupError)?;
+    let grad_t = compute_nodal_temperature_gradient(mesh, &t);
+    // Pure thermal conduction (no mechanical supports or zero CTE): return exact nodal
+    // temperature field and conduction report without forcing an elastic stress solve.
+    if fixed.iter().all(|&m| m == 0) || alpha_elem.iter().all(|&a| a.abs() < 1e-18) {
+        let nn = mesh.nodes.len();
+        let ne = mesh.tets.len();
+        return Ok(CaseResult {
+            name,
+            max_von_mises: 0.0,
+            max_vm_elem: 0.0,
+            max_displacement: 0.0,
+            compliance: 0.0,
+            compliance_upper: if equilibrate { Some(0.0) } else { None },
+            u: vec![0.0; nn * 3],
+            stress: vec![Stress::default(); nn],
+            von_mises: vec![0.0; nn],
+            sigma_min_elem: vec![0.0; ne],
+            stress_elem: vec![Stress::default(); ne],
+            plastic_strain_elem: vec![0.0; ne],
+            grad_t_nodal: Some(grad_t),
+            peel_nodal: Vec::new(),
+            peel_elem: vec![0.0; ne],
+            max_layer_peel: 0.0,
+            vm_elem: vec![0.0; ne],
+            solve: creport.clone(),
+            load_reports: Vec::new(),
+            temperature: Some(t),
+            conduction: Some(creport),
+        });
+    }
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
     let force = thermal_load_multi(mesh, &dt, young, poisson, alpha_elem, &ThermalRefData::new());
@@ -1163,6 +1334,8 @@ pub fn run_thermal_case_multi(
         von_mises: vm,
         sigma_min_elem,
         stress_elem,
+        plastic_strain_elem: vec![0.0; mesh.tets.len()],
+        grad_t_nodal: Some(grad_t),
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
@@ -1229,6 +1402,8 @@ struct Prepared {
     fixed: Vec<u8>,
     mat: materials::Material,
     young: Vec<f64>,
+    yield_elem: Vec<f64>,
+    k_elem: Vec<f64>,
     alpha_elem: Vec<Option<f64>>,
     rho_avg: f64,
     mass_g: f64,
@@ -1279,6 +1454,566 @@ fn structural_doc(doc: &Document) -> std::borrow::Cow<'_, Document> {
     std::borrow::Cow::Owned(cloned)
 }
 
+fn tet_signed_vol(verts: &[[f64; 3]], t: [u32; 4]) -> f64 {
+    let [a, b, c, d] = t.map(|i| verts[i as usize]);
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+        + u[2] * (v[0] * w[1] - v[1] * w[0]))
+        / 6.0
+}
+
+/// Remove lone 1-tet and 2-tet exterior "ear" spikes (`tet_count[v] <= 2` with no interior edges,
+/// i.e. `bnd_deg[v] == tet_count[v] + 2`, at a boundary vertex `v` not lying on any bounding-box
+/// datum plane `b_lo` / `b_hi`). On off-lattice horizontal edges (such as `flange_boss` at z = 26 mm
+/// and `base_block` at z = 10 mm on T15), BCC short edges emit isolated 1-tet pyramid teeth and
+/// 2-tet grazing wedges every cell spacing h; stripping these ear tets exposes the underlying
+/// uniform bevel strip without altering datum corners.
+fn prune_boundary_ear_tets(
+    lin: &mut fieldsmith_mesh::TetMesh,
+    b_lo: [f64; 3],
+    b_hi: [f64; 3],
+    h: f64,
+) {
+    let is_on_datum_plane = |p: [f64; 3]| -> bool {
+        (0..3).any(|axis| {
+            (p[axis] - b_lo[axis]).abs() <= 1e-3 * h || (p[axis] - b_hi[axis]).abs() <= 1e-3 * h
+        })
+    };
+    for _pass in 0..2 {
+        let nv = lin.verts.len();
+        if nv == 0 || lin.tets.len() <= 8 {
+            break;
+        }
+        let mut tet_count = vec![0usize; nv];
+        for t in &lin.tets {
+            for &vi in t {
+                tet_count[vi as usize] += 1;
+            }
+        }
+        let bnd = lin.boundary();
+        let mut bnd_face_count = vec![0usize; nv];
+        for &(f, _) in &bnd {
+            bnd_face_count[f[0] as usize] += 1;
+            bnd_face_count[f[1] as usize] += 1;
+            bnd_face_count[f[2] as usize] += 1;
+        }
+        let before = lin.tets.len();
+        lin.tets.retain(|t| {
+            !t.iter().any(|&vi| {
+                let v = vi as usize;
+                let tc = tet_count[v];
+                let is_ear = tc == 1 || (tc == 2 && lin.verts[v][2] < b_hi[2] - 1.9 * h);
+                is_ear
+                    && bnd_face_count[v] >= tc + 2
+                    && !is_on_datum_plane(lin.verts[v])
+            })
+        });
+        if lin.tets.len() == before {
+            break;
+        }
+        lin.compact();
+    }
+}
+
+/// Snap chamfered boundary vertices onto sharp CAD feature edges on bounding-box datum caps
+/// (2-plane QEF + exact SDF positive-boundary bisection along the face tangent) while guarding
+/// element volumes. Returns a per-vertex mask indicating which linear vertices lie on a datum-cap
+/// 2-face CAD edge.
+fn snap_feature_edges(
+    lin: &mut fieldsmith_mesh::TetMesh,
+    body: &expr::Expr,
+    b_lo: [f64; 3],
+    b_hi: [f64; 3],
+    h: f64,
+) -> Vec<bool> {
+    let nv = lin.verts.len();
+    if nv == 0 || lin.tets.is_empty() {
+        return Vec::new();
+    }
+    let is_on_datum_plane = |p: [f64; 3]| -> bool {
+        (0..3).any(|axis| {
+            (p[axis] - b_lo[axis]).abs() <= 0.03 * h || (p[axis] - b_hi[axis]).abs() <= 0.03 * h
+        })
+    };
+    let bnd = lin.boundary();
+    let mut is_bnd = vec![false; nv];
+    let mut mesh_norm = vec![[0.0f64; 3]; nv];
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nv];
+    for &(f, _) in &bnd {
+        let [i0, i1, i2] = [f[0] as usize, f[1] as usize, f[2] as usize];
+        is_bnd[i0] = true;
+        is_bnd[i1] = true;
+        is_bnd[i2] = true;
+        for &(a, b) in &[(i0, i1), (i1, i2), (i2, i0)] {
+            if !adj[a].contains(&b) {
+                adj[a].push(b);
+            }
+            if !adj[b].contains(&a) {
+                adj[b].push(a);
+            }
+        }
+        let p0 = lin.verts[i0];
+        let p1 = lin.verts[i1];
+        let p2 = lin.verts[i2];
+        let ux = p1[0] - p0[0];
+        let uy = p1[1] - p0[1];
+        let uz = p1[2] - p0[2];
+        let vx = p2[0] - p0[0];
+        let vy = p2[1] - p0[1];
+        let vz = p2[2] - p0[2];
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        for &idx in &[i0, i1, i2] {
+            mesh_norm[idx][0] += nx;
+            mesh_norm[idx][1] += ny;
+            mesh_norm[idx][2] += nz;
+        }
+    }
+    for v in 0..nv {
+        if !is_bnd[v] {
+            continue;
+        }
+        let nl = (mesh_norm[v][0].powi(2) + mesh_norm[v][1].powi(2) + mesh_norm[v][2].powi(2)).sqrt();
+        if nl > 1e-12 {
+            mesh_norm[v][0] /= nl;
+            mesh_norm[v][1] /= nl;
+            mesh_norm[v][2] /= nl;
+        }
+    }
+
+    // Detect vertices already lying on a sharp 2-face CAD edge vs single-face vertices,
+    // and evaluate outward CAD face normals g_v.
+    let mut cad_norm = vec![[0.0f64; 3]; nv];
+    let mut has_cad_norm = vec![false; nv];
+    let mut locked_on_edge = vec![false; nv];
+    let probe_eps = 0.012 * h;
+    let dirs: [[f64; 3]; 6] = [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ];
+    for v in 0..nv {
+        if !is_bnd[v] {
+            continue;
+        }
+        let p = lin.verts[v];
+        let mn = mesh_norm[v];
+        // Sample slightly outside along mesh_norm so flat-cap boundary ties never flip sign
+        let p_out = [
+            p[0] + 1e-4 * h * mn[0],
+            p[1] + 1e-4 * h * mn[1],
+            p[2] + 1e-4 * h * mn[2],
+        ];
+        let d = expr::eval(body, p_out);
+        let gl = (d.g[0].powi(2) + d.g[1].powi(2) + d.g[2].powi(2)).sqrt();
+        if gl > 0.25 {
+            let mut g = [d.g[0] / gl, d.g[1] / gl, d.g[2] / gl];
+            if g[0] * mn[0] + g[1] * mn[1] + g[2] * mn[2] < -0.1 {
+                g = [-g[0], -g[1], -g[2]];
+            }
+            cad_norm[v] = g;
+            has_cad_norm[v] = true;
+        }
+        if !is_on_datum_plane(p) {
+            continue;
+        }
+        // Check if p already lies at the intersection of two CAD faces within 0.008 * h
+        let mut near_planes: Vec<[f64; 3]> = Vec::new();
+        for dir in &dirs {
+            let qp = [
+                p[0] + probe_eps * dir[0],
+                p[1] + probe_eps * dir[1],
+                p[2] + probe_eps * dir[2],
+            ];
+            let dq = expr::eval(body, qp);
+            let qgl = (dq.g[0].powi(2) + dq.g[1].powi(2) + dq.g[2].powi(2)).sqrt();
+            if qgl > 0.5 {
+                let qg = [dq.g[0] / qgl, dq.g[1] / qgl, dq.g[2] / qgl];
+                let plane_dist = ((p[0] - qp[0]) * qg[0]
+                    + (p[1] - qp[1]) * qg[1]
+                    + (p[2] - qp[2]) * qg[2])
+                    + dq.v / qgl;
+                if plane_dist.abs() < 0.008 * h {
+                    near_planes.push(qg);
+                }
+            }
+        }
+        'outer: for i in 0..near_planes.len() {
+            for j in (i + 1)..near_planes.len() {
+                let dot = near_planes[i][0] * near_planes[j][0]
+                    + near_planes[i][1] * near_planes[j][1]
+                    + near_planes[i][2] * near_planes[j][2];
+                if dot > -0.35 && dot < 0.70 {
+                    locked_on_edge[v] = true;
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    // Build vertex -> incident tets map for volume & orientation guarding
+    let mut v_tets: Vec<Vec<usize>> = vec![Vec::new(); nv];
+    for (ti, t) in lin.tets.iter().enumerate() {
+        for &vi in t {
+            v_tets[vi as usize].push(ti);
+        }
+    }
+
+    let init_locked = locked_on_edge.clone();
+    let orig_verts = lin.verts.clone();
+    let tiny = 1e-9 * h;
+    for u in 0..nv {
+        if !is_bnd[u] || !has_cad_norm[u] || init_locked[u] {
+            continue;
+        }
+        let pu = orig_verts[u];
+        let g1 = cad_norm[u];
+        let mut best_cand: Option<([f64; 3], f64)> = None;
+        for &w in &adj[u] {
+            if !has_cad_norm[w] {
+                continue;
+            }
+            let pw = orig_verts[w];
+            let g2 = cad_norm[w];
+            let c = g1[0] * g2[0] + g1[1] * g2[1] + g1[2] * g2[2];
+            if !(-0.35..0.70).contains(&c) {
+                continue;
+            }
+            let det = 1.0 - c * c;
+            if det < 0.25 {
+                continue;
+            }
+            let dx = pw[0] - pu[0];
+            let dy = pw[1] - pu[1];
+            let dz = pw[2] - pu[2];
+            let delta_u = g2[0] * dx + g2[1] * dy + g2[2] * dz;
+            let delta_w = -(g1[0] * dx + g1[1] * dy + g1[2] * dz);
+            // Only snap the endpoint that is strictly closer to the 2-plane intersection line,
+            // when w sits genuinely inside the adjacent face (delta_w > 0.22 * h), and only for
+            // convex outward rims (delta_u > 0) within 0.56 * h.
+            if delta_u <= 1e-5 * h
+                || delta_u > 0.56 * h
+                || delta_w.abs() <= 0.22 * h
+                || delta_u >= delta_w.abs() - 1e-5 * h
+            {
+                continue;
+            }
+            let inv_sqrt_det = 1.0 / det.sqrt();
+            let t1 = [
+                (g2[0] - c * g1[0]) * inv_sqrt_det,
+                (g2[1] - c * g1[1]) * inv_sqrt_det,
+                (g2[2] - c * g1[2]) * inv_sqrt_det,
+            ];
+            let s_lin = delta_u * inv_sqrt_det;
+            if s_lin > 0.58 * h {
+                continue;
+            }
+            // Only snap onto bounding-box datum caps (where `stuff()`'s zero-patch warping has
+            // already placed the cap's lattice vertices on the exact datum plane, so snapping
+            // the few diagonal-cut rim vertices completes a flat, watertight cap rim without
+            // erecting isolated spikes on off-lattice interior bevel strips) or near-flat plateaus.
+            let p_lin = [
+                pu[0] + s_lin * t1[0],
+                pu[1] + s_lin * t1[1],
+                pu[2] + s_lin * t1[2],
+            ];
+            let is_near_flat_plateau = g2[2].abs() > 0.99 && s_lin <= 0.16 * h;
+            if !is_on_datum_plane(p_lin) && !is_near_flat_plateau {
+                continue;
+            }
+            let s_max = (1.18 * s_lin).min(0.62 * h);
+            let p_far = [
+                pu[0] + s_max * t1[0],
+                pu[1] + s_max * t1[1],
+                pu[2] + s_max * t1[2],
+            ];
+            if expr::eval(body, p_far).v <= 1e-4 * h {
+                continue;
+            }
+            let mut s_lo = 0.0f64;
+            let mut s_hi = s_max;
+            for _ in 0..32 {
+                let s_mid = 0.5 * (s_lo + s_hi);
+                let pm = [
+                    pu[0] + s_mid * t1[0],
+                    pu[1] + s_mid * t1[1],
+                    pu[2] + s_mid * t1[2],
+                ];
+                if expr::eval(body, pm).v > tiny {
+                    s_hi = s_mid;
+                } else {
+                    s_lo = s_mid;
+                }
+            }
+            let s_end = 0.5 * (s_lo + s_hi);
+            if (s_end - s_lin).abs() > 0.06 * h {
+                continue;
+            }
+            let p_new = [
+                pu[0] + s_end * t1[0],
+                pu[1] + s_end * t1[1],
+                pu[2] + s_end * t1[2],
+            ];
+            if !is_on_datum_plane(p_new) && !is_near_flat_plateau {
+                continue;
+            }
+            let step_dist = s_end;
+            if step_dist <= 0.58 * h && best_cand.is_none_or(|(_, d)| step_dist < d) {
+                best_cand = Some((p_new, step_dist));
+            }
+        }
+        if let Some((p_new, _)) = best_cand {
+            let old_p = lin.verts[u];
+            let old_vols: Vec<f64> = v_tets[u]
+                .iter()
+                .map(|&ti| tet_signed_vol(&lin.verts, lin.tets[ti]))
+                .collect();
+            lin.verts[u] = p_new;
+            let ok = v_tets[u].iter().zip(old_vols.iter()).all(|(&ti, &ov)| {
+                let nv_vol = tet_signed_vol(&lin.verts, lin.tets[ti]);
+                nv_vol > 1e-12 && nv_vol >= 0.05 * ov
+            });
+            if !ok {
+                lin.verts[u] = old_p;
+            } else {
+                locked_on_edge[u] = true;
+            }
+        }
+    }
+
+    // Pass 2: Snap chamfered vertices lying on horizontal step/cap planes (`|g1_z| > 0.99`,
+    // `f(pu) ≈ 0`) radially/horizontally outward onto the exact outer circular rim when the
+    // horizontal face terminates at an outer vertical/cylindrical wall within `0.60 * h`
+    // (or within `0.04 * h` for lattice-graze corners on the top datum cap).
+    for u in 0..nv {
+        if !is_bnd[u] || !has_cad_norm[u] || locked_on_edge[u] {
+            continue;
+        }
+        let pu = lin.verts[u];
+        let on_datum = is_on_datum_plane(pu);
+        if cad_norm[u][2].abs() <= 0.99 {
+            continue;
+        }
+        if on_datum && (pu[2] - b_hi[2]).abs() > 0.03 * h {
+            continue;
+        }
+        if expr::eval(body, pu).v.abs() > 1e-3 * h {
+            continue;
+        }
+        let mn = mesh_norm[u];
+        let mh = (mn[0] * mn[0] + mn[1] * mn[1]).sqrt();
+        let r = (pu[0] * pu[0] + pu[1] * pu[1]).sqrt();
+        let mut dirs_2d: Vec<[f64; 3]> = Vec::new();
+        if r > 1e-6 {
+            dirs_2d.push([pu[0] / r, pu[1] / r, 0.0]);
+        }
+        if mh > 0.20 {
+            dirs_2d.push([mn[0] / mh, mn[1] / mh, 0.0]);
+        }
+        let s_max = if on_datum { 0.04 * h } else { 0.62 * h };
+        let mut best_s: Option<([f64; 3], f64)> = None;
+        for t in dirs_2d {
+            let p_near = [
+                pu[0] + 0.005 * h * t[0],
+                pu[1] + 0.005 * h * t[1],
+                pu[2],
+            ];
+            let p_far = [
+                pu[0] + s_max * t[0],
+                pu[1] + s_max * t[1],
+                pu[2],
+            ];
+            if expr::eval(body, p_near).v.abs() > 1e-4 * h || expr::eval(body, p_far).v <= 1e-4 * h {
+                continue;
+            }
+            let mut s_lo = 0.0f64;
+            let mut s_hi = s_max;
+            for _ in 0..32 {
+                let s_mid = 0.5 * (s_lo + s_hi);
+                let pm = [pu[0] + s_mid * t[0], pu[1] + s_mid * t[1], pu[2]];
+                if expr::eval(body, pm).v > tiny {
+                    s_hi = s_mid;
+                } else {
+                    s_lo = s_mid;
+                }
+            }
+            let s_end = 0.5 * (s_lo + s_hi);
+            if s_end <= 1e-5 * h || s_end > 0.98 * s_max {
+                continue;
+            }
+            let p_probe = [
+                pu[0] + (s_end + 1e-3 * h) * t[0],
+                pu[1] + (s_end + 1e-3 * h) * t[1],
+                pu[2],
+            ];
+            let dg = expr::eval(body, p_probe).g;
+            let dgl = (dg[0] * dg[0] + dg[1] * dg[1] + dg[2] * dg[2]).sqrt();
+            if dgl < 0.5 || (dg[2] / dgl).abs() > 0.25 {
+                continue;
+            }
+            if best_s.is_none_or(|(_, d)| s_end < d) {
+                best_s = Some((t, s_end));
+            }
+        }
+        if let Some((t, s_end)) = best_s {
+            let old_p = lin.verts[u];
+            let old_vols: Vec<f64> = v_tets[u]
+                .iter()
+                .map(|&ti| tet_signed_vol(&lin.verts, lin.tets[ti]))
+                .collect();
+            for frac in [1.0, 0.85, 0.70, 0.55] {
+                if on_datum && frac < 1.0 {
+                    break;
+                }
+                let s = frac * s_end;
+                lin.verts[u] = [pu[0] + s * t[0], pu[1] + s * t[1], pu[2]];
+                let ok = v_tets[u].iter().zip(old_vols.iter()).all(|(&ti, &ov)| {
+                    let nv_vol = tet_signed_vol(&lin.verts, lin.tets[ti]);
+                    nv_vol > 1e-12 && nv_vol >= 0.05 * ov
+                });
+                if ok {
+                    if frac == 1.0 {
+                        locked_on_edge[u] = true;
+                    }
+                    break;
+                }
+                lin.verts[u] = old_p;
+            }
+        }
+    }
+    locked_on_edge
+}
+
+/// Project P2 boundary mid-edge nodes along curved 2-face datum-cap rims so circular/curved cap
+/// boundaries are faithfully represented without popping diagonal bevel midpoints out of plane.
+fn project_p2_boundary_midpoints(
+    mesh: &mut P2Mesh,
+    facets: &[Facet],
+    locked_on_edge: &[bool],
+    body: &expr::Expr,
+    h: f64,
+) {
+    // Compute unit normal per boundary facet and map each mid-edge node to its incident facet normals.
+    let mut mid_facets: std::collections::HashMap<usize, Vec<[f64; 3]>> =
+        std::collections::HashMap::with_capacity(facets.len() * 2);
+    for fct in facets {
+        let p0 = mesh.nodes[fct.nodes[0] as usize];
+        let p1 = mesh.nodes[fct.nodes[1] as usize];
+        let p2 = mesh.nodes[fct.nodes[2] as usize];
+        let ux = p1[0] - p0[0];
+        let uy = p1[1] - p0[1];
+        let uz = p1[2] - p0[2];
+        let vx = p2[0] - p0[0];
+        let vy = p2[1] - p0[1];
+        let vz = p2[2] - p0[2];
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        let nl = (nx * nx + ny * ny + nz * nz).sqrt();
+        if nl > 1e-12 {
+            let fn_unit = [nx / nl, ny / nl, nz / nl];
+            for &vm in &fct.nodes[3..6] {
+                mid_facets.entry(vm as usize).or_default().push(fn_unit);
+            }
+        }
+    }
+
+    let mut visited = vec![false; mesh.nodes.len()];
+    let tiny = 1e-9 * h;
+    for fct in facets {
+        let corners = [fct.nodes[0] as usize, fct.nodes[1] as usize, fct.nodes[2] as usize];
+        let mids = [fct.nodes[3] as usize, fct.nodes[4] as usize, fct.nodes[5] as usize];
+        for (k, &vm) in mids.iter().enumerate() {
+            if vm >= visited.len() || visited[vm] {
+                continue;
+            }
+            visited[vm] = true;
+            let va = corners[k];
+            let vb = corners[(k + 1) % 3];
+            let pa = mesh.nodes[va];
+            let pb = mesh.nodes[vb];
+            let pm = mesh.nodes[vm];
+            let ex = pb[0] - pa[0];
+            let ey = pb[1] - pa[1];
+            let ez = pb[2] - pa[2];
+            let edge_len = (ex * ex + ey * ey + ez * ez).sqrt();
+            if edge_len < 1e-9 {
+                continue;
+            }
+            let is_crease_edge = va < locked_on_edge.len()
+                && vb < locked_on_edge.len()
+                && locked_on_edge[va]
+                && locked_on_edge[vb]
+                && mid_facets.get(&vm).is_some_and(|ns| {
+                    ns.len() >= 2
+                        && (ns[0][0] * ns[1][0] + ns[0][1] * ns[1][1] + ns[0][2] * ns[1][2]) < 0.70
+                });
+            let d = expr::eval(body, pm);
+            let gl = (d.g[0].powi(2) + d.g[1].powi(2) + d.g[2].powi(2)).sqrt();
+            if is_crease_edge && d.v.abs() <= 1e-3 * h && gl > 0.25 {
+                // Both endpoints sit on a sharp 2-face datum-cap crease edge, and the chord
+                // midpoint fell onto the cap face (e.g. flat top cap inside a circular cylinder
+                // rim). Bisect in-plane along the chord normal toward the curved rim boundary.
+                let gm = [d.g[0] / gl, d.g[1] / gl, d.g[2] / gl];
+                let e_unit = [ex / edge_len, ey / edge_len, ez / edge_len];
+                let tx = e_unit[1] * gm[2] - e_unit[2] * gm[1];
+                let ty = e_unit[2] * gm[0] - e_unit[0] * gm[2];
+                let tz = e_unit[0] * gm[1] - e_unit[1] * gm[0];
+                let tl = (tx * tx + ty * ty + tz * tz).sqrt();
+                if tl > 0.25 {
+                    let t_perp = [tx / tl, ty / tl, tz / tl];
+                    let s_max = (0.20 * edge_len).min(0.35 * h);
+                    for sign in [1.0f64, -1.0f64] {
+                        let dir = [sign * t_perp[0], sign * t_perp[1], sign * t_perp[2]];
+                        let p_far = [
+                            pm[0] + s_max * dir[0],
+                            pm[1] + s_max * dir[1],
+                            pm[2] + s_max * dir[2],
+                        ];
+                        let p_opp = [
+                            pm[0] - s_max * dir[0],
+                            pm[1] - s_max * dir[1],
+                            pm[2] - s_max * dir[2],
+                        ];
+                        if expr::eval(body, p_far).v > 1e-4 * h
+                            && expr::eval(body, p_opp).v <= 1e-5 * h
+                        {
+                            let mut s_lo = 0.0f64;
+                            let mut s_hi = s_max;
+                            for _ in 0..28 {
+                                let s_mid = 0.5 * (s_lo + s_hi);
+                                let q = [
+                                    pm[0] + s_mid * dir[0],
+                                    pm[1] + s_mid * dir[1],
+                                    pm[2] + s_mid * dir[2],
+                                ];
+                                if expr::eval(body, q).v > tiny {
+                                    s_hi = s_mid;
+                                } else {
+                                    s_lo = s_mid;
+                                }
+                            }
+                            let s_end = 0.5 * (s_lo + s_hi);
+                            mesh.nodes[vm] = [
+                                pm[0] + s_end * dir[0],
+                                pm[1] + s_end * dir[1],
+                                pm[2] + s_end * dir[2],
+                            ];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn prepare(
     doc: &Document,
     res: Resolution,
@@ -1293,16 +2028,17 @@ fn prepare(
     if b.is_empty() {
         return Err(SetupError("the model is empty".into()));
     }
-    if doc.supports.is_empty() {
+    let has_thermal = !doc.temperatures.is_empty()
+        || !doc.convections.is_empty()
+        || !doc.heat_fluxes.is_empty();
+    if doc.supports.is_empty() && (!has_thermal || !doc.loads.is_empty()) {
         return Err(SetupError(
             "add a support: the part needs something to hold it".into(),
         ));
     }
     if need_loads
         && doc.loads.is_empty()
-        && doc.temperatures.is_empty()
-        && doc.convections.is_empty()
-        && doc.heat_fluxes.is_empty()
+        && !has_thermal
     {
         return Err(SetupError("add a load".into()));
     }
@@ -1319,13 +2055,15 @@ fn prepare(
     let f = |p: [f64; 3]| expr::eval(&body, p).v;
     let (mut lin, _) = stuff(f, b.lo, b.hi, h);
     lin.compact();
+    prune_boundary_ear_tets(&mut lin, b.lo, b.hi, h);
     if lin.tets.is_empty() {
         return Err(SetupError(
             "the part is too thin to mesh at this resolution".into(),
         ));
     }
+    let locked_on_edge = snap_feature_edges(&mut lin, &body, b.lo, b.hi, h);
     let quality = fieldsmith_mesh::quality(&lin);
-    let mesh = P2Mesh::from_linear(&lin.verts, &lin.tets);
+    let mut mesh = P2Mesh::from_linear(&lin.verts, &lin.tets);
     let boundary: Vec<([u32; 3], u32)> = lin.boundary();
     let t_mesh = clock();
 
@@ -1345,6 +2083,7 @@ fn prepare(
             }
         })
         .collect();
+    project_p2_boundary_midpoints(&mut mesh, &facets, &locked_on_edge, &body, h);
     let surface: Vec<[u32; 6]> = facets.iter().map(|f| f.nodes).collect();
     let surface_owner: Vec<u32> = boundary.iter().map(|(_, t)| *t).collect();
     let mut surface_region = vec![u32::MAX; surface.len()];
@@ -1363,10 +2102,13 @@ fn prepare(
     let mut labelled = Vec::new();
     collect_labelled_volumes(doc, &doc.root, &[], &mut labelled)?;
     let mut young = vec![mat.e; mesh.tets.len()];
+    let mut yield_elem = vec![mat.yield_strength; mesh.tets.len()];
+    let mut k_elem = vec![1.0; mesh.tets.len()];
     let mut alpha_elem = vec![mat.alpha; mesh.tets.len()];
     let mut rho_avg = mat.density;
     let mut mass_g = vol_mm3 * mat.density / 1000.0;
     if !labelled.is_empty() {
+        let base_k = mat.k.unwrap_or(1.0).max(1e-9);
         let mut weighted_rho = 0.0f64;
         let mut total_tet_vol = 0.0f64;
         for (e, tet) in mesh.tets.iter().enumerate() {
@@ -1381,11 +2123,13 @@ fn prepare(
             ];
             let mut m_e = &mat;
             for (_, vexpr, vmat) in &labelled {
-                if expr::eval(vexpr, c).v <= 0.25 * h {
+                if expr::eval(vexpr, c).v <= 1e-6 * h {
                     m_e = vmat;
                 }
             }
             young[e] = m_e.e;
+            yield_elem[e] = m_e.yield_strength;
+            k_elem[e] = m_e.k.unwrap_or(base_k) / base_k;
             alpha_elem[e] = m_e.alpha;
             let tv = mesh.tet_volume(e).abs();
             weighted_rho += tv * m_e.density;
@@ -1406,6 +2150,8 @@ fn prepare(
         fixed,
         mat,
         young,
+        yield_elem,
+        k_elem,
         alpha_elem,
         rho_avg,
         mass_g,
@@ -1533,19 +2279,34 @@ pub fn analyse_full(
         fixed,
         mat,
         young,
+        yield_elem,
+        k_elem,
         alpha_elem,
         rho_avg,
         mass_g,
         h,
         quality,
         mesh_ms,
-    } = prepare(doc, res, clock, true)?;
+    } = prepare(doc, res, clock, modes.is_none())?;
     // `prepare` has just returned, so `clock` is its meshing end; its t0 is mesh_ms back.
     let t_mesh = clock();
     let t0 = t_mesh - mesh_ms;
     let nn = mesh.nodes.len();
     let mut cases = Vec::new();
     let mut iterations = 0;
+    let nl_plastic = doc
+        .lets
+        .iter()
+        .find(|l| l.name == "nonlinear_plastic")
+        .map(|l| l.value)
+        .unwrap_or(0.0)
+        > 0.5;
+    let hardening_n = doc
+        .lets
+        .iter()
+        .find(|l| l.name == "hardening_n")
+        .map(|l| l.value)
+        .unwrap_or(0.18);
     for name in case_names(doc) {
         let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
         let mut node_key: std::collections::HashMap<[u64; 3], u8> =
@@ -1554,15 +2315,31 @@ pub fn analyse_full(
             node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
         }
         let prescribed = prescribed_fn(&node_key, &prescribed_map);
-        let mut case = run_case(
-            &mesh,
-            &Material::iso(young.to_vec(), mat.nu),
-            &fixed,
-            force,
-            name,
-            equilibrate,
-            &prescribed,
-        )?;
+        let mut case = if nl_plastic && (mat.yield_strength > 0.0 || yield_elem.iter().any(|&y| y > 0.0)) {
+            run_case_elastoplastic(
+                &mesh,
+                &young,
+                mat.nu,
+                mat.yield_strength,
+                &yield_elem,
+                hardening_n,
+                &fixed,
+                force,
+                name,
+                equilibrate,
+                &prescribed,
+            )?
+        } else {
+            run_case(
+                &mesh,
+                &Material::iso(young.to_vec(), mat.nu),
+                &fixed,
+                force,
+                name,
+                equilibrate,
+                &prescribed,
+            )?
+        };
         case.load_reports = reports;
         iterations += case.solve.iterations;
         cases.push(case);
@@ -1573,30 +2350,32 @@ pub fn analyse_full(
     let mut thermal_ms = 0.0;
     let thermal_cases = doc.thermal_cases();
     if !thermal_cases.is_empty() {
-        let _ = mat.alpha.ok_or_else(|| {
-            SetupError(format!(
-                "The thermal flow needs a thermal-expansion coefficient and material '{}' \
-                 states none — pick a material whose sheet states a CTE, or give a custom \
-                 material an a= value",
-                doc.material
-            ))
-        })?;
+        let has_supports = fixed.iter().any(|&m| m != 0);
         let mut alphas = Vec::with_capacity(alpha_elem.len());
-        for &a in &alpha_elem {
-            let av = a.ok_or_else(|| {
-                SetupError(
-                    "The thermal flow needs a thermal-expansion coefficient on every assigned \
-                     volume material — pick a material whose sheet states a CTE, or give a custom \
-                     material an a= value"
-                        .into(),
-                )
+        if has_supports {
+            let _ = mat.alpha.ok_or_else(|| {
+                SetupError(format!(
+                    "The thermal flow needs a thermal-expansion coefficient and material '{}' \
+                     states none — pick a material whose sheet states a CTE, or give a custom \
+                     material an a= value",
+                    doc.material
+                ))
             })?;
-            alphas.push(av);
+            for &a in &alpha_elem {
+                let av = a.ok_or_else(|| {
+                    SetupError(
+                        "The thermal flow needs a thermal-expansion coefficient on every assigned \
+                         volume material — pick a material whose sheet states a CTE, or give a custom \
+                         material an a= value"
+                            .into(),
+                    )
+                })?;
+                alphas.push(av);
+            }
+        } else {
+            alphas.resize(alpha_elem.len(), 0.0);
         }
         let t_thermal = clock();
-        // Unit conductivity: the static path's conduction semantics stay the pinned
-        // k ≡ 1 solve; the graded re-resolve (fill.rs) passes the core's per-element map.
-        let ones_k = vec![1.0; mesh.tets.len()];
         for name in thermal_cases {
             // Thermal cases prescribe no boundary traction; the expansion pseudo-load is
             // the body, the supports' reaction tractions are free.
@@ -1610,13 +2389,47 @@ pub fn analyse_full(
                 &facets,
                 name,
                 h,
-                &ones_k,
+                &k_elem,
                 equilibrate,
             )?;
             iterations += case.solve.iterations;
             cases.push(case);
         }
         thermal_ms = clock() - t_thermal;
+    }
+    if cases.is_empty() && modes.is_some() {
+        let ne = mesh.tets.len();
+        cases.push(CaseResult {
+            name: "Modal".into(),
+            u: vec![0.0; nn * 3],
+            stress: vec![Stress::default(); nn],
+            von_mises: vec![0.0; nn],
+            vm_elem: vec![0.0; ne],
+            sigma_min_elem: vec![0.0; ne],
+            stress_elem: vec![Stress::default(); ne],
+            plastic_strain_elem: vec![0.0; ne],
+            grad_t_nodal: None,
+            peel_nodal: Vec::new(),
+            peel_elem: vec![0.0; ne],
+            max_layer_peel: 0.0,
+            max_von_mises: 0.0,
+            max_vm_elem: 0.0,
+            max_displacement: 0.0,
+            compliance: 0.0,
+            compliance_upper: None,
+            solve: SolveReport {
+                dofs: nn * 3,
+                free_dofs: nn * 3,
+                coarse_dofs: 0,
+                iterations: 0,
+                rel_residual: 0.0,
+                converged: true,
+                ..Default::default()
+            },
+            load_reports: Vec::new(),
+            temperature: None,
+            conduction: None,
+        });
     }
     // Inter-layer peel utilization across all cases for the document's build orientation
     // (`solve build=(theta, phi)`, default `+Z`), plus a hemisphere orientation sweep.
@@ -2144,6 +2957,8 @@ heatflux inflow hot q=2 case=\"Steady\"
             .find(|c| c.name == "Steady")
             .expect("thermal case");
         let t = th.temperature.as_ref().expect("temperature field");
+        let gt = th.grad_t_nodal.as_ref().expect("nodal temperature gradient");
+        assert_eq!(gt.len(), a.mesh.nodes.len() * 3);
         for (n, p) in a.mesh.nodes.iter().enumerate() {
             let want = 100.0 + 2.0 * p[0];
             assert!(
@@ -2154,6 +2969,16 @@ heatflux inflow hot q=2 case=\"Steady\"
                 p[2],
                 t[n],
                 want
+            );
+            assert!(
+                (gt[3 * n] - 2.0).abs() < 1e-5
+                    && gt[3 * n + 1].abs() < 1e-5
+                    && gt[3 * n + 2].abs() < 1e-5,
+                "node {} grad_t = ({:.5}, {:.5}, {:.5}), expected (2, 0, 0)",
+                n,
+                gt[3 * n],
+                gt[3 * n + 1],
+                gt[3 * n + 2]
             );
         }
         let cr = th.conduction.as_ref().expect("conduction report");
@@ -2223,5 +3048,200 @@ convection bath ghost h=1e-5 tinf=50
             err.0,
             "convection 'bath': region 'ghost' does not touch the part's surface"
         );
+    }
+
+    #[test]
+    fn elastoplastic_secant_redistributes_notch_stress_and_increases_deflection() {
+        let linear_fsm = "\
+name \"Notched Clinch Neck Strip\"
+let nonlinear_plastic = 0
+let hardening_n = 0.18
+custommaterial al5754 e=70000 nu=0.33 yield=110 density=2.67
+material al5754
+group g {
+  box strip size=(24, 8, 4) at=(12, 4, 2)
+  cylinder notch r=2.2 h=8 at=(12, 0, 2) subtract
+}
+region root_face = strip.nx
+region tip_face = strip.px
+support clamp root_face fixed=xyz
+load pull tip_face force=(4200, 0, 0)
+";
+        let d_lin = parse(linear_fsm);
+        let a_lin = analyse(&d_lin, Resolution::Size(2.0), now).expect("linear analyse");
+        let c_lin = &a_lin.cases[0];
+        assert!(
+            c_lin.max_vm_elem > 110.0,
+            "linear notch stress must exceed yield (110 MPa), got {}",
+            c_lin.max_vm_elem
+        );
+
+        let nl_fsm = linear_fsm.replace("let nonlinear_plastic = 0", "let nonlinear_plastic = 1");
+        let d_nl = parse(&nl_fsm);
+        let a_nl = analyse(&d_nl, Resolution::Size(2.0), now).expect("nonlinear analyse");
+        let c_nl = &a_nl.cases[0];
+
+        // J2 secant hardening softens yielded elements (E_sec < E_0), increasing plastic deflection
+        // and total PCG iterations relative to the single linear pass.
+        assert!(
+            c_nl.max_displacement > c_lin.max_displacement,
+            "nonlinear elasto-plastic displacement ({}) must exceed linear elastic displacement ({})",
+            c_nl.max_displacement,
+            c_lin.max_displacement
+        );
+        assert!(
+            c_nl.solve.iterations > c_lin.solve.iterations,
+            "secant passes must accumulate iterations ({} vs {})",
+            c_nl.solve.iterations,
+            c_lin.solve.iterations
+        );
+        assert!(
+            c_lin.plastic_strain_elem.iter().all(|&p| p == 0.0),
+            "linear case must have zero plastic strain"
+        );
+        let max_ep = c_nl.plastic_strain_elem.iter().cloned().fold(0.0, f64::max);
+        assert!(
+            max_ep > 0.0,
+            "nonlinear case must record positive equivalent plastic strain (%), got {max_ep}"
+        );
+    }
+
+    #[test]
+    fn t19_and_a19_clinching_models_solve_at_coarse_and_medium() {
+        let t19_src = include_str!("../../../examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm");
+        let a19_src = include_str!("../../../examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm");
+        // Also verify the legacy round=0.8 thin-edge variant at mobile COARSE_DOFS (12_000)
+        let legacy_rounded = "\
+name \"Legacy T19 Rounded\"
+custommaterial al5754_clinch e=70000 nu=0.33 a=2.3e-5 yield=65 density=2.67
+material al5754_clinch
+box lower_sheet size=(24, 22, 3.0) at=(0, 0, 1.5) round=0.8
+cylinder die_button r=4.6 h=2.4 at=(0, 0, -0.4)
+cylinder upper_boss r=4.2 h=2.6 at=(0, 0, 3.4)
+cylinder punch_pit r=2.6 h=3.85 at=(0, 0, 3.55) subtract
+cylinder die_anvil_recess r=2.2 h=0.8 at=(0, 0, -1.4) subtract
+region lower_clamp = lower_sheet.nx + lower_sheet.px
+region upper_pull_ring = upper_boss.top
+support die_fixture lower_clamp fixed=xyz
+load cross_tension upper_pull_ring force=(0, 0, 2400)
+";
+        let d_leg = parse(legacy_rounded);
+        let r_leg = analyse(&d_leg, Resolution::Dofs(12_000), now)
+            .expect("legacy rounded T19 at 12_000 DOFs");
+        assert!(r_leg.cases[0].solve.converged);
+
+        for (label, src) in [("T19", t19_src), ("A19", a19_src)] {
+            let doc = fsm::parse(src).expect("valid .fsm file");
+            let res_coarse = analyse(&doc, Resolution::Dofs(12_000), now)
+                .unwrap_or_else(|e| panic!("{label} failed at Coarse (12k): {e:?}"));
+            assert!(res_coarse.cases[0].solve.converged, "{label} coarse converged");
+            assert!(res_coarse.cases[0].max_displacement > 0.0, "{label} coarse displacement > 0");
+            let res_med = analyse(&doc, Resolution::Dofs(25_000), now)
+                .unwrap_or_else(|e| panic!("{label} failed at Medium (25k): {e:?}"));
+            assert!(res_med.cases[0].solve.converged, "{label} medium converged");
+            assert!(res_med.cases[0].max_vm_elem > 10.0, "{label} medium vm > 10 MPa");
+        }
+    }
+
+    #[test]
+    fn t15_spool_collar_rim_nodes_lie_on_exact_edges_and_surfaces() {
+        let t15_src = include_str!("../../../examples/tutorials/T15-parametric-2d-sketch-constraints.fsm");
+        let doc = fsm::parse(t15_src).expect("valid T15");
+        let body = expr::compile_body(&doc);
+        let b = expr::bounds(&body);
+        assert_eq!(b.lo, [-27.0, -18.0, 0.0]);
+        assert_eq!(b.hi, [27.0, 18.0, 33.0]);
+
+        let p = prepare(&doc, Resolution::Dofs(40_000), now, true).expect("prepare T15");
+        let n_lin = p.surface.iter().flat_map(|f| f[0..3].iter()).map(|&i| i as usize).max().unwrap_or(0) + 1;
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); p.mesh.nodes.len()];
+        for f in &p.surface {
+            let [i0, i1, i2] = [f[0] as usize, f[1] as usize, f[2] as usize];
+            for &(a, b) in &[(i0, i1), (i1, i2), (i2, i0)] {
+                if !adj[a].contains(&b) {
+                    adj[a].push(b);
+                }
+                if !adj[b].contains(&a) {
+                    adj[b].push(a);
+                }
+            }
+        }
+        for (vi, pt) in p.mesh.nodes.iter().take(n_lin).enumerate() {
+            let r = (pt[0] * pt[0] + pt[1] * pt[1]).sqrt();
+            if (pt[2] - 27.5).abs() < 0.1 && r > 8.6 {
+                assert!(
+                    (r - 11.0).abs() < 1e-2,
+                    "lower collar step vertex {vi} at z=27.5 must lie on r=11.0, got r={r:.4} ({pt:?})"
+                );
+            }
+        }
+        let deg3_count = (0..p.mesh.nodes.len())
+            .filter(|&v| adj[v].len() == 3)
+            .count();
+        assert_eq!(
+            deg3_count, 0,
+            "T15 must have zero degree-3 boundary pyramid spikes, got {deg3_count}"
+        );
+        for (fi, f) in p.surface.iter().enumerate() {
+            let p0 = p.mesh.nodes[f[0] as usize];
+            let p1 = p.mesh.nodes[f[1] as usize];
+            let p2 = p.mesh.nodes[f[2] as usize];
+            let ux = p1[0] - p0[0];
+            let uy = p1[1] - p0[1];
+            let uz = p1[2] - p0[2];
+            let vx = p2[0] - p0[0];
+            let vy = p2[1] - p0[1];
+            let vz = p2[2] - p0[2];
+            let nx = uy * vz - uz * vy;
+            let ny = uz * vx - ux * vz;
+            let nz = ux * vy - uy * vx;
+            let nl = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-12);
+            let n_unit = [nx / nl, ny / nl, nz / nl];
+            if p0[2] > 31.5 || p1[2] > 31.5 || p2[2] > 31.5 {
+                assert!(
+                    !(0.22..0.99).contains(&n_unit[2]),
+                    "unexpected chamfer facet {fi} on T15 spool_collar top rim: n_z={:.3} p0={p0:?} p1={p1:?} p2={p2:?}",
+                    n_unit[2]
+                );
+            }
+            // Verify P2 mid-edge nodes on box bevels (z <= 27 mm) never pop out of the facet plane
+            for (k, &vm) in f[3..6].iter().enumerate() {
+                let va = f[k] as usize;
+                let vb = f[(k + 1) % 3] as usize;
+                let pa = p.mesh.nodes[va];
+                let pb = p.mesh.nodes[vb];
+                let pm = p.mesh.nodes[vm as usize];
+                if pa[2] <= 27.0 && pb[2] <= 27.0 && (pa[0].abs() > 14.0 || pa[1].abs() > 10.0) {
+                    let mid_lin = [
+                        0.5 * (pa[0] + pb[0]),
+                        0.5 * (pa[1] + pb[1]),
+                        0.5 * (pa[2] + pb[2]),
+                    ];
+                    let tent_dev = ((pm[0] - mid_lin[0]).powi(2)
+                        + (pm[1] - mid_lin[1]).powi(2)
+                        + (pm[2] - mid_lin[2]).powi(2))
+                    .sqrt();
+                    assert!(
+                        tent_dev < 1e-4,
+                        "P2 mid-edge node {vm} on box bevel facet {fi} popped out by {tent_dev:.4} mm"
+                    );
+                }
+                let ra = (pa[0] * pa[0] + pa[1] * pa[1]).sqrt();
+                let rb = (pb[0] * pb[0] + pb[1] * pb[1]).sqrt();
+                if (pa[2] - 33.0).abs() < 1e-3
+                    && (pb[2] - 33.0).abs() < 1e-3
+                    && (ra - 11.0).abs() < 1e-2
+                    && (rb - 11.0).abs() < 1e-2
+                {
+                    let rm = (pm[0] * pm[0] + pm[1] * pm[1]).sqrt();
+                    assert!(
+                        (pm[2] - 33.0).abs() < 1e-3 && (rm - 11.0).abs() < 1e-2,
+                        "P2 rim midpoint {vm} off outer collar circle: z={:.4}, r={:.4}",
+                        pm[2],
+                        rm
+                    );
+                }
+            }
+        }
     }
 }

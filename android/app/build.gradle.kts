@@ -12,8 +12,8 @@ android {
         applicationId = "sh.fieldsmith.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 160
-        versionName = "0.16.0"
+        versionCode = 170
+        versionName = "0.17.0"
     }
 
     // Omit AGP's Play-specific DependencyInfoBlock so F-Droid scanner and
@@ -110,6 +110,36 @@ val syncWebAssets = tasks.register<Sync>("syncWebAssets") {
     into(layout.projectDirectory.dir("src/main/assets/web"))
 }
 
+// Guard against accidentally copying the `fieldsmith-mcp` PIE CLI executable over the
+// `libfieldsmith_mcp.so` cdylib (which causes UnsatisfiedLinkError on startLocalServer).
+val checkJniSymbols = tasks.register("checkJniSymbols") {
+    doLast {
+        val soFile = layout.projectDirectory.file("src/main/jniLibs/arm64-v8a/libfieldsmith_mcp.so").asFile
+        if (soFile.exists()) {
+            val bytes = soFile.readBytes()
+            val needle = "Java_sh_fieldsmith_app_FieldsmithNativeBridge_startLocalServer"
+                .toByteArray(Charsets.US_ASCII)
+            val found = (0..(bytes.size - needle.size)).any { i ->
+                var match = true
+                for (j in needle.indices) {
+                    if (bytes[i + j] != needle[j]) {
+                        match = false
+                        break
+                    }
+                }
+                match
+            }
+            if (!found) {
+                throw GradleException(
+                    "src/main/jniLibs/arm64-v8a/libfieldsmith_mcp.so is missing JNI symbol " +
+                        "Java_sh_fieldsmith_app_FieldsmithNativeBridge_startLocalServer " +
+                        "(was the CLI binary copied instead of the cdylib? Run `cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p fieldsmith-mcp`)."
+                )
+            }
+        }
+    }
+}
+
 tasks.named("preBuild") {
-    dependsOn(syncWebAssets)
+    dependsOn(syncWebAssets, checkJniSymbols)
 }

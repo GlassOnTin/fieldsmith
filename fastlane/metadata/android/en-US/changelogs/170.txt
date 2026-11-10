@@ -1,0 +1,4 @@
+v0.17.0:
+- Multi-regime free-surface and capillary workbench: Peregrine wave shoaling, DFSPH, Young-Laplace and Rayleigh-Lamb droplets, Jurin TPMS gyroid wicking, Gerris G1-G8 suite, and Oh > 1 spout-lip Stokes flow.
+- New analytic benchmarks A15-A20, tutorials T18-T19 (sheet-metal clinching), curvilinear coordinate FEM workbench, and # @assert contracts across T8-T13.
+- Collapsible Mesh Convergence ("Rungs") section in 3. Results and CUDA BSR3 PCG solver support.

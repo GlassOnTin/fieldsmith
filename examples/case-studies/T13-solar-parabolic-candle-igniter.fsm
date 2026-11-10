@@ -4,13 +4,16 @@ fieldsmith 1
 # @code: T13
 # @category: case-study
 # @level: Flagship Multi-Physics
-# @title: Solar-Focused Optical Lens Candle Ignition, Buoyant Flame, Smoke Plume & Real-Time Video
-# @subtitle: ParaView-Style 3D Volumetric Ray-Marched Radiant Flame, BK7 Solar Caustic Refraction, C₂₅H₅₂ Pyrolysis, Soot/Smoke Plume, Transient Recap & .webm Video Synthesis
+# @title: 3D Solar Candle & BK7 Lens Thermo-Mechanical FEA + 1D/Axisymmetric Reduced-Order Caustic Ignition & Plume Workbench
+# @subtitle: Solve 3D P2 thermo-mechanical stress across the candle, wick, and overhead BK7 lens assembly, paired with an axisymmetric reduced-order thick-lens solar caustic, C₂₅H₅₂ pyrolysis, Burke–Schumann flame sheet, and volumetric plume rendering workbench.
 # @verification_badge: V56 Verified (144-DOF Monolithic Newton · 40 Transient Frames · 5 Recap Milestones)
 # @doc_path: docs/case-studies/T13-solar-parabolic-candle-igniter.md
 # @fsm_path: examples/case-studies/T13-solar-parabolic-candle-igniter.fsm
 # @starter_fsm_name: t13-solar-candle-ignition.fsm
 # @verification_refs: docs/verification/V56.md
+# ---
+# @assert: Lens Gravity Load Resultant |F_lens| || resultant_mag:1 || 12.00 || 0.5% || N
+# @assert: Solar Caustic & Thermal Plume Peak Stress || max_vm_elem:2 || >= 50.0 || >= 50.0 || MPa
 # ---
 # @step: 1. ParaView-Style 3D Volumetric Radiant Flame, Solar Caustic Cone & Smoke Plume in the Main Viewport || shape
 #   Loading T13 places the 9-body 3D Solar-Focused Candle Assembly (brass base, paraffin column, concave molten wax cup, braided cotton wick, and overhead Ø 65 mm biconvex BK7 optical glass lens) in the main 3D viewport alongside the live "3D Volumetric Solar Candle Flame & Plume" HUD (`[data-testid="coupled-viewport-hud"]`). Switch the Volumetric Transfer Function tabs (`Radiant Flame`, `Temp T_gas`, `Soot / Smoke f_v`, `Blue OH*`, `Updraft u_z`) to inspect the blue OH*/CH* chemiluminescence base sheet, the incandescent Planckian soot core (`~2100 K`), the Beer–Lambert absorbing grey smoke plume aloft, the golden converging solar caustic ray cone (`C ≈ 2355×`), and the buoyant convective entrainment streamlines.

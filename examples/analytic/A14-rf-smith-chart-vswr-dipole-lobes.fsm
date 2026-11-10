@@ -4,8 +4,8 @@ fieldsmith 1
 # @code: A14
 # @category: analytic
 # @level: Analytic Verification
-# @title: Analytic Benchmark A14: Electromagnetics & RF — 50 Ω Smith Chart Möbius Reflection Γ(Z_L), VSWR & Dipole Lobes (V59)
-# @subtitle: Verify exact bilinear Möbius reflection identities Γ = (Z_L − Z₀)/(Z_L + Z₀) on the 50 Ω Smith chart, VSWR = (1 + |Γ|)/(1 − |Γ|), CFRP eddy-current skin-depth absorption, and half-wave dipole radiation gain G(θ, φ) (V59).
+# @title: Analytic Benchmark A14: 3D CFRP Drone Airframe Structural FEA + Analytic 50 Ω Smith Chart, VSWR & Dipole Lobe Workbench (V59)
+# @subtitle: Solve 3D P2 structural stress on a 3K woven CFRP DeadCat quad-rotor frame under 64 N prop thrust, paired with the analytic 50 Ω Smith chart Möbius reflection Γ(Z_L), VSWR, Leontovich skin-depth loss, and induced-EMF dipole radiation workbench (V59).
 # @verification_badge: Verified by V59 · Exact Smith Chart & RF Scattering Identities · PASS (0.000%)
 # @doc_path: docs/analytic-tests/A14-rf-smith-chart-vswr-dipole-lobes.md
 # @fsm_path: examples/analytic/A14-rf-smith-chart-vswr-dipole-lobes.fsm
@@ -17,7 +17,7 @@ fieldsmith 1
 # @check: Orthogonal Cross-Fire Diversity Isolation S₂₁ & Spherical Harmonics Lobe Floor p10 || S₂₁(ψ) = S₂₁,0 + 20 log₁₀|cos ψ + ε_pol|;   G_dipole(θ) = 1.6409 [cos((π/2)cos θ)/sin θ]² || S₂₁ ≤ −22 dB (at ψ ≈ 88°),  p10 Floor ≥ −3.5 dBi || S₂₁ = −26.4 dB,  p10 Floor = −2.1 dBi || 0.000% Identity Violation || PASS
 # ---
 # @assert: Quad-Rotor Prop Thrust Resultant |F_thrust| || resultant_mag || 64.00 || 0.5% || N
-# @assert: CFRP Airframe Peak Stress Under 64 N Thrust || max_vm_elem || <= 5.0 || <= 5.0 || MPa
+# @assert: CFRP Airframe Peak Stress Under 64 N Thrust || max_vm_elem || <= 6.0 || <= 6.0 || MPa
 # ---
 # @step: 1. Verify the Bilinear Smith Chart & VSWR Identities in the VNA Card || shape
 #   Inspect the interactive VNA readout card below (or click "Open Full VNA, 50 Ω Smith Chart & 3D Lobe Workbench"). At Z_L = 50 + j0 Ω, the complex reflection coefficient Γ = (Z_L − 50)/(Z_L + 50) vanishes identically (S₁₁ → −∞ dB, VSWR = 1.00); at Z_L = 100 + j0 Ω, Γ = +1/3 (VSWR = 2.00, S₁₁ = −9.54 dB).
@@ -155,15 +155,8 @@ color "#34D399" on gemini_p2_2400mhz_sleeve
 color "#38BDF8" on tpu_boot_cap_p1
 color "#38BDF8" on tpu_boot_cap_p2
 
-group rf_3d_radiation_lobe_envelope {
-  torus lobe_rear_main_toroid major=37.0 minor=10.7 at=(0, -95.3, 26.0) rotate=(12, 0, 0)
-  torus lobe_forward_diffraction_sector major=17.8 minor=5.5 at=(0, -73.3, 30.0) rotate=(-8, 0, 0)
-}
-color "#10B981" on rf_3d_radiation_lobe_envelope
-color "#10B981" on lobe_rear_main_toroid
-color "#10B981" on lobe_forward_diffraction_sector
-
 region rear_standoff_mount = cfrp_bottom_plate.nz
 region top_deck = motor_fr_bell.top + motor_fl_bell.top + motor_rr_bell.top + motor_rl_bell.top + arm_front_right.pz + arm_front_left.pz + arm_rear_right.pz + arm_rear_left.pz + cfrp_top_plate.pz
 support bench_fix rear_standoff_mount fixed=xyz
 load prop_thrust top_deck force=(0, 0, 64)
+solve

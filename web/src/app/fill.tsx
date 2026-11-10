@@ -29,12 +29,10 @@ function defaultFill(): Fill {
   };
 }
 
-/** Shape ids in the tree, depth first — `protect` names solid shapes (excluding boolean cuts), not regions. */
+/** Shape ids in the tree, depth first — `protect` names shapes (including subtracted bores/holes) so a solid margin ring is preserved around them. */
 function shapeIds(d: Document): string[] {
   const ids: string[] = [];
-  walk(d.root, (n) => {
-    if (n.op !== 'subtract') ids.push(n.id);
-  });
+  walk(d.root, (n) => ids.push(n.id));
   return ids;
 }
 

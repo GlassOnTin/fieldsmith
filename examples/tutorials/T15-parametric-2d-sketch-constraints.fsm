@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t15-parametric-sketch-bracket.fsm
 # @verification_refs: docs/verification/V4.md
 # ---
+# @assert: Combined Pin Pull Resultant |F_pull| || resultant_mag || 1281.60 || 0.5% || N
+# @assert: Extruded Boss & Collar von Mises Stress σ_vM || max_vm_elem || 18.83 || 8.0% || MPa
+# @assert: Bracket Tip Deflection |u|_max || max_displacement || 0.0061 || 15.0% || mm
+# ---
 # @step: 1. Inspect Color-Coded Degrees of Freedom (DOF = N_vars − rank(J)) || shape
 #   In the embedded Parametric 2D Sketcher & Constraint Solver workbench above (or by clicking "✏️ Sketch…" in the Shapes tree), inspect the top-right status badge: "✓ Fully Constrained (0 DOF)" in green. Click the preset dropdown and select "Under-Constrained Four-Bar (2 DOF — Blue Drag Demo)". Notice how unconstrained vertices turn sky-blue with a "+1" or "+2" DOF badge computed directly from the column-pivoted Householder QR rank of the constraint Jacobian J.
 # @expected:
@@ -89,6 +93,7 @@ cylinder flange_boss_hole_2 r=hole_r h=20 at=(12, 0, 18) subtract
 revolve spool_collar profile=[(6,-4),(11,-4),(11,-1.5),(8.5,-1.5),(8.5,1.5),(11,1.5),(11,4),(6,4)] angle=360 at=(0, 0, 29) blend=0.8
 
 region mount_bottom = base_block.nz
-region load_bore = flange_boss_hole_2.side
+region load_bore = flange_boss_hole_2.side + spool_collar.all
 support base_fix mount_bottom fixed=xyz
 load pin_pull load_bore force=(pull_n, 0, -450)
+solve

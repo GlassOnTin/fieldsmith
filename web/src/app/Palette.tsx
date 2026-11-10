@@ -53,30 +53,43 @@ export function Palette() {
   return (
     <div class="palette-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div class="palette" role="dialog" aria-label="Command palette">
-        <input
-          ref={input}
-          autoFocus
-          placeholder="Type a command…"
-          value={q}
-          data-testid="palette-input"
-          onInput={(e) => {
-            setQ((e.target as HTMLInputElement).value);
-            setActive(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') close();
-            else if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setActive((a) => Math.min(list.length - 1, a + 1));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setActive((a) => Math.max(0, a - 1));
-            } else if (e.key === 'Enter') {
-              const value = (e.currentTarget as HTMLInputElement).value;
-              run(value === q ? list[active] : matches(value)[0]);
-            }
-          }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingRight: '8px' }}>
+          <input
+            ref={input}
+            autoFocus
+            placeholder="Type a command…"
+            value={q}
+            data-testid="palette-input"
+            style={{ borderBottom: 'none', flex: 1 }}
+            onInput={(e) => {
+              setQ((e.target as HTMLInputElement).value);
+              setActive(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') close();
+              else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActive((a) => Math.min(list.length - 1, a + 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActive((a) => Math.max(0, a - 1));
+              } else if (e.key === 'Enter') {
+                const value = (e.currentTarget as HTMLInputElement).value;
+                run(value === q ? list[active] : matches(value)[0]);
+              }
+            }}
+          />
+          <button
+            type="button"
+            class="btn small ghost"
+            data-testid="palette-close"
+            title="Close command palette (Esc)"
+            onClick={close}
+            style={{ fontWeight: 700, flexShrink: 0 }}
+          >
+            ✕
+          </button>
+        </div>
         {list.length === 0 ? (
           <div class="empty">No matching command.</div>
         ) : (
@@ -126,7 +139,32 @@ export function Menus() {
   return (
     <>
       <div class="scrim" onMouseDown={close} />
-      <div class="menu" style={{ left: `${Math.max(8, m.x)}px`, top: `${m.y}px` }} role="menu">
+      <div class="menu" style={{ left: `${Math.max(8, Math.min(m.x, (typeof window !== 'undefined' ? window.innerWidth : 400) - 228))}px`, top: `${m.y}px`, maxHeight: '78vh', overflowY: 'auto' }} role="menu">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '3px 6px 5px',
+            borderBottom: '1px solid var(--line)',
+            marginBottom: '2px',
+            fontSize: '11px',
+            fontWeight: 700,
+            color: 'var(--text-2)',
+          }}
+        >
+          <span>{m.kind === 'add' ? 'Add Geometry' : m.kind === 'modifier' ? 'Add Modifier' : 'Menu'}</span>
+          <button
+            type="button"
+            class="mini"
+            data-testid="menu-close"
+            title="Close menu"
+            onClick={close}
+            style={{ fontSize: '11px', fontWeight: 700 }}
+          >
+            ✕
+          </button>
+        </div>
         {items.map((it) => (
           <button
             key={it.label}

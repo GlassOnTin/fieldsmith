@@ -453,7 +453,7 @@ function fsmTokens(text: string): Token[] {
       const start = i;
       while (i < chars.length && (/[a-zA-Z0-9_]/.test(chars[i]) || chars[i] === '_')) i++;
       out.push({ t: 'ident', s: chars.slice(start, i).join('') });
-    } else if ('(){}[],=.+*/-'.includes(c)) {
+    } else if ('(){}[],=.+*/-^'.includes(c)) {
       out.push({ t: 'sym', c });
       i++;
     } else {
@@ -469,8 +469,9 @@ type Token = { t: 'ident'; s: string } | { t: 'num'; v: number } | { t: 'str'; s
 type FsmExpr =
   | { t: 'num'; v: number }
   | { t: 'var'; s: string }
+  | { t: 'call'; name: string; args: FsmExpr[] }
   | { t: 'neg'; x: FsmExpr }
-  | { t: 'bin'; op: '+' | '-' | '*' | '/'; l: FsmExpr; r: FsmExpr };
+  | { t: 'bin'; op: '+' | '-' | '*' | '/' | '^'; l: FsmExpr; r: FsmExpr };
 
 function fsmPeek(toks: Token[]): Token | undefined {
   return toks[fsmCursor];
@@ -479,17 +480,34 @@ function fsmNext(toks: Token[]): Token | undefined {
   return toks[fsmCursor++];
 }
 
-/** Parse a unary operand: `-e` or an atom. */
-function fsmUnary(toks: Token[]): FsmExpr {
-  const t = fsmPeek(toks);
-  if (t && t.t === 'sym' && t.c === '-') {
-    fsmCursor++;
-    return { t: 'neg', x: fsmUnary(toks) };
-  }
+/** Parse an atomic operand: number, identifier, function call `f(a, ...)`, or `(e)`. */
+function fsmAtom(toks: Token[]): FsmExpr {
   const n = fsmNext(toks);
   if (!n) throw new Error('expected a value');
   if (n.t === 'num') return { t: 'num', v: n.v };
-  if (n.t === 'ident') return { t: 'var', s: n.s };
+  if (n.t === 'ident') {
+    const p = fsmPeek(toks);
+    if (p && p.t === 'sym' && p.c === '(') {
+      fsmCursor++;
+      const args: FsmExpr[] = [];
+      const next = fsmPeek(toks);
+      if (!(next && next.t === 'sym' && next.c === ')')) {
+        for (;;) {
+          args.push(fsmSum(toks));
+          const sep = fsmPeek(toks);
+          if (sep && sep.t === 'sym' && sep.c === ',') {
+            fsmCursor++;
+          } else {
+            break;
+          }
+        }
+      }
+      const close = fsmNext(toks);
+      if (!close || !(close.t === 'sym' && close.c === ')')) throw new Error("expected ')'");
+      return { t: 'call', name: n.s, args };
+    }
+    return { t: 'var', s: n.s };
+  }
   if (n.t === 'sym' && n.c === '(') {
     const e = fsmSum(toks);
     const close = fsmNext(toks);
@@ -497,6 +515,27 @@ function fsmUnary(toks: Token[]): FsmExpr {
     return e;
   }
   throw new Error('expected a value');
+}
+
+/** Parse a power expression: `atom ('^' unary)?` (right-associative, binds tighter than unary `-`). */
+function fsmPower(toks: Token[]): FsmExpr {
+  const a = fsmAtom(toks);
+  const t = fsmPeek(toks);
+  if (t && t.t === 'sym' && t.c === '^') {
+    fsmCursor++;
+    return { t: 'bin', op: '^', l: a, r: fsmUnary(toks) };
+  }
+  return a;
+}
+
+/** Parse a unary operand: `-e` or a power expression. */
+function fsmUnary(toks: Token[]): FsmExpr {
+  const t = fsmPeek(toks);
+  if (t && t.t === 'sym' && t.c === '-') {
+    fsmCursor++;
+    return { t: 'neg', x: fsmUnary(toks) };
+  }
+  return fsmPower(toks);
 }
 
 /** Fold `*` and `/` (left-associative) onto a parsed left operand. */
@@ -538,7 +577,51 @@ function evalFsmTree(e: FsmExpr, lets: readonly (readonly [string, number])[]): 
       for (const [name, v] of lets) {
         if (name === e.s) return v;
       }
+      if (e.s === 'pi') return Math.PI;
+      if (e.s === 'e') return Math.E;
       throw new Error(`no let named '${e.s}'`);
+    }
+    case 'call': {
+      const vals = e.args.map((a) => evalFsmTree(a, lets));
+      const checkArity = (want: number) => {
+        if (vals.length !== want) {
+          throw new Error(`${e.name} takes ${want} argument${want === 1 ? '' : 's'}, given ${vals.length}`);
+        }
+      };
+      switch (e.name) {
+        case 'sin':
+          checkArity(1);
+          return Math.sin(vals[0]);
+        case 'cos':
+          checkArity(1);
+          return Math.cos(vals[0]);
+        case 'tan':
+          checkArity(1);
+          return Math.tan(vals[0]);
+        case 'sqrt':
+          checkArity(1);
+          return Math.sqrt(vals[0]);
+        case 'abs':
+          checkArity(1);
+          return Math.abs(vals[0]);
+        case 'exp':
+          checkArity(1);
+          return Math.exp(vals[0]);
+        case 'ln':
+          checkArity(1);
+          return Math.log(vals[0]);
+        case 'min':
+          checkArity(2);
+          return Math.min(vals[0], vals[1]);
+        case 'max':
+          checkArity(2);
+          return Math.max(vals[0], vals[1]);
+        case 'pow':
+          checkArity(2);
+          return Math.pow(vals[0], vals[1]);
+        default:
+          throw new Error(`unknown function '${e.name}'`);
+      }
     }
     case 'neg':
       return -evalFsmTree(e.x, lets);
@@ -548,6 +631,7 @@ function evalFsmTree(e: FsmExpr, lets: readonly (readonly [string, number])[]): 
       if (e.op === '+') return lv + rv;
       if (e.op === '-') return lv - rv;
       if (e.op === '*') return lv * rv;
+      if (e.op === '^') return Math.pow(lv, rv);
       if (rv === 0.0) throw new Error('division by zero');
       return lv / rv;
     }

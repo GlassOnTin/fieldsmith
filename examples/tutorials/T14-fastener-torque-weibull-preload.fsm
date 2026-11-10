@@ -12,6 +12,10 @@ fieldsmith 1
 # @starter_fsm_name: t14-self-tapping-fixing-torque.fsm
 # @verification_refs: docs/verification/V53.md
 # ---
+# @assert: Applied Self-Tapping Screw Preload |F_preload| || resultant_mag || 795.00 || 0.5% || N
+# @assert: Boss Clamping von Mises Stress σ_vM || max_vm_elem || >= 10.0 || >= 10.0 || MPa
+# @assert: Boss Clamping Axial Compression |u|_max || max_displacement || >= 0.005 || >= 0.005 || mm
+# ---
 # @step: 1. Insert Engineering Fixings & Auto-Tap the Fixed Object (Shape 1) || shape
 #   In the Shapes tree on the left, click "🔩 Fixings…" (or click + and choose any fixing). Browse the 7 built-in engineering fixings: Self-Tapping Screw, Hex Head Screw (ISO 4017), Hex Cap Bolt (ISO 4762), Structural Washer, Hex Nut, Nyloc Lock Nut (with PA12 insert), and Cantilever Hook-Clip Plastic Box Snap-Fit. Clicking Insert automatically cuts the pilot bore, spotface/counterbore, thread-bite rings, hex nut trap, or snap-fit catch slot into the host object and configures the clamping preload.
 # @expected:
@@ -88,17 +92,15 @@ cylinder receiving_boss r=boss_r h=eng_len at=(0, 0, 2) round=0.4 blend=0.6
 cylinder seat_spotface r=4.5 h=0.8 at=(0, 0, 5.8) subtract
 cylinder self_tap_bore r=pilot_r h=eng_len at=(0, 0, 2.2) subtract
 torus thread_bite_ring major=1.80 minor=0.35 at=(0, 0, 3.2) subtract
-cylinder screw_head r=3.5 h=3.8 at=(0, 0, 7.8) round=0.35
+cylinder screw_shank r=2.0 h=6.0 at=(0, 0, 3.5)
+cylinder screw_head r=3.5 h=3.8 at=(0, 0, 6.8)
+material ti64 on screw_shank
 material ti64 on screw_head
+color "#94A3B8" on screw_shank
 color "#94A3B8" on screw_head
 
-box snap_catch_pocket size=(3.0, 6.8, 3.0) at=(14.5, 0, -1.2) round=0.2 subtract
-box hook_clip_arm size=(1.8, 6.0, 10.0) at=(16.5, 0, 2.0) round=0.35 blend=0.5
-color "#38BDF8" on hook_clip_arm
-box hook_clip_tip size=(2.8, 6.0, 2.4) at=(15.9, 0, 6.2) round=0.3 blend=0.25
-color "#0284C7" on hook_clip_tip
-
 region base_mount = instrument_flange.nz
-region screw_clamp_seat = screw_head.top + seat_spotface.bottom + self_tap_bore.side
+region screw_clamp_seat = screw_head.top
 support mount_fix base_mount fixed=xyz
 load screw_preload screw_clamp_seat preload=preload_n
+solve
