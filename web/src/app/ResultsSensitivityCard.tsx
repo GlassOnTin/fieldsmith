@@ -87,7 +87,7 @@ export function ResultsSensitivityCard() {
               data-testid="results-compute-sensitivities-btn"
               disabled={busy !== null}
               onClick={runSensitivities}
-              title="Evaluate 3D P2 finite-difference sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p at locked mesh h"
+              title="Evaluate fixed-topology 3D P2 boundary-velocity adjoint sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p"
             >
               {busy === 'sens' ? 'Computing ∂/∂p…' : `Compute ∂/∂p (${doc.lets?.length ?? 0} let)`}
             </button>

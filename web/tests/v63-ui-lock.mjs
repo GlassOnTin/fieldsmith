@@ -258,6 +258,22 @@ try {
     window.fieldsmith.store.select({ kind: 'convection', id: 'chan_conv_bore_wall' });
     const ver = wasm.verifyFsmContracts(doc, 3000);
     const sens = wasm.computeFsmSensitivities(doc, ['r_in'], 3000);
+    const elasticBeam = wasm.parseFsm([
+      'fieldsmith 1',
+      'name "Adjoint Beam"',
+      'material ss316l',
+      'let L = 60',
+      'let b = 10',
+      'let d = 8',
+      'box beam size=(L, b, d) at=(L / 2, 0, 0)',
+      'region root = beam.nx',
+      'region tip = beam.px',
+      'support fix root fixed=xyz',
+      'load push tip force=(0, 0, -250)',
+      '',
+    ].join('\n'));
+    if ('error' in elasticBeam) throw new Error(elasticBeam.error.message);
+    const adjSens = wasm.computeFsmSensitivities(elasticBeam.ok, ['L', 'b', 'd'], 3000);
     return {
       convections: doc.convections.length,
       loads: doc.loads.length,
@@ -270,6 +286,9 @@ try {
       sensSolves: sens.solves_run,
       sensCount: sens.parameters.length,
       dMass: sens.parameters[0]?.d_mass_g ?? 0,
+      adjMethod: adjSens.method,
+      adjSolves: adjSens.solves_run,
+      adjParamCount: adjSens.parameters.length,
     };
   });
   assert(boundCheck.convections >= 2, `Expected bound channel convection BC, got ${boundCheck.convections}`);
@@ -281,8 +300,14 @@ try {
   await page.waitForSelector('[data-testid="spatial-fn-curve"]', { timeout: 3000 });
   assert(boundCheck.allPassed, 'verifyFsmContracts failed in browser WASM');
   assert(
-    boundCheck.sensMethod === 'finite_difference_remesh' && boundCheck.sensSolves === 3,
-    `Expected finite_difference_remesh (3 solves), got method=${boundCheck.sensMethod}, solves=${boundCheck.sensSolves}`,
+    boundCheck.sensMethod === 'boundary_velocity_fixed_mesh' && boundCheck.sensSolves === 12,
+    `Expected boundary_velocity_fixed_mesh (12 case solves across 4 J2+thermal cases), got method=${boundCheck.sensMethod}, solves=${boundCheck.sensSolves}`,
+  );
+  assert(
+    boundCheck.adjMethod === 'boundary_velocity_adjoint' &&
+      boundCheck.adjSolves === 3 &&
+      boundCheck.adjParamCount === 3,
+    `Expected boundary_velocity_adjoint (3 solves for 3 params), got method=${boundCheck.adjMethod}, solves=${boundCheck.adjSolves}`,
   );
   assert(boundCheck.sensCount === 1 && boundCheck.dMass < 0, `Expected ∂m/∂r_in < 0 on hollow pipe, got ${boundCheck.dMass}`);
 

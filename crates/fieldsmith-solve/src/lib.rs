@@ -40,8 +40,8 @@ pub use fenics_assembly::elasticity::ElasticMaterial;
 pub use modal::{solve_modes, ModalResult, ModeOptions};
 pub use p2::P2Mesh;
 pub use pcg::{
-    benchmark_large_gpu_fea, discover_local_gpus, solve, solve_gpu, LargeGpuFeaBenchmark,
-    SolveReport, SolverOptions,
+    benchmark_large_gpu_fea, discover_local_gpus, solve, solve_gpu, solve_multi_rhs,
+    LargeGpuFeaBenchmark, SolveReport, SolverOptions,
 };
 pub use stress::{
     element_strain_energy_2u, element_stress, element_stress_cubic, element_stress_mat,

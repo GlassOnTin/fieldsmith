@@ -152,6 +152,7 @@ pub struct Provenance {
 #[derive(Debug)]
 pub struct Analysis {
     pub mesh: P2Mesh,
+    pub fixed: Vec<u8>,
     pub young: Vec<f64>,
     pub poisson: f64,
     pub mass_g: f64,
@@ -516,7 +517,7 @@ pub fn fixed_mask(
         for (ei, tet) in mesh.tets.iter().enumerate() {
             let has_supported_face = TET_FACES
                 .iter()
-                .any(|f| f.iter().all(|& j| fixed[tet[j] as usize] != 0));
+                .any(|f| f.iter().all(|&j| fixed[tet[j] as usize] != 0));
             if has_supported_face {
                 let r = find(&mut parent, ei);
                 comp_supported[r] = true;
@@ -568,12 +569,25 @@ pub type CaseLoads = (
     std::collections::HashMap<[u64; 9], V3>,
 );
 
+pub(crate) type RegionLookup<'a> = dyn Fn(&str) -> Result<Vec<usize>, SetupError> + 'a;
+
 pub fn case_force_report(
     doc: &Document,
     mesh: &P2Mesh,
     facets: &[Facet],
     name: &str,
     h: f64,
+) -> Result<CaseLoads, SetupError> {
+    case_force_report_with_regions(doc, mesh, facets, name, h, None)
+}
+
+pub(crate) fn case_force_report_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+    exact_lookup: Option<&RegionLookup<'_>>,
 ) -> Result<CaseLoads, SetupError> {
     let mut force = vec![0.0; mesh.nodes.len() * 3];
     let mut reports = Vec::new();
@@ -582,7 +596,10 @@ pub fn case_force_report(
         // Exact-only: traction integrates over the claimed facets' real area, and chime
         // facets the second pass would add (with their mesh-chord area) belong to no
         // carrier the load names; loads are data at exact carriers like constraints are.
-        let fs = region_facets_exact(doc, &l.region, mesh, facets, h)?;
+        let fs = match exact_lookup {
+            Some(lookup) => lookup(&l.region)?,
+            None => region_facets_exact(doc, &l.region, mesh, facets, h)?,
+        };
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "load '{}': region '{}' does not touch the part's surface",
@@ -748,8 +765,11 @@ pub fn case_force_report(
             LoadKind::Pressure {
                 expr: Some(src), ..
             } => {
-                let lets: Vec<(String, f64)> =
-                    doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
+                let lets: Vec<(String, f64)> = doc
+                    .lets
+                    .iter()
+                    .map(|lv| (lv.name.clone(), lv.value))
+                    .collect();
                 Some(
                     SpatialFn::compile_with_lets(src, &lets)
                         .map_err(|e| SetupError(format!("load '{}': pressure_fn: {e}", l.id)))?,
@@ -867,7 +887,9 @@ pub fn case_force_report(
             None => {
                 let mag = match l.kind {
                     LoadKind::Preload { newtons, .. } => newtons.abs(),
-                    _ => (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2)).sqrt(),
+                    _ => {
+                        (resultant[0].powi(2) + resultant[1].powi(2) + resultant[2].powi(2)).sqrt()
+                    }
                 };
                 LoadReport {
                     id: l.id.clone(),
@@ -911,11 +933,29 @@ pub fn case_temperatures(
     name: &str,
     h: f64,
 ) -> Result<Vec<Option<f64>>, SetupError> {
+    case_temperatures_with_regions(doc, mesh, facets, name, h, None)
+}
+
+pub(crate) fn case_temperatures_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+    region_lookup: Option<&RegionLookup<'_>>,
+) -> Result<Vec<Option<f64>>, SetupError> {
     let mut d: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
     let mut owner: Vec<Option<(String, bool)>> = vec![None; mesh.nodes.len()];
-    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
+    let lets: Vec<(String, f64)> = doc
+        .lets
+        .iter()
+        .map(|lv| (lv.name.clone(), lv.value))
+        .collect();
     for t in doc.temperatures.iter().filter(|t| t.case == name) {
-        let fs = region_facets(doc, &t.region, mesh, facets, h)?;
+        let fs = match region_lookup {
+            Some(lookup) => lookup(&t.region)?,
+            None => region_facets(doc, &t.region, mesh, facets, h)?,
+        };
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "temperature '{}': region '{}' does not touch the part's surface",
@@ -1002,11 +1042,29 @@ pub fn case_convections_all(
     name: &str,
     h: f64,
 ) -> Result<(Vec<RobinBc>, Vec<SpatialRobinBc<'static>>), SetupError> {
+    case_convections_all_with_regions(doc, mesh, facets, name, h, None)
+}
+
+pub(crate) fn case_convections_all_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+    region_lookup: Option<&RegionLookup<'_>>,
+) -> Result<(Vec<RobinBc>, Vec<SpatialRobinBc<'static>>), SetupError> {
     let mut uniform = Vec::new();
     let mut spatial = Vec::new();
-    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
+    let lets: Vec<(String, f64)> = doc
+        .lets
+        .iter()
+        .map(|lv| (lv.name.clone(), lv.value))
+        .collect();
     for c in doc.convections.iter().filter(|c| c.case == name) {
-        let fs = region_facets(doc, &c.region, mesh, facets, h)?;
+        let fs = match region_lookup {
+            Some(lookup) => lookup(&c.region)?,
+            None => region_facets(doc, &c.region, mesh, facets, h)?,
+        };
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "convection '{}': region '{}' does not touch the part's surface",
@@ -1079,11 +1137,29 @@ pub fn case_heat_fluxes_all(
     name: &str,
     h: f64,
 ) -> Result<(Vec<HeatFluxBc>, Vec<SpatialHeatFluxBc<'static>>), SetupError> {
+    case_heat_fluxes_all_with_regions(doc, mesh, facets, name, h, None)
+}
+
+pub(crate) fn case_heat_fluxes_all_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    name: &str,
+    h: f64,
+    region_lookup: Option<&RegionLookup<'_>>,
+) -> Result<(Vec<HeatFluxBc>, Vec<SpatialHeatFluxBc<'static>>), SetupError> {
     let mut uniform = Vec::new();
     let mut spatial = Vec::new();
-    let lets: Vec<(String, f64)> = doc.lets.iter().map(|lv| (lv.name.clone(), lv.value)).collect();
+    let lets: Vec<(String, f64)> = doc
+        .lets
+        .iter()
+        .map(|lv| (lv.name.clone(), lv.value))
+        .collect();
     for c in doc.heat_fluxes.iter().filter(|c| c.case == name) {
-        let fs = region_facets(doc, &c.region, mesh, facets, h)?;
+        let fs = match region_lookup {
+            Some(lookup) => lookup(&c.region)?,
+            None => region_facets(doc, &c.region, mesh, facets, h)?,
+        };
         if fs.is_empty() {
             return Err(SetupError(format!(
                 "heat flux '{}': region '{}' does not touch the part's surface",
@@ -1423,9 +1499,42 @@ pub fn run_thermal_case_multi(
     k: &[f64],
     equilibrate: bool,
 ) -> Result<CaseResult, SetupError> {
-    let d = case_temperatures(doc, mesh, facets, &name, h)?;
-    let (robin, spatial_robin) = case_convections_all(doc, mesh, facets, &name, h)?;
-    let (flux, spatial_flux) = case_heat_fluxes_all(doc, mesh, facets, &name, h)?;
+    run_thermal_case_multi_with_regions(
+        doc,
+        mesh,
+        young,
+        poisson,
+        alpha_elem,
+        fixed,
+        facets,
+        name,
+        h,
+        k,
+        equilibrate,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_thermal_case_multi_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    fixed: &[u8],
+    facets: &[Facet],
+    name: String,
+    h: f64,
+    k: &[f64],
+    equilibrate: bool,
+    region_lookup: Option<&RegionLookup<'_>>,
+) -> Result<CaseResult, SetupError> {
+    let d = case_temperatures_with_regions(doc, mesh, facets, &name, h, region_lookup)?;
+    let (robin, spatial_robin) =
+        case_convections_all_with_regions(doc, mesh, facets, &name, h, region_lookup)?;
+    let (flux, spatial_flux) =
+        case_heat_fluxes_all_with_regions(doc, mesh, facets, &name, h, region_lookup)?;
     let (t, creport) = solve_conduction_spatial(
         mesh,
         &d,
@@ -1469,7 +1578,14 @@ pub fn run_thermal_case_multi(
     }
     let t_ref = doc.solve.t_ref.unwrap_or(20.0);
     let dt: Vec<f64> = t.iter().map(|ti| ti - t_ref).collect();
-    let force = thermal_load_multi(mesh, &dt, young, poisson, alpha_elem, &ThermalRefData::new());
+    let force = thermal_load_multi(
+        mesh,
+        &dt,
+        young,
+        poisson,
+        alpha_elem,
+        &ThermalRefData::new(),
+    );
     let problem = Problem {
         mesh: mesh.clone(),
         material: Material {
@@ -1523,9 +1639,9 @@ pub fn run_thermal_case_multi(
 }
 
 /// Collect non-suppressed additive nodes carrying an explicit `material` label distinct
-/// from `doc.material`, paired with their world-frame compiled SDF expression and
-/// resolved [`materials::Material`].
-fn collect_labelled_volumes(
+/// from `doc.material`, paired with their material id, world-frame compiled SDF expression,
+/// and resolved [`materials::Material`].
+pub(crate) fn collect_labelled_volumes(
     doc: &Document,
     nodes: &[fieldsmith_doc::Node],
     parent_xforms: &[expr::Rigid],
@@ -1548,7 +1664,7 @@ fn collect_labelled_volumes(
                             e: Box::new(e),
                         };
                     }
-                    out.push((n.id.clone(), e, m));
+                    out.push((mid.clone(), e, m));
                 }
             }
             if let fieldsmith_doc::NodeKind::Group { children, .. } = &n.kind {
@@ -1596,14 +1712,14 @@ fn is_fluid_volume_node(
     n: &fieldsmith_doc::Node,
     region_shapes: &std::collections::HashSet<&str>,
 ) -> bool {
-    if n.suppressed || n.op == fieldsmith_doc::Op::Subtract || region_shapes.contains(n.id.as_str()) {
+    if n.suppressed || n.op == fieldsmith_doc::Op::Subtract || region_shapes.contains(n.id.as_str())
+    {
         return false;
     }
     let Some(mid) = n.material.as_deref() else {
         return false;
     };
-    materials::find(doc, mid)
-        .is_some_and(|m| !m.role.is_structural())
+    materials::find(doc, mid).is_some_and(|m| !m.role.is_structural())
 }
 
 fn collect_region_shapes(doc: &Document) -> std::collections::HashSet<&str> {
@@ -1702,18 +1818,14 @@ fn prepare(
     if b.is_empty() {
         return Err(SetupError("the model is empty".into()));
     }
-    let has_thermal = !doc.temperatures.is_empty()
-        || !doc.convections.is_empty()
-        || !doc.heat_fluxes.is_empty();
+    let has_thermal =
+        !doc.temperatures.is_empty() || !doc.convections.is_empty() || !doc.heat_fluxes.is_empty();
     if doc.supports.is_empty() && (!has_thermal || !doc.loads.is_empty()) {
         return Err(SetupError(
             "add a support: the part needs something to hold it".into(),
         ));
     }
-    if need_loads
-        && doc.loads.is_empty()
-        && !has_thermal
-    {
+    if need_loads && doc.loads.is_empty() && !has_thermal {
         return Err(SetupError("add a load".into()));
     }
     let mat = material_of(doc)?;
@@ -1968,11 +2080,7 @@ pub fn analyse_full(
     let mut cases = Vec::new();
     let mut iterations = 0;
     let nl_plastic = doc.solve.plasticity == Some(fieldsmith_doc::PlasticityLaw::J2);
-    let hardening_n = doc
-        .solve
-        .hardening_n
-        .or(mat.hardening_n)
-        .unwrap_or(0.18);
+    let hardening_n = doc.solve.hardening_n.or(mat.hardening_n).unwrap_or(0.18);
     for name in case_names(doc) {
         let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
         let mut node_key: std::collections::HashMap<[u64; 3], u8> =
@@ -1981,31 +2089,32 @@ pub fn analyse_full(
             node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
         }
         let prescribed = prescribed_fn(&node_key, &prescribed_map);
-        let mut case = if nl_plastic && (mat.yield_strength > 0.0 || yield_elem.iter().any(|&y| y > 0.0)) {
-            run_case_elastoplastic(
-                &mesh,
-                &young,
-                mat.nu,
-                mat.yield_strength,
-                &yield_elem,
-                hardening_n,
-                &fixed,
-                force,
-                name,
-                equilibrate,
-                &prescribed,
-            )?
-        } else {
-            run_case(
-                &mesh,
-                &Material::iso(young.to_vec(), mat.nu),
-                &fixed,
-                force,
-                name,
-                equilibrate,
-                &prescribed,
-            )?
-        };
+        let mut case =
+            if nl_plastic && (mat.yield_strength > 0.0 || yield_elem.iter().any(|&y| y > 0.0)) {
+                run_case_elastoplastic(
+                    &mesh,
+                    &young,
+                    mat.nu,
+                    mat.yield_strength,
+                    &yield_elem,
+                    hardening_n,
+                    &fixed,
+                    force,
+                    name,
+                    equilibrate,
+                    &prescribed,
+                )?
+            } else {
+                run_case(
+                    &mesh,
+                    &Material::iso(young.to_vec(), mat.nu),
+                    &fixed,
+                    force,
+                    name,
+                    equilibrate,
+                    &prescribed,
+                )?
+            };
         case.load_reports = reports;
         iterations += case.solve.iterations;
         cases.push(case);
@@ -2156,6 +2265,7 @@ pub fn analyse_full(
     };
     Ok(Analysis {
         mesh,
+        fixed,
         young,
         poisson: mat.nu,
         mass_g,
@@ -2623,7 +2733,10 @@ heatflux inflow hot q=2 case=\"Steady\"
             .find(|c| c.name == "Steady")
             .expect("thermal case");
         let t = th.temperature.as_ref().expect("temperature field");
-        let gt = th.grad_t_nodal.as_ref().expect("nodal temperature gradient");
+        let gt = th
+            .grad_t_nodal
+            .as_ref()
+            .expect("nodal temperature gradient");
         assert_eq!(gt.len(), a.mesh.nodes.len() * 3);
         for (n, p) in a.mesh.nodes.iter().enumerate() {
             let want = 100.0 + 2.0 * p[0];
@@ -2775,8 +2888,11 @@ load pull tip_face force=(4200, 0, 0)
 
     #[test]
     fn t19_and_a19_clinching_models_solve_at_coarse_and_medium() {
-        let t19_src = include_str!("../../../examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm");
-        let a19_src = include_str!("../../../examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm");
+        let t19_src = include_str!(
+            "../../../examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm"
+        );
+        let a19_src =
+            include_str!("../../../examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm");
         // Also verify the legacy round=0.8 thin-edge variant at mobile COARSE_DOFS (12_000)
         let legacy_rounded = "\
 name \"Legacy T19 Rounded\"
@@ -2801,12 +2917,21 @@ load cross_tension upper_pull_ring force=(0, 0, 2400)
             let doc = fsm::parse(src).expect("valid .fsm file");
             let res_coarse = analyse(&doc, Resolution::Dofs(12_000), now)
                 .unwrap_or_else(|e| panic!("{label} failed at Coarse (12k): {e:?}"));
-            assert!(res_coarse.cases[0].solve.converged, "{label} coarse converged");
-            assert!(res_coarse.cases[0].max_displacement > 0.0, "{label} coarse displacement > 0");
+            assert!(
+                res_coarse.cases[0].solve.converged,
+                "{label} coarse converged"
+            );
+            assert!(
+                res_coarse.cases[0].max_displacement > 0.0,
+                "{label} coarse displacement > 0"
+            );
             let res_med = analyse(&doc, Resolution::Dofs(25_000), now)
                 .unwrap_or_else(|e| panic!("{label} failed at Medium (25k): {e:?}"));
             assert!(res_med.cases[0].solve.converged, "{label} medium converged");
-            assert!(res_med.cases[0].max_vm_elem > 10.0, "{label} medium vm > 10 MPa");
+            assert!(
+                res_med.cases[0].max_vm_elem > 10.0,
+                "{label} medium vm > 10 MPa"
+            );
         }
     }
 
@@ -2831,15 +2956,15 @@ load pull tip_face force=(4200, 0, 0)
 
         let j2_fsm = format!("{base_fsm}solve plasticity=j2\n");
         let d_j2 = fsm::parse(&j2_fsm).expect("parse j2");
-        assert!(d_j2.lets.is_empty(), "must not rely on any magic let variables");
+        assert!(
+            d_j2.lets.is_empty(),
+            "must not rely on any magic let variables"
+        );
         let a_j2 = analyse(&d_j2, Resolution::Size(2.0), now).expect("j2 solve");
 
         assert!(a_j2.cases[0].max_displacement > a_lin.cases[0].max_displacement);
         assert!(
-            a_j2.cases[0]
-                .plastic_strain_elem
-                .iter()
-                .any(|&ep| ep > 0.0),
+            a_j2.cases[0].plastic_strain_elem.iter().any(|&ep| ep > 0.0),
             "typed solve plasticity=j2 must populate plastic_strain_elem"
         );
     }

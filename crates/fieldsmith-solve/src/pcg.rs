@@ -499,6 +499,65 @@ pub fn solve(p: &Problem, opts: SolverOptions) -> Result<(Vec<f64>, SolveReport)
     Ok((x, report))
 }
 
+/// Solve multiple right-hand sides `A x_m = b_m` against a single assembled 3×3 BSR stiffness
+/// matrix and a single factored two-level (P2 → P1 Cholesky) preconditioner.
+/// Used by discrete adjoint sensitivity solves (`K λ_u = ∂u_max/∂u`, `K λ_vm = ∂σ_vM/∂u`)
+/// so multiple observables reuse one matrix assembly and coarse factorization.
+pub fn solve_multi_rhs(
+    mesh: &crate::P2Mesh,
+    material: &crate::Material,
+    fixed: &[u8],
+    rhs_list: &[Vec<f64>],
+    opts: SolverOptions,
+) -> Result<Vec<(Vec<f64>, SolveReport)>, String> {
+    if rhs_list.is_empty() {
+        return Ok(Vec::new());
+    }
+    configure_host_parallelism();
+    let n = mesh.ndofs();
+    let mut a = assemble(mesh, material);
+    apply_dirichlet(&mut a, fixed);
+    let free = (0..mesh.nodes.len())
+        .map(|i| 3 - fixed[i].count_ones() as usize)
+        .sum();
+    let pre = TwoLevel::new(&a, fixed, mesh.nverts, &mesh.tets, &mesh.mid_edge)?;
+    let zeros = vec![0.0; n];
+    let mut out = Vec::with_capacity(rhs_list.len());
+    for rhs in rhs_list {
+        if rhs.len() != n {
+            return Err(format!(
+                "RHS length {} does not match mesh DOFs {}",
+                rhs.len(),
+                n
+            ));
+        }
+        let mut b = rhs.clone();
+        for i in 0..mesh.nodes.len() {
+            for c in 0..3 {
+                if is_fixed(fixed, i, c) {
+                    b[3 * i + c] = 0.0;
+                }
+            }
+        }
+        let (x, run) = pcg_solve(&a, &pre, &b, &zeros, opts)?;
+        out.push((
+            x,
+            SolveReport {
+                dofs: n,
+                free_dofs: free,
+                coarse_dofs: mesh.nverts * 3,
+                iterations: run.iterations,
+                rel_residual: run.rel_residual,
+                converged: run.converged,
+                gpu_device: run.gpu_device,
+                gpu_gflops: run.gpu_gflops,
+                gpu_bw_gbps: run.gpu_bw_gbps,
+            },
+        ));
+    }
+    Ok(out)
+}
+
 /// Hardware summary + measured performance of a large-scale 3D P2 tetrahedral FEA benchmark
 /// executed on the local CUDA GPU(s).
 #[derive(Clone, Debug, serde::Serialize)]
@@ -746,7 +805,8 @@ mod gpu_tests {
         assert!(bench1.max_tip_deflection_mm > 0.0);
 
         // 2) Larger 3D P2 cantilever: 20x10x10 hexes = 12,000 P2 tets = 18,081 P2 nodes = 54,243 DOFs
-        let bench2 = benchmark_large_gpu_fea([20, 10, 10], 1.5).expect("20x10x10 GPU FEA benchmark");
+        let bench2 =
+            benchmark_large_gpu_fea([20, 10, 10], 1.5).expect("20x10x10 GPU FEA benchmark");
         println!(
             "[GPU FEA 20x10x10] tets={}, nodes={}, dofs={}, nnz_blocks={}, asm={:.1}ms | GPU PCG: iters={}, res={:.2e}, wall={:.2}ms, kern={:.2}ms, {:.2} GFLOP/s, {:.2} GB/s on {} | Multi-GPU ({:?}) max_diff={:.2e} | tip={:.4}mm",
             bench2.p2_tets,
@@ -769,7 +829,8 @@ mod gpu_tests {
         assert!(bench2.multi_gpu_spmv_max_diff < 1e-9);
 
         // 3) Large 3D P2 cantilever: 30x14x14 hexes = 35,280 P2 tets = 50,835 P2 nodes = 152,505 DOFs
-        let bench3 = benchmark_large_gpu_fea([30, 14, 14], 1.0).expect("30x14x14 GPU FEA benchmark");
+        let bench3 =
+            benchmark_large_gpu_fea([30, 14, 14], 1.0).expect("30x14x14 GPU FEA benchmark");
         println!(
             "[GPU FEA 30x14x14] tets={}, nodes={}, dofs={}, nnz_blocks={}, asm={:.1}ms | GPU PCG: iters={}, res={:.2e}, wall={:.2}ms, kern={:.2}ms, {:.2} GFLOP/s, {:.2} GB/s on {} | Multi-GPU ({:?}) max_diff={:.2e} | tip={:.4}mm",
             bench3.p2_tets,

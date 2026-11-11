@@ -13,7 +13,7 @@ pub struct Facet {
 }
 
 impl Facet {
-    fn corners(&self, m: &P2Mesh) -> [[f64; 3]; 3] {
+    pub fn corners(&self, m: &P2Mesh) -> [[f64; 3]; 3] {
         [0, 1, 2].map(|i| m.nodes[self.nodes[i] as usize])
     }
     fn cross(&self, m: &P2Mesh) -> [f64; 3] {

@@ -445,25 +445,58 @@ solve
 
     assert_eq!(
         api_sens["sensitivity"]["method"].as_str(),
-        Some("finite_difference_remesh"),
-        "SensitivityReport must state its finite_difference_remesh provenance"
+        Some("boundary_velocity_adjoint"),
+        "SensitivityReport must state its boundary_velocity_adjoint provenance on linear-elastic solids"
+    );
+    assert_eq!(
+        api_sens["sensitivity"]["solves_run"].as_u64(),
+        Some(3),
+        "3 parameters ['L', 'b', 'd'] must run in O(1) = 3 linear solves (1 forward + 2 adjoints), not 2k+1 = 7"
     );
     let sens_rows = api_sens["sensitivity"]["parameters"]
         .as_array()
         .expect("parameters array");
+    let sens_l = sens_rows
+        .iter()
+        .find(|r| r["param"] == "L")
+        .expect("param L row");
     let sens_b = sens_rows
         .iter()
         .find(|r| r["param"] == "b")
         .expect("param b row");
+    let sens_d = sens_rows
+        .iter()
+        .find(|r| r["param"] == "d")
+        .expect("param d row");
+    let rel_comp_l = sens_l["cases"][0]["rel_compliance"]
+        .as_f64()
+        .expect("rel_compliance for L");
     let rel_comp_b = sens_b["cases"][0]["rel_compliance"]
         .as_f64()
         .expect("rel_compliance for b");
+    let rel_comp_d = sens_d["cases"][0]["rel_compliance"]
+        .as_f64()
+        .expect("rel_compliance for d");
     report.check(Check::relative(
-        "3D sensitivity elasticity (b/C)(∂C/∂b) vs beam width scaling (-1.0)",
+        "3D adjoint sensitivity elasticity (L/C)(∂C/∂L) vs cantilever span scaling (+2.93)",
+        2.93,
+        rel_comp_l,
+        "elasticity",
+        0.06,
+    ));
+    report.check(Check::relative(
+        "3D adjoint sensitivity elasticity (b/C)(∂C/∂b) vs beam width scaling (-1.0)",
         -1.0,
         rel_comp_b,
         "elasticity",
-        0.08,
+        0.05,
+    ));
+    report.check(Check::relative(
+        "3D adjoint sensitivity elasticity (d/C)(∂C/∂d) vs beam depth scaling (-2.93)",
+        -2.93,
+        rel_comp_d,
+        "elasticity",
+        0.06,
     ));
 
     // -------------------------------------------------------------------------
@@ -914,7 +947,8 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity`, general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
+             `sensitivity` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k`), \
+             general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
              `lerp(...)` 3D BC projection, and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
@@ -933,9 +967,11 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, and WASM declarative `system` workbench \
          execution are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
-         2. `QuestionSpec::Sensitivity` uses locked-`h` finite differences with re-stuffed \
-         meshes (`method: \"finite_difference_remesh\"`, `2k + 1` solves), not fixed-topology \
-         boundary-velocity adjoints.\n\
+         2. Linear-elastic solid cases use fixed-topology quadric boundary-velocity discrete \
+         adjoints (`method: \"boundary_velocity_adjoint\"`, `1 + 2 * n_cases` solves independent \
+         of parameter count `k`); coupled thermo-elastic and `J2` elastoplastic cases evaluate on \
+         the fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and \
+         graded TPMS `fill` models fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
          `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );
