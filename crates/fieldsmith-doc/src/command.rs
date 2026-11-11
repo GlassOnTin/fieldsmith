@@ -109,6 +109,10 @@ pub enum DocCommand {
     ApplySketchFeature {
         request: SketchFeatureRequest,
     },
+    SetSystemBlock {
+        #[serde(default)]
+        system: Option<crate::system::DeclarativeSystem>,
+    },
 }
 
 /// Outcome returned by [`apply_doc_command`].
@@ -522,6 +526,20 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             entity_kind = Some("sketch_feature".into());
             action = Some("applied".into());
             sketch_feature = Some(summary);
+        }
+        DocCommand::SetSystemBlock { system } => {
+            if let Some(ref sys) = system {
+                let errs = sys.validate(doc);
+                if !errs.is_empty() {
+                    return Err(format!("set_system_block: {}", errs.join("; ")));
+                }
+                entity_id = Some(sys.id.clone());
+                action = Some("updated".into());
+            } else {
+                action = Some("deleted".into());
+            }
+            doc.system_block = system;
+            entity_kind = Some("system".into());
         }
     }
 

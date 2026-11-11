@@ -1801,10 +1801,13 @@ export function generateAppliedMathMarkdownReport(
 }
 
 /**
- * Return the coupled 1D/2D system ID explicitly declared on `doc` via `coupled <id>`
- * (`doc.coupled_system`), or `null` when `doc` is a standard 3D CAD / P2 FEM model.
+ * Return the coupled 0D/1D/2D system ID explicitly declared on `doc` via a composable
+ * `system <id> { ... }` block (`doc.system_block.id`) or `coupled <id>` (`doc.coupled_system`),
+ * or `null` when `doc` is a standalone 3D CAD / P2 FEM model.
  */
 export function matchedCoupledSystemIdForDoc(doc: Document, _sheetId?: string | null): string | null {
+  const declId = doc.system_block?.id?.trim();
+  if (declId) return declId;
   const id = doc.coupled_system?.trim();
   return id ? id : null;
 }

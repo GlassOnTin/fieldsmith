@@ -2076,6 +2076,87 @@ pub fn solve_coupled_system(
     }
 }
 
+/// Inspect and compile the declarative `system <id> { ... }` block on `doc_json`, returning
+/// a `CoupledSystemSummary` JSON object (`is_declarative_doc_system: true`), or `"null"` when
+/// `doc_json` carries no `system_block`.
+#[wasm_bindgen(js_name = describeDocCoupledSystem)]
+pub fn describe_doc_coupled_system(doc_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_core::declarative_system::DeclarativeCoupledSystem;
+    use fieldsmith_solve::coupled_system::CoupledEngineeringSystem;
+
+    let doc: Document = serde_json::from_str(doc_json)
+        .map_err(|e| js_err(format!("invalid Document JSON: {e}")))?;
+    if doc.system_block.is_none() {
+        return Ok("null".to_string());
+    }
+    let sys = DeclarativeCoupledSystem::from_document(&doc).map_err(js_err)?;
+    to_json(&serde_json::json!({
+        "system_id": sys.system_id(),
+        "system_title": sys.system_title(),
+        "industry_sector": sys.industry_sector(),
+        "num_dofs": sys.num_dofs(),
+        "is_declarative_doc_system": true,
+        "fields": sys.field_descriptors(),
+        "design_parameters": sys.design_parameters(),
+        "epistemic_parameters": sys.epistemic_parameters(),
+        "objectives": sys.objective_descriptors(),
+        "scenarios": sys.named_scenarios(),
+    }))
+}
+
+/// Solve the declarative `system <id> { ... }` block on `doc_json` with Dual-Number AD,
+/// sparse Adjoint & Tangent sensitivities, FOSM `p10/p50/p90` uncertainty intervals,
+/// conservation audits, 1D station profiles (`declarative_visual`), and 3D `.fsm` BC projection (`fsm_3d`).
+#[wasm_bindgen(js_name = solveDocCoupledSystem)]
+pub fn solve_doc_coupled_system(
+    doc_json: &str,
+    design_p_json: &str,
+    epistemic_theta_json: &str,
+) -> Result<String, JsValue> {
+    use fieldsmith_core::declarative_system::DeclarativeCoupledSystem;
+    use fieldsmith_solve::coupled_system::{CoupledEngineeringSystem, MonolithicSystemEngine};
+
+    let t0 = clock();
+    let doc: Document = serde_json::from_str(doc_json)
+        .map_err(|e| js_err(format!("invalid Document JSON: {e}")))?;
+    let design_p: Vec<f64> = serde_json::from_str(design_p_json)
+        .map_err(|e| js_err(format!("invalid design_p JSON: {e}")))?;
+    let epistemic_theta: Vec<f64> = serde_json::from_str(epistemic_theta_json)
+        .map_err(|e| js_err(format!("invalid epistemic_theta JSON: {e}")))?;
+
+    let sys = DeclarativeCoupledSystem::from_document(&doc).map_err(js_err)?;
+    let p = if design_p.len() == sys.design_parameters().len() {
+        design_p
+    } else {
+        sys.nominal_design_vector()
+    };
+    let theta = if epistemic_theta.len() == sys.epistemic_parameters().len() {
+        epistemic_theta
+    } else {
+        sys.nominal_epistemic_vector()
+    };
+    let cfg = sys.engine_config();
+    let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
+        .map_err(js_err)?;
+    let obj_descs = sys.objective_descriptors();
+    let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+    let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+    let decl_vis = sys.extract_visual_fields(&analysis.state, &p, &theta);
+    let fsm_3d = sys.build_3d_fsm_from_state(&analysis.state, &p, &theta);
+    let wall_ms = clock() - t0;
+
+    to_json(&serde_json::json!({
+        "analysis": analysis,
+        "constraints_pass_p50": pass_p50,
+        "constraints_pass_robust_p90": pass_p90,
+        "declarative_visual": decl_vis,
+        "float_bath_visual": serde_json::Value::Null,
+        "candle_flame_visual": serde_json::Value::Null,
+        "fsm_3d": fsm_3d,
+        "wall_ms": wall_ms,
+    }))
+}
+
 /// Evaluate the 4-inch DeadCat FPV Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna
 /// VNA sweep (`S11`, `S21`, `VSWR`, Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`)
 /// and 3D radiation lobes (`G(theta, phi)`).

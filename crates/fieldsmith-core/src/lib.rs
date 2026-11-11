@@ -3,6 +3,7 @@
 
 pub mod channel;
 pub mod contracts;
+pub mod declarative_system;
 pub mod fill;
 pub mod fsmz;
 pub mod import;

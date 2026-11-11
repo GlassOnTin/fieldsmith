@@ -2073,8 +2073,10 @@ export function SketchWorkbench({
 }
 
 export function SketchWorkbenchModal() {
-  const [open, setOpen] = useState(sketchModalOpen);
+  useApp();
+  const [open, setOpen] = useState(() => sketchModalOpen || ui.sketchOpen);
   useEffect(() => {
+    setOpen(sketchModalOpen || ui.sketchOpen);
     const fn = () => setOpen(sketchModalOpen);
     modalListeners.add(fn);
     return () => {
@@ -2082,8 +2084,10 @@ export function SketchWorkbenchModal() {
     };
   }, []);
 
+  const visible = open || ui.sketchOpen;
+
   useEffect(() => {
-    if (!open) return;
+    if (!visible) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
@@ -2092,9 +2096,9 @@ export function SketchWorkbenchModal() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  }, [visible]);
 
-  if (!open) return null;
+  if (!visible) return null;
 
   return (
     <div

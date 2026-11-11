@@ -761,6 +761,56 @@ impl Attrs {
             Some(_) => self.err(format!("'{key}' must be a list of names")),
         }
     }
+    fn val_to_signed_num(&self, key: &str, v: &Val) -> Result<f64, ParseError> {
+        match v {
+            Val::Num(x) if x.is_finite() => Ok(*x),
+            Val::Expr { txt } => match eval_expr(txt, &[]) {
+                Ok(x) if x.is_finite() => Ok(x),
+                _ => self.err(format!("'{key}' must be a finite number")),
+            },
+            _ => self.err(format!("'{key}' must be a finite number")),
+        }
+    }
+    fn signed_num(&mut self, key: &str) -> Result<Option<f64>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(v)) => Ok(Some(self.val_to_signed_num(key, &v)?)),
+            Some(None) => self.err(format!("'{key}' must be a finite number")),
+        }
+    }
+    fn req_signed_num(&mut self, key: &str) -> Result<f64, ParseError> {
+        match self.signed_num(key)? {
+            Some(v) => Ok(v),
+            None => self.err(format!("missing '{key}='")),
+        }
+    }
+    fn signed_num_or(&mut self, key: &str, d: f64) -> Result<f64, ParseError> {
+        Ok(self.signed_num(key)?.unwrap_or(d))
+    }
+    fn signed_pair(&mut self, key: &str) -> Result<Option<[f64; 2]>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::Tuple(t))) if t.len() == 2 => Ok(Some([
+                self.val_to_signed_num(key, &t[0])?,
+                self.val_to_signed_num(key, &t[1])?,
+            ])),
+            Some(_) => self.err(format!("'{key}' must be (a, b)")),
+        }
+    }
+    fn signed_nums(&mut self, key: &str) -> Result<Option<Vec<f64>>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::List(items))) | Some(Some(Val::Tuple(items))) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in &items {
+                    out.push(self.val_to_signed_num(key, item)?);
+                }
+                Ok(Some(out))
+            }
+            Some(Some(single)) => Ok(Some(vec![self.val_to_signed_num(key, &single)?])),
+            Some(None) => self.err(format!("'{key}' must be a list of numbers")),
+        }
+    }
     fn finish(self) -> Result<(), ParseError> {
         if let Some((k, _)) = self.items.first() {
             return self.err(format!("unknown attribute '{k}'"));
@@ -788,6 +838,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     let mut stack: Vec<(Node, Vec<Node>, Vec<Modifier>)> = Vec::new();
     // Open `sketch <id> ... { ... }` block, if currently inside one.
     let mut open_sketch: Option<crate::sketch::ParametricSketch> = None;
+    // Open `system <id> ... { ... }` block, if currently inside one.
+    let mut open_system: Option<crate::system::DeclarativeSystem> = None;
     let mut saw_header = false;
     // Per-node material labels wait here until parse end: `material <id> on <shape>` may
     // run before the shape's line. A shape the document never declares fails then, by
@@ -821,6 +873,10 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 doc.sketches.push(sk);
                 continue;
             }
+            if let Some(sys) = open_system.take() {
+                doc.system_block = Some(sys);
+                continue;
+            }
             let (mut node, children, modifiers) =
                 stack.pop().ok_or_else(|| err("unmatched '}'".into()))?;
             node.kind = NodeKind::Group {
@@ -835,6 +891,14 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             parse_sketch_body_line(sk, &mut c)?;
             if !c.done() {
                 return Err(err("unexpected text at end of sketch line".into()));
+            }
+            continue;
+        }
+
+        if let Some(ref mut sys) = open_system {
+            parse_system_body_line(sys, &mut c)?;
+            if !c.done() {
+                return Err(err("unexpected text at end of system line".into()));
             }
             continue;
         }
@@ -1560,9 +1624,60 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     crate::sketch::sync_sketch_features(&mut doc).map_err(err)?;
                 }
             }
+            "system" => {
+                if !stack.is_empty() {
+                    return Err(err("system is only allowed at the top level".into()));
+                }
+                if doc.system_block.is_some() {
+                    return Err(err("at most one 'system' block may be declared".into()));
+                }
+                let id = c.ident("a system identifier")?;
+                let mut a = c.attrs("", &[])?;
+                let opens = c.is_sym('{');
+                let title = a.string("title")?.unwrap_or_default();
+                let sector = a.string("sector")?.unwrap_or_default();
+                let nodes_f = a.num_or("nodes", 1.0)?;
+                if nodes_f < 1.0 || nodes_f.fract() != 0.0 || nodes_f > 512.0 {
+                    return Err(err(format!(
+                        "system '{id}': nodes must be an integer in 1..=512"
+                    )));
+                }
+                let span = a.signed_pair("span")?.unwrap_or([0.0, 1.0]);
+                let axis = match a.string("axis")?.as_deref() {
+                    None => crate::system::DeclAxis::Z,
+                    Some(ax) => crate::system::DeclAxis::parse(ax).ok_or_else(|| {
+                        err(format!("system '{id}': axis must be x, y, z, or r"))
+                    })?,
+                };
+                a.finish()?;
+                if !opens {
+                    return Err(err("system needs '{' at the end of the line".into()));
+                }
+                c.next();
+                if !c.done() {
+                    return Err(err("nothing may follow '{'".into()));
+                }
+                open_system = Some(crate::system::DeclarativeSystem {
+                    id,
+                    title,
+                    sector,
+                    nodes: nodes_f as usize,
+                    span,
+                    axis,
+                    designs: Vec::new(),
+                    epistemics: Vec::new(),
+                    states: Vec::new(),
+                    aux: Vec::new(),
+                    residuals: Vec::new(),
+                    objectives: Vec::new(),
+                    audits: Vec::new(),
+                    bindings: Vec::new(),
+                    scenarios: Vec::new(),
+                });
+            }
             other => return Err(err(format!("unknown keyword '{other}'"))),
         }
-        if !c.done() && !matches!(kw.as_str(), "group" | "sketch") {
+        if !c.done() && !matches!(kw.as_str(), "group" | "sketch" | "system") {
             return Err(err("unexpected text at end of line".into()));
         }
     }
@@ -1572,7 +1687,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             message: "empty document".into(),
         });
     }
-    if open_sketch.is_some() || !stack.is_empty() {
+    if open_sketch.is_some() || open_system.is_some() || !stack.is_empty() {
         return Err(ParseError {
             line: text.lines().count(),
             message: "missing '}'".into(),
@@ -2487,6 +2602,378 @@ fn print_sketch_feature(o: &mut String, sf: &crate::sketch::SketchFeatureBinding
     let _ = writeln!(o, "{line}");
 }
 
+fn parse_system_body_line(
+    sys: &mut crate::system::DeclarativeSystem,
+    c: &mut Cursor,
+) -> Result<(), ParseError> {
+    use crate::system::{
+        DeclAudit, DeclAuxVar, DeclBindAttr, DeclCadBinding, DeclDesignCategory, DeclDesignParam,
+        DeclEpistemicParam, DeclObjKind, DeclObjective, DeclReduce, DeclResidual, DeclScenario,
+        DeclStateField,
+    };
+    let line = c.line;
+    let err = |m: String| ParseError { line, message: m };
+    let kw = c.ident("a system statement keyword")?;
+    match kw.as_str() {
+        "design" => {
+            let name = c.ident("a design parameter name")?;
+            let mut a = c.attrs("", &[])?;
+            let nominal = a.req_signed_num("nominal")?;
+            let min = a.req_signed_num("min")?;
+            let max = a.req_signed_num("max")?;
+            let unit = a.string("unit")?.unwrap_or_default();
+            let symbol = a.string("symbol")?.unwrap_or_else(|| name.clone());
+            let category = match a.string("category")?.as_deref() {
+                None => DeclDesignCategory::Process,
+                Some(cat) => DeclDesignCategory::parse(cat).ok_or_else(|| {
+                    err(format!(
+                        "design '{name}': category must be geometry, hardware, actuator, or process"
+                    ))
+                })?,
+            };
+            let cost_rate = a.signed_num_or("cost", 0.0)?;
+            let description = a.string("desc")?.unwrap_or_default();
+            a.finish()?;
+            sys.designs.push(DeclDesignParam {
+                name,
+                nominal,
+                min,
+                max,
+                unit,
+                symbol,
+                category,
+                cost_rate,
+                description,
+            });
+        }
+        "epistemic" => {
+            let name = c.ident("an epistemic parameter name")?;
+            let mut a = c.attrs("", &[])?;
+            let nominal = a.req_signed_num("nominal")?;
+            let sigma = a.req_signed_num("sigma")?;
+            let min = a.req_signed_num("min")?;
+            let max = a.req_signed_num("max")?;
+            let unit = a.string("unit")?.unwrap_or_default();
+            let symbol = a.string("symbol")?.unwrap_or_else(|| name.clone());
+            let mechanism = a.string("mechanism")?.unwrap_or_default();
+            a.finish()?;
+            sys.epistemics.push(DeclEpistemicParam {
+                name,
+                nominal,
+                sigma,
+                min,
+                max,
+                unit,
+                symbol,
+                mechanism,
+            });
+        }
+        "state" => {
+            let name = c.ident("a state field name")?;
+            let mut a = c.attrs("", &[])?;
+            let init_expr = a.req_string("init")?;
+            let scale = a.signed_num_or("scale", 1.0)?;
+            let unit = a.string("unit")?.unwrap_or_default();
+            let symbol = a.string("symbol")?.unwrap_or_else(|| name.clone());
+            a.finish()?;
+            sys.states.push(DeclStateField {
+                name,
+                init_expr,
+                scale,
+                unit,
+                symbol,
+            });
+        }
+        "aux" => {
+            let name = c.ident("an aux variable name")?;
+            let mut a = c.attrs("", &[])?;
+            let expr = a.req_string("expr")?;
+            a.finish()?;
+            sys.aux.push(DeclAuxVar { name, expr });
+        }
+        "residual" => {
+            let state = c.ident("a state field name")?;
+            let mut a = c.attrs("", &[])?;
+            let eq = a.req_string("eq")?;
+            let bc_left = a.string("bc_left")?;
+            let bc_right = a.string("bc_right")?;
+            let transient = a.signed_num_or("transient", 0.0)?;
+            a.finish()?;
+            sys.residuals.push(DeclResidual {
+                state,
+                eq,
+                bc_left,
+                bc_right,
+                transient,
+            });
+        }
+        "objective" => {
+            let name = c.ident("an objective name")?;
+            let mut a = c.attrs("", &[])?;
+            let expr = a.req_string("expr")?;
+            let reduce = match a.string("reduce")?.as_deref() {
+                None => DeclReduce::Value,
+                Some(r) => DeclReduce::parse(r).ok_or_else(|| {
+                    err(format!(
+                        "objective '{name}': reduce must be value, entry, exit, mean, integral, max, or min"
+                    ))
+                })?,
+            };
+            let kind_word = a.req_string("kind")?;
+            let kind = match kind_word.as_str() {
+                "minimize" => DeclObjKind::Minimize,
+                "maximize" => DeclObjKind::Maximize,
+                "upper" => DeclObjKind::Upper {
+                    limit: a.req_signed_num("limit")?,
+                },
+                "lower" => DeclObjKind::Lower {
+                    limit: a.req_signed_num("limit")?,
+                },
+                "band" => {
+                    let [min, max] = a
+                        .signed_pair("band")?
+                        .ok_or_else(|| err(format!("objective '{name}' kind=band needs band=(min, max)")))?;
+                    DeclObjKind::Band { min, max }
+                }
+                other => {
+                    return Err(err(format!(
+                        "objective '{name}': unknown kind '{other}' (expected minimize, maximize, upper, lower, or band)"
+                    )))
+                }
+            };
+            let unit = a.string("unit")?.unwrap_or_default();
+            let symbol = a.string("symbol")?.unwrap_or_else(|| name.clone());
+            let description = a.string("desc")?.unwrap_or_default();
+            a.finish()?;
+            sys.objectives.push(DeclObjective {
+                name,
+                expr,
+                reduce,
+                kind,
+                unit,
+                symbol,
+                description,
+            });
+        }
+        "audit" => {
+            let name = c.ident("an audit name")?;
+            let mut a = c.attrs("", &[])?;
+            let inflow = a.req_string("inflow")?;
+            let outflow = a.req_string("outflow")?;
+            let source = a.string("source")?;
+            let tolerance = a.signed_num_or("tol", 0.02)?;
+            let unit = a.string("unit")?.unwrap_or_default();
+            a.finish()?;
+            sys.audits.push(DeclAudit {
+                name,
+                inflow,
+                outflow,
+                source,
+                tolerance,
+                unit,
+            });
+        }
+        "bind" => {
+            let target = c.ident("a bind target identifier")?;
+            let mut a = c.attrs("", &[])?;
+            let attr_word = a.req_string("attr")?;
+            let attr = DeclBindAttr::parse(&attr_word).ok_or_else(|| {
+                err(format!(
+                    "bind '{target}': unknown attr '{attr_word}' (expected let, temp, h, tinf, q, pressure, preload, force_x, force_y, or force_z)"
+                ))
+            })?;
+            let expr = a.req_string("expr")?;
+            a.finish()?;
+            sys.bindings.push(DeclCadBinding { target, attr, expr });
+        }
+        "scenario" => {
+            let sc_name = match c.next() {
+                Some(Tok::Str(s)) | Some(Tok::Ident(s)) => s,
+                _ => return Err(err("scenario expects a name string or identifier".into())),
+            };
+            let mut a = c.attrs("", &[])?;
+            let design_p = a
+                .signed_nums("p")?
+                .ok_or_else(|| err(format!("scenario '{sc_name}' needs p=[...]")))?;
+            let description = a.string("desc")?.unwrap_or_default();
+            a.finish()?;
+            sys.scenarios.push(DeclScenario {
+                name: sc_name,
+                description,
+                design_p,
+            });
+        }
+        other => return Err(err(format!("unexpected keyword '{other}' inside system"))),
+    }
+    Ok(())
+}
+
+fn print_system(o: &mut String, sys: &crate::system::DeclarativeSystem) {
+    use crate::system::{DeclAxis, DeclDesignCategory, DeclObjKind, DeclReduce};
+    let mut hdr = format!("system {}", id_tok(&sys.id));
+    if !sys.title.is_empty() {
+        hdr += &format!(" title={}", q(&sys.title));
+    }
+    if !sys.sector.is_empty() {
+        hdr += &format!(" sector={}", q(&sys.sector));
+    }
+    if sys.nodes != 1 {
+        hdr += &format!(" nodes={}", sys.nodes);
+    }
+    if sys.span != [0.0, 1.0] {
+        hdr += &format!(" span=({}, {})", n(sys.span[0]), n(sys.span[1]));
+    }
+    if sys.axis != DeclAxis::Z {
+        hdr += &format!(" axis={}", sys.axis.name());
+    }
+    let _ = writeln!(o, "{hdr} {{");
+
+    for d in &sys.designs {
+        let mut line = format!(
+            "  design {} nominal={} min={} max={}",
+            id_tok(&d.name),
+            n(d.nominal),
+            n(d.min),
+            n(d.max)
+        );
+        if !d.unit.is_empty() {
+            line += &format!(" unit={}", q(&d.unit));
+        }
+        if !d.symbol.is_empty() && d.symbol != d.name {
+            line += &format!(" symbol={}", q(&d.symbol));
+        }
+        if d.category != DeclDesignCategory::Process {
+            line += &format!(" category={}", d.category.name());
+        }
+        if d.cost_rate != 0.0 {
+            line += &format!(" cost={}", n(d.cost_rate));
+        }
+        if !d.description.is_empty() {
+            line += &format!(" desc={}", q(&d.description));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for ep in &sys.epistemics {
+        let mut line = format!(
+            "  epistemic {} nominal={} sigma={} min={} max={}",
+            id_tok(&ep.name),
+            n(ep.nominal),
+            n(ep.sigma),
+            n(ep.min),
+            n(ep.max)
+        );
+        if !ep.unit.is_empty() {
+            line += &format!(" unit={}", q(&ep.unit));
+        }
+        if !ep.symbol.is_empty() && ep.symbol != ep.name {
+            line += &format!(" symbol={}", q(&ep.symbol));
+        }
+        if !ep.mechanism.is_empty() {
+            line += &format!(" mechanism={}", q(&ep.mechanism));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for st in &sys.states {
+        let mut line = format!("  state {} init={}", id_tok(&st.name), q(&st.init_expr));
+        if (st.scale - 1.0).abs() > 1e-12 {
+            line += &format!(" scale={}", n(st.scale));
+        }
+        if !st.unit.is_empty() {
+            line += &format!(" unit={}", q(&st.unit));
+        }
+        if !st.symbol.is_empty() && st.symbol != st.name {
+            line += &format!(" symbol={}", q(&st.symbol));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for ax in &sys.aux {
+        let _ = writeln!(o, "  aux {} expr={}", id_tok(&ax.name), q(&ax.expr));
+    }
+
+    for res in &sys.residuals {
+        let mut line = format!("  residual {} eq={}", id_tok(&res.state), q(&res.eq));
+        if let Some(ref bcl) = res.bc_left {
+            line += &format!(" bc_left={}", q(bcl));
+        }
+        if let Some(ref bcr) = res.bc_right {
+            line += &format!(" bc_right={}", q(bcr));
+        }
+        if res.transient != 0.0 {
+            line += &format!(" transient={}", n(res.transient));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for obj in &sys.objectives {
+        let mut line = format!("  objective {} expr={}", id_tok(&obj.name), q(&obj.expr));
+        if obj.reduce != DeclReduce::Value {
+            line += &format!(" reduce={}", obj.reduce.name());
+        }
+        match obj.kind {
+            DeclObjKind::Minimize => line += " kind=minimize",
+            DeclObjKind::Maximize => line += " kind=maximize",
+            DeclObjKind::Upper { limit } => line += &format!(" kind=upper limit={}", n(limit)),
+            DeclObjKind::Lower { limit } => line += &format!(" kind=lower limit={}", n(limit)),
+            DeclObjKind::Band { min, max } => {
+                line += &format!(" kind=band band=({}, {})", n(min), n(max))
+            }
+        }
+        if !obj.unit.is_empty() {
+            line += &format!(" unit={}", q(&obj.unit));
+        }
+        if !obj.symbol.is_empty() && obj.symbol != obj.name {
+            line += &format!(" symbol={}", q(&obj.symbol));
+        }
+        if !obj.description.is_empty() {
+            line += &format!(" desc={}", q(&obj.description));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for aud in &sys.audits {
+        let mut line = format!(
+            "  audit {} inflow={} outflow={}",
+            id_tok(&aud.name),
+            q(&aud.inflow),
+            q(&aud.outflow)
+        );
+        if let Some(ref src) = aud.source {
+            line += &format!(" source={}", q(src));
+        }
+        if (aud.tolerance - 0.02).abs() > 1e-12 {
+            line += &format!(" tol={}", n(aud.tolerance));
+        }
+        if !aud.unit.is_empty() {
+            line += &format!(" unit={}", q(&aud.unit));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for b in &sys.bindings {
+        let _ = writeln!(
+            o,
+            "  bind {} attr={} expr={}",
+            id_tok(&b.target),
+            b.attr.name(),
+            q(&b.expr)
+        );
+    }
+
+    for sc in &sys.scenarios {
+        let p_str: Vec<String> = sc.design_p.iter().map(|v| n(*v)).collect();
+        let mut line = format!("  scenario {} p=[{}]", q(&sc.name), p_str.join(", "));
+        if !sc.description.is_empty() {
+            line += &format!(" desc={}", q(&sc.description));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    let _ = writeln!(o, "}}");
+}
+
 fn parse_modifier(kw: &str, c: &mut Cursor) -> Result<Modifier, ParseError> {
     let num = |c: &mut Cursor| match c.next() {
         Some(Tok::Num(v)) => Ok(v),
@@ -2807,6 +3294,10 @@ pub fn print(doc: &Document) -> String {
             line += &format!(" erode={}", n(er));
         }
         let _ = writeln!(o, "{line}");
+    }
+    if let Some(sys) = &doc.system_block {
+        o.push('\n');
+        print_system(&mut o, sys);
     }
     for a in &doc.asserts {
         let mut line = format!(

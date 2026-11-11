@@ -23,6 +23,7 @@ use fieldsmith_core::channel::{
     analyze_sdf_channel as run_sdf_channel, bind_channel_bcs_to_region, ChannelAxis,
     ChannelFlowSpec, PassageMode,
 };
+use fieldsmith_core::declarative_system::DeclarativeCoupledSystem;
 use fieldsmith_core::fsmz;
 use fieldsmith_doc::command::{apply_doc_command, DocCommand};
 use fieldsmith_doc::fixings::{
@@ -424,6 +425,7 @@ impl Server {
             "name": d.name,
             "material": d.material,
             "coupled_system": d.coupled_system,
+            "system_block": d.system_block,
             "asserts": d.asserts,
             "lets": d.lets,
             "sketches": d.sketches,
@@ -1530,76 +1532,94 @@ impl Server {
         let swirl_sys = AnnularSwirlSprayCombustorSystem::default();
         let swirl_scenarios = swirl_sys.named_scenarios();
 
-        Ok(json!({
-            "systems": [
-                {
-                    "system_id": bath_sys.system_id(),
-                    "system_title": bath_sys.system_title(),
-                    "industry_sector": bath_sys.industry_sector(),
-                    "num_dofs": bath_sys.num_dofs(),
-                    "fields": bath_sys.field_descriptors(),
-                    "design_parameters": bath_sys.design_parameters(),
-                    "epistemic_parameters": bath_sys.epistemic_parameters(),
-                    "objectives": bath_sys.objective_descriptors(),
-                    "scenarios": bath_scenarios,
-                },
-                {
-                    "system_id": nozzle_sys.system_id(),
-                    "system_title": nozzle_sys.system_title(),
-                    "industry_sector": nozzle_sys.industry_sector(),
-                    "num_dofs": nozzle_sys.num_dofs(),
-                    "fields": nozzle_sys.field_descriptors(),
-                    "design_parameters": nozzle_sys.design_parameters(),
-                    "epistemic_parameters": nozzle_sys.epistemic_parameters(),
-                    "objectives": nozzle_sys.objective_descriptors(),
-                    "scenarios": nozzle_scenarios,
-                },
-                {
-                    "system_id": candle_sys.system_id(),
-                    "system_title": candle_sys.system_title(),
-                    "industry_sector": candle_sys.industry_sector(),
-                    "num_dofs": candle_sys.num_dofs(),
-                    "fields": candle_sys.field_descriptors(),
-                    "design_parameters": candle_sys.design_parameters(),
-                    "epistemic_parameters": candle_sys.epistemic_parameters(),
-                    "objectives": candle_sys.objective_descriptors(),
-                    "scenarios": candle_scenarios,
-                },
-                {
-                    "system_id": fixing_sys.system_id(),
-                    "system_title": fixing_sys.system_title(),
-                    "industry_sector": fixing_sys.industry_sector(),
-                    "num_dofs": fixing_sys.num_dofs(),
-                    "fields": fixing_sys.field_descriptors(),
-                    "design_parameters": fixing_sys.design_parameters(),
-                    "epistemic_parameters": fixing_sys.epistemic_parameters(),
-                    "objectives": fixing_sys.objective_descriptors(),
-                    "scenarios": fixing_scenarios,
-                },
-                {
-                    "system_id": drone_sys.system_id(),
-                    "system_title": drone_sys.system_title(),
-                    "industry_sector": drone_sys.industry_sector(),
-                    "num_dofs": drone_sys.num_dofs(),
-                    "fields": drone_sys.field_descriptors(),
-                    "design_parameters": drone_sys.design_parameters(),
-                    "epistemic_parameters": drone_sys.epistemic_parameters(),
-                    "objectives": drone_sys.objective_descriptors(),
-                    "scenarios": drone_scenarios,
-                },
-                {
-                    "system_id": swirl_sys.system_id(),
-                    "system_title": swirl_sys.system_title(),
-                    "industry_sector": swirl_sys.industry_sector(),
-                    "num_dofs": swirl_sys.num_dofs(),
-                    "fields": swirl_sys.field_descriptors(),
-                    "design_parameters": swirl_sys.design_parameters(),
-                    "epistemic_parameters": swirl_sys.epistemic_parameters(),
-                    "objectives": swirl_sys.objective_descriptors(),
-                    "scenarios": swirl_scenarios,
-                }
-            ]
-        }))
+        let mut systems = Vec::with_capacity(7);
+        if let Some(ref doc) = self.doc {
+            if doc.system_block.is_some() {
+                let decl_sys = DeclarativeCoupledSystem::from_document(doc)?;
+                systems.push(json!({
+                    "system_id": decl_sys.system_id(),
+                    "system_title": decl_sys.system_title(),
+                    "industry_sector": decl_sys.industry_sector(),
+                    "num_dofs": decl_sys.num_dofs(),
+                    "fields": decl_sys.field_descriptors(),
+                    "design_parameters": decl_sys.design_parameters(),
+                    "epistemic_parameters": decl_sys.epistemic_parameters(),
+                    "objectives": decl_sys.objective_descriptors(),
+                    "scenarios": decl_sys.named_scenarios(),
+                    "is_declarative_doc_system": true,
+                }));
+            }
+        }
+        systems.extend([
+            json!({
+                "system_id": bath_sys.system_id(),
+                "system_title": bath_sys.system_title(),
+                "industry_sector": bath_sys.industry_sector(),
+                "num_dofs": bath_sys.num_dofs(),
+                "fields": bath_sys.field_descriptors(),
+                "design_parameters": bath_sys.design_parameters(),
+                "epistemic_parameters": bath_sys.epistemic_parameters(),
+                "objectives": bath_sys.objective_descriptors(),
+                "scenarios": bath_scenarios,
+            }),
+            json!({
+                "system_id": nozzle_sys.system_id(),
+                "system_title": nozzle_sys.system_title(),
+                "industry_sector": nozzle_sys.industry_sector(),
+                "num_dofs": nozzle_sys.num_dofs(),
+                "fields": nozzle_sys.field_descriptors(),
+                "design_parameters": nozzle_sys.design_parameters(),
+                "epistemic_parameters": nozzle_sys.epistemic_parameters(),
+                "objectives": nozzle_sys.objective_descriptors(),
+                "scenarios": nozzle_scenarios,
+            }),
+            json!({
+                "system_id": candle_sys.system_id(),
+                "system_title": candle_sys.system_title(),
+                "industry_sector": candle_sys.industry_sector(),
+                "num_dofs": candle_sys.num_dofs(),
+                "fields": candle_sys.field_descriptors(),
+                "design_parameters": candle_sys.design_parameters(),
+                "epistemic_parameters": candle_sys.epistemic_parameters(),
+                "objectives": candle_sys.objective_descriptors(),
+                "scenarios": candle_scenarios,
+            }),
+            json!({
+                "system_id": fixing_sys.system_id(),
+                "system_title": fixing_sys.system_title(),
+                "industry_sector": fixing_sys.industry_sector(),
+                "num_dofs": fixing_sys.num_dofs(),
+                "fields": fixing_sys.field_descriptors(),
+                "design_parameters": fixing_sys.design_parameters(),
+                "epistemic_parameters": fixing_sys.epistemic_parameters(),
+                "objectives": fixing_sys.objective_descriptors(),
+                "scenarios": fixing_scenarios,
+            }),
+            json!({
+                "system_id": drone_sys.system_id(),
+                "system_title": drone_sys.system_title(),
+                "industry_sector": drone_sys.industry_sector(),
+                "num_dofs": drone_sys.num_dofs(),
+                "fields": drone_sys.field_descriptors(),
+                "design_parameters": drone_sys.design_parameters(),
+                "epistemic_parameters": drone_sys.epistemic_parameters(),
+                "objectives": drone_sys.objective_descriptors(),
+                "scenarios": drone_scenarios,
+            }),
+            json!({
+                "system_id": swirl_sys.system_id(),
+                "system_title": swirl_sys.system_title(),
+                "industry_sector": swirl_sys.industry_sector(),
+                "num_dofs": swirl_sys.num_dofs(),
+                "fields": swirl_sys.field_descriptors(),
+                "design_parameters": swirl_sys.design_parameters(),
+                "epistemic_parameters": swirl_sys.epistemic_parameters(),
+                "objectives": swirl_sys.objective_descriptors(),
+                "scenarios": swirl_scenarios,
+            }),
+        ]);
+
+        Ok(json!({ "systems": systems }))
     }
 
     /// Solve a registered [`CoupledEngineeringSystem`] at `design_p` and `epistemic_theta`,
@@ -1607,12 +1627,19 @@ impl Server {
     /// `p10/p50/p90` epistemic intervals, and 3D `.fsm` CAD twin (automatically loaded into
     /// the open session document unless `sync_cad: false` is passed).
     fn solve_coupled_system(&mut self, args: Value) -> Result<Value, String> {
+        let doc_decl_id = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.system_block.as_ref().map(|s| s.id.clone()));
+        let doc_coupled_id = self.doc.as_ref().and_then(|d| d.coupled_system.clone());
         let system_id = args
             .get("system_id")
             .and_then(Value::as_str)
-            .or(self.coupled_system_id.as_deref())
-            .unwrap_or("pilkington_float_bath_cvd_coater_v1")
-            .to_string();
+            .map(str::to_string)
+            .or_else(|| doc_decl_id.clone())
+            .or(doc_coupled_id)
+            .or_else(|| self.coupled_system_id.clone())
+            .unwrap_or_else(|| "pilkington_float_bath_cvd_coater_v1".to_string());
         let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
         let req_p: Option<Vec<f64>> = args
             .get("design_p")
@@ -1622,6 +1649,39 @@ impl Server {
             .get("epistemic_theta")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .or_else(|| self.epistemic_theta.clone());
+
+        if doc_decl_id.as_deref() == Some(system_id.as_str()) {
+            let doc_ref = self.doc.as_ref().expect("checked doc_decl_id");
+            let sys = DeclarativeCoupledSystem::from_document(doc_ref)?;
+            let p = req_p
+                .filter(|v| v.len() == sys.design_parameters().len())
+                .unwrap_or_else(|| sys.nominal_design_vector());
+            let theta = req_theta
+                .filter(|v| v.len() == sys.epistemic_parameters().len())
+                .unwrap_or_else(|| sys.nominal_epistemic_vector());
+            let cfg = sys.engine_config();
+            let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)?;
+            let obj_descs = sys.objective_descriptors();
+            let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
+            let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
+            let declarative_visual = sys.extract_visual_fields(&analysis.state, &p, &theta);
+            let synced_doc = sys.synced_document(&analysis.state, &p, &theta)?;
+            let fsm_3d = fsm::print(&synced_doc);
+            if sync_cad {
+                self.doc = Some(synced_doc);
+            }
+            self.coupled_system_id = Some(system_id);
+            self.design_p = Some(p);
+            self.epistemic_theta = Some(theta);
+            return Ok(json!({
+                "analysis": analysis,
+                "constraints_pass_p50": pass_p50,
+                "constraints_pass_robust_p90": pass_p90,
+                "declarative_visual": declarative_visual,
+                "synced_to_cad_doc": sync_cad,
+                "fsm_3d": fsm_3d,
+            }));
+        }
 
         if system_id == "pilkington_float_bath_cvd_coater_v1" {
             let case = CffCase::uk5_reference()?;
@@ -1882,12 +1942,19 @@ impl Server {
     /// on a [`CoupledEngineeringSystem`], updating `design_p` and synthesising the updated
     /// 3D `.fsm` CAD twin into the session document.
     fn optimise_coupled_system(&mut self, args: Value) -> Result<Value, String> {
+        let doc_decl_id = self
+            .doc
+            .as_ref()
+            .and_then(|d| d.system_block.as_ref().map(|s| s.id.clone()));
+        let doc_coupled_id = self.doc.as_ref().and_then(|d| d.coupled_system.clone());
         let system_id = args
             .get("system_id")
             .and_then(Value::as_str)
-            .or(self.coupled_system_id.as_deref())
-            .unwrap_or("pilkington_float_bath_cvd_coater_v1")
-            .to_string();
+            .map(str::to_string)
+            .or_else(|| doc_decl_id.clone())
+            .or(doc_coupled_id)
+            .or_else(|| self.coupled_system_id.clone())
+            .unwrap_or_else(|| "pilkington_float_bath_cvd_coater_v1".to_string());
         let steps = args
             .get("steps")
             .and_then(Value::as_u64)
@@ -1902,6 +1969,14 @@ impl Server {
             .get("epistemic_theta")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .or_else(|| self.epistemic_theta.clone());
+
+        if doc_decl_id.as_deref() == Some(system_id.as_str()) {
+            let doc_clone = self.doc.clone().expect("checked doc_decl_id");
+            let sys = DeclarativeCoupledSystem::from_document(&doc_clone)?;
+            let cfg = sys.engine_config();
+            return self
+                .run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad);
+        }
 
         if system_id == "pilkington_float_bath_cvd_coater_v1" {
             let case = CffCase::uk5_reference()?;
@@ -2361,7 +2436,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
  {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -2380,9 +2455,9 @@ const TOOLS_JSON: &str = r#"[
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp` and dimensionless elasticities) across `params` (or all non-derived `let` variables in the open `.fsm` document).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
- {"name":"list_coupled_systems","description":"List all registered pluggable CoupledEngineeringSystem multi-physics packs, design parameters, epistemic uncertainties, objectives, and reference scenarios.","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem at `design_p` and `epistemic_theta` (monolithic Newton + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ) and optionally sync the 3D `.fsm` CAD twin into the open session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1","annular_swirl_spray_combustor_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
- {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem and sync the synthesised 3D `.fsm` CAD twin into the session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string","enum":["pilkington_float_bath_cvd_coater_v1","regen_nozzle_h2_v1","solar_candle_ignition_v1","jwst_fastener_fixing_envelope_v1","deadcat_4in_gemini_antenna_v1","annular_swirl_spray_combustor_v1"]},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
+ {"name":"list_coupled_systems","description":"List all available CoupledEngineeringSystem models, including any user-authored declarative `system <id> { ... }` block in the open `.fsm` document plus built-in reference packs.","inputSchema":{"type":"object","additionalProperties":false}},
+ {"name":"solve_coupled_system","description":"Solve a CoupledEngineeringSystem (defaults to the open `.fsm` document's declarative `system` block when present) at `design_p` and `epistemic_theta` via monolithic Newton + Dual-AD + Sparse Adjoint `dΦ/dp` + FOSM `p10/p50/p90` UQ, and project bound 0D/1D profiles onto the 3D `.fsm` session document (`sync_cad: true`).","inputSchema":{"type":"object","properties":{"system_id":{"type":"string"},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"sync_cad":{"type":"boolean"}}}},
+ {"name":"optimise_coupled_system","description":"Take `steps` (default 1) Sparse Adjoint `-dΦ/dp` design optimisation steps on a CoupledEngineeringSystem (including user-authored declarative `.fsm` `system` blocks) and project updated parameters and `lerp(...)` BCs onto the 3D `.fsm` session document.","inputSchema":{"type":"object","properties":{"system_id":{"type":"string"},"design_p":{"type":"array","items":{"type":"number"}},"epistemic_theta":{"type":"array","items":{"type":"number"}},"steps":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
  {"name":"solve_drone_antenna","description":"Solve the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz` ELRS) Antenna VNA frequency sweep (`S11`, `S21`, `VSWR`, 50 Ω Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`, CFRP eddy-current loss) and 3D radiation lobes (`G(theta, phi)`), and sync the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["optimised_default","unoptimised_tucked"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"pod_eps_r":{"type":"number"},"pod_loss_tan":{"type":"number"},"cfrp_conductivity_s_per_m":{"type":"number"},"match_series_nh":{"type":"number"},"match_shunt_pf":{"type":"number"},"sync_cad":{"type":"boolean"}}}},
  {"name":"optimise_drone_antenna","description":"Optimise the 4-inch DeadCat CFRP Drone + Gemini Dual-Band (`900 MHz` + `2.4 GHz`) Antenna geometry (`cfrp_standoff_mm`, `elevation_above_plate_mm`, `low_band_arm_length_mm`, `high_band_arm_length_mm`, `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance match (`match_series_nh`, `match_shunt_pf`), returning initial vs. optimised VNA/Smith/Lobe reports and syncing the 3D `.fsm` drone assembly.","inputSchema":{"type":"object","properties":{"preset":{"type":"string","enum":["unoptimised_tucked","optimised_default"]},"topology":{"type":"string","enum":["rear_tpu_v_dipole_pod","conformal_arm_folded_fpc","split_front_rear_orthogonal"]},"cfrp_standoff_mm":{"type":"number"},"low_band_arm_length_mm":{"type":"number"},"high_band_arm_length_mm":{"type":"number"},"diversity_skew_deg":{"type":"number"},"elevation_above_plate_mm":{"type":"number"},"dielectric_pod_wall_mm":{"type":"number"},"iterations":{"type":"integer"},"sync_cad":{"type":"boolean"}}}},
  {"name":"discover_compute_peers","description":"Discover Fieldsmith compute servers (`fieldsmith-mcp --serve`) on the local subnet, loopback, or Tailscale/WireGuard interfaces via UDP broadcast (`:18790`) and parallel `/api/health` probes. Returns discovered peers sorted by highest thread count and lowest latency.","inputSchema":{"type":"object","properties":{"ports":{"type":"array","items":{"type":"integer"}},"timeout_ms":{"type":"integer"},"extra_hosts":{"type":"array","items":{"type":"string"}},"include_subnet_sweep":{"type":"boolean"}}}},

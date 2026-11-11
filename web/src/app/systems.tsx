@@ -15,6 +15,7 @@ import {
   type CoupledDistortionPoint,
   type CoupledSolveBundle,
   type CoupledSystemSummary,
+  type DeclarativeSystemVisual,
   type FloatBathVisualFields,
   type SimulationRecapEvent,
 } from '../doc/wasm';
@@ -2798,7 +2799,9 @@ function syncCoupledFsmToStore(fsmText: string, systemId: string, label: string)
     ui.notify(`Line ${parsed.error.line}: ${parsed.error.message}`, 'error', 6000);
     return false;
   }
-  parsed.ok.coupled_system = systemId;
+  if (!parsed.ok.system_block) {
+    parsed.ok.coupled_system = systemId;
+  }
   store.applyExternalDoc(parsed.ok, label);
   return true;
 }
@@ -5200,9 +5203,20 @@ export function matchedCoupledSystemId(): string | null {
 }
 
 /** Extract `design_p` from the active `.fsm` document's `let` variables when present (`Document → CoupledSystem`). */
-function extractCoupledDesignPFromDoc(systemId: string, fallbackP: number[]): number[] {
+function extractCoupledDesignPFromDoc(
+  systemId: string,
+  fallbackP: number[],
+  designParams?: CoupledSystemSummary['design_parameters'],
+): number[] {
   const getLet = (k: string): number | undefined => store.doc.lets?.find((l) => l.name === k)?.value;
   const p = [...fallbackP];
+  if (store.doc.system_block?.id === systemId && designParams) {
+    for (let i = 0; i < designParams.length && i < p.length; i++) {
+      const lv = getLet(designParams[i].name);
+      if (lv !== undefined) p[i] = lv;
+    }
+    return p;
+  }
   if (systemId === 'pilkington_float_bath_cvd_coater_v1' && p.length >= 6) {
     const rollCant = getLet('top_roll_cant') ?? getLet('roll_cant');
     const hSill = getLet('h_sill');
@@ -5282,7 +5296,7 @@ export function SystemsWorkbench() {
         const th = Array.isArray(ws.epistemic_theta) ? ws.epistemic_theta : epistemicTheta;
         setEpistemicTheta(th);
         try {
-          const res = solveCoupledSystem(ws.coupled_system_id, ws.design_p, th);
+          const res = solveCoupledSystem(ws.coupled_system_id, ws.design_p, th, store.doc);
           setBundle(res);
           if (ws.coupled_system_id === 'pilkington_float_bath_cvd_coater_v1') {
             coupledShared.designP = ws.design_p;
@@ -5305,7 +5319,7 @@ export function SystemsWorkbench() {
   useEffect(() => {
     if (!ui.systemsOpen) return;
     try {
-      const cat = listCoupledSystems();
+      const cat = listCoupledSystems(store.doc);
       setSystems(cat);
       const targetId = matchedCoupledSystemId();
       if (!targetId) {
@@ -5333,7 +5347,7 @@ export function SystemsWorkbench() {
         const p0 =
           preserveBath || preserveCandle
             ? baseP
-            : extractCoupledDesignPFromDoc(sys.system_id, baseP);
+            : extractCoupledDesignPFromDoc(sys.system_id, baseP, sys.design_parameters);
         const th0 =
           sys.system_id === 'pilkington_float_bath_cvd_coater_v1' &&
           coupledShared.epistemicTheta.length === sys.epistemic_parameters.length
@@ -5344,7 +5358,7 @@ export function SystemsWorkbench() {
               : sys.epistemic_parameters.map((t) => t.nominal);
         setDesignP(p0);
         setEpistemicTheta(th0);
-        const res = solveCoupledSystem(sys.system_id, p0, th0);
+        const res = solveCoupledSystem(sys.system_id, p0, th0, store.doc);
         setBundle(res);
         if (sys.system_id === 'pilkington_float_bath_cvd_coater_v1') {
           coupledShared.summary = sys;
@@ -5370,7 +5384,7 @@ export function SystemsWorkbench() {
 
   const runSolve = (sysId: string, nextP: number[], nextTheta: number[]) => {
     try {
-      const res = solveCoupledSystem(sysId, nextP, nextTheta);
+      const res = solveCoupledSystem(sysId, nextP, nextTheta, store.doc);
       setBundle(res);
       if (sysId === 'pilkington_float_bath_cvd_coater_v1') {
         coupledShared.designP = nextP;
@@ -5409,7 +5423,11 @@ export function SystemsWorkbench() {
     const sys = systems.find((s) => s.system_id === sysId);
     if (!sys) return;
     setActiveId(sysId);
-    const p0 = extractCoupledDesignPFromDoc(sysId, sys.design_parameters.map((p) => p.nominal));
+    const p0 = extractCoupledDesignPFromDoc(
+      sysId,
+      sys.design_parameters.map((p) => p.nominal),
+      sys.design_parameters,
+    );
     const th0 = sys.epistemic_parameters.map((t) => t.nominal);
     setDesignP(p0);
     setEpistemicTheta(th0);
@@ -5464,8 +5482,10 @@ export function SystemsWorkbench() {
   const syncTo3DViewport = (jumpToResults = false) => {
     if (!bundle) return;
     const fsm = bundle.fsm_3d ?? buildFloatBathFsm(designP);
-    const filename =
-      activeId === 'regen_nozzle_h2_v1'
+    const isDeclDoc = Boolean(activeSummary?.is_declarative_doc_system);
+    const filename = isDeclDoc
+      ? `${store.doc.name || activeId}.fsm`
+      : activeId === 'regen_nozzle_h2_v1'
         ? 'T17-regenerative-rocket-nozzle.fsm'
         : activeId === 'solar_candle_ignition_v1'
           ? 'T13-solar-parabolic-candle-igniter.fsm'
@@ -5613,13 +5633,15 @@ export function SystemsWorkbench() {
                   class="btn small primary"
                   data-testid="sync-3d-bath"
                   onClick={() => syncTo3DViewport(false)}
-                  title="Generate a 3D parametric .fsm CAD twin + thermo-mechanical FEA setup in the main 3D viewport"
+                  title="Project solved coupled state & spatial boundary conditions onto the 3D .fsm part in the main viewport"
                 >
-                  {activeId === 'regen_nozzle_h2_v1'
-                    ? 'Load 3D Nozzle into Viewport'
-                    : activeId === 'solar_candle_ignition_v1'
-                      ? 'Load 3D Solar Candle & Flame into Viewport'
-                      : 'Load 3D Bath into Viewport'}
+                  {activeSummary?.is_declarative_doc_system
+                    ? 'Sync Coupled State to 3D Part'
+                    : activeId === 'regen_nozzle_h2_v1'
+                      ? 'Load 3D Nozzle into Viewport'
+                      : activeId === 'solar_candle_ignition_v1'
+                        ? 'Load 3D Solar Candle & Flame into Viewport'
+                        : 'Load 3D Bath into Viewport'}
                 </button>
                 <button
                   class="btn small"
@@ -5705,6 +5727,42 @@ export function SystemsWorkbench() {
                 Close
               </button>
             </div>
+
+            {systems
+              .filter((s) => s.is_declarative_doc_system)
+              .map((s) => (
+                <div
+                  key={s.system_id}
+                  data-testid="systems-declarative-router-card"
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: '6px',
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '12px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '12.5px', color: '#6ee7b7' }}>
+                      Active .fsm Declarative Coupled System — {s.system_title} ({s.num_dofs} DOFs)
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
+                      [{s.industry_sector}] Dual-Number AD Jacobian · {s.design_parameters.length} design levers · {s.objectives.length} objectives
+                    </div>
+                  </div>
+                  <button
+                    class="btn small primary"
+                    data-testid={`route-system-${s.system_id}`}
+                    onClick={() => switchSystem(s.system_id)}
+                  >
+                    Open {s.system_id} →
+                  </button>
+                </div>
+              ))}
 
             <div
               style={{
@@ -5869,6 +5927,10 @@ export function SystemsWorkbench() {
 
             {/* CENTRE COLUMN: Interactive 3D Multi-Physics Twin / 2D Plan View + 3-Strip Longitudinal Causal Attribution */}
             <div class="sys-col sys-col-center">
+              {bundle.declarative_visual && (
+                <DeclarativeSystemPanel vis={bundle.declarative_visual} />
+              )}
+
               {bundle.float_bath_visual && (
                 <div class="sys-heatmap-wrap">
                   <FloatBathCanvas
@@ -6151,6 +6213,138 @@ function CausalAttributionSvg({
         3. {track.geometry_label}: {(hMax * 1000).toFixed(1)} mm max → {(hMin * 1000).toFixed(1)} mm min
       </text>
     </svg>
+  );
+}
+
+const DECL_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#38bdf8'];
+
+function DeclarativeSystemPanel({ vis }: { vis: DeclarativeSystemVisual }) {
+  const is1D = vis.nodes >= 2 && vis.stations.length >= 2;
+  const sMin = vis.stations[0] ?? 0;
+  const sMax = vis.stations[vis.stations.length - 1] ?? 1;
+  const W = 760;
+  const stripH = 56;
+  const gap = 8;
+  const padL = 52;
+  const padR = 18;
+  const plotW = W - padL - padR;
+  const totalH = is1D ? Math.max(72, vis.fields.length * (stripH + gap) + 12) : 0;
+  const toX = (s: number) => padL + ((s - sMin) / Math.max(sMax - sMin, 1e-9)) * plotW;
+
+  return (
+    <div class="sys-attribution-card" data-testid="declarative-system-panel">
+      <div class="sys-card-bar" style={{ flexWrap: 'wrap', gap: '6px' }}>
+        <span class="sys-card-title">
+          Declarative .fsm Coupled State ({is1D ? `${vis.nodes}-Station 1D Profiles along ${vis.axis}` : '0D Lumped State'})
+        </span>
+        <span class="num" style={{ color: 'var(--text-3)' }}>
+          {is1D
+            ? `${vis.axis} ∈ [${sMin.toFixed(2)}, ${sMax.toFixed(2)}] mm · Dual-Number AD Jacobian`
+            : 'Dual-Number AD Newton Equilibrium'}
+        </span>
+      </div>
+
+      {is1D ? (
+        <svg viewBox={`0 0 ${W} ${totalH}`} class="sys-attr-svg" data-testid="declarative-1d-svg">
+          {vis.fields.map((fld, idx) => {
+            const top = 8 + idx * (stripH + gap);
+            const vals = fld.values;
+            const vMin = Math.min(...vals);
+            const vMax = Math.max(...vals);
+            const span = Math.max(vMax - vMin, 1e-9);
+            const toY = (v: number) =>
+              top + stripH - 8 - ((v - vMin) / span) * (stripH - 22);
+            const pts = vals
+              .map((v, i) => `${toX(vis.stations[i] ?? sMin).toFixed(1)},${toY(v).toFixed(1)}`)
+              .join(' ');
+            const color = DECL_COLORS[idx % DECL_COLORS.length];
+            const entry = vals[0] ?? 0;
+            const exit = vals[vals.length - 1] ?? 0;
+            return (
+              <g key={fld.name}>
+                <rect
+                  x={padL}
+                  y={top}
+                  width={plotW}
+                  height={stripH}
+                  fill="rgba(255,255,255,0.03)"
+                  rx={3}
+                />
+                <polyline fill="none" stroke={color} stroke-width="2" points={pts} />
+                <text x={padL + 6} y={top + 13} class="sys-svg-label">
+                  {fld.symbol || fld.name} ({fld.name}
+                  {fld.unit ? `, ${fld.unit}` : ''}) — entry {entry.toFixed(3)} → exit{' '}
+                  {exit.toFixed(3)} · range [{vMin.toFixed(3)}, {vMax.toFixed(3)}]
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      ) : (
+        <table class="sys-table num" data-testid="declarative-0d-table">
+          <thead>
+            <tr>
+              <th>State Field</th>
+              <th>Symbol</th>
+              <th>Converged Value</th>
+              <th>Unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vis.fields.map((fld) => (
+              <tr key={fld.name}>
+                <td style={{ fontFamily: 'var(--sans)', fontWeight: 500 }}>{fld.name}</td>
+                <td>{fld.symbol || fld.name}</td>
+                <td>{(fld.values[0] ?? 0).toFixed(4)}</td>
+                <td>{fld.unit || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {vis.bindings.length > 0 && (
+        <div style={{ marginTop: '8px' }} data-testid="declarative-bindings-wrap">
+          <div class="sys-card-bar">
+            <span class="sys-card-title">Projected 3D Boundary Condition &amp; Let Bindings</span>
+          </div>
+          <table class="sys-table num" data-testid="declarative-bindings-table">
+            <thead>
+              <tr>
+                <th>3D Target</th>
+                <th>Attribute</th>
+                <th>Mean</th>
+                <th>Range [min .. max]</th>
+                <th>Spatial Profile</th>
+              </tr>
+            </thead>
+            <tbody>
+              {vis.bindings.map((b) => (
+                <tr key={`${b.target}:${b.attr}`}>
+                  <td style={{ fontFamily: 'var(--sans)', fontWeight: 500 }}>{b.target}</td>
+                  <td>{b.attr}</td>
+                  <td>{b.mean.toFixed(4)}</td>
+                  <td>
+                    [{b.min.toFixed(4)} .. {b.max.toFixed(4)}]
+                  </td>
+                  <td
+                    style={{
+                      maxWidth: '280px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={b.lerp_expr ?? `${b.mean}`}
+                  >
+                    {b.lerp_expr ?? 'scalar'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -665,3 +665,87 @@ fn parametric_sketch_persists_in_fsm_and_reacts_to_set_let_over_mcp() {
         "expected boss_w=34 to update 3D extrude profile span to 34 mm, got {span_x} ({profile:?})"
     );
 }
+
+#[test]
+fn declarative_fsm_system_block_solves_optimises_and_projects_1d_bcs_onto_3d_fea_over_mcp() {
+    let fsm_doc = "\
+fieldsmith 1
+name \"User-Authored 1D Cooled Duct\"
+material ss316l
+let wall_t = 2.5
+cylinder outer_wall r=8 + wall_t h=80 at=(0, 0, 40)
+cylinder inner_bore r=8 h=84 at=(0, 0, 40) subtract
+region bore_surf = inner_bore.side
+region outer_surf = outer_wall.side
+region base_cap = outer_wall.bottom
+support fix_base base_cap fixed=xyz
+convection bore_cool bore_surf h=0.01 tinf=25 case=\"Thermal\"
+heatflux outer_heat outer_surf q=0.25 case=\"Thermal\"
+
+system user_duct_cooler title=\"1D Convective Duct Cooler\" sector=\"Thermal-Fluids\" nodes=17 span=(0, 80) axis=z {
+  design mdot nominal=0.03 min=0.015 max=0.20 unit=\"kg/s\" symbol=\"m_dot\"
+  design wall_t nominal=2.5 min=1.5 max=5.0 unit=\"mm\" symbol=\"t_w\" category=geometry
+  epistemic h_mult nominal=1.0 sigma=0.1 min=0.7 max=1.3 unit=\"-\" symbol=\"c_h\"
+  state T_f init=\"25\" scale=100 unit=\"C\" symbol=\"T_f\"
+  state T_w init=\"95\" scale=100 unit=\"C\" symbol=\"T_w\"
+  aux h_eff expr=\"0.022 * h_mult * (mdot / 0.05)^0.8\"
+  aux q_in expr=\"1.25 * (1 + 0.25 * sin(pi * s / L))\"
+  residual T_f eq=\"4180 * mdot * d_ds(T_f) - 2 * pi * 8 * h_eff * (T_w - T_f)\" bc_left=\"T_f - 25\"
+  residual T_w eq=\"-16 * wall_t * d2_ds2(T_w) + h_eff * (T_w - T_f) - q_in\" bc_left=\"d_ds(T_w)\" bc_right=\"d_ds(T_w)\"
+  objective peak_wall expr=\"T_w\" reduce=max kind=upper limit=95 unit=\"C\" symbol=\"T_max\"
+  objective flow_cost expr=\"mdot\" reduce=value kind=minimize unit=\"kg/s\" symbol=\"m_dot\"
+  bind bore_cool attr=h expr=\"h_eff\"
+  bind bore_cool attr=tinf expr=\"T_f\"
+  bind outer_heat attr=q expr=\"q_in\"
+}
+solve size=6 tref=20 build=(0, 0)
+";
+
+    let mut c = Client::spawn();
+    c.initialize();
+    c.tool_ok(70, "open", json!({"doc": fsm_doc}));
+
+    let cat = c.tool_ok(71, "list_coupled_systems", json!({}));
+    let first = &cat["systems"][0];
+    assert_eq!(first["system_id"], "user_duct_cooler");
+    assert_eq!(first["is_declarative_doc_system"], true);
+    assert_eq!(first["num_dofs"], 34);
+
+    // Solve without even passing system_id — defaults to open document's declarative `system`!
+    let solved = c.tool_ok(72, "solve_coupled_system", json!({}));
+    assert_eq!(solved["analysis"]["system_id"], "user_duct_cooler");
+    assert!(solved["analysis"]["final_residual_l2"].as_f64().unwrap() < 1e-9);
+    assert!(
+        solved["analysis"]["adjoint_vs_tangent_max_rel_err"]
+            .as_f64()
+            .unwrap()
+            < 1e-5
+    );
+    let t_peak_0 = solved["analysis"]["objectives"][0].as_f64().unwrap();
+    assert!(t_peak_0 > 95.0, "low-flow nominal should exceed 95 C limit, got {t_peak_0}");
+
+    // Take 3 Sparse Adjoint optimisation steps — increases `mdot` to reduce `peak_wall`!
+    let opt = c.tool_ok(73, "optimise_coupled_system", json!({"steps": 3}));
+    let t_peak_opt = opt["final_objectives"][0].as_f64().unwrap();
+    assert!(
+        t_peak_opt < t_peak_0,
+        "Adjoint optimisation must reduce peak wall temp: {t_peak_opt} >= {t_peak_0}"
+    );
+
+    // Verify 1D `lerp(z, ...)` profiles landed on the session `.fsm` document AND 3D FEA solves cleanly!
+    let insp = c.tool_ok(74, "inspect", json!({}));
+    let tinf_fn = insp["convections"][0]["t_inf_expr"]
+        .as_str()
+        .expect("projected t_inf_expr");
+    assert!(tinf_fn.starts_with("lerp(z, 0, 25"), "got {tinf_fn}");
+
+    let fea = c.tool_ok(75, "solve", json!({"kind": "solve", "h": 6.0}));
+    assert_eq!(fea["status"], "ok", "{fea}");
+    assert!(
+        fea["single"]["cases"][0]["max_von_mises"]
+            .as_f64()
+            .unwrap()
+            > 0.0,
+        "{fea}"
+    );
+}

@@ -57,6 +57,10 @@ pub struct Document {
     /// `ParametricSketch` (`sketchfeature <id> sketch=<sketch_id> ...`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sketch_features: Vec<crate::sketch::SketchFeatureBinding>,
+    /// Optional composable 0D/1D coupled-equation block (`system <id> ... { ... }`) compiled
+    /// with Dual-Number AD and projected onto `.fsm` `let`s and 3D boundary conditions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_block: Option<crate::system::DeclarativeSystem>,
 }
 
 impl Default for Document {
@@ -80,6 +84,7 @@ impl Default for Document {
             asserts: Vec::new(),
             sketches: Vec::new(),
             sketch_features: Vec::new(),
+            system_block: None,
         }
     }
 }
@@ -1482,6 +1487,9 @@ impl Document {
                 "{meshes} mesh nodes in this document; at most 8 are previewable (up to two \
                  sampler3D textures per node against WebGL2's 16-sampler fragment guarantee)"
             ));
+        }
+        if let Some(sys) = &self.system_block {
+            errs.extend(sys.validate(self));
         }
         errs
     }

@@ -994,11 +994,36 @@ export interface CoupledSystemSummary {
   system_title: string;
   industry_sector: string;
   num_dofs: number;
+  is_declarative_doc_system?: boolean;
   fields: CoupledFieldDescriptor[];
   design_parameters: CoupledDesignParameter[];
   epistemic_parameters: CoupledEpistemicParameter[];
   objectives: CoupledObjectiveDescriptor[];
   scenarios: CoupledScenarioPreset[];
+}
+
+export interface DeclarativeFieldProfile {
+  name: string;
+  symbol: string;
+  unit: string;
+  values: number[];
+}
+
+export interface DeclarativeBindingSummary {
+  target: string;
+  attr: string;
+  mean: number;
+  min: number;
+  max: number;
+  lerp_expr?: string;
+}
+
+export interface DeclarativeSystemVisual {
+  axis: string;
+  nodes: number;
+  stations: number[];
+  fields: DeclarativeFieldProfile[];
+  bindings: DeclarativeBindingSummary[];
 }
 
 export interface CandleTransientFrame {
@@ -1075,22 +1100,52 @@ export interface CoupledSolveBundle {
   analysis: CoupledSystemAnalysis;
   constraints_pass_p50: boolean;
   constraints_pass_robust_p90: boolean;
+  declarative_visual?: DeclarativeSystemVisual | null;
   float_bath_visual: FloatBathVisualFields | null;
   candle_flame_visual?: CandleFlameVisual | null;
   fsm_3d?: string | null;
   wall_ms: number;
 }
 
-export function listCoupledSystems(): CoupledSystemSummary[] {
-  return JSON.parse(w.listCoupledSystems());
+export function describeDocCoupledSystem(doc: Document): CoupledSystemSummary | null {
+  if (!doc.system_block) return null;
+  return JSON.parse(w.describeDocCoupledSystem(JSON.stringify(doc))) as CoupledSystemSummary | null;
+}
+
+export function listCoupledSystems(doc?: Document): CoupledSystemSummary[] {
+  const builtin = JSON.parse(w.listCoupledSystems()) as CoupledSystemSummary[];
+  if (doc?.system_block) {
+    try {
+      const decl = describeDocCoupledSystem(doc);
+      if (decl) {
+        return [decl, ...builtin.filter((s) => s.system_id !== decl.system_id)];
+      }
+    } catch {
+      // If the user's system block is mid-edit / invalid, still return the built-in catalogue
+    }
+  }
+  return builtin;
 }
 
 export function solveCoupledSystem(
   systemId: string,
   designP: number[] = [],
   epistemicTheta: number[] = [],
+  doc?: Document,
 ): CoupledSolveBundle {
-  const res = JSON.parse(w.solveCoupledSystem(systemId, JSON.stringify(designP), JSON.stringify(epistemicTheta)));
+  const raw =
+    doc?.system_block && doc.system_block.id === systemId
+      ? w.solveDocCoupledSystem(
+          JSON.stringify(doc),
+          JSON.stringify(designP),
+          JSON.stringify(epistemicTheta),
+        )
+      : w.solveCoupledSystem(
+          systemId,
+          JSON.stringify(designP),
+          JSON.stringify(epistemicTheta),
+        );
+  const res = JSON.parse(raw);
   if (res && typeof res === 'object' && 'error' in res) {
     throw new Error(String(res.error));
   }

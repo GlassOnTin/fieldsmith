@@ -207,6 +207,126 @@ export interface Document {
   /** Persistent 2D parametric sketches (`sketch <id> ... { ... }`) and 3D feature bindings (`sketchfeature ...`). */
   sketches?: ParametricSketch[];
   sketch_features?: SketchFeatureBinding[];
+  /** Optional composable declarative 0D/1D coupled-equation block (`system <id> ... { ... }`). */
+  system_block?: DeclarativeSystem | null;
+}
+
+// ---- Declarative 0D/1D Coupled-Equation System (`system <id> { ... }`) --------------
+
+export type DeclAxis = 'x' | 'y' | 'z' | 'r';
+export type DeclDesignCategory = 'geometry' | 'hardware' | 'actuator' | 'process';
+export type DeclReduce = 'value' | 'entry' | 'exit' | 'mean' | 'integral' | 'max' | 'min';
+
+export type DeclObjKind =
+  | { kind: 'minimize' }
+  | { kind: 'maximize' }
+  | { kind: 'upper'; limit: number }
+  | { kind: 'lower'; limit: number }
+  | { kind: 'band'; min: number; max: number };
+
+export type DeclBindAttr =
+  | 'let'
+  | 'temp'
+  | 'h'
+  | 'tinf'
+  | 'q'
+  | 'pressure'
+  | 'preload'
+  | 'force_x'
+  | 'force_y'
+  | 'force_z';
+
+export interface DeclDesignParam {
+  name: string;
+  nominal: number;
+  min: number;
+  max: number;
+  unit?: string;
+  symbol?: string;
+  category?: DeclDesignCategory;
+  cost_rate?: number;
+  description?: string;
+}
+
+export interface DeclEpistemicParam {
+  name: string;
+  nominal: number;
+  sigma: number;
+  min: number;
+  max: number;
+  unit?: string;
+  symbol?: string;
+  mechanism?: string;
+}
+
+export interface DeclStateField {
+  name: string;
+  init_expr: string;
+  scale?: number;
+  unit?: string;
+  symbol?: string;
+}
+
+export interface DeclAuxVar {
+  name: string;
+  expr: string;
+}
+
+export interface DeclResidual {
+  state: string;
+  eq: string;
+  bc_left?: string;
+  bc_right?: string;
+  transient?: number;
+}
+
+export interface DeclObjective {
+  name: string;
+  expr: string;
+  reduce?: DeclReduce;
+  kind: DeclObjKind;
+  unit?: string;
+  symbol?: string;
+  description?: string;
+}
+
+export interface DeclAudit {
+  name: string;
+  inflow: string;
+  outflow: string;
+  source?: string;
+  tolerance?: number;
+  unit?: string;
+}
+
+export interface DeclCadBinding {
+  target: string;
+  attr: DeclBindAttr;
+  expr: string;
+}
+
+export interface DeclScenario {
+  name: string;
+  description?: string;
+  design_p: number[];
+}
+
+export interface DeclarativeSystem {
+  id: string;
+  title?: string;
+  sector?: string;
+  nodes?: number;
+  span?: [number, number];
+  axis?: DeclAxis;
+  designs?: DeclDesignParam[];
+  epistemics?: DeclEpistemicParam[];
+  states: DeclStateField[];
+  aux?: DeclAuxVar[];
+  residuals: DeclResidual[];
+  objectives?: DeclObjective[];
+  audits?: DeclAudit[];
+  bindings?: DeclCadBinding[];
+  scenarios?: DeclScenario[];
 }
 
 // ---- Parametric 2D Sketch & Authoritative DocCommand Types --------------------------
@@ -447,7 +567,8 @@ export type DocCommand =
   | { cmd: 'set_solve'; solve: Document['solve'] }
   | { cmd: 'upsert_sketch'; sketch: ParametricSketch }
   | { cmd: 'delete_sketch'; id: string }
-  | { cmd: 'apply_sketch_feature'; request: SketchFeatureRequest };
+  | { cmd: 'apply_sketch_feature'; request: SketchFeatureRequest }
+  | { cmd: 'set_system_block'; system?: DeclarativeSystem | null };
 
 export interface DocCommandOutcome {
   entity_id?: string;
@@ -613,6 +734,7 @@ export function allIds(doc: Document): Set<string> {
   for (const l of doc.lets ?? []) s.add(l.name);
   for (const sk of doc.sketches ?? []) s.add(sk.id);
   for (const sf of doc.sketch_features ?? []) s.add(sf.feature_id);
+  if (doc.system_block?.id) s.add(doc.system_block.id);
   return s;
 }
 

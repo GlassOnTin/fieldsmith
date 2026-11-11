@@ -139,10 +139,7 @@ fn v63_architecture_lock() {
             "tool {name} missing inputSchema"
         );
         let (_, body) = mcp_tool_call(&mut probe_srv, (idx + 10) as u64, name, json!({}));
-        let msg = body
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let msg = body.get("text").and_then(Value::as_str).unwrap_or_default();
         if msg.starts_with("unknown tool:") {
             unknown_tool_count += 1;
         }
@@ -228,6 +225,7 @@ fn v63_architecture_lock() {
                     && reparsed.custom_materials.len() == doc.custom_materials.len()
                     && reparsed.sketches == doc.sketches
                     && reparsed.sketch_features == doc.sketch_features
+                    && reparsed.system_block == doc.system_block
                 {
                     out.roundtripped = true;
                 } else {
@@ -255,12 +253,8 @@ fn v63_architecture_lock() {
                                     continue;
                                 }
                             };
-                            let (is_err, body) = mcp_tool_call(
-                                &mut srv,
-                                (step_idx + 2) as u64,
-                                &action.tool,
-                                args,
-                            );
+                            let (is_err, body) =
+                                mcp_tool_call(&mut srv, (step_idx + 2) as u64, &action.tool, args);
                             if is_err {
                                 out.directives_failed += 1;
                                 out.notes.push(format!(
@@ -328,7 +322,8 @@ fn v63_architecture_lock() {
         "fluid volume tin_bath_pool should be suppressed in 3D solid FEA assembly in T8"
     );
 
-    let t19 = fieldsmith_verify::example("tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm");
+    let t19 =
+        fieldsmith_verify::example("tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm");
     assert_eq!(t19.solve.plasticity, Some(PlasticityLaw::J2));
     assert_eq!(t19.solve.hardening_n, Some(0.20));
 
@@ -364,12 +359,20 @@ solve
         .body,
     )
     .expect("api verify ok json");
-    assert_eq!(api_verify_ok["status"], "ok", "api_verify_ok={api_verify_ok}");
+    assert_eq!(
+        api_verify_ok["status"], "ok",
+        "api_verify_ok={api_verify_ok}"
+    );
     assert_eq!(api_verify_ok["verification"]["all_passed"], true);
     assert_eq!(api_verify_ok["verification"]["passed"], 2);
 
     let mut verify_srv = Server::new();
-    let (open_err, _) = mcp_tool_call(&mut verify_srv, 1, "open", json!({ "doc": contract_pass_fsm }));
+    let (open_err, _) = mcp_tool_call(
+        &mut verify_srv,
+        1,
+        "open",
+        json!({ "doc": contract_pass_fsm }),
+    );
     assert!(!open_err);
     let (mcp_verify_err, mcp_verify_ok) =
         mcp_tool_call(&mut verify_srv, 2, "verify", json!({ "dofs": 4000 }));
@@ -394,8 +397,12 @@ solve
     assert_eq!(api_verify_refusal["verification"]["all_passed"], false);
     assert_eq!(api_verify_refusal["verification"]["failed"], 1);
 
-    let (open_err2, _) =
-        mcp_tool_call(&mut verify_srv, 3, "open", json!({ "doc": contract_fail_fsm }));
+    let (open_err2, _) = mcp_tool_call(
+        &mut verify_srv,
+        3,
+        "open",
+        json!({ "doc": contract_fail_fsm }),
+    );
     assert!(!open_err2);
     let (mcp_refusal_is_err, mcp_verify_refusal) =
         mcp_tool_call(&mut verify_srv, 4, "verify", json!({ "dofs": 4000 }));
@@ -420,8 +427,12 @@ solve
     .expect("api sensitivity json");
     assert_eq!(api_sens["status"], "ok");
 
-    let (open_err3, _) =
-        mcp_tool_call(&mut verify_srv, 5, "open", json!({ "doc": contract_pass_fsm }));
+    let (open_err3, _) = mcp_tool_call(
+        &mut verify_srv,
+        5,
+        "open",
+        json!({ "doc": contract_pass_fsm }),
+    );
     assert!(!open_err3);
     let (mcp_sens_err, mcp_sens) = mcp_tool_call(
         &mut verify_srv,
@@ -694,10 +705,16 @@ solve build=(0, 0)
     assert_eq!(reparsed_sk.sketch_features.len(), 1);
     assert_eq!(fsm::print(&reparsed_sk), printed_sk);
 
-    let (solve10_err, solve10) =
-        mcp_tool_call(&mut sk_srv, 902, "solve", json!({ "kind": "solve", "h": 3.0 }));
+    let (solve10_err, solve10) = mcp_tool_call(
+        &mut sk_srv,
+        902,
+        "solve",
+        json!({ "kind": "solve", "h": 3.0 }),
+    );
     assert!(!solve10_err, "solve at beam_h=10 failed: {solve10}");
-    let mass_10 = solve10["single"]["peel"]["mass_g"].as_f64().expect("mass_10");
+    let mass_10 = solve10["single"]["peel"]["mass_g"]
+        .as_f64()
+        .expect("mass_10");
     let u_10 = solve10["single"]["cases"][0]["max_displacement"]
         .as_f64()
         .expect("u_10");
@@ -714,10 +731,16 @@ solve build=(0, 0)
         "unexpected validation problems: {cmd_out}"
     );
 
-    let (solve15_err, solve15) =
-        mcp_tool_call(&mut sk_srv, 904, "solve", json!({ "kind": "solve", "h": 3.0 }));
+    let (solve15_err, solve15) = mcp_tool_call(
+        &mut sk_srv,
+        904,
+        "solve",
+        json!({ "kind": "solve", "h": 3.0 }),
+    );
     assert!(!solve15_err, "solve at beam_h=15 failed: {solve15}");
-    let mass_15 = solve15["single"]["peel"]["mass_g"].as_f64().expect("mass_15");
+    let mass_15 = solve15["single"]["peel"]["mass_g"]
+        .as_f64()
+        .expect("mass_15");
     let u_15 = solve15["single"]["cases"][0]["max_displacement"]
         .as_f64()
         .expect("u_15");
@@ -738,6 +761,152 @@ solve build=(0, 0)
         0.12,
     ));
 
+    // -------------------------------------------------------------------------
+    // 7. Composable declarative 0D/1D `.fsm` `system` block -> Dual-AD + Adjoint + 3D FEA
+    // -------------------------------------------------------------------------
+    let decl_fsm = "\
+fieldsmith 1
+name \"Declarative Cooled Liner\"
+material ss316l
+let r_in = 6
+let r_out = 10
+let L_pipe = 40
+cylinder wall r=r_out h=L_pipe at=(0, 0, L_pipe / 2)
+cylinder bore r=r_in h=L_pipe + 2 at=(0, 0, L_pipe / 2) subtract
+region mount = wall.bottom
+region bore_wall = bore.side
+region outer_wall = wall.side
+support fix mount fixed=xyz
+load bore_p bore_wall pressure=0.5 case=\"Operating\"
+convection cool bore_wall h=0.004 tinf=25 case=\"Operating\"
+heatflux ext_q outer_wall q=0.05 case=\"Operating\"
+solve tref=25
+system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span=(0, 40) axis=z {
+  design mdot nominal=0.035 min=0.015 max=0.12 unit=\"kg/s\" symbol=\"m_dot\" category=process
+  design p_in nominal=1.6 min=0.6 max=3.5 unit=\"MPa\" symbol=\"P_in\" category=process
+  epistemic h_mult nominal=1.0 sigma=0.10 min=0.7 max=1.3 unit=\"-\" symbol=\"k_h\"
+  state T_f init=\"25\" scale=50 unit=\"C\" symbol=\"T_f\"
+  state P_f init=\"p_in\" scale=1 unit=\"MPa\" symbol=\"P_f\"
+  aux cp expr=\"4180\"
+  aux h_film expr=\"h_mult * 0.008 * pow(mdot / 0.05, 0.8)\"
+  aux q_lin expr=\"25.0 * (1 + 0.25 * sin(pi * s / L_pipe))\"
+  residual T_f eq=\"mdot * cp * d_ds(T_f) - q_lin\" bc_left=\"T_f - 25\"
+  residual P_f eq=\"d_ds(P_f) + 0.0035 * pow(mdot / 0.05, 1.8)\" bc_left=\"P_f - p_in\"
+  objective mdot_min expr=\"mdot\" reduce=value kind=minimize unit=\"kg/s\" symbol=\"m_dot\"
+  objective t_wall_max expr=\"T_f + q_lin / (2 * pi * r_in * h_film)\" reduce=max kind=upper limit=95 unit=\"C\" symbol=\"T_w,max\"
+  audit enthalpy inflow=\"mdot * cp * entry(T_f)\" outflow=\"mdot * cp * exit(T_f)\" source=\"integral(q_lin)\" tol=0.02 unit=\"W\"
+  bind cool attr=h expr=\"h_film\"
+  bind cool attr=tinf expr=\"T_f\"
+  bind bore_p attr=pressure expr=\"P_f\"
+}
+";
+    let decl_doc = fsm::parse(decl_fsm).expect("parse declarative system .fsm");
+    let decl_roundtrip =
+        fsm::parse(&fsm::print(&decl_doc)).expect("reparse declarative system .fsm");
+    assert_eq!(decl_roundtrip.system_block, decl_doc.system_block);
+
+    let mut decl_srv = Server::new();
+    let (d_open_err, d_open) =
+        mcp_tool_call(&mut decl_srv, 950, "open", json!({ "doc": decl_fsm }));
+    assert!(!d_open_err, "open decl_fsm failed: {d_open}");
+
+    let (d_solve_err, d_solve) =
+        mcp_tool_call(&mut decl_srv, 951, "solve_coupled_system", json!({}));
+    assert!(
+        !d_solve_err,
+        "solve_coupled_system decl_fsm failed: {d_solve}"
+    );
+    let d_analysis = &d_solve["analysis"];
+    let d_fd_err = d_analysis["directional_fd_jacobian_rel_err"]
+        .as_f64()
+        .expect("directional_fd_jacobian_rel_err");
+    let d_adj_err = d_analysis["adjoint_vs_tangent_max_rel_err"]
+        .as_f64()
+        .expect("adjoint_vs_tangent_max_rel_err");
+    let d_audit_err = d_analysis["conservation_audits"][0]["relative_error"]
+        .as_f64()
+        .expect("conservation relative_error");
+    let tw_before = d_analysis["objectives"][1]
+        .as_f64()
+        .expect("T_w,max before");
+    assert!(
+        tw_before > 95.0,
+        "expected initial T_w,max > 95 C, got {tw_before}"
+    );
+
+    report.check(Check::absolute(
+        "Declarative .fsm Dual-AD Jacobian vs directional FD rel err",
+        0.0,
+        d_fd_err,
+        "",
+        1e-6,
+    ));
+    report.check(Check::absolute(
+        "Declarative .fsm Adjoint vs Tangent sensitivity rel err",
+        0.0,
+        d_adj_err,
+        "",
+        1e-6,
+    ));
+    report.check(Check::absolute(
+        "Declarative .fsm 1D enthalpy conservation audit rel err",
+        0.0,
+        d_audit_err,
+        "",
+        0.02,
+    ));
+
+    let (d_opt_err, d_opt) = mcp_tool_call(
+        &mut decl_srv,
+        952,
+        "optimise_coupled_system",
+        json!({ "steps": 6 }),
+    );
+    assert!(
+        !d_opt_err,
+        "optimise_coupled_system decl_fsm failed: {d_opt}"
+    );
+    let tw_after = d_opt["final_objectives"][1]
+        .as_f64()
+        .expect("T_w,max after");
+    assert!(
+        tw_after < tw_before - 10.0,
+        "expected Adjoint optimisation to reduce peak wall temp by > 10 C: {tw_before} -> {tw_after}"
+    );
+    report.check(Check::absolute(
+        "Adjoint-optimised declarative 1D peak wall temp reduction (> 10 °C)",
+        0.0,
+        (tw_after - (tw_before - 10.0)).max(0.0),
+        "°C",
+        0.0,
+    ));
+
+    let (_, d_insp) = mcp_tool_call(&mut decl_srv, 953, "inspect", json!({}));
+    assert!(
+        d_insp["convections"][0]["t_inf_expr"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("lerp(z,"),
+        "expected synced lerp(z, ...) t_inf_expr on 3D Convection BC: {d_insp}"
+    );
+    let (d_fea_err, d_fea) = mcp_tool_call(
+        &mut decl_srv,
+        954,
+        "solve",
+        json!({ "kind": "solve", "h": 4.0 }),
+    );
+    assert!(
+        !d_fea_err,
+        "3D FEA solve after 1D declarative BC projection failed: {d_fea}"
+    );
+    let d_vm = d_fea["single"]["cases"][0]["max_von_mises"]
+        .as_f64()
+        .expect("max_von_mises");
+    assert!(
+        d_vm > 0.5 && d_vm.is_finite(),
+        "expected positive 3D thermo-elastic stress, got {d_vm}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -747,7 +916,8 @@ solve build=(0, 0)
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
              `sensitivity`, general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
-             stiffness scaling, and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
+             stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
+             `lerp(...)` 3D BC projection, and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
             fsm_files.len(),
             mcp_directives_total,
             tool_count,
@@ -760,13 +930,14 @@ solve build=(0, 0)
 
     report.section(
         "Named gaps",
-        "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`) and WASM \
-         `SketchWorkbench` -> `DocCommand` dispatch are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
+        "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
+         `SketchWorkbench` -> `DocCommand` dispatch, and WASM declarative `system` workbench \
+         execution are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. `QuestionSpec::Sensitivity` uses locked-`h` finite differences with re-stuffed \
          meshes (`method: \"finite_difference_remesh\"`, `2k + 1` solves), not fixed-topology \
          boundary-velocity adjoints.\n\
-         3. Domain-specific `CoupledEngineeringSystem` models (`float_bath`, `candle_flame`, `antenna`, etc.) \
-         are currently compiled Rust structs rather than user-authored 0D/1D `.fsm` equation blocks.",
+         3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
+         `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );
 
     report.finish();

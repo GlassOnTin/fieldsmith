@@ -18,6 +18,20 @@ use faer::prelude::SpSolver;
 use faer::sparse::SparseColMat;
 use serde::{Deserialize, Serialize};
 
+/// Column-compressed sparse Jacobian type (`∂R/∂W`) used by [`CoupledEngineeringSystem`].
+pub type SparseJacobian = SparseColMat<usize, f64>;
+
+/// Construct a [`SparseJacobian`] from `(row, col, value)` triplets without requiring downstream
+/// crates to depend directly on `faer`.
+pub fn sparse_jacobian_from_triplets(
+    nrows: usize,
+    ncols: usize,
+    triplets: &[(usize, usize, f64)],
+) -> Result<SparseJacobian, String> {
+    SparseColMat::<usize, f64>::try_new_from_triplets(nrows, ncols, triplets)
+        .map_err(|e| format!("failed to assemble sparse Jacobian: {e:?}"))
+}
+
 /// Descriptor for one physical degree-of-freedom family in the coupled state vector `W`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FieldDescriptor {

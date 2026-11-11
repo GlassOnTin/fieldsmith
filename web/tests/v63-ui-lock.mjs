@@ -374,7 +374,89 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[7/7] WASM SketchWorkbench -> persistent .fsm sketch + store.dispatch(set_let) -> 3D Extrude sync (${sketchSyncCheck.spanAfterDispatch.toFixed(1)} -> ${sketchSyncCheck.spanAfterInspector.toFixed(1)} mm): PASS`,
+    `[7/8] WASM SketchWorkbench -> persistent .fsm sketch + store.dispatch(set_let) -> 3D Extrude sync (${sketchSyncCheck.spanAfterDispatch.toFixed(1)} -> ${sketchSyncCheck.spanAfterInspector.toFixed(1)} mm): PASS`,
+  );
+
+  // 8. User-authored declarative `.fsm` `system <id> { ... }` solved & Adjoint-stepped in WASM SystemsWorkbench -> 3D `lerp(...)` BC sync
+  const declPipeFsm = [
+    'fieldsmith 1',
+    'name "User Cooled Pipe"',
+    'material ss316l',
+    'let r_in = 6',
+    'let r_out = 10',
+    'let L_pipe = 40',
+    'cylinder wall r=r_out h=L_pipe at=(0, 0, L_pipe / 2)',
+    'cylinder bore r=r_in h=L_pipe + 2 at=(0, 0, L_pipe / 2) subtract',
+    'region mount = wall.bottom',
+    'region bore_wall = bore.side',
+    'support fix mount fixed=xyz',
+    'load bore_p bore_wall pressure=0.5 case="Operating"',
+    'convection cool bore_wall h=0.004 tinf=25 case="Operating"',
+    'solve tref=25',
+    'system user_pipe_1d title="User 1D Cooled Pipe" sector="Custom Thermal" nodes=25 span=(0, 40) axis=z {',
+    '  design mdot nominal=0.035 min=0.015 max=0.12 unit="kg/s" symbol="m_dot" category=process',
+    '  epistemic h_mult nominal=1.0 sigma=0.10 min=0.7 max=1.3 unit="-" symbol="k_h"',
+    '  state T_f init="25" scale=50 unit="C" symbol="T_f"',
+    '  aux cp expr="4180"',
+    '  aux h_film expr="h_mult * 0.008 * pow(mdot / 0.05, 0.8)"',
+    '  aux q_lin expr="25.0 * (1 + 0.25 * sin(pi * s / L_pipe))"',
+    '  residual T_f eq="mdot * cp * d_ds(T_f) - q_lin" bc_left="T_f - 25"',
+    '  objective mdot_min expr="mdot" reduce=value kind=minimize unit="kg/s" symbol="m_dot"',
+    '  objective t_wall_max expr="T_f + q_lin / (2 * pi * r_in * h_film)" reduce=max kind=upper limit=95 unit="C" symbol="T_w,max"',
+    '  audit enthalpy inflow="mdot * cp * entry(T_f)" outflow="mdot * cp * exit(T_f)" source="integral(q_lin)" tol=0.02 unit="W"',
+    '  bind cool attr=h expr="h_film"',
+    '  bind cool attr=tinf expr="T_f"',
+    '}',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.ui.set('sketchOpen', false);
+    window.fieldsmith.ui.set('systemsOpen', true);
+  }, declPipeFsm);
+
+  await page.waitForSelector('[data-testid="declarative-system-panel"]', { timeout: 5000 });
+  await page.waitForSelector('[data-testid="declarative-1d-svg"]', { timeout: 3000 });
+  await page.waitForSelector('[data-testid="declarative-bindings-table"]', { timeout: 3000 });
+
+  const declBeforeText = await page.textContent('[data-testid="objective-card-t_wall_max"]');
+  assert(declBeforeText && declBeforeText.includes('T_w,max'), 'Missing declarative objective card t_wall_max');
+
+  // Take an Adjoint step in WASM SystemsWorkbench, then sync back to the 3D part
+  await page.click('[data-testid="adjoint-step-btn"]');
+  await page.click('[data-testid="sync-3d-bath"]');
+
+  const declSynced = await page.evaluate(async () => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const doc = window.fieldsmith.store.doc;
+    const cool = doc.convections.find((c) => c.id === 'cool');
+    const printed = wasm.printFsm(doc);
+    return {
+      docName: doc.name,
+      rootCount: doc.root.length,
+      systemId: doc.system_block?.id ?? null,
+      mdotNominal: doc.system_block?.designs?.[0]?.nominal ?? 0,
+      tinfExpr: cool?.t_inf_expr ?? '',
+      hVal: cool?.h ?? 0,
+      hasSystemInFsm: printed.includes('system user_pipe_1d'),
+      hasRedundantCoupledLine: /^coupled\s+/m.test(printed),
+    };
+  });
+
+  assert(declSynced.docName === 'User Cooled Pipe', `Expected preserved doc name 'User Cooled Pipe', got '${declSynced.docName}'`);
+  assert(declSynced.rootCount === 2, `Expected 2 user 3D CSG nodes preserved, got ${declSynced.rootCount}`);
+  assert(declSynced.systemId === 'user_pipe_1d', `Expected system_block.id === 'user_pipe_1d', got '${declSynced.systemId}'`);
+  assert(declSynced.mdotNominal > 0.035, `Expected Adjoint step to increase mdot from 0.035, got ${declSynced.mdotNominal}`);
+  assert(declSynced.tinfExpr.startsWith('lerp(z,'), `Expected projected 1D lerp(z, ...) t_inf_expr, got '${declSynced.tinfExpr}'`);
+  assert(declSynced.hasSystemInFsm && !declSynced.hasRedundantCoupledLine, 'Printed .fsm missing system block or polluted with redundant coupled line');
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[8/8] Declarative .fsm system -> WASM Dual-AD SystemsWorkbench + Adjoint step (mdot = ${declSynced.mdotNominal.toFixed(4)} kg/s) + 3D lerp(z, ...) sync: PASS`,
   );
   await page.close();
 } catch (e) {
