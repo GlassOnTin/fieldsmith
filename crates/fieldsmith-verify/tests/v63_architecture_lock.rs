@@ -1162,6 +1162,162 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 140\" unit=\"MPa
         true
     );
 
+    // -------------------------------------------------------------------------
+    // 10. O(1) Two-Pass Graded TPMS Adjoint Sensitivities & Simultaneous 3D Shape + Lattice Co-Optimisation
+    // -------------------------------------------------------------------------
+    let graded_codesign_fsm = "\
+fieldsmith 1
+name \"V63 Graded Gyroid Co-Design Beam\"
+material ss316l
+let d = 7.5
+box beam size=(60, 12, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -280)
+fill gyroid sheet cell=6 rho=(0.16, 0.26) skin=0.65 wall=0.4 margin=1 curve=1.2
+assert \"Graded tip deflection\" metric=\"graded.deflection\" target=\"<= 0.30\" unit=\"mm\"
+assert \"Lattice yield utilization\" metric=\"graded.yield_utilization\" target=\"<= 0.80\"
+assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit=\"%\"
+";
+    let mut gr_srv = Server::new();
+    let (gr_open_err, _) = mcp_tool_call(
+        &mut gr_srv,
+        980,
+        "open",
+        json!({ "doc": graded_codesign_fsm }),
+    );
+    assert!(!gr_open_err);
+
+    let (gr_sens_err, gr_sens) = mcp_tool_call(
+        &mut gr_srv,
+        981,
+        "sensitivity",
+        json!({
+            "params": ["d", "fill.rho_min", "fill.rho_max", "fill.skin", "fill.cell"],
+            "dofs": 4500
+        }),
+    );
+    assert!(!gr_sens_err, "graded TPMS sensitivity failed: {gr_sens}");
+    assert_eq!(
+        gr_sens["sensitivity"]["method"],
+        "boundary_velocity_adjoint"
+    );
+    let gr_solves = gr_sens["sensitivity"]["solves_run"]
+        .as_u64()
+        .expect("graded solves_run");
+    // 2 baseline solves (solid + graded) + 4 graded adjoint RHS + 1 solid stress-pass adjoint RHS = 6 solves across 5 params!
+    assert!(
+        gr_solves <= 7,
+        "expected O(1) <= 7 linear solves across 5 shape+fill parameters, got {gr_solves}"
+    );
+    report.check(Check::absolute(
+        "Graded TPMS discrete adjoint solve count across 5 shape + lattice parameters (<= 7)",
+        6.0,
+        gr_solves as f64,
+        "solves",
+        1.0,
+    ));
+
+    let gr_params = gr_sens["sensitivity"]["parameters"]
+        .as_array()
+        .expect("graded sensitivity parameters");
+    let find_gr_param = |pname: &str| -> &Value {
+        gr_params
+            .iter()
+            .find(|p| p["param"].as_str() == Some(pname))
+            .unwrap_or_else(|| panic!("missing graded param {pname}"))
+    };
+    let d_uy_drho_max = find_gr_param("fill.rho_max")["cases"][0]["d_yield_utilization"]
+        .as_f64()
+        .expect("d_yield_utilization wrt fill.rho_max");
+    let d_mass_dskin = find_gr_param("fill.skin")["d_mass_g"]
+        .as_f64()
+        .expect("d_mass_g wrt fill.skin");
+    assert!(
+        d_uy_drho_max < 0.0,
+        "expected ∂U_yield / ∂fill.rho_max < 0, got {d_uy_drho_max}"
+    );
+    assert!(
+        d_mass_dskin > 0.0,
+        "expected ∂m_graded / ∂fill.skin > 0, got {d_mass_dskin}"
+    );
+
+    let gr_opt_args = json!({
+        "objective": "mass_g",
+        "params": ["d", "fill.rho_min", "fill.rho_max", "fill.skin"],
+        "bounds": {
+            "d": [6.5, 15.0],
+            "fill.rho_min": [0.14, 0.55],
+            "fill.rho_max": [0.22, 0.80],
+            "fill.skin": [0.5, 2.4]
+        },
+        "max_iters": 8,
+        "dofs": 4000,
+    });
+    let gr_api_req = json!({
+        "apiv": 2,
+        "doc": graded_codesign_fsm,
+        "question": {
+            "kind": "optimise",
+            "objective": "mass_g",
+            "params": ["d", "fill.rho_min", "fill.rho_max", "fill.skin"],
+            "bounds": {
+                "d": [6.5, 15.0],
+                "fill.rho_min": [0.14, 0.55],
+                "fill.rho_max": [0.22, 0.80],
+                "fill.skin": [0.5, 2.4]
+            },
+            "max_iters": 8,
+            "dofs": 4000,
+        }
+    });
+    let gr_api_rep = fieldsmith_api::respond(&gr_api_req.to_string());
+    assert!(
+        !gr_api_rep.is_error,
+        "API graded co-optimise failed: {}",
+        gr_api_rep.body
+    );
+    let gr_api_json: Value = serde_json::from_str(&gr_api_rep.body).expect("gr_api_json");
+
+    let mut gr_mcp_args = gr_opt_args;
+    gr_mcp_args["apply"] = json!(true);
+    let (gr_opt_err, gr_mcp_json) = mcp_tool_call(&mut gr_srv, 982, "optimise", gr_mcp_args);
+    assert!(!gr_opt_err, "MCP graded co-optimise failed: {gr_mcp_json}");
+    assert_eq!(
+        canon(&gr_api_json),
+        canon(&gr_mcp_json),
+        "API vs MCP graded TPMS co-optimise envelope mismatch"
+    );
+    assert_eq!(
+        gr_mcp_json["optimisation"]["sensitivity_method"],
+        "boundary_velocity_adjoint"
+    );
+    assert_eq!(
+        gr_mcp_json["optimisation"]["initial_verification"]["all_passed"],
+        false
+    );
+    assert_eq!(
+        gr_mcp_json["optimisation"]["final_verification"]["all_passed"],
+        true
+    );
+    let (gr_ver_err, gr_ver_after) =
+        mcp_tool_call(&mut gr_srv, 983, "verify", json!({ "dofs": 4000 }));
+    assert!(!gr_ver_err);
+    assert_eq!(
+        gr_ver_after["status"], "ok",
+        "expected co-optimised graded TPMS session doc to pass `verify`: {gr_ver_after}"
+    );
+    report.check(Check::absolute(
+        "Co-optimised 3D outer shape + graded TPMS lattice failed assertions after repair",
+        0.0,
+        gr_mcp_json["optimisation"]["final_verification"]["failed"]
+            .as_u64()
+            .unwrap_or(99) as f64,
+        "asserts",
+        0.0,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1170,7 +1326,8 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 140\" unit=\"MPa
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
              `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
-             plus `O(0)`-extra-solve Rayleigh-quotient modal sensitivities), \
+             across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, and `O(0)`-extra-solve \
+             Rayleigh-quotient modal sensitivities), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1189,14 +1346,15 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 140\" unit=\"MPa
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
-         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / modal `∂f₁/∂p` \
-         are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
-         2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, AND modal vibration \
-         cases (including spatial `lerp(...)` BCs and embedded `.fsm` `system` blocks) use fixed-topology \
-         quadric boundary-velocity discrete adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, \
-         `O(1)` linear solves independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on \
-         the fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and \
-         graded TPMS `fill` models fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
+         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / modal `∂f₁/∂p` / \
+         graded TPMS `∂U_y/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
+         2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
+         TPMS `fill` (`fill.*` + outer shape `let`s), AND modal vibration cases (including spatial `lerp(...)` \
+         BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
+         adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear solves \
+         independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on the \
+         fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and discrete \
+         topology jumps fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
          `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );

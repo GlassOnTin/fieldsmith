@@ -72,8 +72,37 @@ pub fn required_modes_for_asserts(
     (needed > 0).then_some(needed)
 }
 
+/// Whether an `@assert` / `assert` metric requires a [`Graded`] lattice re-solve when `doc.fill`
+/// is present.
+pub fn is_graded_assert_metric(metric: &str) -> bool {
+    let m = metric.trim();
+    if m.starts_with("graded.")
+        || matches!(
+            m,
+            "graded_mass_g"
+                | "mass_saved_pct"
+                | "mass_g"
+                | "solid_mass_g"
+                | "yield_utilization"
+                | "yield_util"
+                | "buckling_utilization"
+                | "buckling_util"
+        )
+    {
+        return true;
+    }
+    if let Some((f, _)) = m.split_once(':') {
+        return matches!(
+            f.trim(),
+            "yield_utilization" | "yield_util" | "buckling_utilization" | "buckling_util"
+        );
+    }
+    false
+}
+
 /// Resolve a named contract metric (`compliance`, `max_vm_elem:2`, `graded.deflection`,
-/// `mode_1`, `mass_saved_pct`, `max_plastic_strain`, etc.) from a solved `Analysis`.
+/// `graded.yield_utilization`, `graded.buckling_utilization`, `mode_1`, `mass_saved_pct`,
+/// `max_plastic_strain`, etc.) from a solved `Analysis`.
 pub fn resolve_assert_metric(
     metric: &str,
     a: &Analysis,
@@ -137,6 +166,43 @@ pub fn resolve_assert_metric(
         Some((f, cs)) => (f.trim(), cs.trim()),
         None => (rest.trim(), ""),
     };
+
+    if matches!(
+        field,
+        "yield_utilization" | "yield_util" | "buckling_utilization" | "buckling_util"
+    ) {
+        let gr = g.ok_or_else(|| format!("metric '{m}' requires a graded fill solve"))?;
+        if gr.cases.is_empty() {
+            return Err(format!(
+                "metric '{m}' requires at least one mechanical case"
+            ));
+        }
+        let ci = if case_sel.is_empty() {
+            Some(0)
+        } else if let Ok(idx1) = case_sel.parse::<usize>() {
+            (idx1 >= 1 && idx1 <= gr.cases.len()).then_some(idx1 - 1)
+        } else {
+            gr.cases
+                .iter()
+                .position(|c| c.name.eq_ignore_ascii_case(case_sel) || c.name.contains(case_sel))
+        }
+        .ok_or_else(|| format!("metric '{m}': no graded mechanical case matching '{case_sel}'"))?;
+
+        return match field {
+            "yield_utilization" | "yield_util" => gr
+                .yield_utilization
+                .get(ci)
+                .and_then(|v| *v)
+                .ok_or_else(|| {
+                    format!("metric '{m}' requires a material with positive yield strength")
+                }),
+            _ => gr
+                .buckling_utilization
+                .get(ci)
+                .copied()
+                .ok_or_else(|| format!("metric '{m}': case index {ci} out of range")),
+        };
+    }
 
     let graded_cases_vec: Vec<CaseResult> = g
         .map(|gr| {
@@ -329,29 +395,18 @@ pub fn verify_document(
         Vec::new()
     };
 
-    let need_graded = doc.fill.is_some()
-        && asserts.iter().any(|a| {
-            let m = a.metric.trim();
-            m.starts_with("graded.")
-                || m == "graded_mass_g"
-                || m == "mass_saved_pct"
-                || m == "mass_g"
-        });
+    let need_graded =
+        doc.fill.is_some() && asserts.iter().any(|a| is_graded_assert_metric(&a.metric));
 
     let modes_count = required_modes_for_asserts(doc.solve.modes, &asserts);
 
-    let (analysis, graded_opt) = if need_graded {
-        let (solid_a, gr) = fill::graded(doc, res, clock).map_err(|e| e.0)?;
-        if modes_count.is_some() {
-            let modal_a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
-            (modal_a, Some(gr))
-        } else {
-            (solid_a, Some(gr))
-        }
+    let a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
+    let graded_opt = if need_graded {
+        Some(fill::graded_of(doc, &a, clock, false).map_err(|e| e.0)?)
     } else {
-        let a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
-        (a, None)
+        None
     };
+    let analysis = a;
 
     let report = evaluate_contracts(&asserts, &analysis, graded_opt.as_ref())?;
     Ok((analysis, graded_opt, report))

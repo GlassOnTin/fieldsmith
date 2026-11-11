@@ -43,6 +43,8 @@ fieldsmith 1
 #   Update the internal fill pattern from Gyroid to Diamond with stress-thickened skin (1.0 to 2.4 mm).
 # @mcp: Verify Direct 2D Slicestack Contours via API || export || {"h":0.5,"layer_h":1,"slices":true}
 #   Slice the graded lattice directly into 2D printer layers and verify zero open contour loops.
+# @mcp: Evaluate O(1) Graded Lattice Adjoint Sensitivities || sensitivity || {"params":["fill.rho_min","fill.rho_max","fill.skin","fill.cell"],"dofs":6000}
+#   Differentiate graded lattice mass, deflection, yield utilization, and buckling utilization across all four TPMS grading parameters in O(1) linear solves.
 # === END LITERATE HEADER ===
 
 name "T6 — Stress-Graded Gyroid Bracket"

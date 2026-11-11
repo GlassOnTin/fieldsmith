@@ -1,26 +1,27 @@
 //! General 3D parameter sensitivity operator (`∂Φ / ∂p`) for arbitrary `.fsm` documents.
 //!
 //! Evaluates derivatives of 3D P2 finite-element observables (compliance `C`, mass `m`,
-//! peak displacement `u_max`, peak element von Mises stress `σ_vM`) with respect to
-//! document `let` variables or dotted `ParamAddr` addresses.
+//! peak displacement `u_max`, peak element von Mises stress `σ_vM`, peak conduction
+//! temperature `T_max`, natural frequencies `f_n`, and graded TPMS lattice yield / buckling
+//! utilizations `U_y`, `U_b`) with respect to document `let` variables, `system` designs,
+//! `fill.*` lattice grading parameters, or dotted `ParamAddr` addresses.
 //!
 //! ## Differentiation Regimes (`SensitivityReport::method`)
-//! 1. `"boundary_velocity_adjoint"` — Default for solid linear-elastic AND coupled steady-conduction
-//!    thermo-elastic models (including spatially varying `SpatialFn` `lerp(...)` BCs and declarative
-//!    `.fsm` `system` blocks). Reconstructs the 3D domain velocity field `V_k` on the single
-//!    baseline P2 mesh from per-facet interior SDF normal velocities `V_n = -(∂d/∂p_k) / |∇d_0|` via
-//!    a 3×3 symmetric quadric solve at boundary corners plus harmonic interior vertex smoothing.
-//!    Mechanical cases solve `2` discrete adjoints reusing one `TwoLevel` coarse Cholesky
-//!    factorization; staggered thermo-elastic cases solve `2` mechanical adjoints (`K_u λ_u = c_u`,
-//!    `K_u λ_vm = c_vm`) plus `4` scalar conduction adjoints (`A_T λ_T = B_thᵀ w`, `e_{m*}`) reusing
-//!    one `ScalarTwoLevel` Cholesky factorization (`O(1)` linear solves in parameter count `k`, zero
-//!    re-meshing).
+//! 1. `"boundary_velocity_adjoint"` — Default for solid linear-elastic, coupled steady-conduction
+//!    thermo-elastic, modal, AND stress-graded TPMS `fill` models (including anisotropic cubic
+//!    stiffness tensors, spatially varying `SpatialFn` `lerp(...)` BCs, and declarative `.fsm`
+//!    `system` blocks). Reconstructs the 3D domain velocity field `V_k` on the single baseline P2
+//!    mesh from per-facet interior SDF normal velocities `V_n = -(∂d/∂p_k) / |∇d_0|` via a 3×3
+//!    symmetric quadric solve at boundary corners plus harmonic interior vertex smoothing, and
+//!    differentiates homogenised + sub-voxel skin-occupancy material fractions smoothly on the
+//!    locked grade grid. Mechanical cases solve discrete adjoints reusing one `TwoLevel` coarse
+//!    Cholesky factorization (`O(1)` linear solves in parameter count `k`, zero re-meshing).
 //! 2. `"boundary_velocity_fixed_mesh"` — Used when nonlinear `J2` elastoplasticity (`solve
-//!    plasticity=j2`) is active. Deforms the baseline P2 mesh along `±ε V_k` with locked region
-//!    facet sets and evaluates the nonlinear elastoplastic cases on the fixed topology (zero
-//!    re-meshing).
-//! 3. `"finite_difference_remesh"` — Fallback when `doc.fill` is active or when a degenerate
-//!    perturbation cannot preserve positive element volumes on the fixed topology.
+//!    plasticity=j2`) is active on solid models. Deforms the baseline P2 mesh along `±ε V_k` with
+//!    locked region facet sets and evaluates the nonlinear elastoplastic cases on the fixed
+//!    topology (zero re-meshing).
+//! 3. `"finite_difference_remesh"` — Fallback when a degenerate perturbation cannot preserve
+//!    positive element volumes on the fixed topology.
 
 use crate::contracts::required_modes_for_asserts;
 use crate::declarative_system::resolve_system_doc;
@@ -38,9 +39,9 @@ use fieldsmith_doc::{materials, Document, LoadKind, NodeKind, PlasticityLaw};
 use fieldsmith_field::expr;
 use fieldsmith_solve::assemble::{element_stiffness, RefData};
 use fieldsmith_solve::{
-    assemble_conduction_system_spatial, element_stress, modal_mass_quadratic_form,
-    solve_conduction_multi_rhs, solve_multi_rhs, thermal_load_multi, thermal_load_transpose_multi,
-    von_mises, Material, P2Mesh, SolverOptions, ThermalRefData, V3,
+    assemble_conduction_system_spatial, element_stress_mat, min_compressive,
+    modal_mass_quadratic_form, solve_conduction_multi_rhs, solve_multi_rhs, thermal_load_multi,
+    thermal_load_transpose_multi, von_mises, Material, P2Mesh, SolverOptions, ThermalRefData, V3,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -61,6 +62,12 @@ pub struct CaseSensitivity {
     /// `∂T_max / ∂p` (°C per unit of `p`, peak nodal conduction temperature on thermal cases).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub d_max_temp: Option<f64>,
+    /// `∂U_y / ∂p` (per unit of `p`, peak non-void graded lattice yield utilization `σ_vM / σ_y*(φ)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_yield_utilization: Option<f64>,
+    /// `∂U_b / ∂p` (per unit of `p`, peak lattice elastic-buckling utilization `|σ_min| / σ_el*(φ)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_buckling_utilization: Option<f64>,
 }
 
 /// Sensitivity entry for one named `let` variable or `ParamAddr`.
@@ -70,10 +77,13 @@ pub struct ParameterSensitivity {
     pub nominal: f64,
     pub step: f64,
     pub scheme: String,
-    /// `∂m / ∂p` (g per unit of `p`).
+    /// `∂m / ∂p` (g per unit of `p`; graded mass when `doc.fill` is active).
     pub d_mass_g: f64,
     /// Dimensionless normalized mass elasticity `(p / m) · (∂m / ∂p)`.
     pub rel_mass: f64,
+    /// `∂m_solid / ∂p` (g per unit of `p`, un-filled solid body mass derivative when `doc.fill` is active).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_solid_mass_g: Option<f64>,
     /// `∂f_n / ∂p` (Hz per unit of `p`) for each solved vibration mode `n = 1..count`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub d_modes_hz: Vec<f64>,
@@ -88,16 +98,18 @@ pub struct ParameterSensitivity {
 pub struct SensitivityReport {
     /// Differentiation method provenance:
     /// - `"boundary_velocity_adjoint"` (fixed P2 topology, discrete adjoints, `O(1)` solves in `k`)
-    /// - `"boundary_velocity_fixed_mesh"` (fixed P2 topology along `V_k`, nonlinear J2 / thermal)
+    /// - `"boundary_velocity_fixed_mesh"` (fixed P2 topology along `V_k`, nonlinear J2)
     /// - `"finite_difference_remesh"` (locked baseline `h`, re-stuffed mesh fallback)
     pub method: String,
-    /// Total 3D FEA solves executed (`1 + 2 * n_cases` for `"boundary_velocity_adjoint"`,
-    /// independent of parameter count `k`).
+    /// Total 3D FEA solves executed (`O(1)` independent of parameter count `k` for
+    /// `"boundary_velocity_adjoint"`).
     pub solves_run: usize,
     pub h: f64,
     pub nodes: usize,
     pub elements: usize,
     pub baseline_mass_g: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_solid_mass_g: Option<f64>,
     pub baseline_compliance: Vec<(String, f64)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub baseline_modes_hz: Vec<f64>,
@@ -258,6 +270,17 @@ fn fixed_mesh_mass_grams(mesh: &P2Mesh, rho_elem: &[f64]) -> f64 {
     mass_mm3_g_cm3 / 1000.0
 }
 
+fn is_fill_param_target(doc: &Document, addr: &ParamAddr) -> bool {
+    addr.id == "fill"
+        && !addr.attr.is_empty()
+        && doc.find("fill").is_none()
+        && doc.custom_materials.iter().all(|m| m.id != "fill")
+        && doc.loads.iter().all(|l| l.id != "fill")
+        && doc.temperatures.iter().all(|t| t.id != "fill")
+        && doc.convections.iter().all(|c| c.id != "fill")
+        && doc.heat_fluxes.iter().all(|f| f.id != "fill")
+}
+
 pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &doc.system_block {
@@ -265,6 +288,26 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
                 return Ok(dp.nominal);
             }
         }
+    }
+    if is_fill_param_target(doc, addr) {
+        let f = doc
+            .fill
+            .as_ref()
+            .ok_or_else(|| format!("param {addr}: document has no fill"))?;
+        return match (addr.attr.as_str(), addr.comp) {
+            ("rho_min", None) | ("rho", Some(0)) => Ok(f.rho_min),
+            ("rho_max", None) | ("rho", Some(1)) => Ok(f.rho_max),
+            ("skin", None) => Ok(f.skin),
+            ("skin_max", None) => Ok(f.skin_max.unwrap_or(f.skin)),
+            ("cell", None) => Ok(f.cell),
+            ("cell_min", None) => Ok(f.cell_min.unwrap_or(f.cell)),
+            ("curve", None) => Ok(f.curve),
+            ("wall" | "min_wall", None) => Ok(f.min_wall),
+            ("margin", None) => Ok(f.margin),
+            ("erode", None) => Ok(f.erode.unwrap_or(0.0)),
+            ("rotate", Some(i)) if i < 3 => Ok(f.rotate[i]),
+            _ => Err(format!("param {addr}: unsupported fill parameter")),
+        };
     }
     if !addr.attr.is_empty() && addr.comp.is_none() {
         if let Some(m) = doc.custom_materials.iter().find(|m| m.id == addr.id) {
@@ -365,6 +408,99 @@ pub(crate) fn apply_sens_param(
             }
         }
     }
+    if is_fill_param_target(doc, addr) {
+        let f = doc
+            .fill
+            .as_mut()
+            .ok_or_else(|| format!("param {addr}: document has no fill"))?;
+        return match (addr.attr.as_str(), addr.comp) {
+            ("rho_min", None) | ("rho", Some(0)) => {
+                if val <= 0.0 || val > f.rho_max || val > 1.0 {
+                    return Err(format!(
+                        "param {addr}: fill rho_min must satisfy 0 < rho_min <= rho_max <= 1"
+                    ));
+                }
+                f.rho_min = val;
+                Ok(())
+            }
+            ("rho_max", None) | ("rho", Some(1)) => {
+                if val <= 0.0 || val < f.rho_min || val > 1.0 {
+                    return Err(format!(
+                        "param {addr}: fill rho_max must satisfy 0 < rho_min <= rho_max <= 1"
+                    ));
+                }
+                f.rho_max = val;
+                Ok(())
+            }
+            ("skin", None) => {
+                if val < 0.0 || f.skin_max.is_some_and(|sm| val > sm) {
+                    return Err(format!(
+                        "param {addr}: fill skin must be >= 0 and <= skin_max"
+                    ));
+                }
+                f.skin = val;
+                Ok(())
+            }
+            ("skin_max", None) => {
+                if val < f.skin {
+                    return Err(format!("param {addr}: fill skin_max must be >= skin"));
+                }
+                f.skin_max = Some(val);
+                Ok(())
+            }
+            ("cell", None) => {
+                if val <= 0.0 || f.cell_min.is_some_and(|cm| cm > val) {
+                    return Err(format!(
+                        "param {addr}: fill cell must be > 0 and >= cell_min"
+                    ));
+                }
+                f.cell = val;
+                Ok(())
+            }
+            ("cell_min", None) => {
+                if val <= 0.0 || val > f.cell {
+                    return Err(format!(
+                        "param {addr}: fill cell_min must satisfy 0 < cell_min <= cell"
+                    ));
+                }
+                f.cell_min = Some(val);
+                Ok(())
+            }
+            ("curve", None) => {
+                if val <= 0.0 {
+                    return Err(format!("param {addr}: fill curve must be > 0"));
+                }
+                f.curve = val;
+                Ok(())
+            }
+            ("wall" | "min_wall", None) => {
+                if val < 0.0 {
+                    return Err(format!("param {addr}: fill min_wall must be >= 0"));
+                }
+                f.min_wall = val;
+                Ok(())
+            }
+            ("margin", None) => {
+                if val < 0.0 {
+                    return Err(format!("param {addr}: fill margin must be >= 0"));
+                }
+                f.margin = val;
+                Ok(())
+            }
+            ("erode", None) => {
+                if val < 0.0 {
+                    return Err(format!("param {addr}: fill erode must be >= 0"));
+                }
+                f.erode = Some(val);
+                Ok(())
+            }
+            ("rotate", Some(i)) if i < 3 => {
+                f.rotate[i] = val;
+                Ok(())
+            }
+            _ => Err(format!("param {addr}: unsupported fill parameter")),
+        };
+    }
     if !addr.attr.is_empty() && addr.comp.is_none() {
         if let Some(m) = doc.custom_materials.iter_mut().find(|m| m.id == addr.id) {
             return match addr.attr.as_str() {
@@ -454,6 +590,13 @@ pub(crate) fn default_target_params(doc: &Document, params: &[String]) -> Vec<St
         for dp in &sb.designs {
             if !bound_lets.contains(dp.name.as_str()) && !names.iter().any(|n| n == &dp.name) {
                 names.push(dp.name.clone());
+            }
+        }
+    }
+    if doc.fill.is_some() && doc.find("fill").is_none() {
+        for fp in ["fill.rho_min", "fill.rho_max", "fill.skin", "fill.cell"] {
+            if !names.iter().any(|n| n == fp) {
+                names.push(fp.to_string());
             }
         }
     }
@@ -686,6 +829,17 @@ struct LinearCaseAdjoint {
     lambda_u: Vec<f64>,
     e_star: usize,
     lambda_vm: Vec<f64>,
+    yield_util: Option<(usize, Vec<f64>)>,
+    buckling_util: Option<(usize, Vec<f64>)>,
+}
+
+struct GradedAdjointCtx<'a> {
+    spec: &'a fieldsmith_doc::Fill,
+    yield_strength: f64,
+    young_solid: f64,
+    class: &'a [u8],
+    rho_elem: &'a [f64],
+    sigma_min_elem: &'a [f64],
 }
 
 struct ThermalCaseAdjoint {
@@ -710,14 +864,14 @@ fn peak_temperature_opt(t: Option<&[f64]>) -> Option<f64> {
     t.map(|vals| vals.iter().copied().fold(f64::NEG_INFINITY, f64::max))
 }
 
-fn build_linear_case_adjoint(
+fn build_linear_case_adjoint_mat(
     mesh: &P2Mesh,
-    young: &[f64],
-    poisson: f64,
+    mat: &Material,
     fixed: &[u8],
     u_0: &[f64],
     vm_elem: &[f64],
-) -> Result<LinearCaseAdjoint, SetupError> {
+    graded_ctx: Option<&GradedAdjointCtx<'_>>,
+) -> Result<(LinearCaseAdjoint, usize), SetupError> {
     let ndofs = mesh.ndofs();
     let nn = mesh.nodes.len();
 
@@ -760,7 +914,6 @@ fn build_linear_case_adjoint(
         }
         let du = 1e-7 * max_u_loc.max(1.0);
         let mut u_work = u_0.to_vec();
-        let e_young = young[e_star];
         for &n in &tet {
             let ni = n as usize;
             for c in 0..3 {
@@ -770,29 +923,178 @@ fn build_linear_case_adjoint(
                 let dof = 3 * ni + c;
                 let orig = u_work[dof];
                 u_work[dof] = orig + du;
-                let vm_hi = von_mises(&element_stress(
-                    mesh, &u_work, e_star, e_young, poisson, [0.25; 3],
-                ));
+                let vm_hi = von_mises(&element_stress_mat(mesh, &u_work, e_star, mat, [0.25; 3]));
                 u_work[dof] = orig - du;
-                let vm_lo = von_mises(&element_stress(
-                    mesh, &u_work, e_star, e_young, poisson, [0.25; 3],
-                ));
+                let vm_lo = von_mises(&element_stress_mat(mesh, &u_work, e_star, mat, [0.25; 3]));
                 u_work[dof] = orig;
                 c_vm[dof] = (vm_hi - vm_lo) / (2.0 * du);
             }
         }
     }
 
-    let mat = Material::iso(young.to_vec(), poisson);
-    let mut solved = solve_multi_rhs(mesh, &mat, fixed, &[c_u, c_vm], SolverOptions::default())
+    let mut rhs_list = vec![c_u, c_vm];
+    let mut uy_elem: Option<usize> = None;
+    let mut ub_elem: Option<usize> = None;
+
+    if let Some(gctx) = graded_ctx {
+        if gctx.yield_strength > 0.0 && !mesh.tets.is_empty() {
+            let mut e_y = None;
+            let mut uy_max = 0.0f64;
+            let mut sy_at_star = 0.0f64;
+            for (e, &vm) in vm_elem.iter().enumerate().take(mesh.tets.len()) {
+                if gctx.class[e] == crate::fill::CLASS_VOID {
+                    continue;
+                }
+                let sy = crate::fill::strength_extended(
+                    gctx.spec.family,
+                    gctx.spec.mode,
+                    gctx.yield_strength,
+                    gctx.rho_elem[e],
+                );
+                if sy <= 1e-30 {
+                    continue;
+                }
+                let r = vm / sy;
+                if r > uy_max {
+                    uy_max = r;
+                    e_y = Some(e);
+                    sy_at_star = sy;
+                }
+            }
+            if let Some(ey) = e_y {
+                let mut c_uy = vec![0.0f64; ndofs];
+                let tet = mesh.tets[ey];
+                let mut max_u_loc = 0.0f64;
+                for &n in &tet {
+                    for c in 0..3 {
+                        max_u_loc = max_u_loc.max(u_0[3 * n as usize + c].abs());
+                    }
+                }
+                let du = 1e-7 * max_u_loc.max(1.0);
+                let mut u_work = u_0.to_vec();
+                for &n in &tet {
+                    let ni = n as usize;
+                    for c in 0..3 {
+                        if is_fixed_dof(fixed, ni, c) {
+                            continue;
+                        }
+                        let dof = 3 * ni + c;
+                        let orig = u_work[dof];
+                        u_work[dof] = orig + du;
+                        let vm_hi =
+                            von_mises(&element_stress_mat(mesh, &u_work, ey, mat, [0.25; 3]));
+                        u_work[dof] = orig - du;
+                        let vm_lo =
+                            von_mises(&element_stress_mat(mesh, &u_work, ey, mat, [0.25; 3]));
+                        u_work[dof] = orig;
+                        c_uy[dof] = (vm_hi - vm_lo) / (2.0 * du * sy_at_star);
+                    }
+                }
+                uy_elem = Some(ey);
+                rhs_list.push(c_uy);
+            }
+        }
+
+        if !mesh.tets.is_empty() {
+            let mut e_b = None;
+            let mut ub_max = 0.0f64;
+            let mut sb_at_star = 0.0f64;
+            for (e, (&cls, &smin)) in gctx
+                .class
+                .iter()
+                .zip(gctx.sigma_min_elem)
+                .enumerate()
+                .take(mesh.tets.len())
+            {
+                if cls != crate::fill::CLASS_LATTICE {
+                    continue;
+                }
+                let sc = -smin;
+                if sc <= 0.0 {
+                    continue;
+                }
+                let sb = crate::fill::buckling_extended(
+                    gctx.spec.family,
+                    gctx.spec.mode,
+                    gctx.young_solid,
+                    gctx.rho_elem[e],
+                );
+                if sb <= 1e-30 {
+                    continue;
+                }
+                let r = sc / sb;
+                if r > ub_max {
+                    ub_max = r;
+                    e_b = Some(e);
+                    sb_at_star = sb;
+                }
+            }
+            if let Some(eb) = e_b {
+                let mut c_ub = vec![0.0f64; ndofs];
+                let tet = mesh.tets[eb];
+                let mut max_u_loc = 0.0f64;
+                for &n in &tet {
+                    for c in 0..3 {
+                        max_u_loc = max_u_loc.max(u_0[3 * n as usize + c].abs());
+                    }
+                }
+                let du = 1e-7 * max_u_loc.max(1.0);
+                let mut u_work = u_0.to_vec();
+                for &n in &tet {
+                    let ni = n as usize;
+                    for c in 0..3 {
+                        if is_fixed_dof(fixed, ni, c) {
+                            continue;
+                        }
+                        let dof = 3 * ni + c;
+                        let orig = u_work[dof];
+                        u_work[dof] = orig + du;
+                        let sc_hi = -min_compressive(&element_stress_mat(
+                            mesh, &u_work, eb, mat, [0.25; 3],
+                        ));
+                        u_work[dof] = orig - du;
+                        let sc_lo = -min_compressive(&element_stress_mat(
+                            mesh, &u_work, eb, mat, [0.25; 3],
+                        ));
+                        u_work[dof] = orig;
+                        c_ub[dof] = (sc_hi - sc_lo) / (2.0 * du * sb_at_star);
+                    }
+                }
+                ub_elem = Some(eb);
+                rhs_list.push(c_ub);
+            }
+        }
+    }
+
+    let n_rhs = rhs_list.len();
+    let mut solved = solve_multi_rhs(mesh, mat, fixed, &rhs_list, SolverOptions::default())
         .map_err(SetupError)?;
+    let buckling_util = ub_elem.map(|eb| (eb, solved.pop().expect("c_ub solution").0));
+    let yield_util = uy_elem.map(|ey| (ey, solved.pop().expect("c_uy solution").0));
     let (lambda_vm, _) = solved.pop().expect("c_vm solution");
     let (lambda_u, _) = solved.pop().expect("c_u solution");
-    Ok(LinearCaseAdjoint {
-        lambda_u,
-        e_star,
-        lambda_vm,
-    })
+    Ok((
+        LinearCaseAdjoint {
+            lambda_u,
+            e_star,
+            lambda_vm,
+            yield_util,
+            buckling_util,
+        },
+        n_rhs,
+    ))
+}
+
+fn build_linear_case_adjoint(
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    fixed: &[u8],
+    u_0: &[f64],
+    vm_elem: &[f64],
+) -> Result<LinearCaseAdjoint, SetupError> {
+    let mat = Material::iso(young.to_vec(), poisson);
+    build_linear_case_adjoint_mat(mesh, &mat, fixed, u_0, vm_elem, None).map(|(adj, _)| adj)
 }
 
 /// Precompute staggered thermo-elastic discrete adjoints (`K_u λ_u = c_u`, `K_u λ_vm = c_vm`,
@@ -983,15 +1285,13 @@ fn assemble_conduction_lifted_residual(
 }
 
 /// Matrix-free assembly of `(K(mesh_hi, mat_hi) - K(mesh_lo, mat_lo)) / denom * u_0`
-/// over all P2 tetrahedra, zeroing Dirichlet-fixed DOFs.
+/// over all P2 tetrahedra (isotropic or cubic anisotropic TPMS elements), zeroing Dirichlet-fixed DOFs.
 #[allow(clippy::too_many_arguments)]
 fn stiffness_matvec_derivative(
     mesh_hi: &P2Mesh,
-    young_hi: &[f64],
-    nu_hi: f64,
+    mat_hi: &Material,
     mesh_lo: &P2Mesh,
-    young_lo: &[f64],
-    nu_lo: f64,
+    mat_lo: &Material,
     u_0: &[f64],
     fixed: &[u8],
     denom: f64,
@@ -1000,8 +1300,14 @@ fn stiffness_matvec_derivative(
     let mut dk_u = vec![0.0f64; mesh_hi.ndofs()];
     let inv_denom = 1.0 / denom;
     for (e, tet) in mesh_hi.tets.iter().enumerate() {
-        let ke_hi = element_stiffness(mesh_hi, e, young_hi[e], nu_hi, rd);
-        let ke_lo = element_stiffness(mesh_lo, e, young_lo[e], nu_lo, rd);
+        let ke_hi = match mat_hi.cubic.as_ref().and_then(|cs| cs[e].as_ref()) {
+            Some(c) => fieldsmith_solve::ortho::element_stiffness_cubic(mesh_hi, e, c, rd),
+            None => element_stiffness(mesh_hi, e, mat_hi.young[e], mat_hi.poisson, rd),
+        };
+        let ke_lo = match mat_lo.cubic.as_ref().and_then(|cs| cs[e].as_ref()) {
+            Some(c) => fieldsmith_solve::ortho::element_stiffness_cubic(mesh_lo, e, c, rd),
+            None => element_stiffness(mesh_lo, e, mat_lo.young[e], mat_lo.poisson, rd),
+        };
         let mut u_loc = [0.0f64; 30];
         for (a, &na) in tet.iter().enumerate() {
             let base_idx = 3 * na as usize;
@@ -1065,6 +1371,8 @@ fn modal_rayleigh_sensitivities(
 ) -> (Vec<f64>, Vec<f64>) {
     let rho_hi = modal_density_ns2_mm4(mesh_hi, &props_hi.rho_elem, props_hi.base_mat.density);
     let rho_lo = modal_density_ns2_mm4(mesh_lo, &props_lo.rho_elem, props_lo.base_mat.density);
+    let mat_hi = Material::iso(props_hi.young.clone(), props_hi.base_mat.nu);
+    let mat_lo = Material::iso(props_lo.young.clone(), props_lo.base_mat.nu);
     let n_modes = modal
         .frequencies
         .len()
@@ -1077,18 +1385,8 @@ fn modal_rayleigh_sensitivities(
         let phi = &modal.shapes[m];
         let lambda = modal.eigenvalues[m];
         let f_hz = modal.frequencies[m];
-        let dk_phi = stiffness_matvec_derivative(
-            mesh_hi,
-            &props_hi.young,
-            props_hi.base_mat.nu,
-            mesh_lo,
-            &props_lo.young,
-            props_lo.base_mat.nu,
-            phi,
-            fixed,
-            denom,
-            rd,
-        );
+        let dk_phi =
+            stiffness_matvec_derivative(mesh_hi, &mat_hi, mesh_lo, &mat_lo, phi, fixed, denom, rd);
         let dk_dp = dot_slice(phi, &dk_phi);
         let m_hi = modal_mass_quadratic_form(mesh_hi, rho_hi, phi);
         let m_lo = modal_mass_quadratic_form(mesh_lo, rho_lo, phi);
@@ -1243,9 +1541,9 @@ fn evaluate_cases_on_fixed_mesh(
 }
 
 /// Compute 3D P2 sensitivities for `params` (if non-empty) or all non-derived `let` / `system`
-/// design variables in `doc`, using fixed-topology boundary-velocity discrete mechanical &
-/// staggered thermo-elastic adjoints (`O(1)` linear solves in parameter count `k`) whenever
-/// `solve plasticity=j2` is not active.
+/// design / `fill.*` variables in `doc`, using fixed-topology boundary-velocity discrete
+/// mechanical, staggered thermo-elastic, and graded TPMS lattice adjoints (`O(1)` linear solves in
+/// parameter count `k`) whenever `solve plasticity=j2` is not active.
 pub fn compute_sensitivities(
     doc: &Document,
     params: &[String],
@@ -1253,12 +1551,21 @@ pub fn compute_sensitivities(
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
     let t0 = clock();
-    if doc.fill.is_some() {
-        return compute_sensitivities_remesh(doc, params, res, clock);
-    }
     let sys_doc_0 = resolve_system_doc(doc)?;
     let modes_count = required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts);
     let base = analyse_full(sys_doc_0.as_ref(), res, clock, modes_count, false)?;
+    if doc.fill.is_some() {
+        let graded_0 = crate::fill::graded_of(sys_doc_0.as_ref(), &base, clock, false)?;
+        return compute_sensitivities_graded_with_base(
+            doc,
+            sys_doc_0.as_ref(),
+            &base,
+            &graded_0,
+            params,
+            t0,
+            clock,
+        );
+    }
     compute_sensitivities_with_base(doc, sys_doc_0.as_ref(), &base, params, t0, clock)
 }
 
@@ -1272,7 +1579,16 @@ pub(crate) fn compute_sensitivities_with_base(
 ) -> Result<SensitivityReport, SetupError> {
     let targets = default_target_params(doc, params);
     if doc.fill.is_some() {
-        return compute_sensitivities_remesh_with_base(doc, &targets, base, t0, clock);
+        let graded_0 = crate::fill::graded_of(sys_doc_0_ref, base, clock, false)?;
+        return compute_sensitivities_graded_with_base(
+            doc,
+            sys_doc_0_ref,
+            base,
+            &graded_0,
+            params,
+            t0,
+            clock,
+        );
     }
 
     let sys_doc_0 = std::borrow::Cow::Borrowed(sys_doc_0_ref);
@@ -1441,6 +1757,8 @@ pub(crate) fn compute_sensitivities_with_base(
         let sdoc_lo = structural_doc(d_lo_sys.as_ref());
         let props_hi = eval_element_materials(sdoc_hi.as_ref(), &locked_elem_mats)?;
         let props_lo = eval_element_materials(sdoc_lo.as_ref(), &locked_elem_mats)?;
+        let mat_hi = Material::iso(props_hi.young.clone(), props_hi.base_mat.nu);
+        let mat_lo = Material::iso(props_lo.young.clone(), props_lo.base_mat.nu);
 
         let m_hi = fixed_mesh_mass_grams(&mesh_hi, &props_hi.rho_elem);
         let m_lo = fixed_mesh_mass_grams(&mesh_lo, &props_lo.rho_elem);
@@ -1479,11 +1797,9 @@ pub(crate) fn compute_sensitivities_with_base(
 
                         let dk_u = stiffness_matvec_derivative(
                             &mesh_hi,
-                            &props_hi.young,
-                            props_hi.base_mat.nu,
+                            &mat_hi,
                             &mesh_lo,
-                            &props_lo.young,
-                            props_lo.base_mat.nu,
+                            &mat_lo,
                             &bc.u,
                             &base.fixed,
                             denom,
@@ -1497,21 +1813,11 @@ pub(crate) fn compute_sensitivities_with_base(
                         let d_vm_explicit = if bc.max_vm_elem > 1e-30 && !base.mesh.tets.is_empty()
                         {
                             let e_star = adj.e_star;
-                            let vm_hi = von_mises(&element_stress(
-                                &mesh_hi,
-                                &bc.u,
-                                e_star,
-                                props_hi.young[e_star],
-                                props_hi.base_mat.nu,
-                                [0.25; 3],
+                            let vm_hi = von_mises(&element_stress_mat(
+                                &mesh_hi, &bc.u, e_star, &mat_hi, [0.25; 3],
                             ));
-                            let vm_lo = von_mises(&element_stress(
-                                &mesh_lo,
-                                &bc.u,
-                                e_star,
-                                props_lo.young[e_star],
-                                props_lo.base_mat.nu,
-                                [0.25; 3],
+                            let vm_lo = von_mises(&element_stress_mat(
+                                &mesh_lo, &bc.u, e_star, &mat_lo, [0.25; 3],
                             ));
                             (vm_hi - vm_lo) / denom
                         } else {
@@ -1526,6 +1832,8 @@ pub(crate) fn compute_sensitivities_with_base(
                             d_max_displacement,
                             d_max_vm_elem,
                             d_max_temp: None,
+                            d_yield_utilization: None,
+                            d_buckling_utilization: None,
                         });
                     }
                     CaseAdjoint::Thermal(tadj) => {
@@ -1570,6 +1878,8 @@ pub(crate) fn compute_sensitivities_with_base(
                                 d_max_displacement: 0.0,
                                 d_max_vm_elem: 0.0,
                                 d_max_temp: Some(d_max_temp),
+                                d_yield_utilization: None,
+                                d_buckling_utilization: None,
                             });
                         } else {
                             let alphas_hi: Vec<f64> = props_hi
@@ -1615,11 +1925,9 @@ pub(crate) fn compute_sensitivities_with_base(
 
                             let dk_u = stiffness_matvec_derivative(
                                 &mesh_hi,
-                                &props_hi.young,
-                                props_hi.base_mat.nu,
+                                &mat_hi,
                                 &mesh_lo,
-                                &props_lo.young,
-                                props_lo.base_mat.nu,
+                                &mat_lo,
                                 &bc.u,
                                 &base.fixed,
                                 denom,
@@ -1639,21 +1947,11 @@ pub(crate) fn compute_sensitivities_with_base(
                             let d_vm_explicit =
                                 if bc.max_vm_elem > 1e-30 && !base.mesh.tets.is_empty() {
                                     let e_star = tadj.e_star;
-                                    let vm_hi = von_mises(&element_stress(
-                                        &mesh_hi,
-                                        &bc.u,
-                                        e_star,
-                                        props_hi.young[e_star],
-                                        props_hi.base_mat.nu,
-                                        [0.25; 3],
+                                    let vm_hi = von_mises(&element_stress_mat(
+                                        &mesh_hi, &bc.u, e_star, &mat_hi, [0.25; 3],
                                     ));
-                                    let vm_lo = von_mises(&element_stress(
-                                        &mesh_lo,
-                                        &bc.u,
-                                        e_star,
-                                        props_lo.young[e_star],
-                                        props_lo.base_mat.nu,
-                                        [0.25; 3],
+                                    let vm_lo = von_mises(&element_stress_mat(
+                                        &mesh_lo, &bc.u, e_star, &mat_lo, [0.25; 3],
                                     ));
                                     (vm_hi - vm_lo) / denom
                                 } else {
@@ -1670,6 +1968,8 @@ pub(crate) fn compute_sensitivities_with_base(
                                 d_max_displacement,
                                 d_max_vm_elem,
                                 d_max_temp: Some(d_max_temp),
+                                d_yield_utilization: None,
+                                d_buckling_utilization: None,
                             });
                         }
                     }
@@ -1681,6 +1981,8 @@ pub(crate) fn compute_sensitivities_with_base(
                             d_max_displacement: 0.0,
                             d_max_vm_elem: 0.0,
                             d_max_temp: None,
+                            d_yield_utilization: None,
+                            d_buckling_utilization: None,
                         });
                     }
                 }
@@ -1752,6 +2054,8 @@ pub(crate) fn compute_sensitivities_with_base(
                     d_max_displacement: (hm.max_displacement - lm.max_displacement) / denom,
                     d_max_vm_elem: (hm.max_vm_elem - lm.max_vm_elem) / denom,
                     d_max_temp,
+                    d_yield_utilization: None,
+                    d_buckling_utilization: None,
                 });
             }
         }
@@ -1779,6 +2083,7 @@ pub(crate) fn compute_sensitivities_with_base(
             scheme: scheme.to_string(),
             d_mass_g,
             rel_mass,
+            d_solid_mass_g: None,
             d_modes_hz,
             rel_modes,
             cases,
@@ -1798,6 +2103,7 @@ pub(crate) fn compute_sensitivities_with_base(
         nodes: base.provenance.nodes,
         elements: base.provenance.elements,
         baseline_mass_g: base_mass,
+        baseline_solid_mass_g: None,
         baseline_compliance: base
             .cases
             .iter()
@@ -1813,10 +2119,600 @@ pub(crate) fn compute_sensitivities_with_base(
     })
 }
 
+/// Fixed-topology boundary-velocity discrete adjoint sensitivity operator (`O(1)` linear solves
+/// in parameter count `k`) for stress-graded TPMS `fill` models across both `fill.*` lattice
+/// parameters and outer 3D geometry `let` / `system` design variables.
+pub(crate) fn compute_sensitivities_graded_with_base(
+    doc: &Document,
+    sys_doc_0_ref: &Document,
+    solid_base: &Analysis,
+    graded_0: &crate::fill::Graded,
+    params: &[String],
+    t0: f64,
+    clock: Clock,
+) -> Result<SensitivityReport, SetupError> {
+    let targets = default_target_params(doc, params);
+    let sys_doc_0 = std::borrow::Cow::Borrowed(sys_doc_0_ref);
+    let sdoc_0_cow = structural_doc(sys_doc_0.as_ref());
+    let sdoc_0 = sdoc_0_cow.as_ref();
+    let base_h = solid_base.provenance.element_size;
+    let locked_elem_mats = lock_element_material_ids(sdoc_0, &solid_base.mesh, base_h)?;
+    let elem_props_0 = eval_element_materials(sdoc_0, &locked_elem_mats)?;
+    let smooth_0 = crate::fill::prepare_graded_smooth_baseline(
+        sdoc_0,
+        solid_base,
+        graded_0,
+        &elem_props_0.rho_elem,
+    )?;
+    let base_mass = graded_0.mass_g;
+    let base_solid_mass = graded_0.solid_mass_g;
+
+    let facets: Vec<Facet> = solid_base
+        .surface
+        .iter()
+        .map(|&nodes| Facet { nodes })
+        .collect();
+
+    let mut exact_region_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for l in &sdoc_0.loads {
+        if !exact_region_map.contains_key(&l.region) {
+            exact_region_map.insert(
+                l.region.clone(),
+                region_facets_exact(sdoc_0, &l.region, &solid_base.mesh, &facets, base_h)?,
+            );
+        }
+    }
+    let mut thermal_region_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for reg_id in sdoc_0
+        .temperatures
+        .iter()
+        .map(|t| &t.region)
+        .chain(sdoc_0.convections.iter().map(|c| &c.region))
+        .chain(sdoc_0.heat_fluxes.iter().map(|f| &f.region))
+    {
+        if !thermal_region_map.contains_key(reg_id) {
+            thermal_region_map.insert(
+                reg_id.clone(),
+                region_facets(sdoc_0, reg_id, &solid_base.mesh, &facets, base_h)?,
+            );
+        }
+    }
+    let exact_lookup = |rid: &str| -> Result<Vec<usize>, SetupError> {
+        exact_region_map
+            .get(rid)
+            .cloned()
+            .ok_or_else(|| SetupError(format!("unknown load region '{rid}'")))
+    };
+    let thermal_lookup = |rid: &str| -> Result<Vec<usize>, SetupError> {
+        thermal_region_map
+            .get(rid)
+            .cloned()
+            .ok_or_else(|| SetupError(format!("unknown thermal region '{rid}'")))
+    };
+
+    let mech_cases = case_names(sdoc_0);
+    let thermal_cases = sdoc_0.thermal_cases();
+    let mut base_alphas = Vec::new();
+    if !thermal_cases.is_empty() {
+        let has_supports = solid_base.fixed.iter().any(|&m| m != 0);
+        if has_supports {
+            for &a in &elem_props_0.alpha_elem {
+                base_alphas.push(a.ok_or_else(|| {
+                    SetupError(
+                        "thermal case sensitivity requires a material thermal-expansion coefficient"
+                            .into(),
+                    )
+                })?);
+            }
+        } else {
+            base_alphas.resize(elem_props_0.alpha_elem.len(), 0.0);
+        }
+    }
+
+    let base_static_solves = mech_cases.len() + thermal_cases.len();
+    let base_modal_solves = usize::from(solid_base.modes.is_some());
+    let mut solves_run = (2 * base_static_solves + base_modal_solves).max(1);
+    let mut adjoints: Vec<CaseAdjoint> = Vec::new();
+    if !targets.is_empty() {
+        for gc in &graded_0.cases {
+            let gctx = GradedAdjointCtx {
+                spec: &graded_0.spec,
+                yield_strength: elem_props_0.base_mat.yield_strength,
+                young_solid: elem_props_0.base_mat.e,
+                class: &graded_0.class,
+                rho_elem: &graded_0.rho_elem,
+                sigma_min_elem: &gc.sigma_min_elem,
+            };
+            let (adj, adj_solves) = build_linear_case_adjoint_mat(
+                &solid_base.mesh,
+                &smooth_0.material_0,
+                &solid_base.fixed,
+                &gc.u,
+                &gc.vm_elem,
+                Some(&gctx),
+            )?;
+            solves_run += adj_solves;
+            adjoints.push(CaseAdjoint::Mechanical(adj));
+        }
+        for (t_idx, gc) in graded_0.thermal_cases.iter().enumerate() {
+            let tname = &thermal_cases[t_idx];
+            let (tadj, extra_solves) = build_thermal_case_adjoint(
+                sdoc_0,
+                &solid_base.mesh,
+                &facets,
+                base_h,
+                tname,
+                &smooth_0.k_elem_0,
+                &graded_0.young,
+                elem_props_0.base_mat.nu,
+                &base_alphas,
+                &solid_base.fixed,
+                gc,
+                &thermal_lookup,
+            )?;
+            solves_run += extra_solves;
+            adjoints.push(CaseAdjoint::Thermal(tadj));
+        }
+    }
+
+    let e0 = expr::compile_body(sdoc_0);
+    let vert_adj = build_vertex_adjacency(&solid_base.mesh);
+    let rd = RefData::new();
+    let th_rd = ThermalRefData::new();
+    let mut out_params = Vec::with_capacity(targets.len());
+
+    for pname in &targets {
+        let addr = ParamAddr::parse(pname).map_err(SetupError)?;
+        let p0 = read_param_value(doc, &addr).map_err(SetupError)?;
+        let vel = if is_fill_param_target(doc, &addr) {
+            vec![[0.0; 3]; solid_base.mesh.nodes.len()]
+        } else {
+            compute_mesh_velocity(
+                doc,
+                &addr,
+                p0,
+                &e0,
+                &solid_base.mesh,
+                &facets,
+                &vert_adj,
+                base_h,
+            )?
+        };
+        let v_max = vel
+            .iter()
+            .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0f64, f64::max);
+
+        // `FillExpr.param` stores `f32` (`~1.2e-7` relative precision); `2e-3 * |p0|` stays
+        // >10,000× above `f32` quantization while keeping `O(eps_p²)` truncation < 1e-5.
+        let mut eps_p = (2e-3 * p0.abs()).max(5e-4);
+        if v_max > 0.0 {
+            eps_p = eps_p.min(0.02 * base_h.max(1e-4) / v_max);
+        }
+
+        let mut d_plus = doc.clone();
+        let mut d_minus = doc.clone();
+        let ok_plus = apply_sens_param(&mut d_plus, &addr, p0 + eps_p);
+        let ok_minus = apply_sens_param(&mut d_minus, &addr, p0 - eps_p);
+
+        let (d_hi_raw, delta_hi, d_lo_raw, delta_lo, denom, scheme) = match (ok_plus, ok_minus) {
+            (Ok(()), Ok(())) => (&d_plus, eps_p, &d_minus, -eps_p, 2.0 * eps_p, "central"),
+            (Ok(()), Err(_)) => (&d_plus, eps_p, doc, 0.0, eps_p, "forward"),
+            (Err(_), Ok(())) => (doc, 0.0, &d_minus, -eps_p, eps_p, "backward"),
+            (Err(ep), Err(_)) => return Err(SetupError(ep)),
+        };
+
+        let (Some(mesh_hi), Some(mesh_lo)) = (
+            deform_mesh_checked(&solid_base.mesh, &vel, delta_hi),
+            deform_mesh_checked(&solid_base.mesh, &vel, delta_lo),
+        ) else {
+            return compute_sensitivities_remesh_graded_with_base(
+                doc, &targets, solid_base, graded_0, t0, clock,
+            );
+        };
+
+        let d_hi_sys = if scheme == "backward" {
+            std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
+        } else {
+            resolve_system_doc(d_hi_raw)?
+        };
+        let d_lo_sys = if scheme == "forward" {
+            std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
+        } else {
+            resolve_system_doc(d_lo_raw)?
+        };
+
+        let sdoc_hi = structural_doc(d_hi_sys.as_ref());
+        let sdoc_lo = structural_doc(d_lo_sys.as_ref());
+        let elem_props_hi = eval_element_materials(sdoc_hi.as_ref(), &locked_elem_mats)?;
+        let elem_props_lo = eval_element_materials(sdoc_lo.as_ref(), &locked_elem_mats)?;
+        let gprops_hi = crate::fill::eval_graded_perturbed_props(
+            sdoc_hi.as_ref(),
+            &mesh_hi,
+            base_h,
+            graded_0,
+            &smooth_0,
+            &elem_props_hi.rho_elem,
+        )?;
+        let gprops_lo = crate::fill::eval_graded_perturbed_props(
+            sdoc_lo.as_ref(),
+            &mesh_lo,
+            base_h,
+            graded_0,
+            &smooth_0,
+            &elem_props_lo.rho_elem,
+        )?;
+
+        let d_mass_g = (gprops_hi.mass_g - gprops_lo.mass_g) / denom;
+        let d_solid_mass_g = (gprops_hi.solid_mass_g - gprops_lo.solid_mass_g) / denom;
+        let rel_mass = rel_elasticity(p0, base_mass, d_mass_g);
+
+        let all_graded_cases: Vec<&CaseResult> = graded_0
+            .cases
+            .iter()
+            .chain(graded_0.thermal_cases.iter())
+            .collect();
+        let mut cases = Vec::with_capacity(all_graded_cases.len());
+
+        for (idx, gc) in all_graded_cases.iter().enumerate() {
+            match &adjoints[idx] {
+                CaseAdjoint::Mechanical(adj) => {
+                    let cname = &mech_cases[idx];
+                    let (mut f_hi, _, _) = case_force_report_with_regions(
+                        sdoc_hi.as_ref(),
+                        &mesh_hi,
+                        &facets,
+                        cname,
+                        base_h,
+                        Some(&exact_lookup),
+                    )?;
+                    let (mut f_lo, _, _) = case_force_report_with_regions(
+                        sdoc_lo.as_ref(),
+                        &mesh_lo,
+                        &facets,
+                        cname,
+                        base_h,
+                        Some(&exact_lookup),
+                    )?;
+                    zero_fixed_dofs(&mut f_hi, &solid_base.fixed);
+                    zero_fixed_dofs(&mut f_lo, &solid_base.fixed);
+                    let df_dp: Vec<f64> = f_hi
+                        .iter()
+                        .zip(&f_lo)
+                        .map(|(fh, fl)| (fh - fl) / denom)
+                        .collect();
+
+                    let dk_u = stiffness_matvec_derivative(
+                        &mesh_hi,
+                        &gprops_hi.material,
+                        &mesh_lo,
+                        &gprops_lo.material,
+                        &gc.u,
+                        &solid_base.fixed,
+                        denom,
+                        &rd,
+                    );
+                    let r_k: Vec<f64> = df_dp.iter().zip(&dk_u).map(|(df, dk)| df - dk).collect();
+
+                    let d_compliance = dot_slice(&df_dp, &gc.u) + dot_slice(&gc.u, &r_k);
+                    let d_max_displacement = dot_slice(&adj.lambda_u, &r_k);
+                    let d_vm_explicit =
+                        if gc.max_vm_elem > 1e-30 && !solid_base.mesh.tets.is_empty() {
+                            let e_star = adj.e_star;
+                            let vm_hi = von_mises(&element_stress_mat(
+                                &mesh_hi,
+                                &gc.u,
+                                e_star,
+                                &gprops_hi.material,
+                                [0.25; 3],
+                            ));
+                            let vm_lo = von_mises(&element_stress_mat(
+                                &mesh_lo,
+                                &gc.u,
+                                e_star,
+                                &gprops_lo.material,
+                                [0.25; 3],
+                            ));
+                            (vm_hi - vm_lo) / denom
+                        } else {
+                            0.0
+                        };
+                    let d_max_vm_elem = d_vm_explicit + dot_slice(&adj.lambda_vm, &r_k);
+
+                    let d_yield_utilization = if let Some((ey, ref lambda_uy)) = adj.yield_util {
+                        let sy_hi = crate::fill::strength_extended(
+                            gprops_hi.spec.family,
+                            gprops_hi.spec.mode,
+                            gprops_hi.base_mat.yield_strength,
+                            gprops_hi.phi_elem[ey],
+                        );
+                        let sy_lo = crate::fill::strength_extended(
+                            gprops_lo.spec.family,
+                            gprops_lo.spec.mode,
+                            gprops_lo.base_mat.yield_strength,
+                            gprops_lo.phi_elem[ey],
+                        );
+                        let uy_hi = if sy_hi > 1e-30 {
+                            von_mises(&element_stress_mat(
+                                &mesh_hi,
+                                &gc.u,
+                                ey,
+                                &gprops_hi.material,
+                                [0.25; 3],
+                            )) / sy_hi
+                        } else {
+                            0.0
+                        };
+                        let uy_lo = if sy_lo > 1e-30 {
+                            von_mises(&element_stress_mat(
+                                &mesh_lo,
+                                &gc.u,
+                                ey,
+                                &gprops_lo.material,
+                                [0.25; 3],
+                            )) / sy_lo
+                        } else {
+                            0.0
+                        };
+                        Some((uy_hi - uy_lo) / denom + dot_slice(lambda_uy, &r_k))
+                    } else {
+                        graded_0
+                            .yield_utilization
+                            .get(idx)
+                            .and_then(|v| *v)
+                            .map(|_| 0.0)
+                    };
+
+                    let d_buckling_utilization =
+                        if let Some((eb, ref lambda_ub)) = adj.buckling_util {
+                            let sb_hi = crate::fill::buckling_extended(
+                                gprops_hi.spec.family,
+                                gprops_hi.spec.mode,
+                                gprops_hi.base_mat.e,
+                                gprops_hi.phi_elem[eb],
+                            );
+                            let sb_lo = crate::fill::buckling_extended(
+                                gprops_lo.spec.family,
+                                gprops_lo.spec.mode,
+                                gprops_lo.base_mat.e,
+                                gprops_lo.phi_elem[eb],
+                            );
+                            let sc_hi = -min_compressive(&element_stress_mat(
+                                &mesh_hi,
+                                &gc.u,
+                                eb,
+                                &gprops_hi.material,
+                                [0.25; 3],
+                            ));
+                            let sc_lo = -min_compressive(&element_stress_mat(
+                                &mesh_lo,
+                                &gc.u,
+                                eb,
+                                &gprops_lo.material,
+                                [0.25; 3],
+                            ));
+                            let ub_hi = if sb_hi > 1e-30 { sc_hi / sb_hi } else { 0.0 };
+                            let ub_lo = if sb_lo > 1e-30 { sc_lo / sb_lo } else { 0.0 };
+                            Some((ub_hi - ub_lo) / denom + dot_slice(lambda_ub, &r_k))
+                        } else {
+                            Some(0.0)
+                        };
+
+                    cases.push(CaseSensitivity {
+                        case: gc.name.clone(),
+                        d_compliance,
+                        rel_compliance: rel_elasticity(p0, gc.compliance, d_compliance),
+                        d_max_displacement,
+                        d_max_vm_elem,
+                        d_max_temp: None,
+                        d_yield_utilization,
+                        d_buckling_utilization,
+                    });
+                }
+                CaseAdjoint::Thermal(tadj) => {
+                    let tname = &thermal_cases[idx - mech_cases.len()];
+                    let t_0 = gc
+                        .temperature
+                        .as_deref()
+                        .expect("graded thermal baseline temperature");
+                    let (res_hi, t_lift_hi) = assemble_conduction_lifted_residual(
+                        sdoc_hi.as_ref(),
+                        &mesh_hi,
+                        &facets,
+                        base_h,
+                        tname,
+                        &gprops_hi.k_elem,
+                        t_0,
+                        &thermal_lookup,
+                    )?;
+                    let (res_lo, t_lift_lo) = assemble_conduction_lifted_residual(
+                        sdoc_lo.as_ref(),
+                        &mesh_lo,
+                        &facets,
+                        base_h,
+                        tname,
+                        &gprops_lo.k_elem,
+                        t_0,
+                        &thermal_lookup,
+                    )?;
+                    let r_t: Vec<f64> = res_hi
+                        .iter()
+                        .zip(&res_lo)
+                        .map(|(rh, rl)| (rh - rl) / denom)
+                        .collect();
+                    let d_max_temp = (t_lift_hi[tadj.m_star] - t_lift_lo[tadj.m_star]) / denom
+                        + dot_slice(&tadj.lambda_t_max, &r_t);
+
+                    if tadj.pure_conduction {
+                        cases.push(CaseSensitivity {
+                            case: gc.name.clone(),
+                            d_compliance: 0.0,
+                            rel_compliance: 0.0,
+                            d_max_displacement: 0.0,
+                            d_max_vm_elem: 0.0,
+                            d_max_temp: Some(d_max_temp),
+                            d_yield_utilization: None,
+                            d_buckling_utilization: None,
+                        });
+                    } else {
+                        let alphas_hi: Vec<f64> = elem_props_hi
+                            .alpha_elem
+                            .iter()
+                            .map(|a| a.unwrap_or(0.0))
+                            .collect();
+                        let alphas_lo: Vec<f64> = elem_props_lo
+                            .alpha_elem
+                            .iter()
+                            .map(|a| a.unwrap_or(0.0))
+                            .collect();
+                        let tref_hi = sdoc_hi.solve.t_ref.unwrap_or(20.0);
+                        let tref_lo = sdoc_lo.solve.t_ref.unwrap_or(20.0);
+                        let dt_lift_hi: Vec<f64> =
+                            t_lift_hi.iter().map(|&tv| tv - tref_hi).collect();
+                        let dt_lift_lo: Vec<f64> =
+                            t_lift_lo.iter().map(|&tv| tv - tref_lo).collect();
+
+                        let iso_hi =
+                            Material::iso(gprops_hi.material.young.clone(), gprops_hi.base_mat.nu);
+                        let iso_lo =
+                            Material::iso(gprops_lo.material.young.clone(), gprops_lo.base_mat.nu);
+                        let mut f_th_hi = thermal_load_multi(
+                            &mesh_hi,
+                            &dt_lift_hi,
+                            &iso_hi.young,
+                            iso_hi.poisson,
+                            &alphas_hi,
+                            &th_rd,
+                        );
+                        let mut f_th_lo = thermal_load_multi(
+                            &mesh_lo,
+                            &dt_lift_lo,
+                            &iso_lo.young,
+                            iso_lo.poisson,
+                            &alphas_lo,
+                            &th_rd,
+                        );
+                        zero_fixed_dofs(&mut f_th_hi, &solid_base.fixed);
+                        zero_fixed_dofs(&mut f_th_lo, &solid_base.fixed);
+                        let df_th_explicit: Vec<f64> = f_th_hi
+                            .iter()
+                            .zip(&f_th_lo)
+                            .map(|(fh, fl)| (fh - fl) / denom)
+                            .collect();
+
+                        let dk_u = stiffness_matvec_derivative(
+                            &mesh_hi,
+                            &iso_hi,
+                            &mesh_lo,
+                            &iso_lo,
+                            &gc.u,
+                            &solid_base.fixed,
+                            denom,
+                            &rd,
+                        );
+                        let r_u_explicit: Vec<f64> = df_th_explicit
+                            .iter()
+                            .zip(&dk_u)
+                            .map(|(df, dk)| df - dk)
+                            .collect();
+
+                        let d_compliance = dot_slice(&df_th_explicit, &gc.u)
+                            + dot_slice(&gc.u, &r_u_explicit)
+                            + dot_slice(&tadj.lambda_t_comp, &r_t);
+                        let d_max_displacement = dot_slice(&tadj.lambda_u, &r_u_explicit)
+                            + dot_slice(&tadj.lambda_t_u, &r_t);
+                        let d_vm_explicit =
+                            if gc.max_vm_elem > 1e-30 && !solid_base.mesh.tets.is_empty() {
+                                let e_star = tadj.e_star;
+                                let vm_hi = von_mises(&element_stress_mat(
+                                    &mesh_hi, &gc.u, e_star, &iso_hi, [0.25; 3],
+                                ));
+                                let vm_lo = von_mises(&element_stress_mat(
+                                    &mesh_lo, &gc.u, e_star, &iso_lo, [0.25; 3],
+                                ));
+                                (vm_hi - vm_lo) / denom
+                            } else {
+                                0.0
+                            };
+                        let d_max_vm_elem = d_vm_explicit
+                            + dot_slice(&tadj.lambda_vm, &r_u_explicit)
+                            + dot_slice(&tadj.lambda_t_vm, &r_t);
+
+                        cases.push(CaseSensitivity {
+                            case: gc.name.clone(),
+                            d_compliance,
+                            rel_compliance: rel_elasticity(p0, gc.compliance, d_compliance),
+                            d_max_displacement,
+                            d_max_vm_elem,
+                            d_max_temp: Some(d_max_temp),
+                            d_yield_utilization: None,
+                            d_buckling_utilization: None,
+                        });
+                    }
+                }
+                CaseAdjoint::ModalOnly => {}
+            }
+        }
+
+        let (d_modes_hz, rel_modes) = if let Some(modal) = solid_base.modes.as_ref() {
+            modal_rayleigh_sensitivities(
+                modal,
+                p0,
+                &mesh_hi,
+                &elem_props_hi,
+                &mesh_lo,
+                &elem_props_lo,
+                &solid_base.fixed,
+                denom,
+                &rd,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        out_params.push(ParameterSensitivity {
+            param: pname.clone(),
+            nominal: p0,
+            step: eps_p,
+            scheme: scheme.to_string(),
+            d_mass_g,
+            rel_mass,
+            d_solid_mass_g: Some(d_solid_mass_g),
+            d_modes_hz,
+            rel_modes,
+            cases,
+        });
+    }
+
+    let elapsed_ms = clock() - t0;
+    Ok(SensitivityReport {
+        method: "boundary_velocity_adjoint".to_string(),
+        solves_run,
+        h: base_h,
+        nodes: solid_base.provenance.nodes,
+        elements: solid_base.provenance.elements,
+        baseline_mass_g: base_mass,
+        baseline_solid_mass_g: Some(base_solid_mass),
+        baseline_compliance: graded_0
+            .cases
+            .iter()
+            .chain(graded_0.thermal_cases.iter())
+            .map(|c| (c.name.clone(), c.compliance))
+            .collect(),
+        baseline_modes_hz: solid_base
+            .modes
+            .as_ref()
+            .map(|m| m.frequencies.clone())
+            .unwrap_or_default(),
+        parameters: out_params,
+        elapsed_ms,
+    })
+}
+
 /// Locked-`h` re-meshing finite-difference sensitivity operator (`2k + 1` re-stuffed tetrahedral
-/// meshes and solves). Retained as fallback when `doc.fill` is active or when a degenerate
-/// perturbation cannot preserve positive element volumes on the baseline topology, and as an
-/// independent cross-verification reference for [`compute_sensitivities`].
+/// meshes and solves). Retained as fallback when a degenerate perturbation cannot preserve
+/// positive element volumes on the baseline topology, and as an independent cross-verification
+/// reference for [`compute_sensitivities`].
 pub fn compute_sensitivities_remesh(
     doc: &Document,
     params: &[String],
@@ -1828,7 +2724,230 @@ pub fn compute_sensitivities_remesh(
     let sys_doc_0 = resolve_system_doc(doc)?;
     let modes_count = required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts);
     let base = analyse_full(sys_doc_0.as_ref(), res, clock, modes_count, false)?;
+    if doc.fill.is_some() {
+        let graded_0 = crate::fill::graded_of(sys_doc_0.as_ref(), &base, clock, false)?;
+        return compute_sensitivities_remesh_graded_with_base(
+            doc, &targets, &base, &graded_0, t0, clock,
+        );
+    }
     compute_sensitivities_remesh_with_base(doc, &targets, &base, t0, clock)
+}
+
+fn compute_sensitivities_remesh_graded_with_base(
+    doc: &Document,
+    targets: &[String],
+    solid_base: &Analysis,
+    graded_0: &crate::fill::Graded,
+    t0: f64,
+    clock: Clock,
+) -> Result<SensitivityReport, SetupError> {
+    let sys_doc_0 = resolve_system_doc(doc)?;
+    let base_h = solid_base.provenance.element_size;
+    let locked_res = Resolution::Size(base_h);
+    let modes_count = solid_base
+        .modes
+        .as_ref()
+        .map(|m| m.frequencies.len())
+        .or_else(|| required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts));
+
+    let mut solves_run = 2usize;
+    let mut out_params = Vec::with_capacity(targets.len());
+    for pname in targets {
+        let addr = ParamAddr::parse(pname).map_err(SetupError)?;
+        let p0 = read_param_value(doc, &addr).map_err(SetupError)?;
+        let delta = (2e-2 * p0.abs()).max(5e-3);
+
+        let eval_at = |val: f64| -> Result<(Analysis, crate::fill::Graded), SetupError> {
+            let mut d_pert = doc.clone();
+            apply_sens_param(&mut d_pert, &addr, val).map_err(SetupError)?;
+            let r_pert = resolve_system_doc(&d_pert)?;
+            let a = analyse_full(r_pert.as_ref(), locked_res, clock, modes_count, false)?;
+            let g = crate::fill::graded_of(r_pert.as_ref(), &a, clock, false)?;
+            Ok((a, g))
+        };
+
+        let plus = eval_at(p0 + delta);
+        let minus = eval_at(p0 - delta);
+
+        let (a_hi_ref, g_hi_ref, a_lo_ref, g_lo_ref, denom, scheme): (
+            &Analysis,
+            &crate::fill::Graded,
+            &Analysis,
+            &crate::fill::Graded,
+            f64,
+            &str,
+        );
+        let ap_holder;
+        let gp_holder;
+        let am_holder;
+        let gm_holder;
+        match (plus, minus) {
+            (Ok((ap, gp)), Ok((am, gm))) => {
+                solves_run += 4;
+                ap_holder = ap;
+                gp_holder = gp;
+                am_holder = am;
+                gm_holder = gm;
+                a_hi_ref = &ap_holder;
+                g_hi_ref = &gp_holder;
+                a_lo_ref = &am_holder;
+                g_lo_ref = &gm_holder;
+                denom = 2.0 * delta;
+                scheme = "central";
+            }
+            (Ok((ap, gp)), Err(_)) => {
+                solves_run += 2;
+                ap_holder = ap;
+                gp_holder = gp;
+                a_hi_ref = &ap_holder;
+                g_hi_ref = &gp_holder;
+                a_lo_ref = solid_base;
+                g_lo_ref = graded_0;
+                denom = delta;
+                scheme = "forward";
+            }
+            (Err(_), Ok((am, gm))) => {
+                solves_run += 2;
+                am_holder = am;
+                gm_holder = gm;
+                a_hi_ref = solid_base;
+                g_hi_ref = graded_0;
+                a_lo_ref = &am_holder;
+                g_lo_ref = &gm_holder;
+                denom = delta;
+                scheme = "backward";
+            }
+            (Err(ep), Err(_)) => return Err(ep),
+        }
+
+        let d_mass_g = (g_hi_ref.mass_g - g_lo_ref.mass_g) / denom;
+        let d_solid_mass_g = (g_hi_ref.solid_mass_g - g_lo_ref.solid_mass_g) / denom;
+        let rel_mass = rel_elasticity(p0, graded_0.mass_g, d_mass_g);
+
+        let mut d_modes_hz = Vec::new();
+        let mut rel_modes = Vec::new();
+        if let (Some(bm), Some(mh), Some(ml)) = (
+            solid_base.modes.as_ref(),
+            a_hi_ref.modes.as_ref(),
+            a_lo_ref.modes.as_ref(),
+        ) {
+            let nm = bm
+                .frequencies
+                .len()
+                .min(mh.frequencies.len())
+                .min(ml.frequencies.len());
+            for m_idx in 0..nm {
+                let df = (mh.frequencies[m_idx] - ml.frequencies[m_idx]) / denom;
+                d_modes_hz.push(df);
+                rel_modes.push(rel_elasticity(p0, bm.frequencies[m_idx], df));
+            }
+        }
+
+        let base_all: Vec<&CaseResult> = graded_0
+            .cases
+            .iter()
+            .chain(graded_0.thermal_cases.iter())
+            .collect();
+        let hi_all: Vec<&CaseResult> = g_hi_ref
+            .cases
+            .iter()
+            .chain(g_hi_ref.thermal_cases.iter())
+            .collect();
+        let lo_all: Vec<&CaseResult> = g_lo_ref
+            .cases
+            .iter()
+            .chain(g_lo_ref.thermal_cases.iter())
+            .collect();
+        let n_mech = graded_0.cases.len();
+        let mut cases = Vec::with_capacity(base_all.len());
+        for (idx, gc) in base_all.iter().enumerate() {
+            let Some(ch) = hi_all.get(idx) else {
+                continue;
+            };
+            let Some(cl) = lo_all.get(idx) else {
+                continue;
+            };
+            let d_compliance = (ch.compliance - cl.compliance) / denom;
+            let d_max_displacement = (ch.max_displacement - cl.max_displacement) / denom;
+            let d_max_vm_elem = (ch.max_vm_elem - cl.max_vm_elem) / denom;
+            let d_max_temp = match (
+                peak_temperature_opt(ch.temperature.as_deref()),
+                peak_temperature_opt(cl.temperature.as_deref()),
+            ) {
+                (Some(th), Some(tl)) => Some((th - tl) / denom),
+                _ => None,
+            };
+            let d_yield_utilization = if idx < n_mech {
+                match (
+                    g_hi_ref.yield_utilization.get(idx).and_then(|v| *v),
+                    g_lo_ref.yield_utilization.get(idx).and_then(|v| *v),
+                ) {
+                    (Some(uh), Some(ul)) => Some((uh - ul) / denom),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let d_buckling_utilization = if idx < n_mech {
+                match (
+                    g_hi_ref.buckling_utilization.get(idx),
+                    g_lo_ref.buckling_utilization.get(idx),
+                ) {
+                    (Some(bh), Some(bl)) => Some((bh - bl) / denom),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            cases.push(CaseSensitivity {
+                case: gc.name.clone(),
+                d_compliance,
+                rel_compliance: rel_elasticity(p0, gc.compliance, d_compliance),
+                d_max_displacement,
+                d_max_vm_elem,
+                d_max_temp,
+                d_yield_utilization,
+                d_buckling_utilization,
+            });
+        }
+
+        out_params.push(ParameterSensitivity {
+            param: pname.clone(),
+            nominal: p0,
+            step: delta,
+            scheme: scheme.to_string(),
+            d_mass_g,
+            rel_mass,
+            d_solid_mass_g: Some(d_solid_mass_g),
+            d_modes_hz,
+            rel_modes,
+            cases,
+        });
+    }
+
+    let elapsed_ms = clock() - t0;
+    Ok(SensitivityReport {
+        method: "finite_difference_remesh".to_string(),
+        solves_run,
+        h: base_h,
+        nodes: solid_base.provenance.nodes,
+        elements: solid_base.provenance.elements,
+        baseline_mass_g: graded_0.mass_g,
+        baseline_solid_mass_g: Some(graded_0.solid_mass_g),
+        baseline_compliance: graded_0
+            .cases
+            .iter()
+            .chain(graded_0.thermal_cases.iter())
+            .map(|c| (c.name.clone(), c.compliance))
+            .collect(),
+        baseline_modes_hz: solid_base
+            .modes
+            .as_ref()
+            .map(|m| m.frequencies.clone())
+            .unwrap_or_default(),
+        parameters: out_params,
+        elapsed_ms,
+    })
 }
 
 fn compute_sensitivities_remesh_with_base(
@@ -1959,6 +3078,8 @@ fn compute_sensitivities_remesh_with_base(
                 d_max_displacement,
                 d_max_vm_elem,
                 d_max_temp,
+                d_yield_utilization: None,
+                d_buckling_utilization: None,
             });
         }
 
@@ -1969,6 +3090,7 @@ fn compute_sensitivities_remesh_with_base(
             scheme: scheme.to_string(),
             d_mass_g,
             rel_mass,
+            d_solid_mass_g: None,
             d_modes_hz,
             rel_modes,
             cases,
@@ -1983,6 +3105,7 @@ fn compute_sensitivities_remesh_with_base(
         nodes: base.provenance.nodes,
         elements: base.provenance.elements,
         baseline_mass_g: base_mass,
+        baseline_solid_mass_g: None,
         baseline_compliance: base
             .cases
             .iter()
@@ -2609,5 +3732,241 @@ solve modes=2
             rel_diff < 0.05,
             "expected Rayleigh-quotient ∂f1/∂d ({df1_adj}) within 5% of remesh FD ({df1_fd}), rel_diff={rel_diff}"
         );
+    }
+
+    #[test]
+    fn graded_tpms_adjoint_sensitivities_scale_o1_and_match_fixed_mesh_fd() {
+        // 3D stress-graded cubic-anisotropic gyroid-sheet cantilever with outer depth `let d`
+        // AND `fill.*` lattice parameters (`rho_min`, `rho_max`, `skin`, `cell`).
+        let src = "\
+fieldsmith 1
+name \"Graded Gyroid Cantilever Sensitivity\"
+material petg
+let d = 18
+box beam size=(56, 18, d) at=(28, 0, 0)
+region clamp = beam.nx
+region tip = beam.px
+support root clamp fixed=xyz
+load push tip force=(0, 0, -240)
+fill gyroid sheet cell=6 skin=1.2 rho=(0.22, 0.55) curve=1.0 wall=0.4
+";
+        let doc = fsm::parse(src).expect("parse graded cantilever");
+        let rep = compute_sensitivities(&doc, &[], Resolution::Dofs(7_500), zero_clock)
+            .expect("graded TPMS discrete adjoint sensitivities");
+
+        assert_eq!(rep.method, "boundary_velocity_adjoint");
+        // 1 solid + 1 graded + at most 4 adjoint RHS (u_max, vm, yield_util, buckling_util) = 6 solves across 5 parameters!
+        assert!(
+            rep.solves_run <= 6,
+            "expected O(1) <= 6 solves across 5 parameters, got {}",
+            rep.solves_run
+        );
+        let names: Vec<&str> = rep.parameters.iter().map(|p| p.param.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "d",
+                "fill.rho_min",
+                "fill.rho_max",
+                "fill.skin",
+                "fill.cell"
+            ]
+        );
+        assert!(rep.baseline_solid_mass_g.unwrap() > rep.baseline_mass_g);
+
+        // 1. Physical sign checks on graded lattice parameters vs outer geometry:
+        let by_name = |n: &str| rep.parameters.iter().find(|p| p.param == n).unwrap();
+        let p_rmin = by_name("fill.rho_min");
+        let p_rmax = by_name("fill.rho_max");
+        let p_skin = by_name("fill.skin");
+        let p_d = by_name("d");
+
+        // `fill.*` never alters un-filled solid mass (`∂m_solid / ∂fill.* == 0`), while `d` increases both!
+        assert_eq!(p_rmin.d_solid_mass_g.unwrap(), 0.0);
+        assert_eq!(p_rmax.d_solid_mass_g.unwrap(), 0.0);
+        assert_eq!(p_skin.d_solid_mass_g.unwrap(), 0.0);
+        assert!(p_d.d_solid_mass_g.unwrap() > p_d.d_mass_g && p_d.d_mass_g > 0.0);
+
+        // Increasing `rho_min`, `rho_max`, `skin`, or beam depth `d` increases graded mass and stiffens the beam (`∂C/∂p < 0`)
+        // AND reduces lattice yield & buckling utilization (`∂U_y/∂p < 0`, `∂U_b/∂p < 0`)!
+        for p in [p_rmin, p_rmax, p_skin, p_d] {
+            assert!(
+                p.d_mass_g > 0.0,
+                "expected ∂m_graded/∂{} > 0, got {}",
+                p.param,
+                p.d_mass_g
+            );
+            let cs = &p.cases[0];
+            assert!(
+                cs.d_compliance < 0.0,
+                "expected ∂C/∂{} < 0, got {}",
+                p.param,
+                cs.d_compliance
+            );
+            assert!(
+                cs.d_yield_utilization.unwrap() < 0.0,
+                "expected ∂U_y/∂{} < 0, got {:?}",
+                p.param,
+                cs.d_yield_utilization
+            );
+            assert!(
+                cs.d_buckling_utilization.unwrap() < 0.0,
+                "expected ∂U_b/∂{} < 0, got {:?}",
+                p.param,
+                cs.d_buckling_utilization
+            );
+        }
+
+        // 2. Exact discrete-adjoint verification on cubic anisotropic TPMS elements against direct
+        //    fixed-mesh graded solves (`eval_graded_perturbed_props` + `run_case`)!
+        let solid_base = analyse(&doc, Resolution::Dofs(7_500), zero_clock).unwrap();
+        let graded_0 = crate::fill::graded_of(&doc, &solid_base, zero_clock, false).unwrap();
+        let sdoc_0 = structural_doc(&doc);
+        let base_h = solid_base.provenance.element_size;
+        let locked_elem_mats =
+            lock_element_material_ids(&sdoc_0, &solid_base.mesh, base_h).unwrap();
+        let elem_props_0 = eval_element_materials(&sdoc_0, &locked_elem_mats).unwrap();
+        let smooth_0 = crate::fill::prepare_graded_smooth_baseline(
+            &sdoc_0,
+            &solid_base,
+            &graded_0,
+            &elem_props_0.rho_elem,
+        )
+        .unwrap();
+        let facets: Vec<Facet> = solid_base
+            .surface
+            .iter()
+            .map(|&nodes| Facet { nodes })
+            .collect();
+        let tip_facets =
+            region_facets_exact(&sdoc_0, "tip", &solid_base.mesh, &facets, base_h).unwrap();
+        let exact_lookup = |rid: &str| -> Result<Vec<usize>, SetupError> {
+            assert_eq!(rid, "tip");
+            Ok(tip_facets.clone())
+        };
+        let e0 = expr::compile_body(&sdoc_0);
+        let vert_adj = build_vertex_adjacency(&solid_base.mesh);
+        let cname = case_names(&sdoc_0)[0].clone();
+
+        for pname in ["fill.rho_min", "fill.rho_max", "fill.skin", "d"] {
+            let ps = by_name(pname);
+            let addr = ParamAddr::parse(pname).unwrap();
+            let p0 = ps.nominal;
+            let eps = ps.step;
+            let vel = if is_fill_param_target(&doc, &addr) {
+                vec![[0.0; 3]; solid_base.mesh.nodes.len()]
+            } else {
+                compute_mesh_velocity(
+                    &doc,
+                    &addr,
+                    p0,
+                    &e0,
+                    &solid_base.mesh,
+                    &facets,
+                    &vert_adj,
+                    base_h,
+                )
+                .unwrap()
+            };
+
+            let eval_side = |delta: f64| {
+                let mut d_p = doc.clone();
+                apply_sens_param(&mut d_p, &addr, p0 + delta).unwrap();
+                let sdoc_p = structural_doc(&d_p);
+                let mesh_p = deform_mesh_checked(&solid_base.mesh, &vel, delta).unwrap();
+                let ep = eval_element_materials(&sdoc_p, &locked_elem_mats).unwrap();
+                let gp = crate::fill::eval_graded_perturbed_props(
+                    &sdoc_p,
+                    &mesh_p,
+                    base_h,
+                    &graded_0,
+                    &smooth_0,
+                    &ep.rho_elem,
+                )
+                .unwrap();
+                let (force, _, prescribed_map) = case_force_report_with_regions(
+                    &sdoc_p,
+                    &mesh_p,
+                    &facets,
+                    &cname,
+                    base_h,
+                    Some(&exact_lookup),
+                )
+                .unwrap();
+                let mut node_key: HashMap<[u64; 3], u8> = HashMap::new();
+                for (i, pt) in mesh_p.nodes.iter().enumerate() {
+                    node_key.insert(
+                        [pt[0].to_bits(), pt[1].to_bits(), pt[2].to_bits()],
+                        solid_base.fixed[i],
+                    );
+                }
+                let prescribed = prescribed_fn(&node_key, &prescribed_map);
+                let cr = crate::run_case(
+                    &mesh_p,
+                    &gp.material,
+                    &solid_base.fixed,
+                    force,
+                    cname.clone(),
+                    false,
+                    &prescribed,
+                )
+                .unwrap();
+                let mut uy = 0.0f64;
+                let mut ub = 0.0f64;
+                for e in 0..mesh_p.tets.len() {
+                    if graded_0.class[e] != crate::fill::CLASS_VOID {
+                        let sy = crate::fill::strength_extended(
+                            gp.spec.family,
+                            gp.spec.mode,
+                            gp.base_mat.yield_strength,
+                            gp.phi_elem[e],
+                        );
+                        uy = uy.max(cr.vm_elem[e] / sy);
+                    }
+                    if graded_0.class[e] == crate::fill::CLASS_LATTICE && cr.sigma_min_elem[e] < 0.0
+                    {
+                        let sb = crate::fill::buckling_extended(
+                            gp.spec.family,
+                            gp.spec.mode,
+                            gp.base_mat.e,
+                            gp.phi_elem[e],
+                        );
+                        ub = ub.max((-cr.sigma_min_elem[e]) / sb);
+                    }
+                }
+                (cr, uy, ub)
+            };
+
+            let (cr_hi, uy_hi, ub_hi) = eval_side(eps);
+            let (cr_lo, uy_lo, ub_lo) = eval_side(-eps);
+            let denom = 2.0 * eps;
+            let fd_comp = (cr_hi.compliance - cr_lo.compliance) / denom;
+            let fd_u = (cr_hi.max_displacement - cr_lo.max_displacement) / denom;
+            let fd_uy = (uy_hi - uy_lo) / denom;
+            let fd_ub = (ub_hi - ub_lo) / denom;
+
+            let cs = &ps.cases[0];
+            let rel_err = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-8);
+            assert!(
+                rel_err(cs.d_compliance, fd_comp) < 2e-3,
+                "param {pname} d_compliance adj={} vs fd={fd_comp}",
+                cs.d_compliance
+            );
+            assert!(
+                rel_err(cs.d_max_displacement, fd_u) < 2e-3,
+                "param {pname} d_max_displacement adj={} vs fd={fd_u}",
+                cs.d_max_displacement
+            );
+            assert!(
+                rel_err(cs.d_yield_utilization.unwrap(), fd_uy) < 5e-3,
+                "param {pname} d_yield_utilization adj={} vs fd={fd_uy}",
+                cs.d_yield_utilization.unwrap()
+            );
+            assert!(
+                rel_err(cs.d_buckling_utilization.unwrap(), fd_ub) < 5e-3,
+                "param {pname} d_buckling_utilization adj={} vs fd={fd_ub}",
+                cs.d_buckling_utilization.unwrap()
+            );
+        }
     }
 }

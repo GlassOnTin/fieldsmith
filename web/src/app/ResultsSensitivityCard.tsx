@@ -37,6 +37,10 @@ const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; def
   { value: 'mode_1', label: 'Fundamental mode f₁ (mode_1)', defaultUnit: 'Hz', defaultTarget: '>= 100' },
   { value: 'mode_2', label: 'Second mode f₂ (mode_2)', defaultUnit: 'Hz', defaultTarget: '>= 150' },
   { value: 'mode_split_12_pct', label: 'Doublet split |f₂−f₁|/f̄ (mode_split_12_pct)', defaultUnit: '%', defaultTarget: '<= 2.0' },
+  { value: 'graded.yield_utilization', label: 'Lattice yield util U_y (graded.yield_utilization)', defaultUnit: '', defaultTarget: '<= 0.85' },
+  { value: 'graded.buckling_utilization', label: 'Lattice buckling util U_b (graded.buckling_utilization)', defaultUnit: '', defaultTarget: '<= 0.85' },
+  { value: 'graded.deflection', label: 'Graded deflection ‖u‖ (graded.deflection)', defaultUnit: 'mm', defaultTarget: '<= 0.50' },
+  { value: 'mass_saved_pct', label: 'Lattice mass saved (mass_saved_pct)', defaultUnit: '%', defaultTarget: '>= 25' },
 ];
 
 export function ResultsSensitivityCard() {
@@ -44,7 +48,8 @@ export function ResultsSensitivityCard() {
   const doc = store.doc;
   const letCount = doc.lets?.length ?? 0;
   const sysDesignCount = doc.system_block?.designs?.length ?? 0;
-  const paramCount = letCount + sysDesignCount;
+  const fillParamCount = doc.fill != null ? 4 : 0;
+  const paramCount = letCount + sysDesignCount + fillParamCount;
   const hasParams = paramCount > 0;
   const asserts = doc.asserts ?? [];
   const hasAsserts = asserts.length > 0;
@@ -171,6 +176,11 @@ export function ResultsSensitivityCard() {
   );
   const hasModalSens = Boolean(
     sensReport?.parameters.some((p) => (p.d_modes_hz?.length ?? 0) > 0),
+  );
+  const hasGradedSens = Boolean(
+    sensReport?.parameters.some((p) =>
+      p.cases.some((c) => c.d_yield_utilization != null || c.d_buckling_utilization != null),
+    ),
   );
 
   return (
@@ -485,6 +495,8 @@ export function ResultsSensitivityCard() {
                 <th style={{ padding: '2px 4px' }}>∂m/∂p (g)</th>
                 <th style={{ padding: '2px 4px' }}>∂σ_vM/∂p</th>
                 <th style={{ padding: '2px 4px' }}>∂‖u‖/∂p</th>
+                {hasGradedSens && <th style={{ padding: '2px 4px' }}>∂U_y/∂p</th>}
+                {hasGradedSens && <th style={{ padding: '2px 4px' }}>∂U_b/∂p</th>}
                 {hasThermalSens && <th style={{ padding: '2px 4px' }}>∂T_max/∂p (°C)</th>}
                 {hasModalSens && <th style={{ padding: '2px 4px' }}>∂f₁/∂p (Hz)</th>}
               </tr>
@@ -505,6 +517,16 @@ export function ResultsSensitivityCard() {
                     <td style={{ padding: '2px 4px' }}>{p.d_mass_g.toFixed(2)}</td>
                     <td style={{ padding: '2px 4px' }}>{c0 ? c0.d_max_vm_elem.toFixed(2) : '—'}</td>
                     <td style={{ padding: '2px 4px' }}>{c0 ? c0.d_max_displacement.toFixed(4) : '—'}</td>
+                    {hasGradedSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {c0?.d_yield_utilization != null ? c0.d_yield_utilization.toFixed(3) : '—'}
+                      </td>
+                    )}
+                    {hasGradedSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {c0?.d_buckling_utilization != null ? c0.d_buckling_utilization.toFixed(3) : '—'}
+                      </td>
+                    )}
                     {hasThermalSens && (
                       <td style={{ padding: '2px 4px' }}>
                         {ct?.d_max_temp != null ? ct.d_max_temp.toFixed(2) : '—'}

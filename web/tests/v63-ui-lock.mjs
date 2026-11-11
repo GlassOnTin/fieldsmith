@@ -649,7 +649,92 @@ try {
   );
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
-  console.log('[11/11] Results UI Rayleigh-quotient modal sensitivity (∂f₁/∂p, 1 solve) + max_mode_1_hz optimiser: PASS');
+  console.log('[11/12] Results UI Rayleigh-quotient modal sensitivity (∂f₁/∂p, 1 solve) + max_mode_1_hz optimiser: PASS');
+
+  // 12. Results UI Graded TPMS Discrete Adjoint Sensitivities (`∂U_y/∂p`, `∂U_b/∂p`) & Simultaneous Lattice Co-Optimisation
+  const gradedUiFsm = [
+    'fieldsmith 1',
+    'name "UI Graded Gyroid Beam"',
+    'material ss316l',
+    'box beam size=(60, 12, 10) at=(30, 0, 0)',
+    'region root = beam.nx',
+    'region tip = beam.px',
+    'support clamp root fixed=xyz',
+    'load push tip force=(0, 0, -380)',
+    'fill gyroid sheet cell=6 rho=(0.14, 0.22) skin=0.6 wall=0.4 margin=1 curve=1.2',
+    'assert "Lattice yield utilization" metric="graded.yield_utilization" target="<= 0.80"',
+    'assert "Mass savings vs solid" metric="mass_saved_pct" target=">= 25" unit="%"',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, gradedUiFsm);
+
+  await page.waitForSelector('[data-testid="results-compute-sensitivities-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-compute-sensitivities-btn"]');
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="results-sensitivity-table"]');
+      return el && el.textContent && el.textContent.includes('∂U_y/∂p');
+    },
+    { timeout: 25000 },
+  );
+  const gradedSensText = await page.textContent('[data-testid="results-sensitivity-table"]');
+  assert(
+    gradedSensText &&
+      gradedSensText.includes('method: boundary_velocity_adjoint') &&
+      gradedSensText.includes('∂U_y/∂p') &&
+      gradedSensText.includes('∂U_b/∂p') &&
+      gradedSensText.includes('fill.rho_max=0.22'),
+    `Expected graded TPMS boundary_velocity_adjoint table with ∂U_y/∂p and fill.rho_max=0.22, got '${gradedSensText}'`,
+  );
+
+  await page.selectOption('[data-testid="optimise-objective-select"]', 'mass_g');
+  await page.click('[data-testid="results-run-optimise-btn"]');
+  await page.waitForFunction(
+    () => {
+      const errEl = document.querySelector('[data-testid="results-card-error"]');
+      if (errEl && errEl.textContent) return true;
+      const el = document.querySelector('[data-testid="results-optimisation-output"]');
+      return el && el.textContent && el.textContent.includes('fill.rho_max:');
+    },
+    { timeout: 40000 },
+  );
+  const gradedCardErr = await page.evaluate(
+    () => document.querySelector('[data-testid="results-card-error"]')?.textContent ?? null,
+  );
+  assert(!gradedCardErr, `Unexpected graded TPMS optimisation error in UI: ${gradedCardErr}`);
+  const gradedOptText = await page.textContent('[data-testid="results-optimisation-output"]');
+  assert(
+    gradedOptText && gradedOptText.includes('✓ mass_g:') && gradedOptText.includes('fill.rho_max:'),
+    `Expected feasible graded TPMS mass_g optimisation output, got '${gradedOptText}'`,
+  );
+
+  await page.click('[data-testid="results-apply-optimised-btn"]');
+  const gradedApplied = await page.evaluate(() => {
+    const rhoMaxOpt = window.fieldsmith.store.doc.fill?.rho_max ?? 0;
+    window.fieldsmith.store.undo();
+    const rhoMaxUndone = window.fieldsmith.store.doc.fill?.rho_max ?? 0;
+    return { rhoMaxOpt, rhoMaxUndone };
+  });
+  assert(
+    gradedApplied.rhoMaxOpt > 0.225,
+    `Expected applied optimised fill.rho_max > 0.225, got ${gradedApplied.rhoMaxOpt}`,
+  );
+  assert(
+    Math.abs(gradedApplied.rhoMaxUndone - 0.22) < 1e-9,
+    `Expected Ctrl+Z undo to restore fill.rho_max=0.22, got ${gradedApplied.rhoMaxUndone}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[12/12] Results UI graded TPMS adjoint sensitivity (∂U_y/∂p, ∂U_b/∂p) + lattice optimiser (rho_max: 0.22 -> ${gradedApplied.rhoMaxOpt.toFixed(3)} -> Undo 0.22): PASS`,
+  );
   await page.close();
 } catch (e) {
   console.error(e);

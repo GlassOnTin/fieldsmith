@@ -872,39 +872,7 @@ pub fn graded_of(
     for (i, p) in base.mesh.nodes.iter().enumerate() {
         node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
     }
-    // The anisotropic route: where the family has a measured cubic coupon fit, every
-    // LATTICE element carries its law's triple (VOID_SCALE keeps the void floor the
-    // isotropic route applies, applied to the whole triple so the ratio shape survives).
-    // Solid and void elements stay on the isotropic kernel, and families without a fit
-    // (primitive network) route the whole fill through the isotropic law unchanged.
-    let cubic = cubic_fit(spec.family, spec.mode).map(|_| {
-        let m_solid = fieldsmith_solve::ElasticMaterial::new(mat.e, mat.nu);
-        let solid_c11 = m_solid.lame_lambda() + 2.0 * m_solid.lame_mu();
-        let rot = (spec.rotate != [0.0; 3])
-            .then(|| fieldsmith_field::dual::rotation_xyz_deg(spec.rotate));
-        (0..base.mesh.tets.len())
-            .map(|e| {
-                if class[e] != CLASS_LATTICE {
-                    return None;
-                }
-                let phi = rho_elem[e];
-                let law = law_cubic_at(spec.family, spec.mode, mat.e, mat.nu, phi)?;
-                let rel = VOID_SCALE.max(law.c11 / solid_c11);
-                let s = rel / (law.c11 / solid_c11);
-                Some(fieldsmith_solve::ortho::CubicMaterial {
-                    c11: law.c11 * s,
-                    c12: law.c12 * s,
-                    c44: law.c44 * s,
-                    rot,
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    let graded_material = crate::Material {
-        young: young.clone(),
-        poisson: mat.nu,
-        cubic,
-    };
+    let graded_material = build_graded_material(&spec, &mat, &class, &rho_elem, &young);
     let mut cases = Vec::new();
     for name in case_names(doc) {
         let (force, reports, prescribed_map) =
@@ -1256,6 +1224,484 @@ fn quantile(v: &mut [f64], q: f64) -> f64 {
     v.sort_by(f64::total_cmp);
     let i = (((v.len() - 1) as f64) * q).round() as usize;
     v[i]
+}
+
+/// Build the graded [`crate::Material`] (isotropic `young` plus optional per-element cubic
+/// stiffness triples on `CLASS_LATTICE` elements) from element classes and material fractions.
+pub(crate) fn build_graded_material(
+    spec: &Fill,
+    mat: &crate::materials::Material,
+    class: &[u8],
+    rho_elem: &[f64],
+    young: &[f64],
+) -> crate::Material {
+    let cubic = cubic_fit(spec.family, spec.mode).map(|_| {
+        let m_solid = fieldsmith_solve::ElasticMaterial::new(mat.e, mat.nu);
+        let solid_c11 = m_solid.lame_lambda() + 2.0 * m_solid.lame_mu();
+        let rot = (spec.rotate != [0.0; 3])
+            .then(|| fieldsmith_field::dual::rotation_xyz_deg(spec.rotate));
+        (0..young.len())
+            .map(|e| {
+                if class[e] != CLASS_LATTICE {
+                    return None;
+                }
+                let phi = rho_elem[e];
+                let law = law_cubic_at(spec.family, spec.mode, mat.e, mat.nu, phi)?;
+                let rel = VOID_SCALE.max(law.c11 / solid_c11);
+                let s = rel / (law.c11 / solid_c11);
+                Some(fieldsmith_solve::ortho::CubicMaterial {
+                    c11: law.c11 * s,
+                    c12: law.c12 * s,
+                    c44: law.c44 * s,
+                    rot,
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    crate::Material {
+        young: young.to_vec(),
+        poisson: mat.nu,
+        cubic,
+    }
+}
+
+pub(crate) struct GradedSmoothBaseline {
+    pub drive_0: Vec<f64>,
+    pub grid_origin: V3,
+    pub grid_spacing: f64,
+    pub grid_dims: [usize; 3],
+    pub blur_r: usize,
+    pub phi_homog_0: Vec<f64>,
+    pub mesh_mass_scale: f64,
+    pub solid_mass_scale: f64,
+    pub material_0: crate::Material,
+    pub k_elem_0: Vec<f64>,
+}
+
+pub(crate) struct GradedPerturbedProps {
+    pub spec: Fill,
+    pub base_mat: crate::materials::Material,
+    pub phi_elem: Vec<f64>,
+    pub material: crate::Material,
+    pub k_elem: Vec<f64>,
+    pub mass_g: f64,
+    pub solid_mass_g: f64,
+}
+
+fn smooth_masked_blur(a: &Grid3, mask: &Grid3, r: usize) -> Grid3 {
+    let [nx, ny, nz] = a.dims;
+    let mut out = a.clone();
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let base = (k * ny + j) * nx + i;
+                let m_b = mask.data[base].clamp(0.0, 1.0);
+                if m_b <= 0.0 {
+                    continue;
+                }
+                let mut sum = 0.0f32;
+                let mut wsum = 0.0f32;
+                for dk in 0..(2 * r + 1) {
+                    let kk = (k + dk) as isize - r as isize;
+                    let kk = kk.clamp(0, nz as isize - 1) as usize;
+                    for dj in 0..(2 * r + 1) {
+                        let jj = (j + dj) as isize - r as isize;
+                        let jj = jj.clamp(0, ny as isize - 1) as usize;
+                        for di in 0..(2 * r + 1) {
+                            let ii = (i + di) as isize - r as isize;
+                            let ii = ii.clamp(0, nx as isize - 1) as usize;
+                            let idx = (kk * ny + jj) * nx + ii;
+                            let w = mask.data[idx];
+                            sum += a.data[idx] * w;
+                            wsum += w;
+                        }
+                    }
+                }
+                if wsum > 0.0 {
+                    out.data[base] = (1.0 - m_b) * a.data[base] + m_b * (sum / wsum);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_smooth_fill_expr_and_fractions(
+    sdoc: &fieldsmith_doc::Document,
+    mesh: &P2Mesh,
+    base_h: f64,
+    drive_0: &[f64],
+    sigma_ref_0: f64,
+    grid_origin: V3,
+    grid_spacing: f64,
+    grid_dims: [usize; 3],
+    blur_r: usize,
+) -> Result<(Fill, FillExpr, Vec<f64>), SetupError> {
+    let spec = sdoc
+        .fill
+        .clone()
+        .ok_or_else(|| SetupError("this document has no fill".into()))?;
+    check_spec(&spec)?;
+    let cal0 = calibration(spec.family, spec.mode);
+    let morph_fam = spec.morph.filter(|&m| m != spec.family);
+    let cal1 = morph_fam.map(|m| calibration(m, spec.mode));
+    let body = expr::compile_body(sdoc);
+    let keep = keep_zones(sdoc, &spec)?;
+    let cell_min = spec.cell_min.unwrap_or(spec.cell);
+    let skin_max = spec.skin_max.unwrap_or(spec.skin);
+    let erode = spec.erode.unwrap_or(0.0).max(0.0);
+    let has_keep = !matches!(keep, Expr::Empty);
+
+    let [nx, ny, nz] = grid_dims;
+    let n_nodes = nx * ny * nz;
+    let h_core_occ = (0.5 * grid_spacing).max(0.15);
+    let mut core = Grid3 {
+        origin: grid_origin,
+        spacing: grid_spacing,
+        dims: grid_dims,
+        data: vec![0.0f32; n_nodes],
+    };
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                let p = [
+                    grid_origin[0] + i as f64 * grid_spacing,
+                    grid_origin[1] + j as f64 * grid_spacing,
+                    grid_origin[2] + k as f64 * grid_spacing,
+                ];
+                let d0 = expr::eval(&body, p);
+                let d_in = fieldsmith_field::dual::D::new(d0.v + spec.skin, d0.g);
+                let d_core = if has_keep {
+                    let kv = expr::eval(&keep, p);
+                    let neg_k =
+                        fieldsmith_field::dual::D::new(-kv.v, [-kv.g[0], -kv.g[1], -kv.g[2]]);
+                    fieldsmith_field::dual::dmax(d_in, neg_k)
+                } else {
+                    d_in
+                };
+                core.data[(k * ny + j) * nx + i] = volume::occupancy(d_core, h_core_occ) as f32;
+            }
+        }
+    }
+
+    let mut wsum = vec![0.0f32; n_nodes];
+    let mut vsum = vec![0.0f32; n_nodes];
+    for (e, &sigma_e) in drive_0.iter().enumerate() {
+        let c = centroid(mesh, e);
+        let ux = (c[0] - grid_origin[0]) / grid_spacing;
+        let uy = (c[1] - grid_origin[1]) / grid_spacing;
+        let uz = (c[2] - grid_origin[2]) / grid_spacing;
+        if ux < -0.5
+            || ux > nx as f64 - 0.5
+            || uy < -0.5
+            || uy > ny as f64 - 0.5
+            || uz < -0.5
+            || uz > nz as f64 - 0.5
+        {
+            continue;
+        }
+        let v = mesh.tet_volume(e).abs() as f32;
+        let step_a = |n: usize, u: f64| -> (usize, usize, f32) {
+            if n <= 1 {
+                (0, 0, 0.0)
+            } else {
+                let uc = u.clamp(0.0, (n - 1) as f64);
+                let i0 = (uc.floor() as usize).min(n - 2);
+                (i0, i0 + 1, (uc - i0 as f64) as f32)
+            }
+        };
+        let (ix0, ix1, fx) = step_a(nx, ux);
+        let (iy0, iy1, fy) = step_a(ny, uy);
+        let (iz0, iz1, fz) = step_a(nz, uz);
+        let wx = [1.0 - fx, fx];
+        let wy = [1.0 - fy, fy];
+        let wz = [1.0 - fz, fz];
+        let ix = [ix0, ix1];
+        let iy = [iy0, iy1];
+        let iz = [iz0, iz1];
+        for (kz, &wz_v) in wz.iter().enumerate() {
+            for (jy, &wy_v) in wy.iter().enumerate() {
+                for (ix_i, &wx_v) in wx.iter().enumerate() {
+                    let wt = wx_v * wy_v * wz_v;
+                    if wt > 0.0 {
+                        let idx = (iz[kz] * ny + iy[jy]) * nx + ix[ix_i];
+                        vsum[idx] += wt * v;
+                        wsum[idx] += wt * v * sigma_e as f32;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut rho = Grid3 {
+        origin: grid_origin,
+        spacing: grid_spacing,
+        dims: grid_dims,
+        data: vec![spec.rho_min as f32; n_nodes],
+    };
+    for i in 0..n_nodes {
+        if vsum[i] > 1e-9 {
+            let sigma = (wsum[i] / vsum[i]) as f64;
+            let t = if sigma_ref_0 > 0.0 {
+                (sigma / sigma_ref_0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            rho.data[i] =
+                (spec.rho_min + (spec.rho_max - spec.rho_min) * t.powf(spec.curve)) as f32;
+        }
+    }
+    let rho = if skin_max > spec.skin || erode > 0.0 {
+        blur_populated(&rho, &vsum, &core, blur_r)
+    } else {
+        smooth_masked_blur(&rho, &core, blur_r)
+    };
+
+    let mut p_lo = cal0.param_for(spec.rho_min, spec.cell);
+    let mut p_hi = cal0.param_for(spec.rho_max, spec.cell);
+    if spec.mode == FillMode::Sheet {
+        p_lo = p_lo.max(spec.min_wall);
+        p_hi = p_hi.max(spec.min_wall);
+    }
+    let mut param = Grid3 {
+        origin: grid_origin,
+        spacing: grid_spacing,
+        dims: grid_dims,
+        data: vec![0.0f32; n_nodes],
+    };
+    for i in 0..n_nodes {
+        let mut p = cal0.param_for(rho.data[i] as f64, spec.cell);
+        if spec.mode == FillMode::Sheet {
+            p = p.max(spec.min_wall);
+        }
+        param.data[i] = p as f32;
+    }
+
+    let fill = FillExpr {
+        body,
+        skin: spec.skin,
+        skin_max,
+        erode,
+        param_range: [p_lo, p_hi],
+        family: spec.family,
+        morph: spec.morph,
+        mode: spec.mode,
+        cell: spec.cell,
+        cell_min,
+        min_wall: spec.min_wall,
+        rotate: spec.rotate,
+        param,
+        keep,
+    };
+
+    let has_keep = !matches!(fill.keep, Expr::Empty);
+    let h_occ_body = (0.5 * base_h).max(0.15);
+    let mut phi_homog = vec![0.0f64; mesh.tets.len()];
+    for (e, slot) in phi_homog.iter_mut().enumerate() {
+        let tet = mesh.tets[e];
+        let v = [tet[0], tet[1], tet[2], tet[3]].map(|n| mesh.nodes[n as usize]);
+        let mut rng = Lcg(0x9E37_79B9_7F4A_7C15 ^ (e as u64).wrapping_mul(0xA076_1D64_78BD_542F));
+        let mut acc = 0.0f64;
+        let mut lam = [0.0f64; 4];
+        for _ in 0..PHI_SAMPLES {
+            let mut s = 0.0;
+            for l in &mut lam {
+                *l = -(rng.next_f64() + 1e-12).ln();
+                s += *l;
+            }
+            let pt = [
+                (lam[0] * v[0][0] + lam[1] * v[1][0] + lam[2] * v[2][0] + lam[3] * v[3][0]) / s,
+                (lam[0] * v[0][1] + lam[1] * v[1][1] + lam[2] * v[2][1] + lam[3] * v[3][1]) / s,
+                (lam[0] * v[0][2] + lam[1] * v[1][2] + lam[2] * v[2][2] + lam[3] * v[3][2]) / s,
+            ];
+            let pv = fill.param.sample(pt);
+            let d_outer = fill.outer_body(pt);
+            let occ_body = if erode > 0.0 {
+                volume::occupancy(d_outer, h_occ_body)
+            } else {
+                1.0
+            };
+            let skin_loc = fill.skin_at_param(pv);
+            let occ_shell = if skin_loc <= 1e-9 && !has_keep {
+                0.0
+            } else {
+                let h_occ_skin = (0.6 * base_h).min(1.1 * skin_loc.max(0.2)).max(0.12);
+                let d_skin = fieldsmith_field::dual::D::new(
+                    -(d_outer.v + skin_loc),
+                    [-d_outer.g[0], -d_outer.g[1], -d_outer.g[2]],
+                );
+                let d_shell = if has_keep {
+                    fieldsmith_field::dual::dmin(d_skin, expr::eval(&fill.keep, pt))
+                } else {
+                    d_skin
+                };
+                volume::occupancy(d_shell, h_occ_skin)
+            };
+            let a_loc = fill.cell_at_param(pv).max(1e-6);
+            let w_loc = fill.wall_at_param(pv);
+            let rho_lat = if let Some(c1) = cal1 {
+                let t = fill.grade_at_param(pv);
+                (1.0 - t) * cal0.rho_for(w_loc, a_loc) + t * c1.rho_for(w_loc, a_loc)
+            } else {
+                cal0.rho_for(w_loc, a_loc)
+            };
+            acc += occ_body * (occ_shell + (1.0 - occ_shell) * rho_lat);
+        }
+        *slot = (acc / PHI_SAMPLES as f64).clamp(0.0, 1.0);
+    }
+
+    Ok((spec, fill, phi_homog))
+}
+
+pub(crate) fn prepare_graded_smooth_baseline(
+    sdoc_0: &fieldsmith_doc::Document,
+    solid_base: &Analysis,
+    graded_0: &Graded,
+    rho_mat_0: &[f64],
+) -> Result<GradedSmoothBaseline, SetupError> {
+    let spec = &graded_0.spec;
+    let drive_0: Vec<f64> = match &spec.case {
+        Some(name) => solid_base
+            .cases
+            .iter()
+            .find(|c| c.name == *name)
+            .ok_or_else(|| SetupError(format!("fill case '{name}': no load case with that name")))?
+            .vm_elem
+            .clone(),
+        None => solid_base.envelope_elem.clone(),
+    };
+    let mat_0 = material_of(sdoc_0)?;
+    let body = expr::compile_body(sdoc_0);
+    let b = expr::bounds(&body);
+    let min_cell = spec.cell_min.unwrap_or(spec.cell).min(spec.cell);
+    let spacing = (min_cell / 2.0).max(1e-3);
+    let pad = spec.cell;
+    let grid_0 = grid_over(&b, spacing, pad)?;
+    let base_h = solid_base.provenance.element_size;
+    let blur_r = ((spec.cell / grid_0.spacing) / 2.0).round().max(1.0) as usize;
+
+    let (_, _, phi_homog_0) = build_smooth_fill_expr_and_fractions(
+        sdoc_0,
+        &solid_base.mesh,
+        base_h,
+        &drive_0,
+        graded_0.sigma_ref,
+        grid_0.origin,
+        grid_0.spacing,
+        grid_0.dims,
+        blur_r,
+    )?;
+
+    let mut raw_graded_m0 = 0.0f64;
+    let mut raw_solid_m0 = 0.0f64;
+    for (e, &phi) in graded_0.rho_elem.iter().enumerate() {
+        let v_rho = solid_base.mesh.tet_volume(e).abs() * rho_mat_0[e] / 1000.0;
+        raw_graded_m0 += v_rho * phi;
+        raw_solid_m0 += v_rho;
+    }
+    let mesh_mass_scale = if raw_graded_m0 > 1e-12 {
+        graded_0.mass_g / raw_graded_m0
+    } else {
+        1.0
+    };
+    let solid_mass_scale = if raw_solid_m0 > 1e-12 {
+        graded_0.solid_mass_g / raw_solid_m0
+    } else {
+        1.0
+    };
+    let material_0 = build_graded_material(
+        spec,
+        &mat_0,
+        &graded_0.class,
+        &graded_0.rho_elem,
+        &graded_0.young,
+    );
+    let k_elem_0: Vec<f64> = graded_0
+        .class
+        .iter()
+        .zip(&graded_0.rho_elem)
+        .map(|(&c, &phi)| conductivity_of(c, phi))
+        .collect();
+
+    Ok(GradedSmoothBaseline {
+        drive_0,
+        grid_origin: grid_0.origin,
+        grid_spacing: grid_0.spacing,
+        grid_dims: grid_0.dims,
+        blur_r,
+        phi_homog_0,
+        mesh_mass_scale,
+        solid_mass_scale,
+        material_0,
+        k_elem_0,
+    })
+}
+
+pub(crate) fn eval_graded_perturbed_props(
+    sdoc_pert: &fieldsmith_doc::Document,
+    mesh_pert: &P2Mesh,
+    base_h: f64,
+    graded_0: &Graded,
+    base_smooth: &GradedSmoothBaseline,
+    rho_mat_pert: &[f64],
+) -> Result<GradedPerturbedProps, SetupError> {
+    let base_mat = material_of(sdoc_pert)?;
+    let (spec, fill, phi_homog_pert) = build_smooth_fill_expr_and_fractions(
+        sdoc_pert,
+        mesh_pert,
+        base_h,
+        &base_smooth.drive_0,
+        graded_0.sigma_ref,
+        base_smooth.grid_origin,
+        base_smooth.grid_spacing,
+        base_smooth.grid_dims,
+        base_smooth.blur_r,
+    )?;
+
+    let morph_fam = spec.morph.filter(|&m| m != spec.family);
+    let ne = mesh_pert.tets.len();
+    let mut phi_elem = vec![0.0f64; ne];
+    let mut young = vec![0.0f64; ne];
+    let mut k_elem = vec![0.0f64; ne];
+    let mut raw_graded_m = 0.0f64;
+    let mut raw_solid_m = 0.0f64;
+
+    for e in 0..ne {
+        let d_phi = phi_homog_pert[e] - base_smooth.phi_homog_0[e];
+        let phi = (graded_0.rho_elem[e] + d_phi).clamp(0.0, 1.0);
+        phi_elem[e] = phi;
+
+        let c = centroid(mesh_pert, e);
+        let pv = fill.param.sample(c);
+        let a_loc = fill.cell_at_param(pv).max(1e-6);
+        let h_over_cell = base_h / a_loc;
+        let rel_e = if let Some(fam_hi) = morph_fam {
+            let t = fill.grade_at_param(pv);
+            let e0 = element_stiffness(spec.family, spec.mode, phi, h_over_cell);
+            let e1 = element_stiffness(fam_hi, spec.mode, phi, h_over_cell);
+            (1.0 - t) * e0 + t * e1
+        } else {
+            element_stiffness(spec.family, spec.mode, phi, h_over_cell)
+        };
+        young[e] = base_mat.e * VOID_SCALE.max(rel_e);
+        k_elem[e] = conductivity_of(graded_0.class[e], phi);
+
+        let v_rho = mesh_pert.tet_volume(e).abs() * rho_mat_pert[e] / 1000.0;
+        raw_graded_m += v_rho * phi;
+        raw_solid_m += v_rho;
+    }
+
+    let material = build_graded_material(&spec, &base_mat, &graded_0.class, &phi_elem, &young);
+    Ok(GradedPerturbedProps {
+        spec,
+        base_mat,
+        phi_elem,
+        material,
+        k_elem,
+        mass_g: base_smooth.mesh_mass_scale * raw_graded_m,
+        solid_mass_g: base_smooth.solid_mass_scale * raw_solid_m,
+    })
 }
 
 #[cfg(test)]

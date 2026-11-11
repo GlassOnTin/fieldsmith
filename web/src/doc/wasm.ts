@@ -1467,6 +1467,8 @@ export interface CaseSensitivity {
   d_max_displacement: number;
   d_max_vm_elem: number;
   d_max_temp?: number | null;
+  d_yield_utilization?: number | null;
+  d_buckling_utilization?: number | null;
 }
 
 export interface ParameterSensitivity {
@@ -1476,6 +1478,7 @@ export interface ParameterSensitivity {
   scheme: string;
   d_mass_g: number;
   rel_mass: number;
+  d_solid_mass_g?: number | null;
   d_modes_hz?: number[];
   rel_modes?: number[];
   cases: CaseSensitivity[];
@@ -1488,6 +1491,7 @@ export interface SensitivityReport {
   nodes: number;
   elements: number;
   baseline_mass_g: number;
+  baseline_solid_mass_g?: number | null;
   baseline_compliance: [string, number][];
   baseline_modes_hz?: number[];
   parameters: ParameterSensitivity[];

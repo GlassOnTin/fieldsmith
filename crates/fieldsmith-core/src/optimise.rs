@@ -13,14 +13,14 @@
 //! merit line search at locked element spacing `h`.
 
 use crate::contracts::{
-    evaluate_contracts, parse_mode_metric_index, required_modes_for_asserts, resolve_assert_metric,
-    VerificationReport,
+    evaluate_contracts, is_graded_assert_metric, parse_mode_metric_index,
+    required_modes_for_asserts, resolve_assert_metric, VerificationReport,
 };
 use crate::declarative_system::{resolve_system_doc, sync_system_doc_compact};
 use crate::fill::{self, Graded};
 use crate::sensitivity::{
-    apply_sens_param, compute_sensitivities_with_base, default_target_params, read_param_value,
-    CaseSensitivity, ParameterSensitivity,
+    apply_sens_param, compute_sensitivities_graded_with_base, compute_sensitivities_with_base,
+    default_target_params, read_param_value, CaseSensitivity, ParameterSensitivity,
 };
 use crate::{analyse_full, Analysis, CaseResult, Clock, Resolution, SetupError};
 use fieldsmith_doc::fsm::{self, LiterateAssert};
@@ -165,10 +165,48 @@ struct EvalState {
     doc: Document,
     sys_doc: Document,
     analysis: Analysis,
+    graded: Option<Graded>,
     verification: VerificationReport,
     objective: f64,
     constraints_g: Vec<f64>,
     solves: usize,
+}
+
+fn is_fill_opt_addr(doc: &Document, addr: &ParamAddr) -> bool {
+    addr.id == "fill"
+        && !addr.attr.is_empty()
+        && doc.find("fill").is_none()
+        && doc.custom_materials.iter().all(|m| m.id != "fill")
+        && doc.loads.iter().all(|l| l.id != "fill")
+        && doc.temperatures.iter().all(|t| t.id != "fill")
+        && doc.convections.iter().all(|c| c.id != "fill")
+        && doc.heat_fluxes.iter().all(|f| f.id != "fill")
+}
+
+fn default_fill_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
+    match (addr.attr.as_str(), addr.comp) {
+        ("rho_min", None) | ("rho", Some(0)) => (0.12_f64.min(initial), 0.85_f64.max(initial)),
+        ("rho_max", None) | ("rho", Some(1)) => (0.18_f64.min(initial), 0.95_f64.max(initial)),
+        ("skin", None) => (0.4_f64.min(initial), (3.0 * initial).max(2.5)),
+        ("skin_max", None) => (0.4_f64.min(initial), (3.0 * initial).max(3.5)),
+        ("cell", None) => (
+            (0.45 * initial).max(2.0).min(initial),
+            (2.2 * initial).max(8.0).max(initial),
+        ),
+        ("cell_min", None) => (
+            (0.35 * initial).max(1.5).min(initial),
+            (2.0 * initial).max(6.0).max(initial),
+        ),
+        ("curve", None) => (0.25_f64.min(initial), 3.0_f64.max(initial)),
+        ("wall" | "min_wall", None) => (
+            (0.5 * initial).max(0.2).min(initial),
+            (2.0 * initial).max(1.6).max(initial),
+        ),
+        ("margin", None) => (0.2_f64.min(initial), (2.5 * initial).max(3.0)),
+        ("erode", None) => (0.0, (2.5 * initial).max(3.0)),
+        ("rotate", Some(_)) => (initial - 45.0, initial + 45.0),
+        _ => (0.35 * initial, 2.5 * initial),
+    }
 }
 
 fn default_optimise_params(doc: &Document, requested: &[String]) -> Vec<String> {
@@ -179,6 +217,9 @@ fn default_optimise_params(doc: &Document, requested: &[String]) -> Vec<String> 
     candidates
         .into_iter()
         .filter(|name| {
+            if name.starts_with("fill.") {
+                return true;
+            }
             // Always include explicit `system` design levers.
             if doc
                 .system_block
@@ -217,7 +258,7 @@ fn build_param_metas(
 ) -> Result<Vec<ParamMeta>, SetupError> {
     if names.is_empty() {
         return Err(SetupError(
-            "optimise: document has no tunable `let` or `system` design parameters (pass `params` explicitly)"
+            "optimise: document has no tunable `let`, `system`, or `fill.*` design parameters (pass `params` explicitly)"
                 .into(),
         ));
     }
@@ -243,6 +284,8 @@ fn build_param_metas(
             .and_then(|sb| sb.designs.iter().find(|d| &d.name == name))
         {
             (dp.min, dp.max)
+        } else if is_fill_opt_addr(doc, &addr) {
+            default_fill_param_bounds(&addr, initial)
         } else if initial > 0.0 {
             (0.35 * initial, 2.5 * initial)
         } else if initial < 0.0 {
@@ -287,40 +330,46 @@ fn find_case_index(cases: &[CaseResult], selector: &str, thermal_default: bool) 
         .position(|c| c.name.eq_ignore_ascii_case(selector) || c.name.contains(selector))
 }
 
+fn all_graded_or_solid_cases<'a>(a: &'a Analysis, g: Option<&'a Graded>) -> Vec<&'a CaseResult> {
+    if let Some(gr) = g {
+        gr.cases.iter().chain(gr.thermal_cases.iter()).collect()
+    } else {
+        a.cases.iter().collect()
+    }
+}
+
 fn eval_objective_value(
     obj: OptObjective,
     a: &Analysis,
     g: Option<&Graded>,
 ) -> Result<f64, SetupError> {
+    let cases = all_graded_or_solid_cases(a, g);
     match obj {
         OptObjective::MassG => Ok(g.map(|gr| gr.mass_g).unwrap_or(a.mass_g)),
         OptObjective::Compliance => {
-            if a.cases.is_empty() {
+            if cases.is_empty() {
                 return Err(SetupError(
                     "optimise: compliance objective requires at least one load or thermal case"
                         .into(),
                 ));
             }
-            Ok(a.cases.iter().map(|c| c.compliance).sum())
+            Ok(cases.iter().map(|c| c.compliance).sum())
         }
-        OptObjective::MaxVmElem => a
-            .cases
+        OptObjective::MaxVmElem => cases
             .iter()
             .map(|c| c.max_vm_elem)
             .reduce(f64::max)
             .ok_or_else(|| {
                 SetupError("optimise: max_vm_elem objective requires at least one case".into())
             }),
-        OptObjective::MaxDisplacement => a
-            .cases
+        OptObjective::MaxDisplacement => cases
             .iter()
             .map(|c| c.max_displacement)
             .reduce(f64::max)
             .ok_or_else(|| {
                 SetupError("optimise: max_displacement objective requires at least one case".into())
             }),
-        OptObjective::MaxTemp => a
-            .cases
+        OptObjective::MaxTemp => cases
             .iter()
             .filter_map(|c| c.temperature.as_deref())
             .map(|t| t.iter().copied().fold(f64::NEG_INFINITY, f64::max))
@@ -344,14 +393,15 @@ fn eval_objective_value(
 fn eval_objective_grad_p(
     obj: OptObjective,
     a: &Analysis,
+    g: Option<&Graded>,
     ps: &ParameterSensitivity,
 ) -> Result<f64, SetupError> {
+    let cases = all_graded_or_solid_cases(a, g);
     match obj {
         OptObjective::MassG => Ok(ps.d_mass_g),
         OptObjective::Compliance => Ok(ps.cases.iter().map(|c| c.d_compliance).sum()),
         OptObjective::MaxVmElem => {
-            let (idx, _) = a
-                .cases
+            let (idx, _) = cases
                 .iter()
                 .enumerate()
                 .max_by(|(_, c1), (_, c2)| c1.max_vm_elem.total_cmp(&c2.max_vm_elem))
@@ -359,8 +409,7 @@ fn eval_objective_grad_p(
             Ok(ps.cases.get(idx).map(|c| c.d_max_vm_elem).unwrap_or(0.0))
         }
         OptObjective::MaxDisplacement => {
-            let (idx, _) = a
-                .cases
+            let (idx, _) = cases
                 .iter()
                 .enumerate()
                 .max_by(|(_, c1), (_, c2)| c1.max_displacement.total_cmp(&c2.max_displacement))
@@ -372,8 +421,7 @@ fn eval_objective_grad_p(
                 .unwrap_or(0.0))
         }
         OptObjective::MaxTemp => {
-            let (idx, _) = a
-                .cases
+            let (idx, _) = cases
                 .iter()
                 .enumerate()
                 .filter_map(|(i, c)| {
@@ -402,11 +450,26 @@ fn eval_objective_grad_p(
 fn metric_derivative_for_param(
     metric: &str,
     a: &Analysis,
+    g: Option<&Graded>,
     ps: &ParameterSensitivity,
+    solid_ps: Option<&ParameterSensitivity>,
 ) -> Result<f64, SetupError> {
     let m = metric.trim();
     match m {
-        "mass_g" | "solid_mass_g" | "graded_mass_g" => return Ok(ps.d_mass_g),
+        "mass_g" | "graded_mass_g" => return Ok(ps.d_mass_g),
+        "solid_mass_g" => return Ok(ps.d_solid_mass_g.unwrap_or(ps.d_mass_g)),
+        "mass_saved_pct" => {
+            let gr = g.ok_or_else(|| {
+                SetupError("optimise: mass_saved_pct requires a graded fill solve".into())
+            })?;
+            if gr.solid_mass_g <= 1e-12 {
+                return Ok(0.0);
+            }
+            let dm_graded = ps.d_mass_g;
+            let dm_solid = ps.d_solid_mass_g.unwrap_or(0.0);
+            return Ok(100.0 * (gr.mass_g * dm_solid - gr.solid_mass_g * dm_graded)
+                / (gr.solid_mass_g * gr.solid_mass_g));
+        }
         "mode_split_12_pct" => {
             let freqs = &a
                 .modes
@@ -438,18 +501,102 @@ fn metric_derivative_for_param(
             ))
         });
     }
-    let rest = m
-        .strip_prefix("solid.")
-        .or_else(|| m.strip_prefix("graded."))
-        .unwrap_or(m);
+    let (use_graded, rest) = if let Some(r) = m.strip_prefix("graded.") {
+        (true, r)
+    } else if let Some(r) = m.strip_prefix("solid.") {
+        (false, r)
+    } else {
+        (false, m)
+    };
     let (field, case_sel) = match rest.split_once(':') {
         Some((f, cs)) => (f.trim(), cs.trim()),
         None => (rest.trim(), ""),
     };
+    if matches!(
+        field,
+        "yield_utilization" | "yield_util" | "buckling_utilization" | "buckling_util"
+    ) {
+        let gr = g.ok_or_else(|| {
+            SetupError(format!(
+                "optimise: contract '{m}' requires a graded fill solve"
+            ))
+        })?;
+        let idx = find_case_index(&gr.cases, case_sel, false).ok_or_else(|| {
+            SetupError(format!(
+                "optimise: contract '{m}' matched no graded mechanical case"
+            ))
+        })?;
+        let cs = ps.cases.get(idx).ok_or_else(|| {
+            SetupError(format!(
+                "optimise: missing graded sensitivity for case #{idx} on contract '{m}'"
+            ))
+        })?;
+        return match field {
+            "yield_utilization" | "yield_util" => cs.d_yield_utilization.ok_or_else(|| {
+                SetupError(format!(
+                    "optimise: contract '{m}' requires a material with positive yield strength"
+                ))
+            }),
+            _ => cs.d_buckling_utilization.ok_or_else(|| {
+                SetupError(format!(
+                    "optimise: missing buckling utilization sensitivity on contract '{m}'"
+                ))
+            }),
+        };
+    }
+
     let thermal_default = matches!(field, "max_temp" | "min_temp");
+    if use_graded {
+        let gr = g.ok_or_else(|| {
+            SetupError(format!(
+                "optimise: contract '{m}' requires a graded fill solve"
+            ))
+        })?;
+        let graded_all: Vec<CaseResult> = gr
+            .cases
+            .iter()
+            .chain(gr.thermal_cases.iter())
+            .cloned()
+            .collect();
+        let idx = find_case_index(&graded_all, case_sel, thermal_default).ok_or_else(|| {
+            SetupError(format!("optimise: contract '{m}' matched no graded case"))
+        })?;
+        let cs = ps.cases.get(idx).ok_or_else(|| {
+            SetupError(format!(
+                "optimise: missing graded sensitivity entry for case #{idx} on contract '{m}'"
+            ))
+        })?;
+        let bc = &graded_all[idx];
+        return match field {
+            "compliance" => Ok(cs.d_compliance),
+            "max_displacement" | "max_disp" | "deflection" => Ok(cs.d_max_displacement),
+            "max_vm_elem" | "vm" | "max_von_mises" => Ok(cs.d_max_vm_elem),
+            "min_safety_factor" | "safety_factor" => {
+                let denom = bc.max_vm_elem.max(1e-9);
+                Ok(-a.yield_strength * cs.d_max_vm_elem / (denom * denom))
+            }
+            "max_temp" => cs.d_max_temp.ok_or_else(|| {
+                SetupError(format!(
+                    "optimise: contract '{m}' requires a thermal conduction case"
+                ))
+            }),
+            _ => Err(SetupError(format!(
+                "optimise: contract metric '{m}' is not supported by 3D adjoint differentiation"
+            ))),
+        };
+    }
+
+    let active_ps = if g.is_some() {
+        let Some(sps) = solid_ps else {
+            return Ok(0.0);
+        };
+        sps
+    } else {
+        ps
+    };
     let idx = find_case_index(&a.cases, case_sel, thermal_default)
         .ok_or_else(|| SetupError(format!("optimise: contract '{m}' matched no solved case")))?;
-    let cs: &CaseSensitivity = ps.cases.get(idx).ok_or_else(|| {
+    let cs: &CaseSensitivity = active_ps.cases.get(idx).ok_or_else(|| {
         SetupError(format!(
             "optimise: missing sensitivity entry for case #{idx} on contract '{m}'"
         ))
@@ -470,7 +617,9 @@ fn metric_derivative_for_param(
         }),
         _ => Err(SetupError(format!(
             "optimise: contract metric '{m}' is not supported by 3D adjoint differentiation \
-             (supported: mass_g, compliance, max_displacement, max_vm_elem, min_safety_factor, max_temp, mode_k, mode_split_12_pct)"
+             (supported: mass_g, graded_mass_g, solid_mass_g, mass_saved_pct, compliance, \
+              max_displacement, max_vm_elem, min_safety_factor, max_temp, yield_utilization, \
+              buckling_utilization, mode_k, mode_split_12_pct)"
         ))),
     }
 }
@@ -663,6 +812,98 @@ fn solve_trust_region_subproblem(
     (s, pred_drop)
 }
 
+fn apply_fill_opt_param(doc: &mut Document, addr: &ParamAddr, val: f64) -> Result<(), SetupError> {
+    let f = doc
+        .fill
+        .as_mut()
+        .ok_or_else(|| SetupError(format!("param {addr}: document has no fill")))?;
+    match (addr.attr.as_str(), addr.comp) {
+        ("rho_min", None) | ("rho", Some(0)) => {
+            if !(val > 0.0 && val <= 1.0) {
+                return Err(SetupError(format!(
+                    "param {addr}: rho_min={val} out of (0, 1]"
+                )));
+            }
+            f.rho_min = val;
+        }
+        ("rho_max", None) | ("rho", Some(1)) => {
+            if !(val > 0.0 && val <= 1.0) {
+                return Err(SetupError(format!(
+                    "param {addr}: rho_max={val} out of (0, 1]"
+                )));
+            }
+            f.rho_max = val;
+        }
+        ("skin", None) => {
+            if val < 0.0 {
+                return Err(SetupError(format!("param {addr}: skin={val} must be >= 0")));
+            }
+            f.skin = val;
+        }
+        ("skin_max", None) => {
+            if val < 0.0 {
+                return Err(SetupError(format!(
+                    "param {addr}: skin_max={val} must be >= 0"
+                )));
+            }
+            f.skin_max = Some(val);
+        }
+        ("cell", None) => {
+            if val <= 0.0 {
+                return Err(SetupError(format!("param {addr}: cell={val} must be > 0")));
+            }
+            f.cell = val;
+        }
+        ("cell_min", None) => {
+            if val <= 0.0 {
+                return Err(SetupError(format!(
+                    "param {addr}: cell_min={val} must be > 0"
+                )));
+            }
+            f.cell_min = Some(val);
+        }
+        ("curve", None) => {
+            if val <= 0.0 {
+                return Err(SetupError(format!("param {addr}: curve={val} must be > 0")));
+            }
+            f.curve = val;
+        }
+        ("wall" | "min_wall", None) => {
+            if val <= 0.0 {
+                return Err(SetupError(format!(
+                    "param {addr}: min_wall={val} must be > 0"
+                )));
+            }
+            f.min_wall = val;
+        }
+        ("margin", None) => {
+            if val < 0.0 {
+                return Err(SetupError(format!(
+                    "param {addr}: margin={val} must be >= 0"
+                )));
+            }
+            f.margin = val;
+        }
+        ("erode", None) => {
+            if val < 0.0 {
+                return Err(SetupError(format!(
+                    "param {addr}: erode={val} must be >= 0"
+                )));
+            }
+            f.erode = Some(val);
+        }
+        ("rotate", Some(i)) if i < 3 => {
+            f.rotate[i] = val;
+        }
+        _ => {
+            return Err(SetupError(format!(
+                "param {addr}: unsupported fill parameter"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn evaluate_state(
     base_doc: &Document,
     metas: &[ParamMeta],
@@ -673,39 +914,40 @@ fn evaluate_state(
     clock: Clock,
 ) -> Result<EvalState, SetupError> {
     let mut doc = base_doc.clone();
+    let mut touched_fill = false;
     for (meta, &zk) in metas.iter().zip(z) {
         let p_val = meta.unscale_unit(zk);
-        apply_sens_param(&mut doc, &meta.addr, p_val).map_err(SetupError)?;
+        if is_fill_opt_addr(base_doc, &meta.addr) {
+            apply_fill_opt_param(&mut doc, &meta.addr, p_val)?;
+            touched_fill = true;
+        } else {
+            apply_sens_param(&mut doc, &meta.addr, p_val).map_err(SetupError)?;
+        }
+    }
+    if touched_fill {
+        if let Some(f) = doc.fill.as_mut() {
+            f.rho_max = f.rho_max.max(f.rho_min);
+            if let Some(sm) = f.skin_max.as_mut() {
+                *sm = sm.max(f.skin);
+            }
+            if let Some(cm) = f.cell_min.as_mut() {
+                *cm = cm.min(f.cell);
+            }
+        }
     }
     let sys_cow = resolve_system_doc(&doc)?;
     let sys_doc = sys_cow.into_owned();
-
-    let need_graded = sys_doc.fill.is_some()
-        && (obj == OptObjective::MassG
-            || asserts.iter().any(|a| {
-                let m = a.metric.trim();
-                m.starts_with("graded.")
-                    || m == "graded_mass_g"
-                    || m == "mass_saved_pct"
-                    || m == "mass_g"
-            }));
 
     let mut modes_count = required_modes_for_asserts(sys_doc.solve.modes, asserts);
     if obj == OptObjective::MaxMode1Hz {
         modes_count = Some(modes_count.unwrap_or(0).max(1));
     }
 
-    let (analysis, graded) = if need_graded {
-        let (solid_a, gr) = fill::graded(&sys_doc, res, clock)?;
-        if modes_count.is_some() {
-            let modal_a = analyse_full(&sys_doc, res, clock, modes_count, false)?;
-            (modal_a, Some(gr))
-        } else {
-            (solid_a, Some(gr))
-        }
+    let analysis = analyse_full(&sys_doc, res, clock, modes_count, false)?;
+    let graded = if sys_doc.fill.is_some() {
+        Some(fill::graded_of(&sys_doc, &analysis, clock, false)?)
     } else {
-        let a = analyse_full(&sys_doc, res, clock, modes_count, false)?;
-        (a, None)
+        None
     };
 
     let verification =
@@ -720,11 +962,16 @@ fn evaluate_state(
     }
     let sdoc = crate::structural_doc(&sys_doc);
     let static_solves = crate::case_names(sdoc.as_ref()).len() + sdoc.thermal_cases().len();
-    let solves = (static_solves + usize::from(analysis.modes.is_some())).max(1);
+    let solves = if graded.is_some() {
+        (2 * static_solves + usize::from(analysis.modes.is_some())).max(1)
+    } else {
+        (static_solves + usize::from(analysis.modes.is_some())).max(1)
+    };
     Ok(EvalState {
         doc,
         sys_doc,
         analysis,
+        graded,
         verification,
         objective,
         constraints_g,
@@ -764,8 +1011,9 @@ fn is_better_state(cand: &EvalState, best: &BestState, min_sign: f64) -> bool {
     }
 }
 
-/// Optimise a `.fsm` [`Document`]'s design parameters (`let` variables and/or `system` `design`
-/// levers) to minimise `spec.objective` subject to all `.fsm` `assert` contracts.
+/// Optimise a `.fsm` [`Document`]'s design parameters (`let` variables, `system` `design`
+/// levers, and/or `fill.*` TPMS grading parameters) to minimise `spec.objective` subject to all
+/// `.fsm` `assert` contracts.
 ///
 /// Returns `(best_doc, OptimisationReport)`.
 pub fn optimise_document(
@@ -819,7 +1067,11 @@ pub fn optimise_document(
         params: metas
             .iter()
             .zip(&z)
-            .map(|(m, &zk)| (m.name.clone(), m.unscale_unit(zk)))
+            .map(|(m, &zk)| {
+                let val =
+                    read_param_value(&cur.doc, &m.addr).unwrap_or_else(|_| m.unscale_unit(zk));
+                (m.name.clone(), val)
+            })
             .collect(),
         step_alpha: 0.0,
     });
@@ -831,22 +1083,71 @@ pub fn optimise_document(
         constraints_g: cur.constraints_g.clone(),
     };
 
+    let need_solid_case_sens = cur.graded.is_some()
+        && asserts.iter().any(|a| {
+            let m = a.metric.trim();
+            !is_graded_assert_metric(m) && !m.starts_with("mode_")
+        });
+    let non_fill_param_names: Vec<String> = metas
+        .iter()
+        .filter(|m| !is_fill_opt_addr(doc, &m.addr))
+        .map(|m| m.name.clone())
+        .collect();
+
     let mut trust_delta = 0.28f64;
     let mut converged = false;
     let mut iters_done = 0usize;
 
     for iter in 1..=max_iters {
-        let sens = compute_sensitivities_with_base(
-            &cur.doc,
-            &cur.sys_doc,
-            &cur.analysis,
-            &param_names,
-            clock(),
-            clock,
-        )?;
+        let sens = if let Some(gr) = cur.graded.as_ref() {
+            compute_sensitivities_graded_with_base(
+                &cur.doc,
+                &cur.sys_doc,
+                &cur.analysis,
+                gr,
+                &param_names,
+                clock(),
+                clock,
+            )?
+        } else {
+            compute_sensitivities_with_base(
+                &cur.doc,
+                &cur.sys_doc,
+                &cur.analysis,
+                &param_names,
+                clock(),
+                clock,
+            )?
+        };
         sensitivity_method = sens.method.clone();
         // `sens.solves_run` includes the baseline solve count; add only the adjoint/perturbation solves.
         total_solves += sens.solves_run.saturating_sub(cur.solves);
+
+        let solid_sens = if need_solid_case_sens && !non_fill_param_names.is_empty() {
+            let mut s_doc = cur.doc.clone();
+            s_doc.fill = None;
+            let mut s_sys_doc = cur.sys_doc.clone();
+            s_sys_doc.fill = None;
+            let sr = compute_sensitivities_with_base(
+                &s_doc,
+                &s_sys_doc,
+                &cur.analysis,
+                &non_fill_param_names,
+                clock(),
+                clock,
+            )?;
+            let solid_base_solves = {
+                let sdoc = crate::structural_doc(&s_sys_doc);
+                (crate::case_names(sdoc.as_ref()).len()
+                    + sdoc.thermal_cases().len()
+                    + usize::from(cur.analysis.modes.is_some()))
+                .max(1)
+            };
+            total_solves += sr.solves_run.saturating_sub(solid_base_solves);
+            Some(sr)
+        } else {
+            None
+        };
 
         let mut g_f = vec![0.0; n];
         for (k, meta) in metas.iter().enumerate() {
@@ -857,7 +1158,8 @@ pub fn optimise_document(
                 .ok_or_else(|| {
                     SetupError(format!("optimise: missing sensitivity for '{}'", meta.name))
                 })?;
-            let dj_dp = eval_objective_grad_p(spec.objective, &cur.analysis, ps)?;
+            let dj_dp =
+                eval_objective_grad_p(spec.objective, &cur.analysis, cur.graded.as_ref(), ps)?;
             g_f[k] = min_sign * dj_dp * meta.span() / obj_scale;
         }
 
@@ -871,10 +1173,15 @@ pub fn optimise_document(
                     .iter()
                     .find(|p| p.param == meta.name)
                     .unwrap();
+                let solid_ps = solid_sens
+                    .as_ref()
+                    .and_then(|sr| sr.parameters.iter().find(|p| p.param == meta.name));
                 dv_dp.push(metric_derivative_for_param(
                     &asrt.metric,
                     &cur.analysis,
+                    cur.graded.as_ref(),
                     ps,
+                    solid_ps,
                 )?);
             }
             let (_, dg_dp) = contract_residual_and_grad(asrt, val, Some(&dv_dp))?;
@@ -955,7 +1262,15 @@ pub fn optimise_document(
         if let Some((z_next, next_state, alpha)) = accepted {
             let rel_obj_move =
                 (next_state.objective - cur.objective).abs() / cur.objective.abs().max(1e-6);
-            z = z_next;
+            z = metas
+                .iter()
+                .zip(&z_next)
+                .map(|(m, &zk)| {
+                    read_param_value(&next_state.doc, &m.addr)
+                        .map(|v| m.to_unit(v))
+                        .unwrap_or(zk)
+                })
+                .collect();
             cur = next_state;
             history.push(OptIterationRecord {
                 iter,
@@ -965,7 +1280,11 @@ pub fn optimise_document(
                 params: metas
                     .iter()
                     .zip(&z)
-                    .map(|(m, &zk)| (m.name.clone(), m.unscale_unit(zk)))
+                    .map(|(m, &zk)| {
+                        let val = read_param_value(&cur.doc, &m.addr)
+                            .unwrap_or_else(|_| m.unscale_unit(zk));
+                        (m.name.clone(), val)
+                    })
                     .collect(),
                 step_alpha: alpha,
             });
@@ -1307,6 +1626,114 @@ assert \"Mass budget\" metric=\"mass_g\" target=\"<= 29.0\" unit=\"g\"
             rep.initial_objective,
             rep.final_objective,
             rep.objective_change_pct
+        );
+    }
+
+    #[test]
+    fn optimise_repairs_graded_tpms_yield_and_buckling_contracts_for_min_mass() {
+        let src = "\
+fieldsmith 1
+name \"Under-graded Gyroid Cantilever\"
+material ss316l
+box beam size=(60, 12, 10) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -380)
+fill gyroid sheet cell=6 rho=(0.14, 0.22) skin=0.6 wall=0.4 margin=1 curve=1.2
+assert \"Lattice yield utilization\" metric=\"graded.yield_utilization\" target=\"<= 0.80\"
+assert \"Lattice buckling utilization\" metric=\"graded.buckling_utilization\" target=\"<= 0.80\"
+assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit=\"%\"
+";
+        let doc = fsm::parse(src).expect("parse graded doc");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("fill.rho_min".to_string(), [0.12, 0.65]);
+        bounds.insert("fill.rho_max".to_string(), [0.20, 0.85]);
+        bounds.insert("fill.skin".to_string(), [0.5, 2.6]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec![
+                "fill.rho_min".to_string(),
+                "fill.rho_max".to_string(),
+                "fill.skin".to_string(),
+            ],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(4_000),
+            h: None,
+        };
+        let (opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("optimise graded tpms");
+        assert_eq!(rep.sensitivity_method, "boundary_velocity_adjoint");
+        assert!(
+            !rep.initial_verification.all_passed,
+            "expected initial rho=(0.14, 0.22), skin=0.6 to violate lattice utilization <= 0.80: {:?}",
+            rep.initial_verification
+        );
+        assert!(
+            rep.final_verification.all_passed,
+            "expected graded TPMS adjoint optimiser to satisfy yield/buckling <= 0.80 & mass_saved >= 25%: {:?}",
+            rep.final_verification
+        );
+        let roundtrip = fsm::parse(&rep.optimised_fsm).expect("round-trip optimised .fsm");
+        let f = roundtrip.fill.expect("fill preserved");
+        assert_eq!(f.rho_min, opt_doc.fill.as_ref().unwrap().rho_min);
+        assert!(f.rho_min <= f.rho_max);
+    }
+
+    #[test]
+    fn optimise_simultaneous_outer_shape_and_graded_tpms_co_design() {
+        let src = "\
+fieldsmith 1
+name \"Simultaneous Shape + Graded TPMS Cantilever\"
+material ss316l
+let d = 7.5
+box beam size=(60, 12, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -280)
+fill gyroid sheet cell=6 rho=(0.16, 0.26) skin=0.65 wall=0.4 margin=1 curve=1.2
+assert \"Graded tip deflection\" metric=\"graded.deflection\" target=\"<= 0.30\" unit=\"mm\"
+assert \"Lattice yield utilization\" metric=\"graded.yield_utilization\" target=\"<= 0.80\"
+assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit=\"%\"
+";
+        let doc = fsm::parse(src).expect("parse co-design doc");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("d".to_string(), [6.5, 15.0]);
+        bounds.insert("fill.rho_min".to_string(), [0.14, 0.55]);
+        bounds.insert("fill.rho_max".to_string(), [0.22, 0.80]);
+        bounds.insert("fill.skin".to_string(), [0.5, 2.4]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec![
+                "d".to_string(),
+                "fill.rho_min".to_string(),
+                "fill.rho_max".to_string(),
+                "fill.skin".to_string(),
+            ],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(4_000),
+            h: None,
+        };
+        let (opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("co-optimise shape+fill");
+        assert_eq!(rep.sensitivity_method, "boundary_velocity_adjoint");
+        assert!(
+            !rep.initial_verification.all_passed,
+            "expected initial d=7.5 mm graded beam to fail deflection/yield contracts: {:?}",
+            rep.initial_verification
+        );
+        assert!(
+            rep.final_verification.all_passed,
+            "expected co-optimised outer shape + graded TPMS beam to pass all contracts: {:?}",
+            rep.final_verification
+        );
+        let d_final = opt_doc.lets.iter().find(|l| l.name == "d").unwrap().value;
+        assert!(
+            d_final > 8.0,
+            "expected outer Z-depth d to grow from 7.5 mm for bending stiffness, got {d_final}"
         );
     }
 }
