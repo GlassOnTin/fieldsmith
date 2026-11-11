@@ -147,7 +147,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        38.0,
+        39.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -963,6 +963,97 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
         "expected positive 3D thermo-elastic stress, got {d_vm}"
     );
 
+    // -------------------------------------------------------------------------
+    // 8. Contract-Constrained 3D Adjoint Optimiser (`optimise`) API <-> MCP Parity
+    // -------------------------------------------------------------------------
+    let overstressed_fsm = "\
+fieldsmith 1
+name \"Overstressed V63 Beam\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let b = 10
+let d = 5
+let tip_f = -300
+box beam size=(60, b, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, tip_f)
+assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 135\" unit=\"MPa\"
+";
+    let opt_api_req = json!({
+        "apiv": 2,
+        "doc": overstressed_fsm,
+        "question": {
+            "kind": "optimise",
+            "objective": "mass_g",
+            "params": ["d"],
+            "bounds": { "d": [4.0, 16.0] },
+            "max_iters": 6,
+            "dofs": 4500,
+        }
+    });
+    let opt_api_rep = fieldsmith_api::respond(&opt_api_req.to_string());
+    assert!(
+        !opt_api_rep.is_error,
+        "API optimise returned error: {}",
+        opt_api_rep.body
+    );
+    let opt_api_json: Value = serde_json::from_str(&opt_api_rep.body).expect("opt_api_json");
+    assert_eq!(opt_api_json["status"], "ok");
+
+    let mut opt_srv = Server::new();
+    let (o_open_err, _) = mcp_tool_call(
+        &mut opt_srv,
+        960,
+        "open",
+        json!({ "doc": overstressed_fsm }),
+    );
+    assert!(!o_open_err);
+    let (o_mcp_err, opt_mcp_json) = mcp_tool_call(
+        &mut opt_srv,
+        961,
+        "optimise",
+        json!({
+            "objective": "mass_g",
+            "params": ["d"],
+            "bounds": { "d": [4.0, 16.0] },
+            "max_iters": 6,
+            "dofs": 4500,
+            "apply": true,
+        }),
+    );
+    assert!(!o_mcp_err, "MCP optimise failed: {opt_mcp_json}");
+    assert_eq!(
+        canon(&opt_api_json),
+        canon(&opt_mcp_json),
+        "API vs MCP `optimise` envelope mismatch"
+    );
+    assert_eq!(
+        opt_mcp_json["optimisation"]["initial_verification"]["all_passed"],
+        false
+    );
+    assert_eq!(
+        opt_mcp_json["optimisation"]["final_verification"]["all_passed"],
+        true
+    );
+    let (o_ver_err, o_ver_after) =
+        mcp_tool_call(&mut opt_srv, 962, "verify", json!({ "dofs": 4500 }));
+    assert!(!o_ver_err);
+    assert_eq!(
+        o_ver_after["status"], "ok",
+        "expected open MCP session doc to satisfy contracts after `optimise`: {o_ver_after}"
+    );
+    report.check(Check::absolute(
+        "3D adjoint contract optimiser failed assertions after repair",
+        0.0,
+        opt_mcp_json["optimisation"]["final_verification"]["failed"]
+            .as_u64()
+            .unwrap_or(99) as f64,
+        "asserts",
+        0.0,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -970,7 +1061,7 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k`), \
+             `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k`), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -989,8 +1080,8 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
-         and WASM declarative `system` authoring (`set_system_block`) are verified separately in \
-         `web/tests/v63-ui-lock.mjs`.\n\
+         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` -> `Apply` + undo \
+         are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical AND coupled steady-conduction thermo-elastic cases (including \
          spatial `lerp(...)` BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric \
          boundary-velocity discrete adjoints (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear \

@@ -249,7 +249,7 @@ fn fixed_mesh_mass_grams(mesh: &P2Mesh, rho_elem: &[f64]) -> f64 {
     mass_mm3_g_cm3 / 1000.0
 }
 
-fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
+pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &doc.system_block {
             if let Some(dp) = sb.designs.iter().find(|d| d.name == addr.id) {
@@ -320,7 +320,11 @@ fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     ))
 }
 
-fn apply_sens_param(doc: &mut Document, addr: &ParamAddr, val: f64) -> Result<(), String> {
+pub(crate) fn apply_sens_param(
+    doc: &mut Document,
+    addr: &ParamAddr,
+    val: f64,
+) -> Result<(), String> {
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &mut doc.system_block {
             if let Some(dp) = sb.designs.iter_mut().find(|d| d.name == addr.id) {
@@ -331,6 +335,9 @@ fn apply_sens_param(doc: &mut Document, addr: &ParamAddr, val: f64) -> Result<()
     }
     param::apply(doc, addr, val)?;
     if addr.attr.is_empty() {
+        if let Some(l) = doc.lets.iter_mut().find(|l| l.name == addr.id) {
+            l.expr = format!("{val}");
+        }
         if let Some(sb) = &mut doc.system_block {
             if let Some(dp) = sb.designs.iter_mut().find(|d| d.name == addr.id) {
                 dp.nominal = val;
@@ -340,7 +347,7 @@ fn apply_sens_param(doc: &mut Document, addr: &ParamAddr, val: f64) -> Result<()
     Ok(())
 }
 
-fn default_target_params(doc: &Document, params: &[String]) -> Vec<String> {
+pub(crate) fn default_target_params(doc: &Document, params: &[String]) -> Vec<String> {
     if !params.is_empty() {
         return params.to_vec();
     }
@@ -1087,13 +1094,28 @@ pub fn compute_sensitivities(
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
     let t0 = clock();
-    let targets = default_target_params(doc, params);
     if doc.fill.is_some() {
         return compute_sensitivities_remesh(doc, params, res, clock);
     }
-
     let sys_doc_0 = resolve_system_doc(doc)?;
     let base = analyse(sys_doc_0.as_ref(), res, clock)?;
+    compute_sensitivities_with_base(doc, sys_doc_0.as_ref(), &base, params, t0, clock)
+}
+
+pub(crate) fn compute_sensitivities_with_base(
+    doc: &Document,
+    sys_doc_0_ref: &Document,
+    base: &Analysis,
+    params: &[String],
+    t0: f64,
+    clock: Clock,
+) -> Result<SensitivityReport, SetupError> {
+    let targets = default_target_params(doc, params);
+    if doc.fill.is_some() {
+        return compute_sensitivities_remesh_with_base(doc, &targets, base, t0, clock);
+    }
+
+    let sys_doc_0 = std::borrow::Cow::Borrowed(sys_doc_0_ref);
     let sdoc_0_cow = structural_doc(sys_doc_0.as_ref());
     let sdoc_0 = sdoc_0_cow.as_ref();
     let base_h = base.provenance.element_size;
@@ -1608,18 +1630,18 @@ pub fn compute_sensitivities_remesh(
     let targets = default_target_params(doc, params);
     let sys_doc_0 = resolve_system_doc(doc)?;
     let base = analyse(sys_doc_0.as_ref(), res, clock)?;
-    compute_sensitivities_remesh_with_base(doc, &targets, base, t0, clock)
+    compute_sensitivities_remesh_with_base(doc, &targets, &base, t0, clock)
 }
 
 fn compute_sensitivities_remesh_with_base(
     doc: &Document,
     targets: &[String],
-    base: Analysis,
+    base: &Analysis,
     t0: f64,
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
     let sys_doc_0 = resolve_system_doc(doc)?;
-    let base_mass = mesh_mass_grams(sys_doc_0.as_ref(), &base);
+    let base_mass = mesh_mass_grams(sys_doc_0.as_ref(), base);
     let base_h = base.provenance.element_size;
     let locked_res = Resolution::Size(base_h);
 
@@ -1669,7 +1691,7 @@ fn compute_sensitivities_remesh_with_base(
                 ap_holder = ap;
                 a_hi_ref = &ap_holder;
                 m_hi = mp;
-                a_lo_ref = &base;
+                a_lo_ref = base;
                 m_lo = base_mass;
                 denom = delta;
                 scheme = "forward";
@@ -1677,7 +1699,7 @@ fn compute_sensitivities_remesh_with_base(
             (Err(_), Ok((am, mm))) => {
                 solves_run += 1;
                 am_holder = am;
-                a_hi_ref = &base;
+                a_hi_ref = base;
                 m_hi = base_mass;
                 a_lo_ref = &am_holder;
                 m_lo = mm;

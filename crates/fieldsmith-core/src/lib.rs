@@ -7,6 +7,7 @@ pub mod declarative_system;
 pub mod fill;
 pub mod fsmz;
 pub mod import;
+pub mod optimise;
 pub mod overhang;
 pub mod probe;
 pub mod regions;

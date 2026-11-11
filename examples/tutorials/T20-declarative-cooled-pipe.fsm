@@ -18,6 +18,8 @@ fieldsmith 1
 # @mcp: Add temporary mass budget contract || upsert_assert || {"label":"Mass budget","metric":"mass_g","target":"<= 100","unit":"g"}
 # @mcp: Re-verify contracts with mass budget || verify || {"h":4.5}
 # @mcp: Remove temporary mass budget contract || delete_assert || {"label":"Mass budget"}
+# @mcp: Co-optimise 1D coolant flow and 3D wall thickness for minimum mass || optimise || {"objective":"mass_g","params":["mdot","wall_t"],"max_iters":5,"h":4.5}
+# @mcp: Re-verify contracts on optimised 1D+3D liner || verify || {"h":4.5}
 # ---
 # @assert: Peak 3D liner temperature bounded || max_temp || <= 95.0 || <= 95.0 || C
 # @assert: Peak 3D thermo-elastic von Mises stress bounded || max_vm_elem || <= 220.0 || <= 220.0 || MPa

@@ -6,6 +6,7 @@
 //! than accident.
 
 use fieldsmith_core::contracts::VerificationReport;
+use fieldsmith_core::optimise::{OptObjective, OptimisationReport};
 use fieldsmith_core::overhang::OverhangReport;
 use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::sensitivity::SensitivityReport;
@@ -129,6 +130,24 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         h: Option<f64>,
     },
+    /// Contract-constrained 3D continuum & coupled 0D/1D+3D parameter optimiser (`V63`):
+    /// minimises `objective` (`mass_g` default) subject to all `.fsm` `assert` contracts,
+    /// returning `status: ok` when every contract passes at the optimised design and
+    /// `status: refusal` when one or more contracts remain violated.
+    Optimise {
+        #[serde(default)]
+        objective: OptObjective,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        params: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        bounds: std::collections::BTreeMap<String, [f64; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_iters: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -177,6 +196,9 @@ pub struct Response {
     /// Present for the sensitivity question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sensitivity: Option<SensitivityReport>,
+    /// Present for the contract-constrained optimise question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optimisation: Option<OptimisationReport>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

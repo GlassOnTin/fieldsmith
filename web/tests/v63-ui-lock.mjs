@@ -547,7 +547,52 @@ try {
   assert(afterDeleteCount === 0, `Expected 0 asserts after delete-contract-0, got ${afterDeleteCount}`);
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
-  console.log('[9/9] UI .fsm system authoring (set_system_block) + Results .fsm contract authoring (upsert_assert / delete_assert): PASS');
+  console.log('[9/10] UI .fsm system authoring (set_system_block) + Results .fsm contract authoring (upsert_assert / delete_assert): PASS');
+
+  // 10. Results UI 3D Contract-Constrained Adjoint Optimiser (`Optimise` -> `Apply to 3D Model` -> Ctrl+Z Undo)
+  const overstressedUiFsm = [
+    'fieldsmith 1',
+    'name "UI Overstressed Beam"',
+    'custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85',
+    'material steel200',
+    'let d = 5',
+    'box beam size=(60, 10, d) at=(30, 0, 0)',
+    'region root = beam.nx',
+    'region tip = beam.px',
+    'support clamp root fixed=xyz',
+    'load push tip force=(0, 0, -300)',
+    'assert "Peak stress limit" metric="max_vm_elem" target="<= 135" unit="MPa"',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, overstressedUiFsm);
+
+  await page.waitForSelector('[data-testid="results-run-optimise-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-run-optimise-btn"]');
+  await page.waitForSelector('[data-testid="results-optimisation-output"]', { timeout: 25000 });
+  const optOutText = await page.textContent('[data-testid="results-optimisation-output"]');
+  assert(optOutText && optOutText.includes('✓ mass_g:'), `Expected feasible mass_g optimisation summary, got '${optOutText}'`);
+
+  await page.click('[data-testid="results-apply-optimised-btn"]');
+  const optAppliedCheck = await page.evaluate(() => {
+    const dOpt = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'd')?.value ?? 0;
+    window.fieldsmith.store.undo();
+    const dUndone = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'd')?.value ?? 0;
+    return { dOpt, dUndone };
+  });
+  assert(optAppliedCheck.dOpt > 5.3, `Expected applied optimised depth d > 5.3 mm, got ${optAppliedCheck.dOpt}`);
+  assert(Math.abs(optAppliedCheck.dUndone - 5.0) < 1e-9, `Expected Ctrl+Z undo to restore d=5.0 mm, got ${optAppliedCheck.dUndone}`);
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[10/10] Results UI 3D contract-constrained adjoint optimiser (d: 5.0 -> ${optAppliedCheck.dOpt.toFixed(2)} mm -> Undo 5.0 mm): PASS`,
+  );
   await page.close();
 } catch (e) {
   console.error(e);

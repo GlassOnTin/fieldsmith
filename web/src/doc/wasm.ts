@@ -1501,6 +1501,76 @@ export function computeFsmSensitivities(
   return JSON.parse(w.computeFsmSensitivities(payload, paramsJson, dofs));
 }
 
+export type OptObjective =
+  | 'mass_g'
+  | 'compliance'
+  | 'max_vm_elem'
+  | 'max_displacement'
+  | 'max_temp';
+
+export interface OptimiseSpec {
+  objective?: OptObjective;
+  params?: string[];
+  bounds?: Record<string, [number, number]>;
+  max_iters?: number;
+  dofs?: number;
+  h?: number;
+}
+
+export interface OptParamSummary {
+  param: string;
+  initial: number;
+  final_value: number;
+  min_bound: number;
+  max_bound: number;
+  delta_pct: number;
+}
+
+export interface OptIterationRecord {
+  iter: number;
+  objective: number;
+  max_violation: number;
+  all_passed: boolean;
+  params: [string, number][];
+  step_alpha: number;
+}
+
+export interface OptimisationReport {
+  objective: OptObjective;
+  objective_unit: string;
+  method: string;
+  sensitivity_method: string;
+  iterations: number;
+  solves_run: number;
+  converged: boolean;
+  initial_objective: number;
+  final_objective: number;
+  objective_change_pct: number;
+  initial_verification: VerificationReport;
+  final_verification: VerificationReport;
+  parameters: OptParamSummary[];
+  history: OptIterationRecord[];
+  optimised_fsm: string;
+  h: number;
+  elapsed_ms: number;
+}
+
+export interface OptimiseBundle {
+  report: OptimisationReport;
+  doc: Document;
+}
+
+export function optimiseFsmDocument(
+  docOrFsm: Document | string,
+  spec?: OptimiseSpec,
+): OptimiseBundle {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  const specJson = spec ? JSON.stringify(spec) : undefined;
+  const res: OptimiseBundle = JSON.parse(w.optimiseFsmDocument(payload, specJson));
+  withLetTables(res.doc);
+  return res;
+}
+
 export interface ChannelFlowSpec {
   axis: 'x' | 'y' | 'z';
   passage_mode: 'auto' | 'interior_void' | 'solid_core';

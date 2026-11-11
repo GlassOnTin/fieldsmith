@@ -151,8 +151,9 @@ pub fn spatial_fn_probe(
     for i in 0..n {
         let u = d.0 + (d.1 - d.0) * i as f64 / (n - 1).max(1) as f64;
         let p = match coord {
-            fieldsmith_doc::spatial::SpatialCoord::X
-            | fieldsmith_doc::spatial::SpatialCoord::R => [u, 0.0, 0.0],
+            fieldsmith_doc::spatial::SpatialCoord::X | fieldsmith_doc::spatial::SpatialCoord::R => {
+                [u, 0.0, 0.0]
+            }
             fieldsmith_doc::spatial::SpatialCoord::Y => [0.0, u, 0.0],
             fieldsmith_doc::spatial::SpatialCoord::Z => [0.0, 0.0, u],
         };
@@ -1067,10 +1068,7 @@ impl GradedOut {
                     strength_exp,
                     buckling_coef,
                     buckling_exp,
-                    lattice_adjoint_sensitivity_sum: self
-                        .g
-                        .lattice_adjoint_sensitivity_sum
-                        .clone(),
+                    lattice_adjoint_sensitivity_sum: self.g.lattice_adjoint_sensitivity_sum.clone(),
                     mass_g: self.g.mass_g,
                     solid_mass_g: self.g.solid_mass_g,
                     fill_ms: self.g.fill_ms,
@@ -1395,7 +1393,8 @@ impl GradedOut {
             layer_h.max(0.05),
             h.max(0.05),
         );
-        let bytes = fieldsmith_mesh::slice::write_3mf_slicestack(&self.name, &self.material, &stack);
+        let bytes =
+            fieldsmith_mesh::slice::write_3mf_slicestack(&self.name, &self.material, &stack);
         Ok(Uint8Array::from(bytes.as_slice()))
     }
 }
@@ -1701,7 +1700,12 @@ pub fn list_coupled_systems() -> Result<String, JsValue> {
     let fixing_sys = FastenerFixingSystem::new();
     let drone_sys = DeadCatGeminiAntennaSystem::new();
     let swirl_sys = AnnularSwirlSprayCombustorSystem::default();
-    let _ = (analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna, DroneAntennaDesignSpec::default);
+    let _ = (
+        analyze_drone_antenna,
+        build_deadcat_drone_fsm,
+        optimise_drone_antenna,
+        DroneAntennaDesignSpec::default,
+    );
 
     let bath_scenarios = vec![
         NamedScenario {
@@ -1890,8 +1894,8 @@ pub fn solve_coupled_system(
             newton_tol: 1e-8,
             state_fd_eps: 1e-6,
         };
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -1921,8 +1925,8 @@ pub fn solve_coupled_system(
             sys.nominal_epistemic_vector()
         };
         let cfg = EngineConfig::default();
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -1951,8 +1955,8 @@ pub fn solve_coupled_system(
             sys.nominal_epistemic_vector()
         };
         let cfg = EngineConfig::default();
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -1982,8 +1986,8 @@ pub fn solve_coupled_system(
             sys.nominal_epistemic_vector()
         };
         let cfg = EngineConfig::default();
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -2013,8 +2017,8 @@ pub fn solve_coupled_system(
             sys.nominal_epistemic_vector()
         };
         let cfg = EngineConfig::default();
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -2050,8 +2054,8 @@ pub fn solve_coupled_system(
             sys.nominal_epistemic_vector()
         };
         let cfg = EngineConfig::default();
-        let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-            .map_err(js_err)?;
+        let analysis =
+            MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
         let obj_descs = sys.objective_descriptors();
         let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
         let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -2136,8 +2140,8 @@ pub fn solve_doc_coupled_system(
         sys.nominal_epistemic_vector()
     };
     let cfg = sys.engine_config();
-    let analysis = MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta)
-        .map_err(js_err)?;
+    let analysis =
+        MonolithicSystemEngine::solve_and_analyze(&sys, &cfg, &p, &theta).map_err(js_err)?;
     let obj_descs = sys.objective_descriptors();
     let pass_p50 = analysis.all_constraints_satisfied_p50(&obj_descs);
     let pass_p90 = analysis.all_constraints_satisfied_robust_p90(&obj_descs);
@@ -2322,7 +2326,8 @@ pub fn verify_fsm_contracts(doc_or_fsm: &str, dofs: Option<usize>) -> Result<Str
             .map(Resolution::Size)
             .unwrap_or(Resolution::Dofs(25_000)),
     };
-    let (_analysis, _graded, report) = verify_document(&doc, raw_fsm, res, clock).map_err(js_err)?;
+    let (_analysis, _graded, report) =
+        verify_document(&doc, raw_fsm, res, clock).map_err(js_err)?;
     to_json(&report)
 }
 
@@ -2352,6 +2357,33 @@ pub fn compute_fsm_sensitivities(
     };
     let report = compute_sensitivities(&doc, &params, res, clock).map_err(js_err)?;
     to_json(&report)
+}
+
+/// Contract-constrained 3D continuum & coupled 0D/1D+3D parameter optimiser (`optimise`):
+/// minimises `spec.objective` (`mass_g` default) subject to all `.fsm` `assert` contracts and
+/// returns `{"report": OptimisationReport, "doc": best_doc}`.
+#[wasm_bindgen(js_name = optimiseFsmDocument)]
+pub fn optimise_fsm_document_wasm(
+    doc_or_fsm: &str,
+    spec_json: Option<String>,
+) -> Result<String, JsValue> {
+    use fieldsmith_core::optimise::{optimise_document, OptimiseSpec};
+    let doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let raw_fsm = if doc_or_fsm.trim_start().starts_with('{') {
+        None
+    } else {
+        Some(doc_or_fsm)
+    };
+    let spec: OptimiseSpec = match spec_json.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => serde_json::from_str(s)
+            .map_err(|e| js_err(format!("invalid OptimiseSpec JSON: {e}")))?,
+        _ => OptimiseSpec::default(),
+    };
+    let (best_doc, report) = optimise_document(&doc, raw_fsm, &spec, clock).map_err(js_err)?;
+    to_json(&serde_json::json!({
+        "report": report,
+        "doc": best_doc,
+    }))
 }
 
 /// Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`)
@@ -2390,9 +2422,7 @@ pub fn analyze_fsm_channel_wasm(doc_or_fsm: &str, spec_json: &str) -> Result<Str
                 &mut doc,
                 &report,
                 reg_trimmed,
-                req.thermal_case
-                    .as_deref()
-                    .unwrap_or("Channel Thermal"),
+                req.thermal_case.as_deref().unwrap_or("Channel Thermal"),
                 req.pressure_case.as_deref(),
             )
             .map_err(js_err)?;

@@ -53,6 +53,38 @@ pub fn resolve_system_doc(doc: &Document) -> Result<Cow<'_, Document>, crate::Se
     Ok(Cow::Owned(next_doc))
 }
 
+/// Synchronise an embedded `doc.system_block` equilibrium onto `doc` using compact (`.6`) `.fsm`
+/// `lerp(...)` formatting so printed `.fsm` source stays concise and self-consistent.
+pub fn sync_system_doc_compact(doc: &mut Document) -> Result<(), crate::SetupError> {
+    let Some(ref sb) = doc.system_block else {
+        return Ok(());
+    };
+    let sys = DeclarativeCoupledSystem::from_document(doc).map_err(crate::SetupError)?;
+    let design_p: Vec<f64> = sb
+        .designs
+        .iter()
+        .map(|dp| {
+            doc.lets
+                .iter()
+                .find(|l| l.name == dp.name)
+                .map(|l| l.value)
+                .unwrap_or(dp.nominal)
+        })
+        .collect();
+    let theta = sys.nominal_epistemic_vector();
+    let cfg = sys.engine_config();
+    let (state, _, _) = MonolithicSystemEngine::solve_equilibrium(&sys, &cfg, &design_p, &theta)
+        .map_err(crate::SetupError)?;
+    if !sb.bindings.is_empty() {
+        sync_system_bindings_to_doc(doc, &state, &design_p, &theta).map_err(crate::SetupError)?;
+    } else if let Some(ref mut sb_mut) = doc.system_block {
+        for (k, &pv) in design_p.iter().enumerate() {
+            sb_mut.designs[k].nominal = pv;
+        }
+    }
+    Ok(())
+}
+
 /// Solved 0D/1D station profiles and 3D BC projection preview returned alongside
 /// [`fieldsmith_solve::coupled_system::SystemAnalysisResult`] for declarative `.fsm` systems.
 #[derive(Clone, Debug, Serialize, Deserialize)]

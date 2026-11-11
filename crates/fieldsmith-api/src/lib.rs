@@ -19,6 +19,7 @@ pub mod store;
 pub mod sweep_csv;
 
 use fieldsmith_core::contracts::verify_document;
+use fieldsmith_core::optimise::{optimise_document, OptimiseSpec};
 use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
 use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::sensitivity::compute_sensitivities;
@@ -222,6 +223,7 @@ pub fn respond(input: &str) -> Reply {
                         overhang: None,
                         verification: None,
                         sensitivity: None,
+                        optimisation: None,
                         error: None,
                     })
                 }
@@ -241,7 +243,12 @@ pub fn respond(input: &str) -> Reply {
             match analyse_full(&doc, res, question::clock, None, equilibrate) {
                 Ok(a) => {
                     if doc.fill.is_some() {
-                        match fieldsmith_core::fill::graded_of(&doc, &a, question::clock, equilibrate) {
+                        match fieldsmith_core::fill::graded_of(
+                            &doc,
+                            &a,
+                            question::clock,
+                            equilibrate,
+                        ) {
                             Ok(g) => {
                                 let (strength_coef, strength_exp) =
                                     fieldsmith_core::fill::law_strength_params(
@@ -304,6 +311,7 @@ pub fn respond(input: &str) -> Reply {
                                     overhang: None,
                                     verification: None,
                                     sensitivity: None,
+                                    optimisation: None,
                                     error: None,
                                 })
                             }
@@ -346,6 +354,7 @@ pub fn respond(input: &str) -> Reply {
                             overhang: None,
                             verification: None,
                             sensitivity: None,
+                            optimisation: None,
                             error: None,
                         })
                     }
@@ -407,6 +416,7 @@ pub fn respond(input: &str) -> Reply {
                         overhang: None,
                         verification: None,
                         sensitivity: None,
+                        optimisation: None,
                         error: None,
                     })
                 }
@@ -546,6 +556,7 @@ pub fn respond(input: &str) -> Reply {
                 overhang: None,
                 verification: None,
                 sensitivity: None,
+                optimisation: None,
                 error: None,
             })
         }
@@ -570,6 +581,7 @@ pub fn respond(input: &str) -> Reply {
                     overhang: Some(rep),
                     verification: None,
                     sensitivity: None,
+                    optimisation: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -601,6 +613,7 @@ pub fn respond(input: &str) -> Reply {
                         overhang: None,
                         verification: Some(rep),
                         sensitivity: None,
+                        optimisation: None,
                         error: None,
                     })
                 }
@@ -627,8 +640,52 @@ pub fn respond(input: &str) -> Reply {
                     overhang: None,
                     verification: None,
                     sensitivity: Some(rep),
+                    optimisation: None,
                     error: None,
                 }),
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
+        }
+        QuestionSpec::Optimise {
+            objective,
+            params,
+            bounds,
+            max_iters,
+            dofs,
+            h,
+        } => {
+            let spec = OptimiseSpec {
+                objective,
+                params,
+                bounds,
+                max_iters,
+                dofs,
+                h,
+            };
+            match optimise_document(&doc, req.doc.as_deref(), &spec, question::clock) {
+                Ok((_opt_doc, rep)) => {
+                    let status = if rep.final_verification.all_passed {
+                        Status::Ok
+                    } else {
+                        Status::Refusal
+                    };
+                    ok_reply(schema::Response {
+                        apiv: APIV,
+                        engine: store::engine_identity(),
+                        status,
+                        name: Some(name),
+                        question: Some(echo),
+                        warnings,
+                        outcome: None,
+                        single: None,
+                        sweep: None,
+                        overhang: None,
+                        verification: None,
+                        sensitivity: None,
+                        optimisation: Some(rep),
+                        error: None,
+                    })
+                }
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
@@ -679,6 +736,7 @@ fn error_reply(
             overhang: None,
             verification: None,
             sensitivity: None,
+            optimisation: None,
             error: Some(message.into()),
         },
         true,

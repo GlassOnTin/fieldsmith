@@ -136,6 +136,7 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "solve",
             "verify",
             "sensitivity",
+            "optimise",
             "analyze_sdf_channel",
             "export",
             "list_coupled_systems",

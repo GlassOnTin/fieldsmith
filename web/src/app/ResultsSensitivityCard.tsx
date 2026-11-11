@@ -7,11 +7,22 @@ import { useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import {
   computeFsmSensitivities,
+  optimiseFsmDocument,
   verifyFsmContracts,
+  type OptObjective,
+  type OptimiseBundle,
   type SensitivityReport,
   type VerificationReport,
 } from '../doc/wasm';
 import { ui, useApp } from './ui';
+
+const OPT_OBJECTIVES: { value: OptObjective; label: string }[] = [
+  { value: 'mass_g', label: 'Min Mass (g)' },
+  { value: 'compliance', label: 'Min Compliance (N·mm)' },
+  { value: 'max_vm_elem', label: 'Min Stress σ_vM (MPa)' },
+  { value: 'max_displacement', label: 'Min Deflection ‖u‖ (mm)' },
+  { value: 'max_temp', label: 'Min Temp T_max (°C)' },
+];
 
 const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; defaultTarget: string }[] = [
   { value: 'max_vm_elem', label: 'Peak von Mises σ_vM (max_vm_elem)', defaultUnit: 'MPa', defaultTarget: '<= 180' },
@@ -37,7 +48,9 @@ export function ResultsSensitivityCard() {
 
   const [sensReport, setSensReport] = useState<SensitivityReport | null>(null);
   const [contractReport, setContractReport] = useState<VerificationReport | null>(null);
-  const [busy, setBusy] = useState<'sens' | 'verify' | null>(null);
+  const [optBundle, setOptBundle] = useState<OptimiseBundle | null>(null);
+  const [optObjective, setOptObjective] = useState<OptObjective>('mass_g');
+  const [busy, setBusy] = useState<'sens' | 'verify' | 'opt' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -79,6 +92,36 @@ export function ResultsSensitivityCard() {
         setBusy(null);
       }
     }, 10);
+  };
+
+  const runOptimiser = () => {
+    setBusy('opt');
+    setErr(null);
+    window.setTimeout(() => {
+      try {
+        const res = optimiseFsmDocument(store.doc, {
+          objective: optObjective,
+          max_iters: 6,
+          dofs: 3500,
+        });
+        setOptBundle(res);
+        setContractReport(res.report.final_verification);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setErr(msg);
+        ui.notify(`Optimisation error: ${msg}`, 'error');
+      } finally {
+        setBusy(null);
+      }
+    }, 10);
+  };
+
+  const applyOptimisedDesign = () => {
+    if (!optBundle) return;
+    store.applyExternalDoc(optBundle.doc, 'Apply 3D Adjoint Optimisation');
+    setSensReport(null);
+    setOptBundle(null);
+    ui.notify('Applied optimised .fsm parameters (Ctrl+Z to undo)');
   };
 
   const onMetricChange = (nextMetric: string) => {
@@ -143,18 +186,46 @@ export function ResultsSensitivityCard() {
         <span style={{ fontWeight: 700, color: '#6ee7b7', fontSize: '11px' }}>
           ∇ 3D Continuum Sensitivities &amp; .fsm Contracts
         </span>
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
           {hasParams && (
-            <button
-              type="button"
-              class="mini-btn"
-              data-testid="results-compute-sensitivities-btn"
-              disabled={busy !== null}
-              onClick={runSensitivities}
-              title="Evaluate fixed-topology 3D P2 boundary-velocity adjoint sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p, ∂T_max/∂p"
-            >
-              {busy === 'sens' ? 'Computing ∂/∂p…' : `Compute ∂/∂p (${paramCount})`}
-            </button>
+            <>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid="results-compute-sensitivities-btn"
+                disabled={busy !== null}
+                onClick={runSensitivities}
+                title="Evaluate fixed-topology 3D P2 boundary-velocity adjoint sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p, ∂T_max/∂p"
+              >
+                {busy === 'sens' ? 'Computing ∂/∂p…' : `Compute ∂/∂p (${paramCount})`}
+              </button>
+              <select
+                class="select"
+                data-testid="optimise-objective-select"
+                value={optObjective}
+                disabled={busy !== null}
+                onChange={(e) => setOptObjective((e.target as HTMLSelectElement).value as OptObjective)}
+                style={{ fontSize: '9.5px', padding: '1px 4px', height: '20px' }}
+                title="Objective minimised by the 3D contract-constrained adjoint optimiser"
+              >
+                {OPT_OBJECTIVES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid="results-run-optimise-btn"
+                disabled={busy !== null}
+                onClick={runOptimiser}
+                style={{ borderColor: 'rgba(16, 185, 129, 0.5)', color: '#6ee7b7', fontWeight: 700 }}
+                title="Run trust-region SQP 3D + 0D/1D adjoint optimiser subject to all .fsm assert contracts"
+              >
+                {busy === 'opt' ? 'Optimising…' : 'Optimise'}
+              </button>
+            </>
           )}
           {hasAsserts && (
             <button
@@ -347,6 +418,48 @@ export function ResultsSensitivityCard() {
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {optBundle && (
+        <div
+          data-testid="results-optimisation-output"
+          style={{
+            padding: '6px 8px',
+            borderRadius: '5px',
+            background: 'rgba(16, 185, 129, 0.10)',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            fontFamily: 'var(--mono)',
+            fontSize: '9.5px',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, color: optBundle.report.final_verification.all_passed ? '#4ade80' : '#fbbf24' }}>
+              {optBundle.report.final_verification.all_passed ? '✓' : '⚠'} {optBundle.report.objective}:{' '}
+              {optBundle.report.initial_objective.toPrecision(4)} → {optBundle.report.final_objective.toPrecision(4)}{' '}
+              {optBundle.report.objective_unit} ({optBundle.report.objective_change_pct >= 0 ? '+' : ''}
+              {optBundle.report.objective_change_pct.toFixed(1)}%) · {optBundle.report.iterations} iters ({optBundle.report.solves_run} solves)
+            </span>
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="results-apply-optimised-btn"
+              onClick={applyOptimisedDesign}
+              style={{ fontWeight: 700, color: '#6ee7b7', borderColor: 'rgba(16, 185, 129, 0.5)' }}
+            >
+              Apply to 3D Model
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', color: 'var(--text-2)' }}>
+            {optBundle.report.parameters.map((p) => (
+              <span key={p.param}>
+                {p.param}: {p.initial.toPrecision(4)} → <strong>{p.final_value.toPrecision(4)}</strong>
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

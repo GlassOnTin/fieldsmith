@@ -312,6 +312,7 @@ impl Server {
             "solve" | "solve_study" => self.solve(args),
             "verify" => self.verify(args),
             "sensitivity" => self.sensitivity(args),
+            "optimise" | "optimize" => self.optimise(args),
             "analyze_sdf_channel" => self.analyze_sdf_channel(args),
             "export" => self.export(args),
             "list_coupled_systems" => self.list_coupled_systems(args),
@@ -354,6 +355,8 @@ impl Server {
                     | "delete_assert"
                     | "solve"
                     | "solve_study"
+                    | "optimise"
+                    | "optimize"
                     | "analyze_sdf_channel"
                     | "solve_coupled_system"
                     | "optimise_coupled_system"
@@ -1078,6 +1081,26 @@ impl Server {
         let mut q = args;
         q["kind"] = json!("sensitivity");
         self.solve(q)
+    }
+
+    fn optimise(&mut self, args: Value) -> Result<Value, String> {
+        let apply = args.get("apply").and_then(Value::as_bool).unwrap_or(true);
+        let mut q = args;
+        if let Some(obj) = q.as_object_mut() {
+            obj.remove("apply");
+        }
+        q["kind"] = json!("optimise");
+        let env = self.solve(q)?;
+        if apply {
+            if let Some(fsm_str) = env
+                .pointer("/optimisation/optimised_fsm")
+                .and_then(Value::as_str)
+            {
+                let d = fsm::parse(fsm_str).map_err(|e| e.to_string())?;
+                self.doc = Some(d);
+            }
+        }
+        Ok(env)
     }
 
     fn analyze_sdf_channel(&mut self, args: Value) -> Result<Value, String> {
@@ -2566,6 +2589,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, and dimensionless elasticities) across `params` (or all non-derived `let` / `system` design variables in the open `.fsm` document) using mechanical & staggered thermo-elastic discrete adjoints (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"optimise","description":"Contract-constrained 3D continuum & coupled 0D/1D+3D parameter optimiser: minimises `objective` (`mass_g` default, `compliance`, `max_vm_elem`, `max_displacement`, `max_temp`) across `params` (or all non-load `let` + `system` design variables) subject to every `.fsm` `assert` contract using `O(1)` mechanical & staggered thermo-elastic discrete adjoints (`trust_region_sqp_adjoint`). Updates the open session document when `apply` is true (default).","inputSchema":{"type":"object","properties":{"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp"]},"params":{"type":"array","items":{"type":"string"}},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"dofs":{"type":"integer"},"h":{"type":"number"},"apply":{"type":"boolean"}}}},
  {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all available CoupledEngineeringSystem models, including any user-authored declarative `system <id> { ... }` block in the open `.fsm` document plus built-in reference packs.","inputSchema":{"type":"object","additionalProperties":false}},
