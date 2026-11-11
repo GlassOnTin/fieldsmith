@@ -147,7 +147,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        36.0,
+        38.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -843,6 +843,29 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
         mcp_tool_call(&mut decl_srv, 950, "open", json!({ "doc": decl_fsm }));
     assert!(!d_open_err, "open decl_fsm failed: {d_open}");
 
+    // Verify standalone 3D staggered thermo-elastic adjoint sensitivity on untouched `decl_fsm`
+    // (automatically solves the 1D `system` equilibrium and differentiates 3D `T_max` & `σ_vM` in O(1) solves!)
+    let (d_sens_err, d_sens) = mcp_tool_call(
+        &mut decl_srv,
+        949,
+        "sensitivity",
+        json!({ "params": ["mdot", "p_in", "r_out"], "h": 4.5 }),
+    );
+    assert!(
+        !d_sens_err,
+        "standalone 1D->3D adjoint sensitivity failed: {d_sens}"
+    );
+    assert_eq!(d_sens["sensitivity"]["method"], "boundary_velocity_adjoint");
+    // 2 baseline cases (1 mechanical + 1 thermal) + 2 mechanical adjoints + 6 thermal adjoints = 10 solves across 3 params
+    assert_eq!(d_sens["sensitivity"]["solves_run"], 10);
+    let dt_dmdot = d_sens["sensitivity"]["parameters"][0]["cases"][1]["d_max_temp"]
+        .as_f64()
+        .expect("d_max_temp wrt mdot");
+    assert!(
+        dt_dmdot < 0.0,
+        "expected ∂T_max,3D / ∂mdot < 0 from automatic 1D->3D staggered adjoint, got {dt_dmdot}"
+    );
+
     let (d_solve_err, d_solve) =
         mcp_tool_call(&mut decl_srv, 951, "solve_coupled_system", json!({}));
     assert!(
@@ -965,11 +988,13 @@ system pipe_1d title=\"1D Cooled Liner\" sector=\"Thermal-Fluids\" nodes=31 span
     report.section(
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
-         `SketchWorkbench` -> `DocCommand` dispatch, and WASM declarative `system` workbench \
-         execution are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
-         2. Linear-elastic solid cases use fixed-topology quadric boundary-velocity discrete \
-         adjoints (`method: \"boundary_velocity_adjoint\"`, `1 + 2 * n_cases` solves independent \
-         of parameter count `k`); coupled thermo-elastic and `J2` elastoplastic cases evaluate on \
+         `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
+         and WASM declarative `system` authoring (`set_system_block`) are verified separately in \
+         `web/tests/v63-ui-lock.mjs`.\n\
+         2. Linear-elastic mechanical AND coupled steady-conduction thermo-elastic cases (including \
+         spatial `lerp(...)` BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric \
+         boundary-velocity discrete adjoints (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear \
+         solves independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on \
          the fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and \
          graded TPMS `fill` models fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \

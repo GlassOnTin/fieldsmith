@@ -6,17 +6,52 @@ use fieldsmith_doc::command::{apply_doc_command, DocCommand};
 use fieldsmith_doc::fsm;
 use fieldsmith_doc::spatial::SpatialFn;
 use fieldsmith_doc::system::{
-    sync_system_bindings_to_doc, CompiledSystem, DeclDesignCategory, DeclObjKind, DeclarativeSystem,
+    sync_system_bindings_to_doc, sync_system_bindings_to_doc_exact, CompiledSystem,
+    DeclDesignCategory, DeclObjKind, DeclarativeSystem,
 };
 use fieldsmith_doc::Document;
 use fieldsmith_solve::coupled_system::{
     sparse_jacobian_from_triplets, CausalAttributionPoint, CausalAttributionTrack,
     ConservationAudit, CoupledEngineeringSystem, DesignParameter, DesignParameterCategory,
-    EngineConfig, EpistemicParameter, FieldDescriptor, NamedScenario, ObjectiveDescriptor,
-    ObjectiveKind, SparseJacobian,
+    EngineConfig, EpistemicParameter, FieldDescriptor, MonolithicSystemEngine, NamedScenario,
+    ObjectiveDescriptor, ObjectiveKind, SparseJacobian,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+
+/// If `doc.system_block` is present and declares `bind` projections, solve its monolithic 0D/1D
+/// equilibrium `R(W; p, θ) = 0` (propagating any matching top-level `doc.lets` values into
+/// `design_p`) and return an owned [`Document`] with full IEEE-754 `lerp(...)` spatial boundary
+/// conditions and bound `let` parameters projected in-memory. Returns `Cow::Borrowed(doc)` with
+/// zero allocation when `doc.system_block` is `None`.
+pub fn resolve_system_doc(doc: &Document) -> Result<Cow<'_, Document>, crate::SetupError> {
+    let Some(ref sb) = doc.system_block else {
+        return Ok(Cow::Borrowed(doc));
+    };
+    if sb.bindings.is_empty() {
+        return Ok(Cow::Borrowed(doc));
+    }
+    let sys = DeclarativeCoupledSystem::from_document(doc).map_err(crate::SetupError)?;
+    let design_p: Vec<f64> = sb
+        .designs
+        .iter()
+        .map(|dp| {
+            doc.lets
+                .iter()
+                .find(|l| l.name == dp.name)
+                .map(|l| l.value)
+                .unwrap_or(dp.nominal)
+        })
+        .collect();
+    let theta = sys.nominal_epistemic_vector();
+    let cfg = sys.engine_config();
+    let (state, _, _) = MonolithicSystemEngine::solve_equilibrium(&sys, &cfg, &design_p, &theta)
+        .map_err(crate::SetupError)?;
+    let mut next_doc = doc.clone();
+    sync_system_bindings_to_doc_exact(&mut next_doc, &state, &design_p, &theta)
+        .map_err(crate::SetupError)?;
+    Ok(Cow::Owned(next_doc))
+}
 
 /// Solved 0D/1D station profiles and 3D BC projection preview returned alongside
 /// [`fieldsmith_solve::coupled_system::SystemAnalysisResult`] for declarative `.fsm` systems.
@@ -542,7 +577,6 @@ impl CoupledEngineeringSystem for DeclarativeCoupledSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fieldsmith_solve::coupled_system::MonolithicSystemEngine;
 
     #[test]
     fn convective_pipe_1d_matches_analytical_exponential_and_projects_onto_3d_thermo_elastic_fea() {

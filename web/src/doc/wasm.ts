@@ -1466,6 +1466,7 @@ export interface CaseSensitivity {
   rel_compliance: number;
   d_max_displacement: number;
   d_max_vm_elem: number;
+  d_max_temp?: number | null;
 }
 
 export interface ParameterSensitivity {

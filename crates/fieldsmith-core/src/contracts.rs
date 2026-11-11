@@ -132,23 +132,23 @@ pub fn resolve_assert_metric(
         &a.cases
     };
 
-    let case = find_case(pool, case_sel)
-        .ok_or_else(|| format!("metric '{m}': no solved case matching '{case_sel}'"))?;
+    let case = if case_sel.is_empty() && matches!(field, "max_temp" | "min_temp") {
+        pool.iter().find(|c| c.temperature.is_some())
+    } else {
+        find_case(pool, case_sel)
+    }
+    .ok_or_else(|| format!("metric '{m}': no solved case matching '{case_sel}'"))?;
 
     match field {
         "max_displacement" | "max_disp" | "deflection" => Ok(case.max_displacement),
         "max_vm_elem" | "vm" => Ok(case.max_vm_elem),
         "max_von_mises" => Ok(case.max_von_mises),
-        "min_safety_factor" | "safety_factor" => {
-            Ok(a.yield_strength / case.max_vm_elem.max(1e-12))
-        }
+        "min_safety_factor" | "safety_factor" => Ok(a.yield_strength / case.max_vm_elem.max(1e-12)),
         "max_layer_peel" | "peel" => Ok(case.max_layer_peel),
         "compliance" => Ok(case.compliance),
-        "max_plastic_strain" | "plastic_strain" => Ok(case
-            .plastic_strain_elem
-            .iter()
-            .copied()
-            .fold(0.0, f64::max)),
+        "max_plastic_strain" | "plastic_strain" => {
+            Ok(case.plastic_strain_elem.iter().copied().fold(0.0, f64::max))
+        }
         "max_temp" => {
             let t = case
                 .temperature
@@ -307,14 +307,16 @@ pub fn verify_document(
     let need_graded = doc.fill.is_some()
         && asserts.iter().any(|a| {
             let m = a.metric.trim();
-            m.starts_with("graded.") || m == "graded_mass_g" || m == "mass_saved_pct" || m == "mass_g"
+            m.starts_with("graded.")
+                || m == "graded_mass_g"
+                || m == "mass_saved_pct"
+                || m == "mass_g"
         });
 
     let (analysis, graded_opt) = if need_graded {
         let (solid_a, gr) = fill::graded(doc, res, clock).map_err(|e| e.0)?;
         if doc.solve.modes.is_some() {
-            let modal_a =
-                analyse_full(doc, res, clock, doc.solve.modes, false).map_err(|e| e.0)?;
+            let modal_a = analyse_full(doc, res, clock, doc.solve.modes, false).map_err(|e| e.0)?;
             (modal_a, Some(gr))
         } else {
             (solid_a, Some(gr))

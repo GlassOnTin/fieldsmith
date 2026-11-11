@@ -1,7 +1,7 @@
-// General 3D Parameter Sensitivity (∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p) &
-// Unified .fsm `assert` Contract Verifier Card for the Results lens.
-// Works on ANY .fsm document via `computeFsmSensitivities` and `verifyFsmContracts`
-// in `fieldsmith-wasm` (no shadow TS evaluators or domain-specific heuristics).
+// General 3D Parameter Sensitivity (∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p, ∂T_max/∂p) &
+// Unified .fsm `assert` Contract Authoring + Verifier Card for the Results lens.
+// Works on ANY .fsm document via `computeFsmSensitivities`, `verifyFsmContracts`,
+// and `DocCommand` (`upsert_assert` / `delete_assert`) in `fieldsmith-wasm`.
 
 import { useState } from 'preact/hooks';
 import { store } from '../doc/store';
@@ -13,18 +13,39 @@ import {
 } from '../doc/wasm';
 import { ui, useApp } from './ui';
 
+const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; defaultTarget: string }[] = [
+  { value: 'max_vm_elem', label: 'Peak von Mises σ_vM (max_vm_elem)', defaultUnit: 'MPa', defaultTarget: '<= 180' },
+  { value: 'min_safety_factor', label: 'Safety factor (min_safety_factor)', defaultUnit: '', defaultTarget: '>= 1.5' },
+  { value: 'max_displacement', label: 'Peak deflection ‖u‖ (max_displacement)', defaultUnit: 'mm', defaultTarget: '<= 1.0' },
+  { value: 'compliance', label: 'Strain compliance C (compliance)', defaultUnit: 'mJ', defaultTarget: '<= 500' },
+  { value: 'max_temp', label: 'Peak temperature T_max (max_temp)', defaultUnit: '°C', defaultTarget: '<= 120' },
+  { value: 'min_temp', label: 'Minimum temperature T_min (min_temp)', defaultUnit: '°C', defaultTarget: '>= 15' },
+  { value: 'mass_g', label: 'Part mass (mass_g)', defaultUnit: 'g', defaultTarget: '<= 250' },
+  { value: 'max_layer_peel', label: 'Inter-layer peel (max_layer_peel)', defaultUnit: '', defaultTarget: '<= 1.0' },
+  { value: 'mode_1', label: 'Fundamental mode f₁ (mode_1)', defaultUnit: 'Hz', defaultTarget: '>= 100' },
+];
+
 export function ResultsSensitivityCard() {
   useApp();
   const doc = store.doc;
-  const hasLets = (doc.lets?.length ?? 0) > 0;
-  const hasAsserts = (doc.asserts?.length ?? 0) > 0;
+  const letCount = doc.lets?.length ?? 0;
+  const sysDesignCount = doc.system_block?.designs?.length ?? 0;
+  const paramCount = letCount + sysDesignCount;
+  const hasParams = paramCount > 0;
+  const asserts = doc.asserts ?? [];
+  const hasAsserts = asserts.length > 0;
 
   const [sensReport, setSensReport] = useState<SensitivityReport | null>(null);
   const [contractReport, setContractReport] = useState<VerificationReport | null>(null);
   const [busy, setBusy] = useState<'sens' | 'verify' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  if (!hasLets && !hasAsserts) return null;
+  const [addOpen, setAddOpen] = useState(false);
+  const [label, setLabel] = useState('Peak stress margin');
+  const [metric, setMetric] = useState('max_vm_elem');
+  const [target, setTarget] = useState('<= 180');
+  const [tolerance, setTolerance] = useState('');
+  const [unit, setUnit] = useState('MPa');
 
   const runSensitivities = () => {
     setBusy('sens');
@@ -60,6 +81,49 @@ export function ResultsSensitivityCard() {
     }, 10);
   };
 
+  const onMetricChange = (nextMetric: string) => {
+    setMetric(nextMetric);
+    const preset = CONTRACT_METRICS.find((m) => m.value === nextMetric);
+    if (preset) {
+      setUnit(preset.defaultUnit);
+      setTarget(preset.defaultTarget);
+    }
+  };
+
+  const saveContract = () => {
+    const trimmedMetric = metric.trim();
+    const trimmedTarget = target.trim();
+    if (!trimmedMetric || !trimmedTarget) {
+      setErr('Contract metric and target are required.');
+      return;
+    }
+    setErr(null);
+    store.dispatch('add engineering contract', {
+      cmd: 'upsert_assert',
+      assertion: {
+        label: label.trim() || trimmedMetric,
+        metric: trimmedMetric,
+        target: trimmedTarget,
+        tolerance: tolerance.trim(),
+        unit: unit.trim(),
+      },
+    });
+    setContractReport(null);
+    setAddOpen(false);
+  };
+
+  const removeContract = (index: number) => {
+    store.dispatch('delete engineering contract', {
+      cmd: 'delete_assert',
+      index,
+    });
+    setContractReport(null);
+  };
+
+  const hasThermalSens = Boolean(
+    sensReport?.parameters.some((p) => p.cases.some((c) => c.d_max_temp != null)),
+  );
+
   return (
     <div
       data-testid="results-sensitivity-contracts-card"
@@ -80,16 +144,16 @@ export function ResultsSensitivityCard() {
           ∇ 3D Continuum Sensitivities &amp; .fsm Contracts
         </span>
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {hasLets && (
+          {hasParams && (
             <button
               type="button"
               class="mini-btn"
               data-testid="results-compute-sensitivities-btn"
               disabled={busy !== null}
               onClick={runSensitivities}
-              title="Evaluate fixed-topology 3D P2 boundary-velocity adjoint sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p"
+              title="Evaluate fixed-topology 3D P2 boundary-velocity adjoint sensitivities ∂C/∂p, ∂m/∂p, ∂σ_vM/∂p, ∂‖u‖/∂p, ∂T_max/∂p"
             >
-              {busy === 'sens' ? 'Computing ∂/∂p…' : `Compute ∂/∂p (${doc.lets?.length ?? 0} let)`}
+              {busy === 'sens' ? 'Computing ∂/∂p…' : `Compute ∂/∂p (${paramCount})`}
             </button>
           )}
           {hasAsserts && (
@@ -101,11 +165,141 @@ export function ResultsSensitivityCard() {
               onClick={runContracts}
               title="Verify .fsm assert / # @assert contracts via unified Rust evaluator"
             >
-              {busy === 'verify' ? 'Verifying…' : `Verify Asserts (${doc.asserts?.length ?? 0})`}
+              {busy === 'verify' ? 'Verifying…' : `Verify Asserts (${asserts.length})`}
             </button>
           )}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="results-toggle-add-contract-btn"
+            onClick={() => setAddOpen((v) => !v)}
+            title="Author a persistent .fsm engineering contract (assert ...)"
+          >
+            {addOpen ? 'Cancel' : '+ Add Contract'}
+          </button>
         </div>
       </div>
+
+      {addOpen && (
+        <div
+          data-testid="results-add-contract-form"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+            gap: '4px',
+            padding: '6px',
+            borderRadius: '4px',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            alignItems: 'end',
+          }}
+        >
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Label
+            <input
+              type="text"
+              class="input"
+              data-testid="contract-label-input"
+              value={label}
+              onInput={(e) => setLabel((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Metric
+            <select
+              class="select"
+              data-testid="contract-metric-select"
+              value={metric}
+              onChange={(e) => onMetricChange((e.target as HTMLSelectElement).value)}
+              style={{ fontSize: '10px', padding: '2px 4px' }}
+            >
+              {CONTRACT_METRICS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Target
+            <input
+              type="text"
+              class="input"
+              data-testid="contract-target-input"
+              placeholder="<= 180"
+              value={target}
+              onInput={(e) => setTarget((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Unit / Tol
+            <div style={{ display: 'flex', gap: '3px' }}>
+              <input
+                type="text"
+                class="input"
+                data-testid="contract-unit-input"
+                placeholder="unit"
+                value={unit}
+                onInput={(e) => setUnit((e.target as HTMLInputElement).value)}
+                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              />
+              <input
+                type="text"
+                class="input"
+                data-testid="contract-tol-input"
+                placeholder="tol"
+                value={tolerance}
+                onInput={(e) => setTolerance((e.target as HTMLInputElement).value)}
+                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              />
+            </div>
+          </label>
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="contract-save-btn"
+            onClick={saveContract}
+            style={{ height: '22px', fontWeight: 700, color: '#6ee7b7' }}
+          >
+            Save Contract
+          </button>
+        </div>
+      )}
+
+      {hasAsserts && !contractReport && (
+        <div data-testid="results-authored-contracts-list" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {asserts.map((a, i) => (
+            <div
+              key={`${a.metric}-${i}`}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '6px',
+                fontFamily: 'var(--mono)',
+                fontSize: '9.5px',
+                color: 'var(--text-2)',
+              }}
+            >
+              <span>
+                • {a.label || a.metric}: {a.metric} {a.target} {a.unit}
+              </span>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid={`delete-contract-${i}`}
+                onClick={() => removeContract(i)}
+                title="Remove contract from .fsm document"
+                style={{ padding: '0 4px', lineHeight: 1.2 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {err && (
         <div style={{ color: 'var(--danger)', fontFamily: 'var(--mono)', fontSize: '10px' }}>
@@ -124,6 +318,7 @@ export function ResultsSensitivityCard() {
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
+                alignItems: 'center',
                 gap: '6px',
                 fontFamily: 'var(--mono)',
                 fontSize: '9.5px',
@@ -133,8 +328,22 @@ export function ResultsSensitivityCard() {
               <span>
                 {r.passed ? '✓' : '✗'} {r.label || r.metric} ({r.target})
               </span>
-              <span>
-                {r.value.toPrecision(4)} {r.unit} ({r.error_or_margin})
+              <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span>
+                  {r.value.toPrecision(4)} {r.unit} ({r.error_or_margin})
+                </span>
+                {i < asserts.length && (
+                  <button
+                    type="button"
+                    class="mini-btn"
+                    data-testid={`delete-contract-${i}`}
+                    onClick={() => removeContract(i)}
+                    title="Remove contract from .fsm document"
+                    style={{ padding: '0 4px', lineHeight: 1.2 }}
+                  >
+                    ×
+                  </button>
+                )}
               </span>
             </div>
           ))}
@@ -149,16 +358,18 @@ export function ResultsSensitivityCard() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: '9.5px' }}>
             <thead>
               <tr style={{ color: 'var(--text-3)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
-                <th style={{ textAlign: 'left', padding: '2px 4px' }}>let p</th>
+                <th style={{ textAlign: 'left', padding: '2px 4px' }}>param p</th>
                 <th style={{ padding: '2px 4px' }} title="Logarithmic compliance elasticity (p/C)·∂C/∂p">e_C</th>
                 <th style={{ padding: '2px 4px' }}>∂m/∂p (g)</th>
                 <th style={{ padding: '2px 4px' }}>∂σ_vM/∂p</th>
                 <th style={{ padding: '2px 4px' }}>∂‖u‖/∂p</th>
+                {hasThermalSens && <th style={{ padding: '2px 4px' }}>∂T_max/∂p (°C)</th>}
               </tr>
             </thead>
             <tbody>
               {sensReport.parameters.map((p) => {
                 const c0 = p.cases[0];
+                const ct = p.cases.find((c) => c.d_max_temp != null);
                 return (
                   <tr key={p.param} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
                     <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
@@ -170,6 +381,11 @@ export function ResultsSensitivityCard() {
                     <td style={{ padding: '2px 4px' }}>{p.d_mass_g.toFixed(2)}</td>
                     <td style={{ padding: '2px 4px' }}>{c0 ? c0.d_max_vm_elem.toFixed(2) : '—'}</td>
                     <td style={{ padding: '2px 4px' }}>{c0 ? c0.d_max_displacement.toFixed(4) : '—'}</td>
+                    {hasThermalSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {ct?.d_max_temp != null ? ct.d_max_temp.toFixed(2) : '—'}
+                      </td>
+                    )}
                   </tr>
                 );
               })}

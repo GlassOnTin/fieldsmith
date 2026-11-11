@@ -391,6 +391,26 @@ impl SpatialFn {
     /// Build a compact, human-readable `lerp(axis, s0, v0, s1, v1, ...)` expression from
     /// strictly increasing `(station_mm, value)` pairs.
     pub fn format_lerp(coord: SpatialCoord, samples: &[(f64, f64)]) -> Option<String> {
+        Self::format_lerp_with(coord, samples, fmt_num)
+    }
+
+    /// Build a full IEEE-754 precision `lerp(axis, s0, v0, s1, v1, ...)` expression for
+    /// in-memory solver and adjoint/sensitivity evaluation without decimal rounding noise.
+    pub fn format_lerp_exact(coord: SpatialCoord, samples: &[(f64, f64)]) -> Option<String> {
+        Self::format_lerp_with(coord, samples, |v| {
+            if v == 0.0 {
+                "0".to_string()
+            } else {
+                format!("{v}")
+            }
+        })
+    }
+
+    fn format_lerp_with(
+        coord: SpatialCoord,
+        samples: &[(f64, f64)],
+        fmt: fn(f64) -> String,
+    ) -> Option<String> {
         if samples.len() < 2 {
             return None;
         }
@@ -405,8 +425,8 @@ impl SpatialFn {
                 continue;
             }
             prev_s = s;
-            parts.push(fmt_num(s));
-            parts.push(fmt_num(v));
+            parts.push(fmt(s));
+            parts.push(fmt(v));
         }
         if parts.len() < 5 {
             return None;

@@ -396,6 +396,7 @@ try {
   await page.waitForSelector('[data-testid="sketch-saved-select"]', { timeout: 3000 });
   const savedSelectVal = await page.$eval('[data-testid="sketch-saved-select"]', (el) => el.value);
   assert(savedSelectVal === 'sketch_boss1_sk', `Expected saved sketch 'sketch_boss1_sk' auto-selected, got '${savedSelectVal}'`);
+  await page.click('[data-testid="close-sketch-modal"]');
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
@@ -414,9 +415,11 @@ try {
     'cylinder bore r=r_in h=L_pipe + 2 at=(0, 0, L_pipe / 2) subtract',
     'region mount = wall.bottom',
     'region bore_wall = bore.side',
+    'region outer_wall = wall.side',
     'support fix mount fixed=xyz',
     'load bore_p bore_wall pressure=0.5 case="Operating"',
     'convection cool bore_wall h=0.004 tinf=25 case="Operating"',
+    'heatflux q_ext outer_wall q=0.02 case="Operating"',
     'solve tref=25',
     'system user_pipe_1d title="User 1D Cooled Pipe" sector="Custom Thermal" nodes=25 span=(0, 40) axis=z {',
     '  design mdot nominal=0.035 min=0.015 max=0.12 unit="kg/s" symbol="m_dot" category=process',
@@ -460,6 +463,9 @@ try {
     const doc = window.fieldsmith.store.doc;
     const cool = doc.convections.find((c) => c.id === 'cool');
     const printed = wasm.printFsm(doc);
+    const thermoAdj = wasm.computeFsmSensitivities(doc, ['r_in', 'mdot'], 2500);
+    const mdotParam = thermoAdj.parameters.find((p) => p.param === 'mdot');
+    const mdotThermalCase = mdotParam?.cases.find((c) => c.d_max_temp != null);
     return {
       docName: doc.name,
       rootCount: doc.root.length,
@@ -469,6 +475,9 @@ try {
       hVal: cool?.h ?? 0,
       hasSystemInFsm: printed.includes('system user_pipe_1d'),
       hasRedundantCoupledLine: /^coupled\s+/m.test(printed),
+      thermoMethod: thermoAdj.method,
+      thermoSolves: thermoAdj.solves_run,
+      dMaxTempDmdot: mdotThermalCase?.d_max_temp ?? null,
     };
   });
 
@@ -478,11 +487,67 @@ try {
   assert(declSynced.mdotNominal > 0.035, `Expected Adjoint step to increase mdot from 0.035, got ${declSynced.mdotNominal}`);
   assert(declSynced.tinfExpr.startsWith('lerp(z,'), `Expected projected 1D lerp(z, ...) t_inf_expr, got '${declSynced.tinfExpr}'`);
   assert(declSynced.hasSystemInFsm && !declSynced.hasRedundantCoupledLine, 'Printed .fsm missing system block or polluted with redundant coupled line');
+  assert(
+    declSynced.thermoMethod === 'boundary_velocity_adjoint' &&
+      declSynced.thermoSolves === 10 &&
+      declSynced.dMaxTempDmdot !== null &&
+      declSynced.dMaxTempDmdot < 0,
+    `Expected staggered 1D->3D thermo-elastic adjoint (10 solves, ∂T_max/∂mdot < 0), got method=${declSynced.thermoMethod}, solves=${declSynced.thermoSolves}, dT/dmdot=${declSynced.dMaxTempDmdot}`,
+  );
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[8/8] Declarative .fsm system -> WASM Dual-AD SystemsWorkbench + Adjoint step (mdot = ${declSynced.mdotNominal.toFixed(4)} kg/s) + 3D lerp(z, ...) sync: PASS`,
+    `[8/9] Declarative .fsm system -> WASM Dual-AD SystemsWorkbench + 1D->3D thermo-elastic adjoint (∂T_max/∂mdot = ${declSynced.dMaxTempDmdot.toFixed(1)} °C/(kg/s), 10 solves): PASS`,
   );
+
+  // 9. Interactive `.fsm` system authoring (`set_system_block`) + `.fsm` contract authoring (`upsert_assert` / `delete_assert`) in Results UI
+  await page.evaluate(() => {
+    window.fieldsmith.ui.set('systemsOpen', true);
+  });
+  await page.waitForSelector('[data-testid="open-declarative-author-btn"]', { timeout: 3000 });
+  await page.click('[data-testid="open-declarative-author-btn"]');
+  await page.waitForSelector('[data-testid="declarative-author-panel"]', { timeout: 3000 });
+  await page.click('[data-testid="decl-template-0d-btn"]');
+  await page.click('[data-testid="decl-system-apply-btn"]');
+  await page.waitForSelector('[data-testid="systems-solve-status"]', { timeout: 3000 });
+
+  const authoredSysId = await page.evaluate(() => {
+    const id = window.fieldsmith.store.doc.system_block?.id ?? null;
+    window.fieldsmith.ui.set('systemsOpen', false);
+    window.fieldsmith.store.setLens('results');
+    return id;
+  });
+  assert(authoredSysId === 'thermal_node_0d', `Expected authored system_block.id === 'thermal_node_0d', got '${authoredSysId}'`);
+
+  await page.waitForSelector('[data-testid="results-sensitivity-contracts-card"]', { timeout: 15000 });
+  await page.click('[data-testid="results-toggle-add-contract-btn"]');
+  await page.fill('[data-testid="contract-label-input"]', 'Thermal cap');
+  await page.selectOption('[data-testid="contract-metric-select"]', 'max_temp');
+  await page.fill('[data-testid="contract-target-input"]', '<= 250');
+  await page.click('[data-testid="contract-save-btn"]');
+
+  const contractAdded = await page.evaluate(async () => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const asserts = window.fieldsmith.store.doc.asserts ?? [];
+    const printed = wasm.printFsm(window.fieldsmith.store.doc);
+    return {
+      count: asserts.length,
+      hasInFsm: printed.includes('assert "Thermal cap"'),
+    };
+  });
+  assert(contractAdded.count === 1 && contractAdded.hasInFsm, `Expected 1 authored assert in .fsm, got count=${contractAdded.count}, hasInFsm=${contractAdded.hasInFsm}`);
+
+  await page.click('[data-testid="results-verify-contracts-btn"]');
+  await page.waitForSelector('[data-testid="results-contracts-output"]', { timeout: 10000 });
+  const contractOutText = await page.textContent('[data-testid="results-contracts-output"]');
+  assert(contractOutText && contractOutText.includes('1/1 .fsm contracts passed'), `Expected 1/1 .fsm contracts passed, got '${contractOutText}'`);
+
+  await page.click('[data-testid="delete-contract-0"]');
+  const afterDeleteCount = await page.evaluate(() => (window.fieldsmith.store.doc.asserts ?? []).length);
+  assert(afterDeleteCount === 0, `Expected 0 asserts after delete-contract-0, got ${afterDeleteCount}`);
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log('[9/9] UI .fsm system authoring (set_system_block) + Results .fsm contract authoring (upsert_assert / delete_assert): PASS');
   await page.close();
 } catch (e) {
   console.error(e);

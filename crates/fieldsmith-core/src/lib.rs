@@ -1965,6 +1965,8 @@ pub fn analyse_modes(
     clock: Clock,
     count: usize,
 ) -> Result<ModalRun, SetupError> {
+    let sys_resolved = crate::declarative_system::resolve_system_doc(doc)?;
+    let doc = sys_resolved.as_ref();
     let Prepared {
         mesh,
         fixed,
@@ -2052,7 +2054,8 @@ pub fn analyse_full(
     modes: Option<usize>,
     equilibrate: bool,
 ) -> Result<Analysis, SetupError> {
-    let sdoc = structural_doc(doc);
+    let sys_resolved = crate::declarative_system::resolve_system_doc(doc)?;
+    let sdoc = structural_doc(sys_resolved.as_ref());
     let doc = sdoc.as_ref();
     let Prepared {
         mesh,

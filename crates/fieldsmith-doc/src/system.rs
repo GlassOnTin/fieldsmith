@@ -2072,6 +2072,27 @@ pub fn sync_system_bindings_to_doc(
     design_p: &[f64],
     epistemic_theta: &[f64],
 ) -> Result<(), String> {
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, false)
+}
+
+/// Exact IEEE-754 variant of [`sync_system_bindings_to_doc`] for in-memory solver and sensitivity
+/// evaluation (`SpatialFn::format_lerp_exact`).
+pub fn sync_system_bindings_to_doc_exact(
+    doc: &mut Document,
+    state: &[f64],
+    design_p: &[f64],
+    epistemic_theta: &[f64],
+) -> Result<(), String> {
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, true)
+}
+
+fn sync_system_bindings_impl(
+    doc: &mut Document,
+    state: &[f64],
+    design_p: &[f64],
+    epistemic_theta: &[f64],
+    exact_lerp: bool,
+) -> Result<(), String> {
     let sys_snapshot = doc
         .system_block
         .clone()
@@ -2148,7 +2169,11 @@ pub fn sync_system_bindings_to_doc(
                 .copied()
                 .zip(vals.iter().copied())
                 .collect();
-            SpatialFn::format_lerp(coord, &samples)
+            if exact_lerp {
+                SpatialFn::format_lerp_exact(coord, &samples)
+            } else {
+                SpatialFn::format_lerp(coord, &samples)
+            }
         } else {
             None
         };

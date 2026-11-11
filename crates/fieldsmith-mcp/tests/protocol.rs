@@ -130,6 +130,8 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "set_let",
             "set_fill",
             "set_build",
+            "upsert_assert",
+            "delete_assert",
             "doc_text",
             "solve",
             "verify",
@@ -462,7 +464,10 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
     let catalog = c.tool_ok(74, "list_coupled_systems", json!({}));
     let systems = catalog["systems"].as_array().unwrap();
     assert_eq!(systems.len(), 6);
-    assert_eq!(systems[0]["system_id"], "pilkington_float_bath_cvd_coater_v1");
+    assert_eq!(
+        systems[0]["system_id"],
+        "pilkington_float_bath_cvd_coater_v1"
+    );
     assert_eq!(systems[1]["system_id"], "regen_nozzle_h2_v1");
     assert_eq!(systems[2]["system_id"], "solar_candle_ignition_v1");
     assert_eq!(systems[3]["system_id"], "jwst_fastener_fixing_envelope_v1");
@@ -508,7 +513,12 @@ fn cad_authoring_and_coupled_synthesis_round_trip() {
     assert!(cases[0]["max_vm_elem"].as_f64().unwrap() > 1.0);
     let graded = &solved_nozzle["single"]["graded"];
     assert!(graded["mass_g"].as_f64().unwrap() < graded["solid_mass_g"].as_f64().unwrap() * 0.70);
-    assert!(graded["max_layer_peel"].as_array().unwrap()[1].as_f64().unwrap() < 0.60);
+    assert!(
+        graded["max_layer_peel"].as_array().unwrap()[1]
+            .as_f64()
+            .unwrap()
+            < 0.60
+    );
 }
 
 #[test]
@@ -554,19 +564,28 @@ fn spatial_boundary_conditions_round_trip_and_solve_over_mcp() {
         "add_load",
         json!({"id": "hydro", "region": "wet", "pressure": 5.0, "pressure_fn": "0.5 * (20 - z)", "case": "Hydro"}),
     );
-    assert!(r_load["problems"].as_array().unwrap().is_empty(), "{r_load}");
+    assert!(
+        r_load["problems"].as_array().unwrap().is_empty(),
+        "{r_load}"
+    );
     let r_temp = c.tool_ok(
         9,
         "add_temperature",
         json!({"id": "t_grad", "region": "wet", "temp_fn": "20 + 3 * z", "case": "Thermal"}),
     );
-    assert!(r_temp["problems"].as_array().unwrap().is_empty(), "{r_temp}");
+    assert!(
+        r_temp["problems"].as_array().unwrap().is_empty(),
+        "{r_temp}"
+    );
     let r_conv = c.tool_ok(
         10,
         "add_convection",
         json!({"id": "c_grad", "region": "dry", "h_fn": "0.02 + 0.002 * z", "tinf_fn": "20 + 0.5 * z", "case": "Thermal"}),
     );
-    assert!(r_conv["problems"].as_array().unwrap().is_empty(), "{r_conv}");
+    assert!(
+        r_conv["problems"].as_array().unwrap().is_empty(),
+        "{r_conv}"
+    );
     let r_hf = c.tool_ok(
         11,
         "add_heatflux",
@@ -647,7 +666,10 @@ fn parametric_sketch_persists_in_fsm_and_reacts_to_set_let_over_mcp() {
     let txt = c.tool_ok(7, "doc_text", json!({}));
     let fsm_str = txt["text"].as_str().expect("doc_text.text");
     assert!(fsm_str.contains("sketch sk_boss"), "{fsm_str}");
-    assert!(fsm_str.contains("sketchfeature boss1 sketch=sk_boss"), "{fsm_str}");
+    assert!(
+        fsm_str.contains("sketchfeature boss1 sketch=sk_boss"),
+        "{fsm_str}"
+    );
 
     // Re-open the printed `.fsm` text and verify the sketch binding survives round-trip.
     c.tool_ok(8, "open", json!({"doc": fsm_str}));
@@ -722,7 +744,10 @@ solve size=6 tref=20 build=(0, 0)
             < 1e-5
     );
     let t_peak_0 = solved["analysis"]["objectives"][0].as_f64().unwrap();
-    assert!(t_peak_0 > 95.0, "low-flow nominal should exceed 95 C limit, got {t_peak_0}");
+    assert!(
+        t_peak_0 > 95.0,
+        "low-flow nominal should exceed 95 C limit, got {t_peak_0}"
+    );
 
     // Take 3 Sparse Adjoint optimisation steps — increases `mdot` to reduce `peak_wall`!
     let opt = c.tool_ok(73, "optimise_coupled_system", json!({"steps": 3}));
@@ -742,10 +767,7 @@ solve size=6 tref=20 build=(0, 0)
     let fea = c.tool_ok(75, "solve", json!({"kind": "solve", "h": 6.0}));
     assert_eq!(fea["status"], "ok", "{fea}");
     assert!(
-        fea["single"]["cases"][0]["max_von_mises"]
-            .as_f64()
-            .unwrap()
-            > 0.0,
+        fea["single"]["cases"][0]["max_von_mises"].as_f64().unwrap() > 0.0,
         "{fea}"
     );
 }

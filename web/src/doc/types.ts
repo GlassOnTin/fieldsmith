@@ -568,7 +568,9 @@ export type DocCommand =
   | { cmd: 'upsert_sketch'; sketch: ParametricSketch }
   | { cmd: 'delete_sketch'; id: string }
   | { cmd: 'apply_sketch_feature'; request: SketchFeatureRequest }
-  | { cmd: 'set_system_block'; system?: DeclarativeSystem | null };
+  | { cmd: 'set_system_block'; system?: DeclarativeSystem | null }
+  | { cmd: 'upsert_assert'; index?: number; assertion: LiterateAssert }
+  | { cmd: 'delete_assert'; index: number };
 
 export interface DocCommandOutcome {
   entity_id?: string;
@@ -651,6 +653,7 @@ export function emptyDocument(): Document {
     solve: { size: null, modes: null, t_ref: null },
     lets: [],
     consumed: [],
+    asserts: [],
     sketches: [],
     sketch_features: [],
   };
@@ -663,6 +666,7 @@ export function emptyDocument(): Document {
 export function withLetTables<T extends Document>(doc: T): T {
   doc.lets ??= [];
   doc.consumed ??= [];
+  doc.asserts ??= [];
   doc.convections ??= [];
   doc.heat_fluxes ??= [];
   doc.sketches ??= [];

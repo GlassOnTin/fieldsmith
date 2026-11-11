@@ -26,9 +26,7 @@ use fieldsmith_core::channel::{
 use fieldsmith_core::declarative_system::DeclarativeCoupledSystem;
 use fieldsmith_core::fsmz;
 use fieldsmith_doc::command::{apply_doc_command, DocCommand};
-use fieldsmith_doc::fixings::{
-    insert_fixing_into_document, FixingInsertRequest, FixingKind,
-};
+use fieldsmith_doc::fixings::{insert_fixing_into_document, FixingInsertRequest, FixingKind};
 use fieldsmith_doc::sketch::{
     preset_sketch_template, solve_sketch as solve_sketch_doc, ParametricSketch,
     SketchFeatureRequest,
@@ -308,6 +306,8 @@ impl Server {
             "set_let" | "set_param" => self.set_let(args),
             "set_fill" => self.set_fill(args),
             "set_build" => self.set_build(args),
+            "upsert_assert" => self.upsert_assert(args),
+            "delete_assert" => self.delete_assert(args),
             "doc_text" | "export_fsm" => self.doc_text(args),
             "solve" | "solve_study" => self.solve(args),
             "verify" => self.verify(args),
@@ -350,6 +350,8 @@ impl Server {
                     | "set_param"
                     | "set_fill"
                     | "set_build"
+                    | "upsert_assert"
+                    | "delete_assert"
                     | "solve"
                     | "solve_study"
                     | "analyze_sdf_channel"
@@ -388,7 +390,9 @@ impl Server {
             .and_then(Value::as_str);
         let docz = args.get("docz").and_then(Value::as_str);
         if doc.is_none() && docz.is_none() {
-            return Err("open: pass exactly one of doc/fsm (.fsm text) or docz (base64 .fsmz)".into());
+            return Err(
+                "open: pass exactly one of doc/fsm (.fsm text) or docz (base64 .fsmz)".into(),
+            );
         }
         let d = load_doc(doc, docz)?;
         let summary = doc_summary(&d);
@@ -446,10 +450,7 @@ impl Server {
 
     fn add_region(&mut self, args: Value) -> Result<Value, String> {
         let selectors: Vec<Selector> = field("selectors", &args)?;
-        let id = args
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
         let out = apply_doc_command(d, DocCommand::UpsertRegion { id, selectors })?;
         Ok(json!({"added": out.entity_id, "problems": out.problems}))
@@ -458,10 +459,7 @@ impl Server {
     fn add_support(&mut self, args: Value) -> Result<Value, String> {
         let region = text_field("region", &args)?;
         let fixed: [bool; 3] = field("fixed", &args)?;
-        let id = args
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
         let out = apply_doc_command(d, DocCommand::UpsertSupport { id, region, fixed })?;
         Ok(json!({"added": out.entity_id, "problems": out.problems}))
@@ -508,7 +506,9 @@ impl Server {
         {
             LoadKind::Force { vector: v }
         } else {
-            return Err("add_load: missing kind (or force / pressure / pressure_fn / preload)".into());
+            return Err(
+                "add_load: missing kind (or force / pressure / pressure_fn / preload)".into(),
+            );
         };
         let id = args.get("id").and_then(Value::as_str).map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
@@ -670,8 +670,16 @@ impl Server {
             .and_then(Value::as_f64)
             .ok_or_else(|| "upsert_custom_material: missing yield_strength/yield".to_string())?;
         let density = number_field("density", &args)?;
-        let min_wall = args.get("min_wall").or_else(|| args.get("wall")).and_then(Value::as_f64).unwrap_or(0.8);
-        let role = match args.get("role").and_then(Value::as_str).unwrap_or("structural") {
+        let min_wall = args
+            .get("min_wall")
+            .or_else(|| args.get("wall"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.8);
+        let role = match args
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("structural")
+        {
             "structural" | "solid" | "" => MaterialRole::Structural,
             "fluid" => MaterialRole::Fluid,
             other => {
@@ -692,7 +700,10 @@ impl Server {
             yield_strength,
             density,
             min_wall,
-            alpha: args.get("alpha").or_else(|| args.get("a")).and_then(Value::as_f64),
+            alpha: args
+                .get("alpha")
+                .or_else(|| args.get("a"))
+                .and_then(Value::as_f64),
             k: args.get("k").and_then(Value::as_f64),
             yield_z: args.get("yield_z").and_then(Value::as_f64),
             shear_z: args.get("shear_z").and_then(Value::as_f64),
@@ -715,8 +726,7 @@ impl Server {
     /// or define a new `let` variable, and re-evaluate all dependent consumer expressions
     /// and bound parametric sketch features.
     fn set_let(&mut self, args: Value) -> Result<Value, String> {
-        let name = text_field("name", &args)
-            .or_else(|_| text_field("addr", &args))?;
+        let name = text_field("name", &args).or_else(|_| text_field("addr", &args))?;
         let value = number_field("value", &args)?;
         let expr = args
             .get("expr")
@@ -739,6 +749,76 @@ impl Server {
         } else {
             Ok(json!({"name": name, "value": value, "lets": d.lets, "problems": out.problems}))
         }
+    }
+
+    fn upsert_assert(&mut self, args: Value) -> Result<Value, String> {
+        let index = args
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        let metric = text_field("metric", &args)?;
+        let target = match args.get("target") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => return Err("upsert_assert: 'target' is required (string or number)".into()),
+        };
+        let label = args
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let tolerance = args
+            .get("tolerance")
+            .or_else(|| args.get("tol"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let unit = args
+            .get("unit")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertAssert {
+                index,
+                assertion: fsm::LiterateAssert {
+                    label,
+                    metric,
+                    target,
+                    tolerance,
+                    unit,
+                },
+            },
+        )?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "asserts": d.asserts,
+            "problems": out.problems,
+        }))
+    }
+
+    fn delete_assert(&mut self, args: Value) -> Result<Value, String> {
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let idx = if let Some(i) = args.get("index").and_then(Value::as_u64) {
+            i as usize
+        } else if let Some(lbl) = args.get("label").and_then(Value::as_str) {
+            d.asserts
+                .iter()
+                .position(|a| a.label == lbl)
+                .ok_or_else(|| format!("delete_assert: no assert with label {lbl:?}"))?
+        } else {
+            return Err("delete_assert: provide 'index' or 'label'".into());
+        };
+        let out = apply_doc_command(d, DocCommand::DeleteAssert { index: idx })?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "asserts": d.asserts,
+            "problems": out.problems,
+        }))
     }
 
     /// Configure or update the document's `fill` specification (TPMS family, mode, cell,
@@ -773,7 +853,9 @@ impl Server {
                     "gyroid" => Some(Family::Gyroid),
                     "primitive" | "schwarz_p" => Some(Family::Primitive),
                     "diamond" => Some(Family::Diamond),
-                    other => return Err(format!("set_fill: unknown morph lattice family {other:?}")),
+                    other => {
+                        return Err(format!("set_fill: unknown morph lattice family {other:?}"))
+                    }
                 };
             } else {
                 return Err("set_fill: morph must be a lattice family string or null".into());
@@ -854,8 +936,8 @@ impl Server {
             f.margin = v;
         }
         if let Some(p) = args.get("protect") {
-            f.protect = serde_json::from_value(p.clone())
-                .map_err(|e| format!("set_fill: protect: {e}"))?;
+            f.protect =
+                serde_json::from_value(p.clone()).map_err(|e| format!("set_fill: protect: {e}"))?;
         }
         if let Some(c) = args.get("case") {
             f.case = if c.is_null() {
@@ -918,15 +1000,14 @@ impl Server {
             };
         }
         if let Some(hn) = args.get("hardening_n") {
-            d.solve.hardening_n = if hn.is_null() {
-                None
-            } else {
-                Some(
-                    hn.as_f64().ok_or_else(|| {
+            d.solve.hardening_n =
+                if hn.is_null() {
+                    None
+                } else {
+                    Some(hn.as_f64().ok_or_else(|| {
                         "set_build: hardening_n must be a number or null".to_string()
-                    })?,
-                )
-            };
+                    })?)
+                };
         }
         let problems = d.validate();
         Ok(json!({"solve": d.solve, "problems": problems}))
@@ -1157,23 +1238,32 @@ impl Server {
             _ => d.fresh_id(&kind_str),
         };
         if !fsm::is_ident(&id) {
-            return Err(format!("upsert_shape: {id:?} is not a valid shape identifier"));
+            return Err(format!(
+                "upsert_shape: {id:?} is not a valid shape identifier"
+            ));
         }
 
         let op = match args.get("op").and_then(Value::as_str).unwrap_or("add") {
             "add" => Op::Add,
             "subtract" => Op::Subtract,
             "intersect" => Op::Intersect,
-            other => return Err(format!("upsert_shape: unknown op {other:?} (expected add|subtract|intersect)")),
+            other => {
+                return Err(format!(
+                    "upsert_shape: unknown op {other:?} (expected add|subtract|intersect)"
+                ))
+            }
         };
         let blend = args.get("blend").and_then(Value::as_f64).unwrap_or(0.0);
         let suppressed = flag(&args, "suppressed");
         let translate: [f64; 3] = match args.get("at") {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("upsert_shape: at: {e}"))?,
+            Some(v) => {
+                serde_json::from_value(v.clone()).map_err(|e| format!("upsert_shape: at: {e}"))?
+            }
             None => [0.0, 0.0, 0.0],
         };
         let rotate: [f64; 3] = match args.get("rotate") {
-            Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("upsert_shape: rotate: {e}"))?,
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| format!("upsert_shape: rotate: {e}"))?,
             None => [0.0, 0.0, 0.0],
         };
         let material = match args.get("material") {
@@ -1352,11 +1442,9 @@ impl Server {
             }
             p
         } else if let Some(sub) = args.get("sketch") {
-            serde_json::from_value(sub.clone())
-                .map_err(|e| format!("solve_sketch: sketch: {e}"))?
+            serde_json::from_value(sub.clone()).map_err(|e| format!("solve_sketch: sketch: {e}"))?
         } else {
-            serde_json::from_value(args.clone())
-                .map_err(|e| format!("solve_sketch: {e}"))?
+            serde_json::from_value(args.clone()).map_err(|e| format!("solve_sketch: {e}"))?
         };
 
         let mut lets: Vec<(String, f64)> = self
@@ -1384,7 +1472,8 @@ impl Server {
     /// and re-synchronize any 3D `sketchfeature` bindings referencing that sketch.
     fn upsert_sketch(&mut self, args: Value) -> Result<Value, String> {
         let sketch: ParametricSketch = if let Some(sub) = args.get("sketch") {
-            serde_json::from_value(sub.clone()).map_err(|e| format!("upsert_sketch: sketch: {e}"))?
+            serde_json::from_value(sub.clone())
+                .map_err(|e| format!("upsert_sketch: sketch: {e}"))?
         } else {
             serde_json::from_value(args).map_err(|e| format!("upsert_sketch: {e}"))?
         };
@@ -1422,8 +1511,8 @@ impl Server {
     /// to a 3D shape face (`on: "<shape_id>.<face>"`) and compile it into a 3D feature
     /// (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`) in the open `.fsm` document.
     fn apply_sketch_feature(&mut self, args: Value) -> Result<Value, String> {
-        let request: SketchFeatureRequest = serde_json::from_value(args)
-            .map_err(|e| format!("apply_sketch_feature: {e}"))?;
+        let request: SketchFeatureRequest =
+            serde_json::from_value(args).map_err(|e| format!("apply_sketch_feature: {e}"))?;
         if self.doc.is_none() {
             self.doc = Some(Document::default());
         }
@@ -1640,7 +1729,10 @@ impl Server {
             .or(doc_coupled_id)
             .or_else(|| self.coupled_system_id.clone())
             .unwrap_or_else(|| "pilkington_float_bath_cvd_coater_v1".to_string());
-        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let sync_cad = args
+            .get("sync_cad")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let req_p: Option<Vec<f64>> = args
             .get("design_p")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -1883,7 +1975,9 @@ impl Server {
                 "fsm_3d": fsm_3d,
             }))
         } else {
-            Err(format!("solve_coupled_system: unknown system_id {system_id:?}"))
+            Err(format!(
+                "solve_coupled_system: unknown system_id {system_id:?}"
+            ))
         }
     }
 
@@ -1891,7 +1985,10 @@ impl Server {
     /// VNA sweep (`S11`, `S21`, `VSWR`, Smith Chart `Gamma(f)`, radiation efficiency `eta_rad`)
     /// and 3D radiation lobes (`G(theta, phi)`), optionally syncing the 3D `.fsm` drone assembly.
     fn solve_drone_antenna(&mut self, args: Value) -> Result<Value, String> {
-        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let sync_cad = args
+            .get("sync_cad")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let spec = parse_drone_antenna_spec(&args);
         let report = analyze_drone_antenna(&spec);
         let fsm_3d = build_deadcat_drone_fsm(&spec);
@@ -1911,7 +2008,10 @@ impl Server {
     /// `diversity_skew_deg`, `dielectric_pod_wall_mm`) and L-network impedance matching, and sync
     /// the optimised 3D `.fsm` drone assembly into the session document.
     fn optimise_drone_antenna(&mut self, args: Value) -> Result<Value, String> {
-        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let sync_cad = args
+            .get("sync_cad")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let max_iters = args
             .get("iterations")
             .and_then(Value::as_u64)
@@ -1960,7 +2060,10 @@ impl Server {
             .and_then(Value::as_u64)
             .unwrap_or(1)
             .clamp(1, 20) as usize;
-        let sync_cad = args.get("sync_cad").and_then(Value::as_bool).unwrap_or(true);
+        let sync_cad = args
+            .get("sync_cad")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let req_p: Option<Vec<f64>> = args
             .get("design_p")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -2010,7 +2113,9 @@ impl Server {
             let cfg = EngineConfig::default();
             self.run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad)
         } else {
-            Err(format!("optimise_coupled_system: unknown system_id {system_id:?}"))
+            Err(format!(
+                "optimise_coupled_system: unknown system_id {system_id:?}"
+            ))
         }
     }
 
@@ -2142,18 +2247,17 @@ impl Server {
                 })
                 .unwrap_or_default();
             let peers = http::discover_peers(&[8080, 18789], 180, &extra_hosts, true);
-            peers
-                .into_iter()
-                .next()
-                .map(|p| p.url)
-                .ok_or_else(|| "connect_compute_peer: no Fieldsmith compute peers discovered".to_string())?
+            peers.into_iter().next().map(|p| p.url).ok_or_else(|| {
+                "connect_compute_peer: no Fieldsmith compute peers discovered".to_string()
+            })?
         } else {
             let (_, _, norm) = http::parse_http_host_port(url_arg)?;
             norm
         };
         let (host, port, norm_url) = http::parse_http_host_port(&target_url)?;
-        let peer_info = http::probe_peer_health(&host, port, 1500, "connect")
-            .ok_or_else(|| format!("connect_compute_peer: failed to reach {norm_url}/api/health"))?;
+        let peer_info = http::probe_peer_health(&host, port, 1500, "connect").ok_or_else(|| {
+            format!("connect_compute_peer: failed to reach {norm_url}/api/health")
+        })?;
         let sync_payload = json!({
             "actor": http::local_hostname(),
             "last_tool": "connect_compute_peer",
@@ -2319,17 +2423,21 @@ fn case_or_default(args: &Value, default: &str) -> String {
 }
 
 fn parse_profile_vertices(val: Option<&Value>) -> Result<Vec<ProfileVertex>, String> {
-    let arr = val
-        .and_then(Value::as_array)
-        .ok_or_else(|| "profile: expected an array of [x, y] or {x, y, bulge} vertices".to_string())?;
+    let arr = val.and_then(Value::as_array).ok_or_else(|| {
+        "profile: expected an array of [x, y] or {x, y, bulge} vertices".to_string()
+    })?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
         if let Some(coords) = item.as_array() {
             if coords.len() < 2 {
                 return Err("profile vertex array must have at least [x, y]".into());
             }
-            let x = coords[0].as_f64().ok_or("profile vertex x must be a number")?;
-            let y = coords[1].as_f64().ok_or("profile vertex y must be a number")?;
+            let x = coords[0]
+                .as_f64()
+                .ok_or("profile vertex x must be a number")?;
+            let y = coords[1]
+                .as_f64()
+                .ok_or("profile vertex y must be a number")?;
             let bulge = coords.get(2).and_then(Value::as_f64).unwrap_or(0.0);
             out.push(ProfileVertex { x, y, bulge });
         } else if let Some(obj) = item.as_object() {
@@ -2392,7 +2500,10 @@ fn parse_drone_antenna_spec(args: &Value) -> DroneAntennaDesignSpec {
     if let Some(v) = args.get("pod_loss_tan").and_then(Value::as_f64) {
         s.pod_loss_tan = v;
     }
-    if let Some(v) = args.get("cfrp_conductivity_s_per_m").and_then(Value::as_f64) {
+    if let Some(v) = args
+        .get("cfrp_conductivity_s_per_m")
+        .and_then(Value::as_f64)
+    {
         s.cfrp_conductivity_s_per_m = v;
     }
     if let Some(v) = args.get("wheelbase_mm").and_then(Value::as_f64) {
@@ -2436,7 +2547,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
  {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -2449,10 +2560,12 @@ const TOOLS_JSON: &str = r#"[
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
  {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
  {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, and constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]}}}},
+ {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `min_safety_factor`, `mass_g`, `mode_1`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
+ {"name":"delete_assert","description":"Delete an executable `assert` engineering contract from the open `.fsm` document by `index` or `label`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
- {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp` and dimensionless elasticities) across `params` (or all non-derived `let` variables in the open `.fsm` document).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, and dimensionless elasticities) across `params` (or all non-derived `let` / `system` design variables in the open `.fsm` document) using mechanical & staggered thermo-elastic discrete adjoints (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all available CoupledEngineeringSystem models, including any user-authored declarative `system <id> { ... }` block in the open `.fsm` document plus built-in reference packs.","inputSchema":{"type":"object","additionalProperties":false}},

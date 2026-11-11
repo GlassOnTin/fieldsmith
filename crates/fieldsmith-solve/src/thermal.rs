@@ -436,12 +436,11 @@ pub fn solve_conduction(
     solve_conduction_spatial(mesh, d, k, robin, &[], flux, &[], opts)
 }
 
-/// Steady conduction on the P2 mesh accepting both uniform [`RobinBc`]/[`HeatFluxBc`] and
-/// world-space [`SpatialRobinBc`]/[`SpatialHeatFluxBc`] boundary terms. When
-/// `spatial_robin` and `spatial_flux` are empty, arithmetic is bit-for-bit identical to
-/// [`solve_conduction`].
+/// Assemble the unconstrained scalar P2 conduction matrix `A` (`k`-weighted Laplace + Robin
+/// mass terms), unconstrained thermal load vector `q` (Robin `h · T_inf` + surface heat flux),
+/// and Dirichlet node mask `fixed` (`d[i].is_some()`), validating all boundary inputs.
 #[allow(clippy::too_many_arguments)]
-pub fn solve_conduction_spatial(
+pub fn assemble_conduction_system_spatial(
     mesh: &P2Mesh,
     d: &[Option<f64>],
     k: &[f64],
@@ -449,9 +448,7 @@ pub fn solve_conduction_spatial(
     spatial_robin: &[SpatialRobinBc<'_>],
     flux: &[HeatFluxBc],
     spatial_flux: &[SpatialHeatFluxBc<'_>],
-    opts: SolverOptions,
-) -> Result<(Vec<f64>, SolveReport), String> {
-    faer::set_global_parallelism(faer::Parallelism::None);
+) -> Result<(Csr, Vec<f64>, Vec<bool>), String> {
     let n = mesh.nodes.len();
     assert_eq!(d.len(), n, "one temperature statement (or None) per node");
     for (bi, bc) in robin.iter().enumerate() {
@@ -564,6 +561,28 @@ pub fn solve_conduction_spatial(
                 .into()
         });
     }
+    Ok((a, load, fixed))
+}
+
+/// Steady conduction on the P2 mesh accepting both uniform [`RobinBc`]/[`HeatFluxBc`] and
+/// world-space [`SpatialRobinBc`]/[`SpatialHeatFluxBc`] boundary terms. When
+/// `spatial_robin` and `spatial_flux` are empty, arithmetic is bit-for-bit identical to
+/// [`solve_conduction`].
+#[allow(clippy::too_many_arguments)]
+pub fn solve_conduction_spatial(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k: &[f64],
+    robin: &[RobinBc],
+    spatial_robin: &[SpatialRobinBc<'_>],
+    flux: &[HeatFluxBc],
+    spatial_flux: &[SpatialHeatFluxBc<'_>],
+    opts: SolverOptions,
+) -> Result<(Vec<f64>, SolveReport), String> {
+    faer::set_global_parallelism(faer::Parallelism::None);
+    let n = mesh.nodes.len();
+    let (mut a, load, fixed) =
+        assemble_conduction_system_spatial(mesh, d, k, robin, spatial_robin, flux, spatial_flux)?;
     // Lift the Dirichlet values into the right-hand side: solve A_ff x = −A_fd·s_d, then
     // write the fixed values back. Symmetric one-sided lift (full matrix times the
     // Dirichlet vector, fixed rows of the rhs zeroed) keeps A symmetric for PCG; the
@@ -592,6 +611,63 @@ pub fn solve_conduction_spatial(
         }
     }
     Ok((x, report))
+}
+
+/// Solve multiple homogeneous-Dirichlet conduction right-hand sides `A_ff λ_m = rhs_m`
+/// reusing a single assembled scalar CSR operator and a single `ScalarTwoLevel` Cholesky
+/// preconditioner. Used by staggered discrete thermo-elastic adjoints (`K_T λ_T = B_th^T λ_u`).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_conduction_multi_rhs(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k: &[f64],
+    robin: &[RobinBc],
+    spatial_robin: &[SpatialRobinBc<'_>],
+    flux: &[HeatFluxBc],
+    spatial_flux: &[SpatialHeatFluxBc<'_>],
+    rhs_list: &[Vec<f64>],
+    opts: SolverOptions,
+) -> Result<Vec<(Vec<f64>, SolveReport)>, String> {
+    if rhs_list.is_empty() {
+        return Ok(Vec::new());
+    }
+    faer::set_global_parallelism(faer::Parallelism::None);
+    let n = mesh.nodes.len();
+    let (mut a, _load, fixed) =
+        assemble_conduction_system_spatial(mesh, d, k, robin, spatial_robin, flux, spatial_flux)?;
+    apply_dirichlet(&mut a, &fixed);
+    let pre = ScalarTwoLevel::new(&a, &fixed, mesh.nverts, &mesh.mid_edge)?;
+    let free_dofs = n - fixed.iter().filter(|&&f| f).count();
+    let mut out = Vec::with_capacity(rhs_list.len());
+    for rhs in rhs_list {
+        if rhs.len() != n {
+            return Err(format!(
+                "conduction adjoint RHS length {} does not match mesh nodes {}",
+                rhs.len(),
+                n
+            ));
+        }
+        let mut b = rhs.clone();
+        for (bi, &f) in b.iter_mut().zip(&fixed) {
+            if f {
+                *bi = 0.0;
+            }
+        }
+        let (x, run) = pcg_scalar(&a, &pre, &b, opts)?;
+        out.push((
+            x,
+            SolveReport {
+                dofs: n,
+                free_dofs,
+                coarse_dofs: mesh.nverts,
+                iterations: run.iterations,
+                rel_residual: run.rel_residual,
+                converged: run.converged,
+                ..Default::default()
+            },
+        ));
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -785,11 +861,7 @@ where
 
 /// Nodal spatially varying surface-flux integrals on one 6-node P2 boundary facet:
 /// `flux[a] = ∫ q(x) φa dΓ` via the 16-point (4×4 degree-7) Duffy Gauss–Legendre rule.
-pub fn element_flux_spatial<F>(
-    mesh: &P2Mesh,
-    nodes: &[u32; 6],
-    eval: F,
-) -> Result<[f64; 6], String>
+pub fn element_flux_spatial<F>(mesh: &P2Mesh, nodes: &[u32; 6], eval: F) -> Result<[f64; 6], String>
 where
     F: Fn(V3) -> Result<f64, String>,
 {
@@ -1023,4 +1095,80 @@ pub fn thermal_load_multi(
         }
     }
     f
+}
+
+/// Exact discrete transpose `(B_th^T w)[b] = ∑_e β_e ∫_{Ω_e} (∇ · w) φ_b dV` of
+/// [`thermal_load_multi`], satisfying `<thermal_load_multi(dt), w> == <dt, B_th^T w>`
+/// to IEEE-754 floating-point precision. Used by staggered discrete thermo-elastic adjoints.
+pub fn thermal_load_transpose_multi(
+    mesh: &P2Mesh,
+    w: &[f64],
+    young: &[f64],
+    poisson: f64,
+    alpha_elem: &[f64],
+    rd: &ThermalRefData,
+) -> Vec<f64> {
+    assert_eq!(young.len(), mesh.tets.len(), "one modulus per element");
+    assert_eq!(alpha_elem.len(), mesh.tets.len(), "one alpha per element");
+    assert_eq!(w.len(), mesh.ndofs(), "3 displacement DOFs per node");
+    let mut out_t = vec![0.0; mesh.nodes.len()];
+    for (e, (&y, &alpha)) in young.iter().zip(alpha_elem.iter()).enumerate() {
+        let m = fenics_assembly::elasticity::ElasticMaterial::new(y, poisson);
+        let beta = (3.0 * m.lame_lambda() + 2.0 * m.lame_mu()) * alpha;
+        if beta == 0.0 {
+            continue;
+        }
+        let map = element_map(mesh, e);
+        let det = map.det_jacobian.abs();
+        let t = &mesh.tets[e];
+        for (q, wq) in rd.weights.iter().enumerate() {
+            let mut div_w = 0.0f64;
+            for (a, &ta) in t.iter().enumerate() {
+                let gp = map.transform_gradient(&rd.grads[q][a]);
+                let base = 3 * ta as usize;
+                div_w += gp[0] * w[base] + gp[1] * w[base + 1] + gp[2] * w[base + 2];
+            }
+            let scale = beta * wq * det * div_w;
+            for (b, &phi_b) in rd.basis[q].iter().enumerate() {
+                out_t[t[b] as usize] += scale * phi_b;
+            }
+        }
+    }
+    out_t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thermal_load_transpose_satisfies_exact_bilinear_duality() {
+        let verts = vec![
+            [0.0, 0.0, 0.0],
+            [12.0, 1.0, 0.0],
+            [2.0, 10.0, 0.5],
+            [1.0, 2.0, 9.0],
+            [14.0, 11.0, 8.0],
+        ];
+        let tets = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        let mesh = P2Mesh::from_linear(&verts, &tets);
+        let young = vec![71_000.0, 193_000.0];
+        let alpha = vec![23.1e-6, 16.0e-6];
+        let dt: Vec<f64> = (0..mesh.nodes.len())
+            .map(|i| 15.0 + 3.7 * (i as f64).sin() - 1.9 * ((2 * i) as f64).cos())
+            .collect();
+        let w: Vec<f64> = (0..mesh.ndofs())
+            .map(|k| 0.42 * ((k + 3) as f64).cos() - 0.17 * ((3 * k) as f64).sin())
+            .collect();
+        let rd = ThermalRefData::new();
+        let f_th = thermal_load_multi(&mesh, &dt, &young, 0.31, &alpha, &rd);
+        let bt_w = thermal_load_transpose_multi(&mesh, &w, &young, 0.31, &alpha, &rd);
+        let lhs: f64 = f_th.iter().zip(&w).map(|(a, b)| a * b).sum();
+        let rhs: f64 = dt.iter().zip(&bt_w).map(|(a, b)| a * b).sum();
+        let rel = (lhs - rhs).abs() / lhs.abs().max(1e-12);
+        assert!(
+            rel < 1e-14,
+            "expected <B_th dt, w> == <dt, B_th^T w> to machine precision, lhs={lhs}, rhs={rhs}, rel={rel:e}"
+        );
+    }
 }

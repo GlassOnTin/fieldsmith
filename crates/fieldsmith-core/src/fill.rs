@@ -636,6 +636,8 @@ pub fn graded(
     res: Resolution,
     clock: Clock,
 ) -> Result<(Analysis, Graded), SetupError> {
+    let sys_resolved = crate::declarative_system::resolve_system_doc(doc)?;
+    let doc = sys_resolved.as_ref();
     let base = crate::analyse(doc, res, clock)?;
     let g = graded_of(doc, &base, clock, false)?;
     Ok((base, g))
@@ -649,6 +651,8 @@ pub fn graded_of(
     clock: Clock,
     equilibrate: bool,
 ) -> Result<Graded, SetupError> {
+    let sys_resolved = crate::declarative_system::resolve_system_doc(doc)?;
+    let doc = sys_resolved.as_ref();
     let t0 = clock();
     let spec = doc
         .fill
@@ -992,7 +996,12 @@ pub fn graded_of(
         .map(|e| all_cases.clone().map(|c| c.vm_elem[e]).fold(0.0, f64::max))
         .collect();
     let peel_envelope_elem = (0..base.mesh.tets.len())
-        .map(|e| all_cases.clone().map(|c| c.peel_elem[e]).fold(0.0, f64::max))
+        .map(|e| {
+            all_cases
+                .clone()
+                .map(|c| c.peel_elem[e])
+                .fold(0.0, f64::max)
+        })
         .collect();
 
     // Strength utilization per solid case: the max over NON-VOID elements of the
@@ -1009,7 +1018,8 @@ pub fn graded_of(
                     if class[e] == CLASS_VOID {
                         continue;
                     }
-                    let sy = strength_extended(spec.family, spec.mode, mat.yield_strength, rho_elem[e]);
+                    let sy =
+                        strength_extended(spec.family, spec.mode, mat.yield_strength, rho_elem[e]);
                     let r = c.vm_elem[e] / sy;
                     if r > worst {
                         worst = r;

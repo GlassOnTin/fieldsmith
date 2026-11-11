@@ -442,16 +442,14 @@ pub struct ScenarioComparisonSuite {
 pub struct MonolithicSystemEngine;
 
 impl MonolithicSystemEngine {
-    /// Solve the monolithic system `R(W; p, θ) = 0`, verify the sparse Jacobian, compute exact
-    /// adjoint design sensitivities `dΦ/dp` (cross-checked against tangent sensitivities `J s = -∂R/∂p`),
-    /// propagate epistemic uncertainties `Σ_θ` into `p10/p50/p90` confidence intervals, and
-    /// run conservation and causal attribution audits.
-    pub fn solve_and_analyze<S: CoupledEngineeringSystem>(
+    /// Solve the monolithic equilibrium `R(W; p, θ) = 0` via BDF1 pseudo-transient continuation
+    /// followed by damped Newton polish, returning `(state, initial_residual_l2, steady_newton_iters)`.
+    pub fn solve_equilibrium<S: CoupledEngineeringSystem>(
         sys: &S,
         cfg: &EngineConfig,
         design_p: &[f64],
         epistemic_theta: &[f64],
-    ) -> Result<SystemAnalysisResult, String> {
+    ) -> Result<(Vec<f64>, f64, usize), String> {
         let ndof = sys.num_dofs();
         let mut w = sys.initial_state(design_p, epistemic_theta);
         if w.len() != ndof {
@@ -470,13 +468,8 @@ impl MonolithicSystemEngine {
         for _step in 0..cfg.num_bdf_steps {
             let w_prev = w.clone();
             for _iter in 0..2 {
-                let (r_vec, j_mat, _) = sys.assemble_jacobian(
-                    &w,
-                    &w_prev,
-                    inv_dt,
-                    design_p,
-                    epistemic_theta,
-                )?;
+                let (r_vec, j_mat, _) =
+                    sys.assemble_jacobian(&w, &w_prev, inv_dt, design_p, epistemic_theta)?;
                 let r_norm = l2_norm(&r_vec);
                 if r_norm < cfg.newton_tol {
                     break;
@@ -523,8 +516,7 @@ impl MonolithicSystemEngine {
                 for k in 0..ndof {
                     w_trial[k] = w[k] + alpha * dw[(k, 0)];
                 }
-                let r_trial =
-                    sys.eval_residual(&w_trial, &w_ref, 0.0, design_p, epistemic_theta);
+                let r_trial = sys.eval_residual(&w_trial, &w_ref, 0.0, design_p, epistemic_theta);
                 let norm_trial = l2_norm(&r_trial);
                 if norm_trial < r_norm || alpha <= 0.125 {
                     w.copy_from_slice(&w_trial);
@@ -533,6 +525,24 @@ impl MonolithicSystemEngine {
                 alpha *= 0.5;
             }
         }
+
+        Ok((w, initial_residual_l2, steady_newton_iters))
+    }
+
+    /// Solve the monolithic system `R(W; p, θ) = 0`, verify the sparse Jacobian, compute exact
+    /// adjoint design sensitivities `dΦ/dp` (cross-checked against tangent sensitivities `J s = -∂R/∂p`),
+    /// propagate epistemic uncertainties `Σ_θ` into `p10/p50/p90` confidence intervals, and
+    /// run conservation and causal attribution audits.
+    pub fn solve_and_analyze<S: CoupledEngineeringSystem>(
+        sys: &S,
+        cfg: &EngineConfig,
+        design_p: &[f64],
+        epistemic_theta: &[f64],
+    ) -> Result<SystemAnalysisResult, String> {
+        let ndof = sys.num_dofs();
+        let (w, initial_residual_l2, steady_newton_iters) =
+            Self::solve_equilibrium(sys, cfg, design_p, epistemic_theta)?;
+        let w_ref = w.clone();
 
         // 3. Final Jacobian assembly & directional finite-difference verification
         let (r_final, j_final, cross_physics_nnz) =
@@ -988,7 +998,8 @@ impl CoupledEngineeringSystem for RegenerativeCooledNozzleSystem {
                 max_bound: 220.0,
                 fd_step: 1e-2,
                 cost_rate_per_unit: 0.5,
-                description: "YSZ thermal barrier coating thickness on the hot-gas face".to_string(),
+                description: "YSZ thermal barrier coating thickness on the hot-gas face"
+                    .to_string(),
             },
             DesignParameter {
                 name: "Coolant H₂ Mass Flow".to_string(),
@@ -1161,17 +1172,13 @@ impl CoupledEngineeringSystem for RegenerativeCooledNozzleSystem {
                 let t_cool_prev = w[prev];
                 let p_cool_prev = w[prev + 1];
                 // 1. Coolant energy balance: m_dot * cp * dT/dx = q_flux * w_perimeter
-                r[base] = inv_dt * (t_cool - w_prev[base])
-                    + (t_cool - t_cool_prev) / dx
+                r[base] = inv_dt * (t_cool - w_prev[base]) + (t_cool - t_cool_prev) / dx
                     - (q_to_cool_w_m2 * w_perimeter_m) / (m_dot * cp_h2);
 
                 // 2. Coolant momentum/Darcy pressure drop: dp/dx = -f * (L/D_h) * G^2 / (2 * rho_h2)
                 let rho_h2 = (p_cool.max(2.0) * 1e6) / (4124.0 * t_cool.max(40.0));
-                let dp_dx_mpa_m = theta_f
-                    * 0.024
-                    * (g_mass * g_mass)
-                    / (2.0 * rho_h2 * d_hyd)
-                    * 1e-6;
+                let dp_dx_mpa_m =
+                    theta_f * 0.024 * (g_mass * g_mass) / (2.0 * rho_h2 * d_hyd) * 1e-6;
                 r[base + 1] = (p_cool - p_cool_prev) / dx + dp_dx_mpa_m;
             }
 
@@ -1189,9 +1196,10 @@ impl CoupledEngineeringSystem for RegenerativeCooledNozzleSystem {
 
             // 4. Thermo-elastic + pressure-differential liner stress (MPa)
             let dt_across_wall = q_to_cool_w_m2 * (t_wall_m / k_cu);
-            let sigma_thermal =
-                (e_cu * alpha_cu / (1.0 - nu_cu)) * (0.5 * dt_across_wall + 0.18 * (t_wall - 293.0));
-            let sigma_pressure = (p_cool - 8.5 * profile).max(0.0) * (w_chan_m / t_wall_m).powi(2) * 0.5;
+            let sigma_thermal = (e_cu * alpha_cu / (1.0 - nu_cu))
+                * (0.5 * dt_across_wall + 0.18 * (t_wall - 293.0));
+            let sigma_pressure =
+                (p_cool - 8.5 * profile).max(0.0) * (w_chan_m / t_wall_m).powi(2) * 0.5;
             r[base + 3] = sigma_th - (sigma_thermal + sigma_pressure);
         }
 
@@ -2046,14 +2054,8 @@ pub fn solve_annular_swirl_spray_combustor(
         let h_s_m = (r_o_m * h_0_m * cos_theta) / r_s_m;
         let a_s_m = 0.5 * h_s_m;
 
-        let (k_max, omega_max) = find_fastest_growing_kh_mode(
-            a_s_m,
-            rho_hat,
-            u_rel_m_s,
-            nu_l,
-            gamma,
-            rho_l,
-        );
+        let (k_max, omega_max) =
+            find_fastest_growing_kh_mode(a_s_m, rho_hat, u_rel_m_s, nu_l, gamma, rho_l);
 
         if j > 0 {
             let dn = 0.5 * (prev_omega + omega_max) / u_s_m_s.max(1e-6) * ds_m;
@@ -2085,7 +2087,10 @@ pub fn solve_annular_swirl_spray_combustor(
 
     let l_b_m = l_b_m.unwrap_or_else(|| {
         let mean_rate = (n_amp / l_max_m).max(100.0);
-        k_max_breakup = sheet_profile.last().map(|st| st.k_max_inv_m).unwrap_or(4.0e4);
+        k_max_breakup = sheet_profile
+            .last()
+            .map(|st| st.k_max_inv_m)
+            .unwrap_or(4.0e4);
         n_crit / mean_rate
     });
     let sheet_breakup_length_mm = l_b_m * 1e3;
@@ -2266,15 +2271,10 @@ pub fn solve_annular_swirl_spray_combustor(
         }
         prev_f_liq = f_liq;
 
-        let local_smd_d32_um = if d2_sum > 1e-12 {
-            d3_sum / d2_sum
-        } else {
-            0.0
-        };
+        let local_smd_d32_um = if d2_sum > 1e-12 { d3_sum / d2_sum } else { 0.0 };
 
         // Secondary dilution jet admission at z = 46 mm smoothly leans out the post-flame gases:
-        let dilution_factor =
-            1.0 - 0.28 * (0.5 * (1.0 + ((z_mm - 46.0) / 6.0).tanh()));
+        let dilution_factor = 1.0 - 0.28 * (0.5 * (1.0 + ((z_mm - 46.0) / 6.0).tanh()));
         let vap_frac = (1.0 - f_liq).clamp(0.0, 1.0);
         let eff_equivalence_ratio = phi_pz * vap_frac * dilution_factor;
 
@@ -2284,10 +2284,8 @@ pub fn solve_annular_swirl_spray_combustor(
         let s_phi_spray = (0.045 * (smd_d32_um / 42.0).powf(0.85) + 0.012 * large_drop_tail_pct)
             * (0.35 * f_liq + 0.65 * upper_survival)
             * vap_frac.sqrt();
-        let s_phi_turb = 0.032
-            * (2.2 / swirl_number.max(0.5)).powf(0.45)
-            * (-z_mm / 32.0).exp()
-            * vap_frac;
+        let s_phi_turb =
+            0.032 * (2.2 / swirl_number.max(0.5)).powf(0.45) * (-z_mm / 32.0).exp() * vap_frac;
         let unmixedness_variance = (s_phi_spray + s_phi_turb).clamp(0.0, 0.45);
 
         // Local flame temperature T_flame(z):
@@ -2305,8 +2303,8 @@ pub fn solve_annular_swirl_spray_combustor(
             .max(t_inlet_k);
 
         // Conjugate effusion-cooled liner wall temperature T_liner(z):
-        let liner_wall_temp_k = t_coolant_k
-            + (1.0 - 0.64 * eta_effusion) * 0.56 * (flame_temp_k - t_coolant_k);
+        let liner_wall_temp_k =
+            t_coolant_k + (1.0 - 0.64 * eta_effusion) * 0.56 * (flame_temp_k - t_coolant_k);
 
         if flame_temp_k > peak_flame_temp_k {
             peak_flame_temp_k = flame_temp_k;
@@ -2327,8 +2325,10 @@ pub fn solve_annular_swirl_spray_combustor(
                 * o2_radical
                 * (-38_200.0 / t_zel_eff.max(900.0)).exp()
                 * vap_frac;
-            let r_prompt_ppm_s =
-                950.0 * eff_equivalence_ratio.powf(1.35) * (1.0 + 2.5 * unmixedness_variance) * vap_frac;
+            let r_prompt_ppm_s = 950.0
+                * eff_equivalence_ratio.powf(1.35)
+                * (1.0 + 2.5 * unmixedness_variance)
+                * vap_frac;
             cumulative_nox_ppm += (r_zeldovich_ppm_s + r_prompt_ppm_s) * dt_s;
         }
 
@@ -2708,19 +2708,12 @@ impl CoupledEngineeringSystem for AnnularSwirlSprayCombustorSystem {
 
             // Cross-coupled nonlinear two-phase conservation & Damköhler thermal feedback system
             // linking f_liq(z), D_32(z), T_flame(z), and T_liner(z):
-            r[base] = 0.45 * inv_dt * (f_liq_pct - w_prev[base])
-                + df
-                + 0.015 * dd
-                - 0.004 * dtf
+            r[base] = 0.45 * inv_dt * (f_liq_pct - w_prev[base]) + df + 0.015 * dd - 0.004 * dtf
                 + 1.5e-5 * df * df;
-            r[base + 1] = 0.45 * inv_dt * (d32_local - w_prev[base + 1])
-                + dd
-                - 0.02 * df
-                - 0.002 * dtf
-                + 1.0e-5 * dd * dd;
-            r[base + 2] = 0.45 * inv_dt * (t_flame - w_prev[base + 2])
-                + dtf
-                + 0.45 * df
+            r[base + 1] =
+                0.45 * inv_dt * (d32_local - w_prev[base + 1]) + dd - 0.02 * df - 0.002 * dtf
+                    + 1.0e-5 * dd * dd;
+            r[base + 2] = 0.45 * inv_dt * (t_flame - w_prev[base + 2]) + dtf + 0.45 * df
                 - 0.30 * dd
                 - 0.08 * dtl
                 + 2.0e-6 * dtf * dtf;
@@ -2789,13 +2782,8 @@ impl CoupledEngineeringSystem for AnnularSwirlSprayCombustorSystem {
             * rep.sheet_velocity_m_s
             * f_in_state
             * 1e6;
-        let vol_flux_breakup = 2.0
-            * std::f64::consts::PI
-            * r_b_m
-            * h_b_m
-            * rep.sheet_velocity_m_s
-            * f_in_state
-            * 1e6;
+        let vol_flux_breakup =
+            2.0 * std::f64::consts::PI * r_b_m * h_b_m * rep.sheet_velocity_m_s * f_in_state * 1e6;
         let sheet_imbalance = (vol_flux_orifice - vol_flux_breakup).abs();
 
         // 2. 16-bin Villermaux–Marmottant droplet spectrum mass-fraction normalisation audit:
@@ -2815,8 +2803,7 @@ impl CoupledEngineeringSystem for AnnularSwirlSprayCombustorSystem {
                 tolerance: 1e-6,
             },
             ConservationAudit {
-                name: "16-Bin Villermaux–Marmottant Droplet Spectrum Mass Conservation"
-                    .to_string(),
+                name: "16-Bin Villermaux–Marmottant Droplet Spectrum Mass Conservation".to_string(),
                 inflow: 1.0,
                 outflow: bin_mass_sum,
                 source_or_sink: 0.0,
@@ -3394,7 +3381,9 @@ mod tests {
         let swirl_entry = catalog
             .iter()
             .find(|c| c.system_id == "annular_swirl_spray_combustor_v1")
-            .expect("annular_swirl_spray_combustor_v1 must be registered in list_coupled_systems()");
+            .expect(
+                "annular_swirl_spray_combustor_v1 must be registered in list_coupled_systems()",
+            );
         assert_eq!(swirl_entry.design_parameters.len(), 6);
         assert_eq!(swirl_entry.epistemic_parameters.len(), 4);
 
@@ -3524,8 +3513,9 @@ mod tests {
 
         // 4. Verify Adjoint optimisation via optimise_coupled_system() starting from coarse low-pressure preset:
         let p_coarse = vec![5.2, 1.75, 3.2, 7.5, 0.72, 0.065];
-        let opt_res = optimise_coupled_system("annular_swirl_spray_combustor_v1", &p_coarse, &[], 4)
-            .expect("optimise annular_swirl_spray_combustor_v1");
+        let opt_res =
+            optimise_coupled_system("annular_swirl_spray_combustor_v1", &p_coarse, &[], 4)
+                .expect("optimise annular_swirl_spray_combustor_v1");
         assert!(
             opt_res.final_objectives[0] < opt_res.initial_objectives[0],
             "Adjoint optimisation must reduce exit NOx: {} -> {}",

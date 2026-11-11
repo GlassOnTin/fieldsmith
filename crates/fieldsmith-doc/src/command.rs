@@ -113,6 +113,14 @@ pub enum DocCommand {
         #[serde(default)]
         system: Option<crate::system::DeclarativeSystem>,
     },
+    UpsertAssert {
+        #[serde(default)]
+        index: Option<usize>,
+        assertion: crate::fsm::LiterateAssert,
+    },
+    DeleteAssert {
+        index: usize,
+    },
 }
 
 /// Outcome returned by [`apply_doc_command`].
@@ -541,6 +549,58 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             doc.system_block = system;
             entity_kind = Some("system".into());
         }
+        DocCommand::UpsertAssert {
+            index,
+            mut assertion,
+        } => {
+            assertion.label = assertion.label.trim().to_string();
+            assertion.metric = assertion.metric.trim().to_string();
+            assertion.target = assertion.target.trim().to_string();
+            assertion.tolerance = assertion.tolerance.trim().to_string();
+            assertion.unit = assertion.unit.trim().to_string();
+            if assertion.label.is_empty() {
+                assertion.label = format!("{} {}", assertion.metric, assertion.target);
+            }
+            if assertion.metric.is_empty() {
+                return Err("upsert_assert: metric cannot be empty".into());
+            }
+            if assertion.target.is_empty() {
+                return Err("upsert_assert: target cannot be empty".into());
+            }
+            let lbl = assertion.label.clone();
+            let act = if let Some(idx) = index {
+                if idx < doc.asserts.len() {
+                    doc.asserts[idx] = assertion;
+                    "updated"
+                } else {
+                    return Err(format!(
+                        "upsert_assert: index {idx} out of bounds (len {})",
+                        doc.asserts.len()
+                    ));
+                }
+            } else if let Some(slot) = doc.asserts.iter_mut().find(|a| a.label == lbl) {
+                *slot = assertion;
+                "updated"
+            } else {
+                doc.asserts.push(assertion);
+                "created"
+            };
+            entity_id = Some(lbl);
+            entity_kind = Some("assert".into());
+            action = Some(act.into());
+        }
+        DocCommand::DeleteAssert { index } => {
+            if index >= doc.asserts.len() {
+                return Err(format!(
+                    "delete_assert: index {index} out of bounds (len {})",
+                    doc.asserts.len()
+                ));
+            }
+            let removed = doc.asserts.remove(index);
+            entity_id = Some(removed.label);
+            entity_kind = Some("assert".into());
+            action = Some("deleted".into());
+        }
     }
 
     Ok(DocCommandOutcome {
@@ -865,5 +925,43 @@ support fix1 top_face fixed=xyz
         assert!(doc.validate().is_empty(), "{:?}", doc.validate());
         assert!(doc.find("link_arm").is_some());
         assert!(doc.find("link_arm_hole1").is_some());
+    }
+
+    #[test]
+    fn upsert_and_delete_assert_round_trip_through_fsm() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"Assert Command Test\"\n\
+             material ss316l\n\
+             box b size=(20, 10, 10)\n",
+        )
+        .expect("parse");
+        let out = apply_doc_command(
+            &mut doc,
+            DocCommand::UpsertAssert {
+                index: None,
+                assertion: fsm::LiterateAssert {
+                    label: "Peak stress cap".into(),
+                    metric: "max_vm_elem".into(),
+                    target: "<= 180".into(),
+                    tolerance: String::new(),
+                    unit: "MPa".into(),
+                },
+            },
+        )
+        .expect("upsert assert");
+        assert_eq!(out.action.as_deref(), Some("created"));
+        assert_eq!(doc.asserts.len(), 1);
+        let printed = fsm::print(&doc);
+        assert!(printed.contains(
+            "assert \"Peak stress cap\" metric=\"max_vm_elem\" target=\"<= 180\" unit=\"MPa\""
+        ));
+        let reparsed = fsm::parse(&printed).expect("reparse");
+        assert_eq!(reparsed.asserts, doc.asserts);
+
+        let del = apply_doc_command(&mut doc, DocCommand::DeleteAssert { index: 0 })
+            .expect("delete assert");
+        assert_eq!(del.action.as_deref(), Some("deleted"));
+        assert!(doc.asserts.is_empty());
     }
 }

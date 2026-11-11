@@ -5273,6 +5273,53 @@ function extractCoupledDesignPFromDoc(
   return p;
 }
 
+function extractSystemBlockText(): string {
+  if (!store.doc.system_block) return '';
+  const printed = printFsm(store.doc);
+  const m = printed.match(/^system\s+[\s\S]*?\n\}/m);
+  return m ? m[0] : '';
+}
+
+function buildDeclarativeSystemTemplate(kind: '0d' | '1d'): string {
+  const convId = store.doc.convections?.[0]?.id;
+  if (kind === '0d') {
+    const bindLines = convId ? [`  bind ${convId} attr=tinf expr="T_node"`] : [];
+    return [
+      'system thermal_node_0d title="0D Lumped Thermal Balance" sector="Custom Thermal" nodes=1 {',
+      '  design h_cool nominal=12.0 min=2.0 max=60.0 unit="W/K" symbol="G_th" category=process',
+      '  epistemic q_mult nominal=1.0 sigma=0.08 min=0.75 max=1.25 unit="-" symbol="k_q"',
+      '  state T_node init="35" scale=50 unit="C" symbol="T_n"',
+      '  aux Q_load expr="q_mult * 240.0"',
+      '  residual T_node eq="h_cool * (T_node - 25.0) - Q_load"',
+      '  objective power_min expr="h_cool" reduce=value kind=minimize unit="W/K" symbol="G_th"',
+      '  objective temp_cap expr="T_node" reduce=value kind=upper limit=55.0 unit="C" symbol="T_max"',
+      ...bindLines,
+      '}',
+    ].join('\n');
+  }
+  const bindLines = convId
+    ? [
+        `  bind ${convId} attr=h expr="h_film"`,
+        `  bind ${convId} attr=tinf expr="T_f"`,
+      ]
+    : [];
+  return [
+    'system coolant_1d title="1D Convective Channel" sector="Custom Thermal" nodes=21 span=(0, 40) axis=z {',
+    '  design mdot nominal=0.04 min=0.015 max=0.15 unit="kg/s" symbol="m_dot" category=process',
+    '  epistemic h_mult nominal=1.0 sigma=0.10 min=0.7 max=1.3 unit="-" symbol="k_h"',
+    '  state T_f init="25" scale=50 unit="C" symbol="T_f"',
+    '  aux cp expr="4180"',
+    '  aux h_film expr="h_mult * 0.008 * pow(mdot / 0.05, 0.8)"',
+    '  aux q_lin expr="22.0 * (1 + 0.2 * sin(pi * s / L))"',
+    '  residual T_f eq="mdot * cp * d_ds(T_f) - q_lin" bc_left="T_f - 25"',
+    '  objective mdot_min expr="mdot" reduce=value kind=minimize unit="kg/s" symbol="m_dot"',
+    '  objective t_exit_cap expr="exit(T_f)" reduce=value kind=upper limit=42.0 unit="C" symbol="T_out"',
+    '  audit enthalpy inflow="mdot * cp * entry(T_f)" outflow="mdot * cp * exit(T_f)" source="integral(q_lin)" tol=0.02 unit="W"',
+    ...bindLines,
+    '}',
+  ].join('\n');
+}
+
 export function SystemsWorkbench() {
   useApp();
   const [systems, setSystems] = useState<CoupledSystemSummary[]>([]);
@@ -5284,6 +5331,9 @@ export function SystemsWorkbench() {
   const [wsRev, setWsRev] = useState<number>(() => Math.max(0, getWorkspaceSyncState().revision));
   const [wsActor, setWsActor] = useState<string>(() => getWorkspaceSyncState().lastActor || 'ready');
   const [error, setError] = useState<string | null>(null);
+  const [authorOpen, setAuthorOpen] = useState<boolean>(false);
+  const [authorText, setAuthorText] = useState<string>('');
+  const [authorErr, setAuthorErr] = useState<string | null>(null);
 
   // Subscribe to global workspace sync snapshots (single poll owner in `workspace-sync.ts`)
   useEffect(() => {
@@ -5528,6 +5578,65 @@ export function SystemsWorkbench() {
     }
   };
 
+  const toggleDeclarativeAuthor = () => {
+    setAuthorErr(null);
+    if (!authorOpen) {
+      const existing = extractSystemBlockText();
+      setAuthorText(existing || buildDeclarativeSystemTemplate('1d'));
+      setAuthorOpen(true);
+    } else {
+      setAuthorOpen(false);
+    }
+  };
+
+  const applyAuthoredSystemBlock = () => {
+    const trimmed = authorText.trim();
+    if (!trimmed) {
+      setAuthorErr('Enter a system <id> { ... } block.');
+      return;
+    }
+    const baseNoSys = printFsm({ ...store.doc, system_block: null, coupled_system: null });
+    const parsed = parseFsm(`${baseNoSys}\n${trimmed}\n`);
+    if ('error' in parsed) {
+      setAuthorErr(`Line ${parsed.error.line}: ${parsed.error.message}`);
+      return;
+    }
+    if (!parsed.ok.system_block) {
+      setAuthorErr('No system <id> { ... } block found.');
+      return;
+    }
+    setAuthorErr(null);
+    store.dispatch('set declarative system', {
+      cmd: 'set_system_block',
+      system: parsed.ok.system_block,
+    });
+    const cat = listCoupledSystems(store.doc);
+    setSystems(cat);
+    const sys = cat.find((s) => s.system_id === parsed.ok.system_block!.id);
+    if (sys) {
+      setActiveId(sys.system_id);
+      const p0 = sys.design_parameters.map((p) => p.nominal);
+      const th0 = sys.epistemic_parameters.map((t) => t.nominal);
+      setDesignP(p0);
+      setEpistemicTheta(th0);
+      runSolve(sys.system_id, p0, th0);
+    }
+    setAuthorOpen(false);
+  };
+
+  const clearAuthoredSystemBlock = () => {
+    setAuthorErr(null);
+    store.dispatch('clear declarative system', {
+      cmd: 'set_system_block',
+      system: null,
+    });
+    const cat = listCoupledSystems(store.doc);
+    setSystems(cat);
+    setActiveId('');
+    setBundle(null);
+    setAuthorOpen(false);
+  };
+
   const track = bundle?.analysis.causal_tracks[0] ?? null;
 
   const routeGroups: { title: string; subtitle: string; ids: string[] }[] = [
@@ -5627,6 +5736,19 @@ export function SystemsWorkbench() {
             >
               MCP Workspace rev #{wsRev} ({wsActor})
             </span>
+            <button
+              class="btn small"
+              data-testid="open-declarative-author-btn"
+              onClick={toggleDeclarativeAuthor}
+              style={{ borderColor: 'rgba(16, 185, 129, 0.45)', color: '#6ee7b7' }}
+              title="Author or edit a composable 0D/1D .fsm system <id> { ... } block compiled with Dual-Number AD"
+            >
+              {authorOpen
+                ? 'Close .fsm System Editor'
+                : store.doc.system_block
+                  ? `Edit .fsm System (${store.doc.system_block.id})`
+                  : '+ Author .fsm System'}
+            </button>
             {bundle && (
               <>
                 <button
@@ -5689,6 +5811,97 @@ export function SystemsWorkbench() {
         )}
 
         {error && <div class="error-box">{error}</div>}
+
+        {authorOpen && (
+          <div
+            data-testid="declarative-author-panel"
+            style={{
+              padding: '12px 20px',
+              background: 'rgba(16, 185, 129, 0.06)',
+              borderBottom: '1px solid rgba(16, 185, 129, 0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '12px', color: '#6ee7b7' }}>
+                  Declarative 0D/1D .fsm Coupled-Equation Editor (Dual-AD Newton + Adjoint + UQ)
+                </div>
+                <div style={{ fontSize: '10.5px', color: 'var(--text-2)' }}>
+                  Author `design`, `epistemic`, `state`, `aux`, `residual`, `objective`, `audit`, and `bind` rules directly on this `.fsm` document via `DocCommand::SetSystemBlock`.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="decl-template-0d-btn"
+                  onClick={() => {
+                    setAuthorErr(null);
+                    setAuthorText(buildDeclarativeSystemTemplate('0d'));
+                  }}
+                >
+                  Template: 0D Thermal Node
+                </button>
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="decl-template-1d-btn"
+                  onClick={() => {
+                    setAuthorErr(null);
+                    setAuthorText(buildDeclarativeSystemTemplate('1d'));
+                  }}
+                >
+                  Template: 1D Convective Pipe
+                </button>
+                {store.doc.system_block && (
+                  <button
+                    type="button"
+                    class="btn small"
+                    data-testid="decl-system-clear-btn"
+                    onClick={clearAuthoredSystemBlock}
+                  >
+                    Remove System Block
+                  </button>
+                )}
+                <button
+                  type="button"
+                  class="btn small primary"
+                  data-testid="decl-system-apply-btn"
+                  onClick={applyAuthoredSystemBlock}
+                >
+                  Apply &amp; Solve System Block
+                </button>
+              </div>
+            </div>
+            {authorErr && (
+              <div data-testid="decl-author-error" style={{ color: 'var(--danger)', fontFamily: 'var(--mono)', fontSize: '10.5px' }}>
+                {authorErr}
+              </div>
+            )}
+            <textarea
+              data-testid="decl-system-textarea"
+              value={authorText}
+              onInput={(e) => setAuthorText((e.target as HTMLTextAreaElement).value)}
+              rows={11}
+              spellcheck={false}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--mono)',
+                fontSize: '11px',
+                lineHeight: 1.4,
+                padding: '8px 10px',
+                borderRadius: '5px',
+                background: 'var(--bg-1)',
+                color: 'var(--text-1)',
+                border: '1px solid var(--line)',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+        )}
 
         {/* 5S Coupled-Physics Abstraction Router when no coupled system is bound to the active document */}
         {(!bundle || !activeSummary) && (

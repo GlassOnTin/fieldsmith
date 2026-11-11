@@ -377,16 +377,10 @@ pub fn eval_expr(text: &str, lets: &[(String, f64)]) -> Result<f64, String> {
                     ("max", [a, b]) => a.max(*b),
                     ("pow", [a, b]) => a.powf(*b),
                     ("sin" | "cos" | "tan" | "sqrt" | "abs" | "exp" | "ln", _) => {
-                        return Err(format!(
-                            "{name} takes 1 argument, given {}",
-                            vals.len()
-                        ));
+                        return Err(format!("{name} takes 1 argument, given {}", vals.len()));
                     }
                     ("min" | "max" | "pow", _) => {
-                        return Err(format!(
-                            "{name} takes 2 arguments, given {}",
-                            vals.len()
-                        ));
+                        return Err(format!("{name} takes 2 arguments, given {}", vals.len()));
                     }
                     _ => return Err(format!("unknown function '{name}'")),
                 }
@@ -614,9 +608,9 @@ impl Attrs {
     ) -> Result<f64, ParseError> {
         let uses_let = tokenize_line(txt, 0)
             .map(|toks| {
-                toks.iter().any(|t| {
-                    matches!(t, Tok::Ident(s) if self.lets.iter().any(|(name, _)| name == s))
-                })
+                toks.iter().any(
+                    |t| matches!(t, Tok::Ident(s) if self.lets.iter().any(|(name, _)| name == s)),
+                )
             })
             .unwrap_or(false);
         if !uses_let {
@@ -943,7 +937,11 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                             "coupled system '{s}' is not a valid identifier"
                         )))
                     }
-                    _ => return Err(err("coupled needs a system id, e.g. coupled regen_nozzle_h2_v1".into())),
+                    _ => {
+                        return Err(err(
+                            "coupled needs a system id, e.g. coupled regen_nozzle_h2_v1".into(),
+                        ))
+                    }
                 };
                 doc.coupled_system = Some(sys_id);
             }
@@ -1299,7 +1297,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let p_fn = a.string("pressure_fn")?;
                 let kind = if let Some(v) = a.vec3("force")? {
                     if p_num.is_some() || p_fn.is_some() {
-                        return Err(err("load cannot combine force= with pressure=/pressure_fn=".into()));
+                        return Err(err(
+                            "load cannot combine force= with pressure=/pressure_fn=".into(),
+                        ));
                     }
                     LoadKind::Force { vector: v }
                 } else if p_num.is_some() || p_fn.is_some() {
@@ -1320,7 +1320,9 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 } else if let Some(src) = a.string("fn")? {
                     // Compiled here, so a bad function names its character, not a
                     // distant validate error.
-                    if let Err(e) = crate::loaddist::LoadFn::compile_with_lets(&src, &let_scope(&doc)) {
+                    if let Err(e) =
+                        crate::loaddist::LoadFn::compile_with_lets(&src, &let_scope(&doc))
+                    {
                         return Err(err(format!("fn: {e}")));
                     }
                     let (dir_v, local_v) = (a.vec3("dir")?, a.vec3("local")?);
@@ -1346,7 +1348,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     }
                 } else {
                     return Err(err(
-                        "load needs force=(x, y, z), pressure=value, preload=value, or fn=...".into()
+                        "load needs force=(x, y, z), pressure=value, preload=value, or fn=..."
+                            .into(),
                     ));
                 };
                 doc.consumed.append(&mut a.consumed);
@@ -1645,9 +1648,8 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let span = a.signed_pair("span")?.unwrap_or([0.0, 1.0]);
                 let axis = match a.string("axis")?.as_deref() {
                     None => crate::system::DeclAxis::Z,
-                    Some(ax) => crate::system::DeclAxis::parse(ax).ok_or_else(|| {
-                        err(format!("system '{id}': axis must be x, y, z, or r"))
-                    })?,
+                    Some(ax) => crate::system::DeclAxis::parse(ax)
+                        .ok_or_else(|| err(format!("system '{id}': axis must be x, y, z, or r")))?,
                 };
                 a.finish()?;
                 if !opens {
@@ -2065,9 +2067,7 @@ fn parse_sketch_body_line(
     Ok(())
 }
 
-fn parse_sketch_feature(
-    c: &mut Cursor,
-) -> Result<crate::sketch::SketchFeatureBinding, ParseError> {
+fn parse_sketch_feature(c: &mut Cursor) -> Result<crate::sketch::SketchFeatureBinding, ParseError> {
     use crate::sketch::{SketchFeatureBinding, SketchFeatureOp};
     let line = c.line;
     let err = |m: String| ParseError { line, message: m };
@@ -2140,12 +2140,7 @@ fn print_sketch(o: &mut String, sk: &crate::sketch::ParametricSketch) {
     }
     let _ = writeln!(o, "{hdr} {{");
     for pt in &sk.points {
-        let mut line = format!(
-            "  point {} at=({}, {})",
-            id_tok(&pt.id),
-            n(pt.x),
-            n(pt.y)
-        );
+        let mut line = format!("  point {} at=({}, {})", id_tok(&pt.id), n(pt.x), n(pt.y));
         if pt.fixed {
             line += " fixed";
         }
@@ -2375,7 +2370,12 @@ fn print_sketch(o: &mut String, sk: &crate::sketch::ParametricSketch) {
                 value,
                 expr,
             } => {
-                let _ = write!(line, "kind=radius target={} value={}", id_tok(target), n(*value));
+                let _ = write!(
+                    line,
+                    "kind=radius target={} value={}",
+                    id_tok(target),
+                    n(*value)
+                );
                 if let Some(ex) = expr {
                     line += &format!(" expr={}", q(ex));
                 }
@@ -3584,7 +3584,9 @@ pub struct LiterateAssert {
     pub label: String,
     pub metric: String,
     pub target: String,
+    #[serde(default)]
     pub tolerance: String,
+    #[serde(default)]
     pub unit: String,
 }
 
@@ -5000,13 +5002,22 @@ region bottom = mesh1.p1
                     match parse_literate_header(&raw) {
                         Some(hdr) => {
                             if hdr.id.is_empty() || hdr.title.is_empty() {
-                                errors.push(format!("{}: literate header missing id/title", path.display()));
+                                errors.push(format!(
+                                    "{}: literate header missing id/title",
+                                    path.display()
+                                ));
                             }
                             if sub == "analytic" && hdr.checks.is_empty() {
-                                errors.push(format!("{}: analytic case has 0 @check entries", path.display()));
+                                errors.push(format!(
+                                    "{}: analytic case has 0 @check entries",
+                                    path.display()
+                                ));
                             }
                             if sub == "analytic" && hdr.asserts.is_empty() {
-                                errors.push(format!("{}: analytic case has 0 @assert entries", path.display()));
+                                errors.push(format!(
+                                    "{}: analytic case has 0 @assert entries",
+                                    path.display()
+                                ));
                             }
                         }
                         None => {
@@ -5034,7 +5045,10 @@ region bottom = mesh1.p1
             count,
             errors.join("\n")
         );
-        assert!(count >= 36, "Expected at least 36 .fsm files, found {count}");
+        assert!(
+            count >= 36,
+            "Expected at least 36 .fsm files, found {count}"
+        );
     }
 
     #[test]
@@ -5057,7 +5071,11 @@ load press top fn=\"0 < x < a -> b * 0.1\" dir=(0, 0, -1)
         // b = 8 + 1 + 1 + 4 + 5 + 2 + 3 + 8 + 0 = 32
         assert!((doc.lets[1].value - 32.0).abs() < 1e-12);
         assert_eq!(doc.custom_materials[0].k, Some(320.0));
-        assert!(doc.validate().is_empty(), "validate errors: {:?}", doc.validate());
+        assert!(
+            doc.validate().is_empty(),
+            "validate errors: {:?}",
+            doc.validate()
+        );
         let printed = print(&doc);
         assert!(printed.contains("k=320"), "printed: {printed}");
         let reparsed = parse(&printed).expect("reparse");
@@ -5107,10 +5125,24 @@ solve tref=20 plasticity=\"j2\" hardening_n=0.2
         let mut doc = parse("fieldsmith 1\nname \"Bad\"\nmaterial bad_m\ncustommaterial bad_m e=70000 nu=0.3 yield=100 density=2.7 hardening_n=1.4 weibull_m=-3\nsolve hardening_n=0\n").unwrap();
         doc.coupled_system = Some("123 bad".into());
         let errs = doc.validate();
-        assert!(errs.iter().any(|e| e.contains("Custom material 'bad_m' hardening_n")), "{errs:?}");
-        assert!(errs.iter().any(|e| e.contains("Custom material 'bad_m' weibull_m")), "{errs:?}");
-        assert!(errs.iter().any(|e| e.contains("solve hardening_n=")), "{errs:?}");
-        assert!(errs.iter().any(|e| e.contains("coupled system")), "{errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("Custom material 'bad_m' hardening_n")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("Custom material 'bad_m' weibull_m")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("solve hardening_n=")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("coupled system")),
+            "{errs:?}"
+        );
     }
 
     #[test]
