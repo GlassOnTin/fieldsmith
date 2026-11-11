@@ -1476,6 +1476,8 @@ export interface ParameterSensitivity {
   scheme: string;
   d_mass_g: number;
   rel_mass: number;
+  d_modes_hz?: number[];
+  rel_modes?: number[];
   cases: CaseSensitivity[];
 }
 
@@ -1487,6 +1489,7 @@ export interface SensitivityReport {
   elements: number;
   baseline_mass_g: number;
   baseline_compliance: [string, number][];
+  baseline_modes_hz?: number[];
   parameters: ParameterSensitivity[];
   elapsed_ms: number;
 }
@@ -1506,7 +1509,8 @@ export type OptObjective =
   | 'compliance'
   | 'max_vm_elem'
   | 'max_displacement'
-  | 'max_temp';
+  | 'max_temp'
+  | 'max_mode_1_hz';
 
 export interface OptimiseSpec {
   objective?: OptObjective;

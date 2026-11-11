@@ -294,7 +294,10 @@ async function run(doc: Document) {
     doc.temperatures.length > 0 ||
     doc.convections.length > 0 ||
     doc.heat_fluxes.length > 0;
-  const hasModal = doc.solve?.modes != null && doc.solve.modes > 0;
+  const hasModalAssert = (doc.asserts ?? []).some((a) =>
+    /^mode_(?:\d+(?:_hz)?|split_12_pct)$/.test(a.metric),
+  );
+  const hasModal = (doc.solve?.modes != null && doc.solve.modes > 0) || hasModalAssert;
   if (
     (!hasSupports && (!hasThermal || hasLoads)) ||
     (!hasLoads && !hasThermal && !hasModal)

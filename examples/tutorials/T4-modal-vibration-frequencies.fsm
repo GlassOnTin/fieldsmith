@@ -36,6 +36,8 @@ fieldsmith 1
 # ---
 # @mcp: Compute the First 4 Natural Frequencies via API || solve || {"kind":"modes","n":4,"dofs":30000}
 #   Ask the solver for the lowest 4 natural vibration frequencies (in Hz) of the sensor pedestal.
+# @mcp: Compute Rayleigh-Quotient Modal Sensitivities ∂f/∂p || sensitivity || {"params":["stem.radius","stage.size.2"],"dofs":6000}
+#   Differentiate all 4 natural frequencies with respect to stem radius and top stage thickness in 0 extra eigen solves.
 # === END LITERATE HEADER ===
 
 name "T4 — Optical Sensor Mount (Modal)"

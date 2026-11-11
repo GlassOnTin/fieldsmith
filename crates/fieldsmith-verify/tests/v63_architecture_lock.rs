@@ -1054,6 +1054,114 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 135\" unit=\"MPa
         0.0,
     ));
 
+    // -------------------------------------------------------------------------
+    // 9. O(0)-Extra-Solve Rayleigh-Quotient Modal Sensitivities & Resonance Contract Optimiser
+    // -------------------------------------------------------------------------
+    let modal_cantilever_fsm = "\
+fieldsmith 1
+name \"V63 Modal Rayleigh Cantilever\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let L = 60
+let b = 12
+let d = 8
+box beam size=(L, b, d) at=(L / 2, 0, 0)
+region root = beam.nx
+support clamp root fixed=xyz
+solve modes=2
+";
+    let mut mod_srv = Server::new();
+    let (m_open_err, _) = mcp_tool_call(
+        &mut mod_srv,
+        970,
+        "open",
+        json!({ "doc": modal_cantilever_fsm }),
+    );
+    assert!(!m_open_err);
+    let (m_sens_err, m_sens) = mcp_tool_call(
+        &mut mod_srv,
+        971,
+        "sensitivity",
+        json!({ "params": ["L", "b", "d"], "dofs": 9000 }),
+    );
+    assert!(!m_sens_err, "modal sensitivity failed: {m_sens}");
+    assert_eq!(m_sens["sensitivity"]["method"], "boundary_velocity_adjoint");
+    // Pure modal solve: 1 baseline modal run + 0 extra linear/eigen solves across 3 geometric parameters!
+    assert_eq!(m_sens["sensitivity"]["solves_run"], 1);
+    let m_params = m_sens["sensitivity"]["parameters"]
+        .as_array()
+        .expect("modal sensitivity parameters");
+    let find_rel_f1 = |pname: &str| -> f64 {
+        m_params
+            .iter()
+            .find(|p| p["param"].as_str() == Some(pname))
+            .and_then(|p| p["rel_modes"][0].as_f64())
+            .unwrap_or(f64::NAN)
+    };
+    let rel_f1_l = find_rel_f1("L");
+    let rel_f1_b = find_rel_f1("b");
+    let rel_f1_d = find_rel_f1("d");
+    assert!(
+        rel_f1_b.abs() < 0.05,
+        "expected |(b/f1)(∂f1/∂b)| < 0.05, got {rel_f1_b}"
+    );
+    report.check(Check::relative(
+        "3D Rayleigh-quotient modal elasticity (d/f₁)(∂f₁/∂d) vs beam depth scaling (+0.97)",
+        0.97,
+        rel_f1_d,
+        "elasticity",
+        0.06,
+    ));
+    report.check(Check::relative(
+        "3D Rayleigh-quotient modal elasticity (L/f₁)(∂f₁/∂L) vs cantilever span scaling (-1.96)",
+        -1.96,
+        rel_f1_l,
+        "elasticity",
+        0.06,
+    ));
+
+    // Verify modal-contract-constrained `optimise` without explicit `solve modes` (auto-inferred from `mode_1`!)
+    let modal_opt_fsm = "\
+fieldsmith 1
+name \"V63 Resonance Repair Beam\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let b = 12
+let d = 4.5
+box beam size=(60, b, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -200)
+assert \"Fundamental resonance floor\" metric=\"mode_1\" target=\">= 1650\" unit=\"Hz\"
+assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 140\" unit=\"MPa\"
+";
+    let (mo_open_err, _) =
+        mcp_tool_call(&mut mod_srv, 972, "open", json!({ "doc": modal_opt_fsm }));
+    assert!(!mo_open_err);
+    let (mo_opt_err, mo_opt) = mcp_tool_call(
+        &mut mod_srv,
+        973,
+        "optimise",
+        json!({
+            "objective": "mass_g",
+            "params": ["b", "d"],
+            "bounds": { "b": [5.0, 16.0], "d": [4.0, 16.0] },
+            "max_iters": 8,
+            "dofs": 4500,
+            "apply": true,
+        }),
+    );
+    assert!(!mo_opt_err, "modal contract optimise failed: {mo_opt}");
+    assert_eq!(
+        mo_opt["optimisation"]["initial_verification"]["all_passed"],
+        false
+    );
+    assert_eq!(
+        mo_opt["optimisation"]["final_verification"]["all_passed"],
+        true
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1061,7 +1169,8 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 135\" unit=\"MPa
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k`), \
+             `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             plus `O(0)`-extra-solve Rayleigh-quotient modal sensitivities), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1080,12 +1189,12 @@ assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 135\" unit=\"MPa
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
-         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` -> `Apply` + undo \
+         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / modal `∂f₁/∂p` \
          are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
-         2. Linear-elastic mechanical AND coupled steady-conduction thermo-elastic cases (including \
-         spatial `lerp(...)` BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric \
-         boundary-velocity discrete adjoints (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear \
-         solves independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on \
+         2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, AND modal vibration \
+         cases (including spatial `lerp(...)` BCs and embedded `.fsm` `system` blocks) use fixed-topology \
+         quadric boundary-velocity discrete adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, \
+         `O(1)` linear solves independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on \
          the fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and \
          graded TPMS `fill` models fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \

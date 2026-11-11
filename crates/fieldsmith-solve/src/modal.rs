@@ -168,6 +168,59 @@ pub fn solve_modes(
     })
 }
 
+fn reference_mass_products_p2() -> &'static [f64; 100] {
+    static PRODUCTS: std::sync::OnceLock<[f64; 100]> = std::sync::OnceLock::new();
+    PRODUCTS.get_or_init(|| {
+        let verts = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let ref_mesh = P2Mesh::from_linear(&verts, &[[0, 1, 2, 3]]);
+        let cell: [usize; 10] = ref_mesh.tets[0].map(|v| v as usize);
+        let m = fenics_assembly::assemble_elasticity_mass_p2_3d(&ref_mesh.nodes, &[cell], 1.0);
+        let mut out = [0.0f64; 100];
+        let mut e_i = vec![0.0f64; 30];
+        for i in 0..10 {
+            e_i[3 * i] = 1.0;
+            let col = fenics_solver::cg::spmv(&m, &e_i);
+            e_i[3 * i] = 0.0;
+            for j in 0..10 {
+                out[i * 10 + j] = col[3 * j];
+            }
+        }
+        out
+    })
+}
+
+/// Matrix-free evaluation of the consistent P2 mass quadratic form `φᵀ M φ`
+/// (`M_{(i,α),(j,β)} = ρ_modal · |det J_e| · ∫_Khat φ_i φ_j dV̂ δ_{αβ}`),
+/// matching `fenics_assembly::assemble_elasticity_mass_p2_3d` without allocating sparse triplets.
+pub fn modal_mass_quadratic_form(mesh: &P2Mesh, density_modal: f64, phi: &[f64]) -> f64 {
+    let products = reference_mass_products_p2();
+    let mut sum = 0.0f64;
+    for (e, tet) in mesh.tets.iter().enumerate() {
+        let det = 6.0 * mesh.tet_volume(e).abs();
+        if det < 1e-14 {
+            continue;
+        }
+        let mut e_acc = 0.0f64;
+        for i in 0..10 {
+            let ni = 3 * tet[i] as usize;
+            let pi = [phi[ni], phi[ni + 1], phi[ni + 2]];
+            e_acc += products[i * 10 + i] * (pi[0] * pi[0] + pi[1] * pi[1] + pi[2] * pi[2]);
+            for j in (i + 1)..10 {
+                let nj = 3 * tet[j] as usize;
+                let dot_ij = pi[0] * phi[nj] + pi[1] * phi[nj + 1] + pi[2] * phi[nj + 2];
+                e_acc += 2.0 * products[i * 10 + j] * dot_ij;
+            }
+        }
+        sum += det * e_acc;
+    }
+    density_modal * sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +313,11 @@ mod tests {
             assert!(
                 (mass - 1.0).abs() < 1e-9,
                 "shape {i}: modal mass {mass}, expected 1"
+            );
+            let qmass = modal_mass_quadratic_form(&mesh, 7.85e-9, shape);
+            assert!(
+                (qmass - mass).abs() < 1e-12,
+                "shape {i}: matrix-free modal mass {qmass} != assembled {mass}"
             );
             // Every clamped corner is motionless, all three components.
             for n in 0..mesh.nverts {

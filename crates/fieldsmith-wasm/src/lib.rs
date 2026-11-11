@@ -723,7 +723,8 @@ pub fn analyse(
         (_, Some(n)) => Resolution::Dofs(n),
         (None, None) => Resolution::Dofs(150_000),
     };
-    let modes = doc.solve.modes;
+    let modes =
+        fieldsmith_core::contracts::required_modes_for_asserts(doc.solve.modes, &doc.asserts);
     let a =
         core_analyse_full(&doc, res, clock, modes, equilibrate.unwrap_or(false)).map_err(js_err)?;
     Ok(AnalysisOut { a })

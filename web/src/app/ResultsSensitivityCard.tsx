@@ -22,6 +22,7 @@ const OPT_OBJECTIVES: { value: OptObjective; label: string }[] = [
   { value: 'max_vm_elem', label: 'Min Stress σ_vM (MPa)' },
   { value: 'max_displacement', label: 'Min Deflection ‖u‖ (mm)' },
   { value: 'max_temp', label: 'Min Temp T_max (°C)' },
+  { value: 'max_mode_1_hz', label: 'Max Mode f₁ (Hz)' },
 ];
 
 const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; defaultTarget: string }[] = [
@@ -34,6 +35,8 @@ const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; def
   { value: 'mass_g', label: 'Part mass (mass_g)', defaultUnit: 'g', defaultTarget: '<= 250' },
   { value: 'max_layer_peel', label: 'Inter-layer peel (max_layer_peel)', defaultUnit: '', defaultTarget: '<= 1.0' },
   { value: 'mode_1', label: 'Fundamental mode f₁ (mode_1)', defaultUnit: 'Hz', defaultTarget: '>= 100' },
+  { value: 'mode_2', label: 'Second mode f₂ (mode_2)', defaultUnit: 'Hz', defaultTarget: '>= 150' },
+  { value: 'mode_split_12_pct', label: 'Doublet split |f₂−f₁|/f̄ (mode_split_12_pct)', defaultUnit: '%', defaultTarget: '<= 2.0' },
 ];
 
 export function ResultsSensitivityCard() {
@@ -165,6 +168,9 @@ export function ResultsSensitivityCard() {
 
   const hasThermalSens = Boolean(
     sensReport?.parameters.some((p) => p.cases.some((c) => c.d_max_temp != null)),
+  );
+  const hasModalSens = Boolean(
+    sensReport?.parameters.some((p) => (p.d_modes_hz?.length ?? 0) > 0),
   );
 
   return (
@@ -373,7 +379,10 @@ export function ResultsSensitivityCard() {
       )}
 
       {err && (
-        <div style={{ color: 'var(--danger)', fontFamily: 'var(--mono)', fontSize: '10px' }}>
+        <div
+          data-testid="results-card-error"
+          style={{ color: 'var(--danger)', fontFamily: 'var(--mono)', fontSize: '10px' }}
+        >
           {err}
         </div>
       )}
@@ -477,12 +486,14 @@ export function ResultsSensitivityCard() {
                 <th style={{ padding: '2px 4px' }}>∂σ_vM/∂p</th>
                 <th style={{ padding: '2px 4px' }}>∂‖u‖/∂p</th>
                 {hasThermalSens && <th style={{ padding: '2px 4px' }}>∂T_max/∂p (°C)</th>}
+                {hasModalSens && <th style={{ padding: '2px 4px' }}>∂f₁/∂p (Hz)</th>}
               </tr>
             </thead>
             <tbody>
               {sensReport.parameters.map((p) => {
                 const c0 = p.cases[0];
                 const ct = p.cases.find((c) => c.d_max_temp != null);
+                const df1 = p.d_modes_hz?.[0];
                 return (
                   <tr key={p.param} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
                     <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
@@ -497,6 +508,11 @@ export function ResultsSensitivityCard() {
                     {hasThermalSens && (
                       <td style={{ padding: '2px 4px' }}>
                         {ct?.d_max_temp != null ? ct.d_max_temp.toFixed(2) : '—'}
+                      </td>
+                    )}
+                    {hasModalSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {df1 != null ? df1.toFixed(2) : '—'}
                       </td>
                     )}
                   </tr>

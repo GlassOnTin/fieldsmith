@@ -591,8 +591,65 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[10/10] Results UI 3D contract-constrained adjoint optimiser (d: 5.0 -> ${optAppliedCheck.dOpt.toFixed(2)} mm -> Undo 5.0 mm): PASS`,
+    `[10/11] Results UI 3D contract-constrained adjoint optimiser (d: 5.0 -> ${optAppliedCheck.dOpt.toFixed(2)} mm -> Undo 5.0 mm): PASS`,
   );
+
+  // 11. Results UI O(0)-Extra-Solve Modal Sensitivity (`∂f₁/∂p`) & Resonance Maximisation (`max_mode_1_hz`)
+  const modalUiFsm = [
+    'fieldsmith 1',
+    'name "UI Modal Resonance Beam"',
+    'custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85',
+    'material steel200',
+    'let b = 12',
+    'let d = 5',
+    'box beam size=(60, b, d) at=(30, 0, 0)',
+    'region root = beam.nx',
+    'support clamp root fixed=xyz',
+    'assert "Mass budget" metric="mass_g" target="<= 29.0" unit="g"',
+    'assert "Resonance check" metric="mode_1" target=">= 900" unit="Hz"',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, modalUiFsm);
+
+  await page.waitForSelector('[data-testid="results-compute-sensitivities-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-compute-sensitivities-btn"]');
+  await page.waitForSelector('[data-testid="results-sensitivity-table"]', { timeout: 20000 });
+  const modalSensText = await page.textContent('[data-testid="results-sensitivity-table"]');
+  assert(
+    modalSensText && modalSensText.includes('∂f₁/∂p (Hz)') && modalSensText.includes('1 solves'),
+    `Expected ∂f₁/∂p (Hz) column and '1 solves' in modal sensitivity table, got '${modalSensText}'`,
+  );
+
+  await page.selectOption('[data-testid="optimise-objective-select"]', 'max_mode_1_hz');
+  await page.click('[data-testid="results-run-optimise-btn"]');
+  await page.waitForFunction(
+    () => {
+      const errEl = document.querySelector('[data-testid="results-card-error"]');
+      if (errEl && errEl.textContent) return true;
+      const el = document.querySelector('[data-testid="results-optimisation-output"]');
+      return el && el.textContent && el.textContent.includes('max_mode_1_hz:');
+    },
+    { timeout: 30000 },
+  );
+  const modalCardErr = await page.evaluate(
+    () => document.querySelector('[data-testid="results-card-error"]')?.textContent ?? null,
+  );
+  assert(!modalCardErr, `Unexpected modal optimisation error in UI: ${modalCardErr}`);
+  const modalOptText = await page.textContent('[data-testid="results-optimisation-output"]');
+  assert(
+    modalOptText && modalOptText.includes('✓ max_mode_1_hz:') && modalOptText.includes('Hz (+'),
+    `Expected feasible max_mode_1_hz increase under mass budget, got '${modalOptText}'`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log('[11/11] Results UI Rayleigh-quotient modal sensitivity (∂f₁/∂p, 1 solve) + max_mode_1_hz optimiser: PASS');
   await page.close();
 } catch (e) {
   console.error(e);

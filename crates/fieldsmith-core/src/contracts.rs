@@ -46,6 +46,32 @@ fn find_case<'a>(cases: &'a [CaseResult], selector: &str) -> Option<&'a CaseResu
         .find(|c| c.name.eq_ignore_ascii_case(selector) || c.name.contains(selector))
 }
 
+/// Parse a 1-based modal index from `mode_<k>` or `mode_<k>_hz` (`k >= 1`).
+pub fn parse_mode_metric_index(metric: &str) -> Option<usize> {
+    let m = metric.trim();
+    let rest = m.strip_prefix("mode_")?;
+    let num_str = rest.strip_suffix("_hz").unwrap_or(rest);
+    let idx1: usize = num_str.parse().ok()?;
+    (idx1 >= 1).then_some(idx1)
+}
+
+/// Minimum modal eigenpair count required to evaluate `doc_modes` and `asserts`.
+pub fn required_modes_for_asserts(
+    doc_modes: Option<usize>,
+    asserts: &[LiterateAssert],
+) -> Option<usize> {
+    let mut needed = doc_modes.unwrap_or(0);
+    for a in asserts {
+        let m = a.metric.trim();
+        if m == "mode_split_12_pct" {
+            needed = needed.max(2);
+        } else if let Some(idx1) = parse_mode_metric_index(m) {
+            needed = needed.max(idx1);
+        }
+    }
+    (needed > 0).then_some(needed)
+}
+
 /// Resolve a named contract metric (`compliance`, `max_vm_elem:2`, `graded.deflection`,
 /// `mode_1`, `mass_saved_pct`, `max_plastic_strain`, etc.) from a solved `Analysis`.
 pub fn resolve_assert_metric(
@@ -66,17 +92,16 @@ pub fn resolve_assert_metric(
         let mean = 0.5 * (freqs[0] + freqs[1]).max(1e-12);
         return Ok(100.0 * (freqs[1] - freqs[0]).abs() / mean);
     }
-    if let Some(rest) = m.strip_prefix("mode_") {
-        let idx1: usize = rest
-            .parse()
-            .map_err(|_| format!("invalid mode metric '{m}'"))?;
+    if m.starts_with("mode_") {
+        let idx1 =
+            parse_mode_metric_index(m).ok_or_else(|| format!("invalid mode metric '{m}'"))?;
         let freqs = &a
             .modes
             .as_ref()
             .ok_or_else(|| format!("metric '{m}' requires a modal solve (`solve modes=...`)"))?
             .frequencies;
         return freqs
-            .get(idx1.saturating_sub(1))
+            .get(idx1 - 1)
             .copied()
             .ok_or_else(|| format!("metric '{m}' out of range ({} modes solved)", freqs.len()));
     }
@@ -313,16 +338,18 @@ pub fn verify_document(
                 || m == "mass_g"
         });
 
+    let modes_count = required_modes_for_asserts(doc.solve.modes, &asserts);
+
     let (analysis, graded_opt) = if need_graded {
         let (solid_a, gr) = fill::graded(doc, res, clock).map_err(|e| e.0)?;
-        if doc.solve.modes.is_some() {
-            let modal_a = analyse_full(doc, res, clock, doc.solve.modes, false).map_err(|e| e.0)?;
+        if modes_count.is_some() {
+            let modal_a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
             (modal_a, Some(gr))
         } else {
             (solid_a, Some(gr))
         }
     } else {
-        let a = analyse_full(doc, res, clock, doc.solve.modes, false).map_err(|e| e.0)?;
+        let a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
         (a, None)
     };
 

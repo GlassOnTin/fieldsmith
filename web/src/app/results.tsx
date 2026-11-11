@@ -230,7 +230,11 @@ export function detectPrimaryResultsDiscipline(lvl?: LevelResult | null): Result
     (doc.convections?.length ?? 0) > 0 ||
     (doc.heat_fluxes?.length ?? 0) > 0;
   const hasThermalLvl = lvl ? !!tempField(lvl, -1) : false;
-  const hasModes = (doc.solve?.modes ?? 0) > 0 || !!(lvl?.meta.modes?.frequencies?.length);
+  const hasModalAssert = (doc.asserts ?? []).some((a) =>
+    /^mode_(?:\d+(?:_hz)?|split_12_pct)$/.test(a.metric),
+  );
+  const hasModes =
+    (doc.solve?.modes ?? 0) > 0 || hasModalAssert || !!(lvl?.meta.modes?.frequencies?.length);
 
   if (
     ((hasThermalDoc || hasThermalLvl) && !hasLoads) ||
@@ -3639,7 +3643,13 @@ function ResultsPanel() {
               )}
             />
           )}
-          <ResultsSensitivityCard />
+            </>
+          )}
+          {store.doc.root.length > 0 && (
+            <ResultsSensitivityCard key={`results-sens-card-${store.loads}`} />
+          )}
+          {lvl && (
+            <>
           {(() => {
             const litSheet = findMatchingLiterateSheet(store.doc.name);
             const isFluidOrCapillary =

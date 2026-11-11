@@ -2,15 +2,20 @@
 //!
 //! Solves general constrained sizing and process-parameter synthesis problems on arbitrary `.fsm`
 //! documents:
-//! $$\min_{p \in [p_{\min}, p_{\max}]} \; J(p) \quad \text{subject to all `.fsm` `assert` contracts } g_j(p) \le 0$$
+//!   minimise (or maximise f₁) J(p)  over p ∈ [p_min, p_max]
+//!   subject to all `.fsm` `assert` contracts  g_j(p) ≤ 0.
 //!
 //! Each outer iteration reuses the single forward 3D P2 solve inside
 //! [`crate::sensitivity::compute_sensitivities_with_base`] (`O(1)` discrete mechanical and
-//! staggered thermo-elastic adjoint solves independent of parameter count `k`), assembles a
-//! dimensionless trust-region Sequential Quadratic / Exact-Penalty subproblem on $[0, 1]^k$, and
-//! executes a backtracking merit line search at locked element spacing `h`.
+//! staggered thermo-elastic adjoint solves plus `O(0)`-extra-solve Rayleigh-quotient modal
+//! derivatives independent of parameter count `k`), assembles a dimensionless trust-region
+//! Sequential Quadratic / Exact-Penalty subproblem on `[0, 1]^k`, and executes a backtracking
+//! merit line search at locked element spacing `h`.
 
-use crate::contracts::{evaluate_contracts, resolve_assert_metric, VerificationReport};
+use crate::contracts::{
+    evaluate_contracts, parse_mode_metric_index, required_modes_for_asserts, resolve_assert_metric,
+    VerificationReport,
+};
 use crate::declarative_system::{resolve_system_doc, sync_system_doc_compact};
 use crate::fill::{self, Graded};
 use crate::sensitivity::{
@@ -39,6 +44,14 @@ pub enum OptObjective {
     MaxDisplacement,
     /// Minimise worst-case peak nodal temperature `max_c T_{max,c}(p)` in °C.
     MaxTemp,
+    /// Maximise fundamental natural vibration frequency `f_1(p)` in Hz.
+    #[serde(
+        rename = "max_mode_1_hz",
+        alias = "max_mode1_hz",
+        alias = "mode_1",
+        alias = "mode_1_hz"
+    )]
+    MaxMode1Hz,
 }
 
 impl OptObjective {
@@ -49,6 +62,15 @@ impl OptObjective {
             Self::MaxVmElem => "MPa",
             Self::MaxDisplacement => "mm",
             Self::MaxTemp => "°C",
+            Self::MaxMode1Hz => "Hz",
+        }
+    }
+
+    #[inline]
+    fn minimise_sign(self) -> f64 {
+        match self {
+            Self::MaxMode1Hz => -1.0,
+            _ => 1.0,
         }
     }
 }
@@ -306,6 +328,16 @@ fn eval_objective_value(
             .ok_or_else(|| {
                 SetupError("optimise: max_temp objective requires at least one thermal case".into())
             }),
+        OptObjective::MaxMode1Hz => a
+            .modes
+            .as_ref()
+            .and_then(|m| m.frequencies.first().copied())
+            .ok_or_else(|| {
+                SetupError(
+                    "optimise: max_mode_1_hz objective requires a supported structure with free DOFs"
+                        .into(),
+                )
+            }),
     }
 }
 
@@ -359,6 +391,11 @@ fn eval_objective_grad_p(
                 SetupError("optimise: missing thermal sensitivity d_max_temp".into())
             })
         }
+        OptObjective::MaxMode1Hz => {
+            ps.d_modes_hz.first().copied().ok_or_else(|| {
+                SetupError("optimise: missing modal sensitivity d_modes_hz[0]".into())
+            })
+        }
     }
 }
 
@@ -370,7 +407,36 @@ fn metric_derivative_for_param(
     let m = metric.trim();
     match m {
         "mass_g" | "solid_mass_g" | "graded_mass_g" => return Ok(ps.d_mass_g),
+        "mode_split_12_pct" => {
+            let freqs = &a
+                .modes
+                .as_ref()
+                .ok_or_else(|| {
+                    SetupError("optimise: mode_split_12_pct requires modal solve".into())
+                })?
+                .frequencies;
+            if freqs.len() < 2 || ps.d_modes_hz.len() < 2 {
+                return Err(SetupError(
+                    "optimise: mode_split_12_pct requires at least 2 solved modes".into(),
+                ));
+            }
+            let (f1, f2) = (freqs[0], freqs[1]);
+            let (df1, df2) = (ps.d_modes_hz[0], ps.d_modes_hz[1]);
+            let sign = if f2 >= f1 { 1.0 } else { -1.0 };
+            let sum = (f1 + f2).max(1e-12);
+            return Ok(400.0 * sign * (f1 * df2 - f2 * df1) / (sum * sum));
+        }
         _ => {}
+    }
+    if m.starts_with("mode_") {
+        let idx1 = parse_mode_metric_index(m)
+            .ok_or_else(|| SetupError(format!("optimise: invalid mode metric '{m}'")))?;
+        return ps.d_modes_hz.get(idx1 - 1).copied().ok_or_else(|| {
+            SetupError(format!(
+                "optimise: contract '{m}' out of range ({} modal sensitivities)",
+                ps.d_modes_hz.len()
+            ))
+        });
     }
     let rest = m
         .strip_prefix("solid.")
@@ -404,7 +470,7 @@ fn metric_derivative_for_param(
         }),
         _ => Err(SetupError(format!(
             "optimise: contract metric '{m}' is not supported by 3D adjoint differentiation \
-             (supported: mass_g, compliance, max_displacement, max_vm_elem, min_safety_factor, max_temp)"
+             (supported: mass_g, compliance, max_displacement, max_vm_elem, min_safety_factor, max_temp, mode_k, mode_split_12_pct)"
         ))),
     }
 }
@@ -624,16 +690,21 @@ fn evaluate_state(
                     || m == "mass_g"
             }));
 
+    let mut modes_count = required_modes_for_asserts(sys_doc.solve.modes, asserts);
+    if obj == OptObjective::MaxMode1Hz {
+        modes_count = Some(modes_count.unwrap_or(0).max(1));
+    }
+
     let (analysis, graded) = if need_graded {
         let (solid_a, gr) = fill::graded(&sys_doc, res, clock)?;
-        if sys_doc.solve.modes.is_some() {
-            let modal_a = analyse_full(&sys_doc, res, clock, sys_doc.solve.modes, false)?;
+        if modes_count.is_some() {
+            let modal_a = analyse_full(&sys_doc, res, clock, modes_count, false)?;
             (modal_a, Some(gr))
         } else {
             (solid_a, Some(gr))
         }
     } else {
-        let a = analyse_full(&sys_doc, res, clock, sys_doc.solve.modes, false)?;
+        let a = analyse_full(&sys_doc, res, clock, modes_count, false)?;
         (a, None)
     };
 
@@ -647,7 +718,9 @@ fn evaluate_state(
         let (g, _) = contract_residual_and_grad(asrt, val, None)?;
         constraints_g.push(g);
     }
-    let solves = analysis.cases.len().max(1);
+    let sdoc = crate::structural_doc(&sys_doc);
+    let static_solves = crate::case_names(sdoc.as_ref()).len() + sdoc.thermal_cases().len();
+    let solves = (static_solves + usize::from(analysis.modes.is_some())).max(1);
     Ok(EvalState {
         doc,
         sys_doc,
@@ -674,18 +747,18 @@ fn sum_hard_violation(g: &[f64]) -> f64 {
     g.iter().map(|&x| x.max(0.0)).sum()
 }
 
-fn is_better_state(cand: &EvalState, best: &BestState) -> bool {
+fn is_better_state(cand: &EvalState, best: &BestState, min_sign: f64) -> bool {
     match (cand.verification.all_passed, best.verification.all_passed) {
         (true, false) => true,
         (false, true) => false,
-        (true, true) => cand.objective < best.objective,
+        (true, true) => min_sign * cand.objective < min_sign * best.objective,
         (false, false) => {
             let cv = sum_hard_violation(&cand.constraints_g);
             let bv = sum_hard_violation(&best.constraints_g);
             if (cv - bv).abs() > 1e-9 {
                 cv < bv
             } else {
-                cand.objective < best.objective
+                min_sign * cand.objective < min_sign * best.objective
             }
         }
     }
@@ -731,6 +804,7 @@ pub fn optimise_document(
     let initial_objective = cur.objective;
     let initial_verification = cur.verification.clone();
     let obj_scale = initial_objective.abs().max(1e-6);
+    let min_sign = spec.objective.minimise_sign();
     let cushion = if asserts.is_empty() { 0.0 } else { 0.02 };
     let rho = 25.0;
 
@@ -771,10 +845,8 @@ pub fn optimise_document(
             clock,
         )?;
         sensitivity_method = sens.method.clone();
-        // `sens.solves_run` includes the baseline cases count; add only the adjoint/perturbation solves.
-        total_solves += sens
-            .solves_run
-            .saturating_sub(cur.analysis.cases.len().max(1));
+        // `sens.solves_run` includes the baseline solve count; add only the adjoint/perturbation solves.
+        total_solves += sens.solves_run.saturating_sub(cur.solves);
 
         let mut g_f = vec![0.0; n];
         for (k, meta) in metas.iter().enumerate() {
@@ -786,7 +858,7 @@ pub fn optimise_document(
                     SetupError(format!("optimise: missing sensitivity for '{}'", meta.name))
                 })?;
             let dj_dp = eval_objective_grad_p(spec.objective, &cur.analysis, ps)?;
-            g_f[k] = dj_dp * meta.span() / obj_scale;
+            g_f[k] = min_sign * dj_dp * meta.span() / obj_scale;
         }
 
         let mut jac_g = Vec::with_capacity(asserts.len());
@@ -829,7 +901,12 @@ pub fn optimise_document(
             break;
         }
 
-        let cur_merit = eval_merit(cur.objective / obj_scale, &cur.constraints_g, cushion, rho);
+        let cur_merit = eval_merit(
+            min_sign * cur.objective / obj_scale,
+            &cur.constraints_g,
+            cushion,
+            rho,
+        );
         let cur_hard = sum_hard_violation(&cur.constraints_g);
 
         let mut accepted: Option<(Vec<f64>, EvalState, f64)> = None;
@@ -851,7 +928,7 @@ pub fn optimise_document(
                 continue;
             };
             total_solves += trial.solves;
-            if is_better_state(&trial, &best) {
+            if is_better_state(&trial, &best, min_sign) {
                 best = BestState {
                     doc: trial.doc.clone(),
                     verification: trial.verification.clone(),
@@ -860,7 +937,7 @@ pub fn optimise_document(
                 };
             }
             let trial_merit = eval_merit(
-                trial.objective / obj_scale,
+                min_sign * trial.objective / obj_scale,
                 &trial.constraints_g,
                 cushion,
                 rho,
@@ -1136,6 +1213,100 @@ system pipe_1d title=\"1D Coolant\" sector=\"Thermal\" nodes=21 span=(0, 40) axi
         assert!(
             mdot_final > 0.022,
             "expected 1D->3D thermal adjoint to raise mdot above 0.022 kg/s, got {mdot_final}"
+        );
+    }
+
+    #[test]
+    fn optimise_repairs_resonance_frequency_and_stress_contracts_for_minimum_mass() {
+        // Notice `solve modes` is intentionally omitted: `optimise_document` auto-infers
+        // `modes_count = 1` from `metric="mode_1"`!
+        let src = "\
+fieldsmith 1
+name \"Resonance & Stress Cantilever\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let b = 12
+let d = 4.5
+let tip_f = -200
+box beam size=(60, b, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, tip_f)
+assert \"Fundamental resonance floor\" metric=\"mode_1\" target=\">= 1650\" unit=\"Hz\"
+assert \"Peak stress limit\" metric=\"max_vm_elem\" target=\"<= 140\" unit=\"MPa\"
+";
+        let doc = fsm::parse(src).expect("parse");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("b".to_string(), [5.0, 16.0]);
+        bounds.insert("d".to_string(), [4.0, 16.0]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec!["b".to_string(), "d".to_string()],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(4_500),
+            h: None,
+        };
+        let (opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("optimise resonance");
+        assert!(
+            !rep.initial_verification.all_passed,
+            "expected initial d=4.5 mm to fail f1 >= 1650 Hz: {:?}",
+            rep.initial_verification
+        );
+        assert!(
+            rep.final_verification.all_passed,
+            "expected modal+mechanical adjoint optimiser to satisfy f1 >= 1650 Hz & σ_vM <= 140 MPa: {:?}",
+            rep.final_verification
+        );
+        let b_final = opt_doc.lets.iter().find(|l| l.name == "b").unwrap().value;
+        let d_final = opt_doc.lets.iter().find(|l| l.name == "d").unwrap().value;
+        assert!(
+            d_final > 6.5 && b_final < 12.0,
+            "expected optimiser to thicken Z-depth d ({d_final}) and narrow Y-width b ({b_final}) for minimum mass"
+        );
+    }
+
+    #[test]
+    fn optimise_maximises_fundamental_frequency_under_mass_budget() {
+        let src = "\
+fieldsmith 1
+name \"Max Resonance Pure Modal Beam\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let b = 12
+let d = 5
+box beam size=(60, b, d) at=(30, 0, 0)
+region root = beam.nx
+support clamp root fixed=xyz
+assert \"Mass budget\" metric=\"mass_g\" target=\"<= 29.0\" unit=\"g\"
+";
+        let doc = fsm::parse(src).expect("parse");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("b".to_string(), [6.0, 14.0]);
+        bounds.insert("d".to_string(), [4.0, 11.0]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MaxMode1Hz,
+            params: vec!["b".to_string(), "d".to_string()],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(4_500),
+            h: None,
+        };
+        let (_opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("maximise mode_1");
+        assert!(
+            rep.final_verification.all_passed,
+            "expected mass budget <= 29 g to hold: {:?}",
+            rep.final_verification
+        );
+        assert!(
+            rep.final_objective > 1.35 * rep.initial_objective,
+            "expected f1 to increase by > 35% ({:.1} -> {:.1} Hz), got {:.1}%",
+            rep.initial_objective,
+            rep.final_objective,
+            rep.objective_change_pct
         );
     }
 }

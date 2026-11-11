@@ -22,10 +22,11 @@
 //! 3. `"finite_difference_remesh"` — Fallback when `doc.fill` is active or when a degenerate
 //!    perturbation cannot preserve positive element volumes on the fixed topology.
 
+use crate::contracts::required_modes_for_asserts;
 use crate::declarative_system::resolve_system_doc;
 use crate::regions::{jacobi3, region_facets, region_facets_exact, Facet};
 use crate::{
-    analyse, case_convections_all_with_regions, case_force_report_with_regions,
+    analyse_full, case_convections_all_with_regions, case_force_report_with_regions,
     case_heat_fluxes_all_with_regions, case_names, case_temperatures_with_regions,
     collect_labelled_volumes, material_of, prescribed_fn, run_case_elastoplastic,
     run_thermal_case_multi_with_regions, structural_doc, Analysis, CaseResult, Clock, RegionLookup,
@@ -37,9 +38,9 @@ use fieldsmith_doc::{materials, Document, LoadKind, NodeKind, PlasticityLaw};
 use fieldsmith_field::expr;
 use fieldsmith_solve::assemble::{element_stiffness, RefData};
 use fieldsmith_solve::{
-    assemble_conduction_system_spatial, element_stress, solve_conduction_multi_rhs,
-    solve_multi_rhs, thermal_load_multi, thermal_load_transpose_multi, von_mises, Material, P2Mesh,
-    SolverOptions, ThermalRefData, V3,
+    assemble_conduction_system_spatial, element_stress, modal_mass_quadratic_form,
+    solve_conduction_multi_rhs, solve_multi_rhs, thermal_load_multi, thermal_load_transpose_multi,
+    von_mises, Material, P2Mesh, SolverOptions, ThermalRefData, V3,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -73,6 +74,12 @@ pub struct ParameterSensitivity {
     pub d_mass_g: f64,
     /// Dimensionless normalized mass elasticity `(p / m) · (∂m / ∂p)`.
     pub rel_mass: f64,
+    /// `∂f_n / ∂p` (Hz per unit of `p`) for each solved vibration mode `n = 1..count`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub d_modes_hz: Vec<f64>,
+    /// Dimensionless normalized modal frequency elasticities `(p / f_n) · (∂f_n / ∂p)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rel_modes: Vec<f64>,
     pub cases: Vec<CaseSensitivity>,
 }
 
@@ -92,6 +99,8 @@ pub struct SensitivityReport {
     pub elements: usize,
     pub baseline_mass_g: f64,
     pub baseline_compliance: Vec<(String, f64)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_modes_hz: Vec<f64>,
     pub parameters: Vec<ParameterSensitivity>,
     pub elapsed_ms: f64,
 }
@@ -257,6 +266,26 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
             }
         }
     }
+    if !addr.attr.is_empty() && addr.comp.is_none() {
+        if let Some(m) = doc.custom_materials.iter().find(|m| m.id == addr.id) {
+            return match addr.attr.as_str() {
+                "e" | "young" => Ok(m.e),
+                "nu" | "poisson" => Ok(m.nu),
+                "yield" | "yield_strength" => Ok(m.yield_strength),
+                "density" | "rho" => Ok(m.density),
+                "k" | "conductivity" => {
+                    m.k.ok_or_else(|| format!("param {addr}: custommaterial has no k"))
+                }
+                "a" | "alpha" => m
+                    .alpha
+                    .ok_or_else(|| format!("param {addr}: custommaterial has no alpha")),
+                _ => Err(format!(
+                    "param {addr}: custommaterial {:?} has no numeric parameter {:?}",
+                    addr.id, addr.attr
+                )),
+            };
+        }
+    }
     param::resolve(doc, addr)?;
     if addr.attr.is_empty() {
         return doc
@@ -325,12 +354,61 @@ pub(crate) fn apply_sens_param(
     addr: &ParamAddr,
     val: f64,
 ) -> Result<(), String> {
+    if !val.is_finite() {
+        return Err(format!("param {addr}: value {val} is not finite"));
+    }
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &mut doc.system_block {
             if let Some(dp) = sb.designs.iter_mut().find(|d| d.name == addr.id) {
                 dp.nominal = val;
                 return Ok(());
             }
+        }
+    }
+    if !addr.attr.is_empty() && addr.comp.is_none() {
+        if let Some(m) = doc.custom_materials.iter_mut().find(|m| m.id == addr.id) {
+            return match addr.attr.as_str() {
+                "e" | "young" => {
+                    if val <= 0.0 {
+                        return Err(format!("param {addr}: Young's modulus must be > 0"));
+                    }
+                    m.e = val;
+                    Ok(())
+                }
+                "nu" | "poisson" => {
+                    if !(0.0..0.499).contains(&val) {
+                        return Err(format!("param {addr}: Poisson ratio must be in [0, 0.499)"));
+                    }
+                    m.nu = val;
+                    Ok(())
+                }
+                "yield" | "yield_strength" => {
+                    m.yield_strength = val;
+                    Ok(())
+                }
+                "density" | "rho" => {
+                    if val <= 0.0 {
+                        return Err(format!("param {addr}: density must be > 0"));
+                    }
+                    m.density = val;
+                    Ok(())
+                }
+                "k" | "conductivity" => {
+                    if val <= 0.0 {
+                        return Err(format!("param {addr}: conductivity must be > 0"));
+                    }
+                    m.k = Some(val);
+                    Ok(())
+                }
+                "a" | "alpha" => {
+                    m.alpha = Some(val);
+                    Ok(())
+                }
+                _ => Err(format!(
+                    "param {addr}: custommaterial {:?} has no numeric parameter {:?}",
+                    addr.id, addr.attr
+                )),
+            };
         }
     }
     param::apply(doc, addr, val)?;
@@ -625,6 +703,7 @@ struct ThermalCaseAdjoint {
 enum CaseAdjoint {
     Mechanical(LinearCaseAdjoint),
     Thermal(ThermalCaseAdjoint),
+    ModalOnly,
 }
 
 fn peak_temperature_opt(t: Option<&[f64]>) -> Option<f64> {
@@ -954,6 +1033,78 @@ fn stiffness_matvec_derivative(
     dk_u
 }
 
+fn modal_density_ns2_mm4(mesh: &P2Mesh, rho_elem: &[f64], fallback_rho: f64) -> f64 {
+    let mut weighted_rho = 0.0f64;
+    let mut total_vol = 0.0f64;
+    for (e, &rho) in rho_elem.iter().enumerate() {
+        let tv = mesh.tet_volume(e).abs();
+        weighted_rho += tv * rho;
+        total_vol += tv;
+    }
+    let rho_avg = if total_vol > 0.0 {
+        weighted_rho / total_vol
+    } else {
+        fallback_rho
+    };
+    rho_avg * 1e-9
+}
+
+/// Exact `O(0)`-extra-solve Rayleigh-quotient differentiation of mass-normalised P2 eigenmodes:
+/// `∂λ_n/∂p = φ_nᵀ (∂K/∂p − λ_n ∂M/∂p) φ_n`, `∂f_n/∂p = (∂λ_n/∂p) / (8π² f_n)`.
+#[allow(clippy::too_many_arguments)]
+fn modal_rayleigh_sensitivities(
+    modal: &fieldsmith_solve::ModalResult,
+    p0: f64,
+    mesh_hi: &P2Mesh,
+    props_hi: &ElementMaterialProps,
+    mesh_lo: &P2Mesh,
+    props_lo: &ElementMaterialProps,
+    fixed: &[u8],
+    denom: f64,
+    rd: &RefData,
+) -> (Vec<f64>, Vec<f64>) {
+    let rho_hi = modal_density_ns2_mm4(mesh_hi, &props_hi.rho_elem, props_hi.base_mat.density);
+    let rho_lo = modal_density_ns2_mm4(mesh_lo, &props_lo.rho_elem, props_lo.base_mat.density);
+    let n_modes = modal
+        .frequencies
+        .len()
+        .min(modal.eigenvalues.len())
+        .min(modal.shapes.len());
+    let mut d_modes_hz = Vec::with_capacity(n_modes);
+    let mut rel_modes = Vec::with_capacity(n_modes);
+    let eight_pi_sq = 8.0 * std::f64::consts::PI * std::f64::consts::PI;
+    for m in 0..n_modes {
+        let phi = &modal.shapes[m];
+        let lambda = modal.eigenvalues[m];
+        let f_hz = modal.frequencies[m];
+        let dk_phi = stiffness_matvec_derivative(
+            mesh_hi,
+            &props_hi.young,
+            props_hi.base_mat.nu,
+            mesh_lo,
+            &props_lo.young,
+            props_lo.base_mat.nu,
+            phi,
+            fixed,
+            denom,
+            rd,
+        );
+        let dk_dp = dot_slice(phi, &dk_phi);
+        let m_hi = modal_mass_quadratic_form(mesh_hi, rho_hi, phi);
+        let m_lo = modal_mass_quadratic_form(mesh_lo, rho_lo, phi);
+        let dm_dp = (m_hi - m_lo) / denom;
+        let d_lambda = dk_dp - lambda * dm_dp;
+        let df_hz = if f_hz > 1e-12 {
+            d_lambda / (eight_pi_sq * f_hz)
+        } else {
+            0.0
+        };
+        d_modes_hz.push(df_hz);
+        rel_modes.push(rel_elasticity(p0, f_hz, df_hz));
+    }
+    (d_modes_hz, rel_modes)
+}
+
 #[derive(Clone, Copy)]
 struct FixedCaseMetrics {
     compliance: f64,
@@ -1079,6 +1230,14 @@ fn evaluate_cases_on_fixed_mesh(
             });
         }
     }
+    if metrics.is_empty() && doc.solve.modes.is_some() {
+        metrics.push(FixedCaseMetrics {
+            compliance: 0.0,
+            max_displacement: 0.0,
+            max_vm_elem: 0.0,
+            max_temp: None,
+        });
+    }
 
     Ok((metrics, solves))
 }
@@ -1098,7 +1257,8 @@ pub fn compute_sensitivities(
         return compute_sensitivities_remesh(doc, params, res, clock);
     }
     let sys_doc_0 = resolve_system_doc(doc)?;
-    let base = analyse(sys_doc_0.as_ref(), res, clock)?;
+    let modes_count = required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts);
+    let base = analyse_full(sys_doc_0.as_ref(), res, clock, modes_count, false)?;
     compute_sensitivities_with_base(doc, sys_doc_0.as_ref(), &base, params, t0, clock)
 }
 
@@ -1185,7 +1345,9 @@ pub(crate) fn compute_sensitivities_with_base(
         }
     }
 
-    let mut solves_run = base.cases.len().max(1);
+    let base_static_solves = mech_cases.len() + thermal_cases.len();
+    let base_modal_solves = usize::from(base.modes.is_some());
+    let mut solves_run = (base_static_solves + base_modal_solves).max(1);
     let mut adjoints: Vec<CaseAdjoint> = Vec::new();
     if use_adjoint && !targets.is_empty() {
         for (idx, bc) in base.cases.iter().enumerate() {
@@ -1200,7 +1362,7 @@ pub(crate) fn compute_sensitivities_with_base(
                 )?;
                 solves_run += 2;
                 adjoints.push(CaseAdjoint::Mechanical(adj));
-            } else {
+            } else if idx < mech_cases.len() + thermal_cases.len() {
                 let tname = &thermal_cases[idx - mech_cases.len()];
                 let (tadj, extra_solves) = build_thermal_case_adjoint(
                     sdoc_0,
@@ -1218,6 +1380,8 @@ pub(crate) fn compute_sensitivities_with_base(
                 )?;
                 solves_run += extra_solves;
                 adjoints.push(CaseAdjoint::Thermal(tadj));
+            } else {
+                adjoints.push(CaseAdjoint::ModalOnly);
             }
         }
     }
@@ -1509,6 +1673,16 @@ pub(crate) fn compute_sensitivities_with_base(
                             });
                         }
                     }
+                    CaseAdjoint::ModalOnly => {
+                        cases.push(CaseSensitivity {
+                            case: bc.name.clone(),
+                            d_compliance: 0.0,
+                            rel_compliance: 0.0,
+                            d_max_displacement: 0.0,
+                            d_max_vm_elem: 0.0,
+                            d_max_temp: None,
+                        });
+                    }
                 }
             }
         } else {
@@ -1582,6 +1756,22 @@ pub(crate) fn compute_sensitivities_with_base(
             }
         }
 
+        let (d_modes_hz, rel_modes) = if let Some(modal) = base.modes.as_ref() {
+            modal_rayleigh_sensitivities(
+                modal,
+                p0,
+                &mesh_hi,
+                &props_hi,
+                &mesh_lo,
+                &props_lo,
+                &base.fixed,
+                denom,
+                &rd,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
         out_params.push(ParameterSensitivity {
             param: pname.clone(),
             nominal: p0,
@@ -1589,6 +1779,8 @@ pub(crate) fn compute_sensitivities_with_base(
             scheme: scheme.to_string(),
             d_mass_g,
             rel_mass,
+            d_modes_hz,
+            rel_modes,
             cases,
         });
     }
@@ -1611,6 +1803,11 @@ pub(crate) fn compute_sensitivities_with_base(
             .iter()
             .map(|c| (c.name.clone(), c.compliance))
             .collect(),
+        baseline_modes_hz: base
+            .modes
+            .as_ref()
+            .map(|m| m.frequencies.clone())
+            .unwrap_or_default(),
         parameters: out_params,
         elapsed_ms,
     })
@@ -1629,7 +1826,8 @@ pub fn compute_sensitivities_remesh(
     let t0 = clock();
     let targets = default_target_params(doc, params);
     let sys_doc_0 = resolve_system_doc(doc)?;
-    let base = analyse(sys_doc_0.as_ref(), res, clock)?;
+    let modes_count = required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts);
+    let base = analyse_full(sys_doc_0.as_ref(), res, clock, modes_count, false)?;
     compute_sensitivities_remesh_with_base(doc, &targets, &base, t0, clock)
 }
 
@@ -1644,6 +1842,11 @@ fn compute_sensitivities_remesh_with_base(
     let base_mass = mesh_mass_grams(sys_doc_0.as_ref(), base);
     let base_h = base.provenance.element_size;
     let locked_res = Resolution::Size(base_h);
+    let modes_count = base
+        .modes
+        .as_ref()
+        .map(|m| m.frequencies.len())
+        .or_else(|| required_modes_for_asserts(sys_doc_0.solve.modes, &doc.asserts));
 
     let mut solves_run = 1usize;
     let mut out_params = Vec::with_capacity(targets.len());
@@ -1656,7 +1859,7 @@ fn compute_sensitivities_remesh_with_base(
             let mut d_pert = doc.clone();
             apply_sens_param(&mut d_pert, &addr, val).map_err(SetupError)?;
             let r_pert = resolve_system_doc(&d_pert)?;
-            let a = analyse(r_pert.as_ref(), locked_res, clock)?;
+            let a = analyse_full(r_pert.as_ref(), locked_res, clock, modes_count, false)?;
             let m = mesh_mass_grams(r_pert.as_ref(), &a);
             Ok((a, m))
         };
@@ -1712,6 +1915,25 @@ fn compute_sensitivities_remesh_with_base(
         let d_mass_g = (m_hi - m_lo) / denom;
         let rel_mass = rel_elasticity(p0, base_mass, d_mass_g);
 
+        let mut d_modes_hz = Vec::new();
+        let mut rel_modes = Vec::new();
+        if let (Some(bm), Some(mh), Some(ml)) = (
+            base.modes.as_ref(),
+            a_hi_ref.modes.as_ref(),
+            a_lo_ref.modes.as_ref(),
+        ) {
+            let nm = bm
+                .frequencies
+                .len()
+                .min(mh.frequencies.len())
+                .min(ml.frequencies.len());
+            for m_idx in 0..nm {
+                let df = (mh.frequencies[m_idx] - ml.frequencies[m_idx]) / denom;
+                d_modes_hz.push(df);
+                rel_modes.push(rel_elasticity(p0, bm.frequencies[m_idx], df));
+            }
+        }
+
         let mut cases = Vec::with_capacity(base.cases.len());
         for (idx, bc) in base.cases.iter().enumerate() {
             let Some(ch) = a_hi_ref.cases.get(idx) else {
@@ -1747,6 +1969,8 @@ fn compute_sensitivities_remesh_with_base(
             scheme: scheme.to_string(),
             d_mass_g,
             rel_mass,
+            d_modes_hz,
+            rel_modes,
             cases,
         });
     }
@@ -1764,6 +1988,11 @@ fn compute_sensitivities_remesh_with_base(
             .iter()
             .map(|c| (c.name.clone(), c.compliance))
             .collect(),
+        baseline_modes_hz: base
+            .modes
+            .as_ref()
+            .map(|m| m.frequencies.clone())
+            .unwrap_or_default(),
         parameters: out_params,
         elapsed_ms,
     })
@@ -1772,6 +2001,7 @@ fn compute_sensitivities_remesh_with_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyse;
     use fieldsmith_doc::fsm;
 
     fn zero_clock() -> f64 {
@@ -2276,6 +2506,108 @@ assert \"Wall peak temperature bounded\" metric=\"max_temp\" target=\"<= 150\" t
             s_mdot.cases[0].d_max_vm_elem < 0.0,
             "expected ∂σ_vM,3D / ∂mdot < 0, got {}",
             s_mdot.cases[0].d_max_vm_elem
+        );
+    }
+
+    #[test]
+    fn modal_rayleigh_quotient_matches_material_and_euler_bernoulli_scaling() {
+        // Clamped 3D cantilever without static loads (`solve modes=2` only):
+        // Mode 1 bends in Z (depth d = 8 mm), Mode 2 bends in Y (width b = 12 mm).
+        let src = "\
+fieldsmith 1
+name \"Modal Rayleigh Quotient Cantilever\"
+custommaterial steel200 e=200000 nu=0.30 yield=250 density=7.85
+material steel200
+let L = 60
+let b = 12
+let d = 8
+box beam size=(L, b, d) at=(L / 2, 0, 0)
+region root = beam.nx
+support clamp root fixed=xyz
+solve modes=2
+";
+        let doc = fsm::parse(src).expect("parse modal cantilever");
+        let params = vec![
+            "L".to_string(),
+            "b".to_string(),
+            "d".to_string(),
+            "steel200.e".to_string(),
+            "steel200.density".to_string(),
+        ];
+        let rep = compute_sensitivities(&doc, &params, Resolution::Dofs(9_000), zero_clock)
+            .expect("modal Rayleigh-quotient sensitivity");
+        assert_eq!(rep.method, "boundary_velocity_adjoint");
+        // Pure modal document: 1 baseline modal solve, 0 extra linear/eigen solves across all 5 params!
+        assert_eq!(rep.solves_run, 1);
+        assert_eq!(rep.baseline_modes_hz.len(), 2);
+
+        let by_name = |name: &str| {
+            rep.parameters
+                .iter()
+                .find(|p| p.param == name)
+                .unwrap_or_else(|| panic!("missing param {name}"))
+        };
+        let p_e = by_name("steel200.e");
+        let p_rho = by_name("steel200.density");
+        let p_l = by_name("L");
+        let p_b = by_name("b");
+        let p_d = by_name("d");
+
+        // Exact scaling laws: f ∝ E^(+1/2) and f ∝ ρ^(-1/2)
+        assert!(
+            (p_e.rel_modes[0] - 0.5).abs() < 1e-4 && (p_e.rel_modes[1] - 0.5).abs() < 1e-4,
+            "expected (E/f)(∂f/∂E) == +0.5, got {:?}",
+            p_e.rel_modes
+        );
+        assert!(
+            (p_rho.rel_modes[0] + 0.5).abs() < 1e-4 && (p_rho.rel_modes[1] + 0.5).abs() < 1e-4,
+            "expected (ρ/f)(∂f/∂ρ) == -0.5, got {:?}",
+            p_rho.rel_modes
+        );
+
+        // Euler-Bernoulli / Timoshenko geometric elasticities:
+        // Mode 1 (Z-bending, thinner depth d=8): e_d ≈ +0.97, e_b ≈ 0, e_L ≈ -1.96
+        assert!(
+            (p_d.rel_modes[0] - 0.97).abs() < 0.06,
+            "expected (d/f1)(∂f1/∂d) ≈ +0.97, got {}",
+            p_d.rel_modes[0]
+        );
+        assert!(
+            p_b.rel_modes[0].abs() < 0.05,
+            "expected |(b/f1)(∂f1/∂b)| < 0.05, got {}",
+            p_b.rel_modes[0]
+        );
+        assert!(
+            (p_l.rel_modes[0] + 1.96).abs() < 0.08,
+            "expected (L/f1)(∂f1/∂L) ≈ -1.96, got {}",
+            p_l.rel_modes[0]
+        );
+        // Mode 2 (Y-bending, wider width b=12): e_b ≈ +0.95, e_d ≈ 0
+        assert!(
+            (p_b.rel_modes[1] - 0.95).abs() < 0.08,
+            "expected (b/f2)(∂f2/∂b) ≈ +0.95, got {}",
+            p_b.rel_modes[1]
+        );
+        assert!(
+            p_d.rel_modes[1].abs() < 0.05,
+            "expected |(d/f2)(∂f2/∂d)| < 0.05, got {}",
+            p_d.rel_modes[1]
+        );
+
+        // Cross-check ∂f_1/∂d against independent re-meshing finite difference!
+        let remesh = compute_sensitivities_remesh(
+            &doc,
+            &["d".to_string()],
+            Resolution::Dofs(9_000),
+            zero_clock,
+        )
+        .expect("remesh modal FD");
+        let df1_adj = p_d.d_modes_hz[0];
+        let df1_fd = remesh.parameters[0].d_modes_hz[0];
+        let rel_diff = (df1_adj - df1_fd).abs() / df1_fd.abs();
+        assert!(
+            rel_diff < 0.05,
+            "expected Rayleigh-quotient ∂f1/∂d ({df1_adj}) within 5% of remesh FD ({df1_fd}), rel_diff={rel_diff}"
         );
     }
 }
