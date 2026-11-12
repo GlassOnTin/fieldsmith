@@ -6,6 +6,12 @@
 //   - Breda, A., Coppieters, S., & Debruyne, D. (2018), "Equivalent modelling strategy for a clinched joint using a simple calibration method", Thin-Walled Structures 113, 1-12.
 
 import type { Document } from './types';
+import {
+  analyzeClinchingWindowWasm,
+  evaluateClinchingPointWasm,
+  extractClinchingSpecWasm,
+  isClinchingDocWasm,
+} from './wasm';
 
 export interface ClinchingSpec {
   /** Upper (punch-side) sheet thickness t_1 (mm). */
@@ -116,218 +122,80 @@ export const DEFAULT_CLINCHING_SPEC: ClinchingSpec = {
   serviceLoadN: 2400,
 };
 
-export function extractClinchingSpecFromDoc(doc: Document): ClinchingSpec {
-  const getLet = (names: string[], fallback: number): number => {
-    for (const nm of names) {
-      const hit = doc.lets?.find((l) => l.name === nm);
-      if (hit && Number.isFinite(hit.value)) return hit.value;
-    }
-    return fallback;
-  };
-  const customMat = doc.custom_materials?.[0];
-  const eMpa = customMat?.e ?? DEFAULT_CLINCHING_SPEC.youngsModulusMpa;
-  const syMpa = customMat?.yield_strength ?? getLet(['sigma_y', 'yield_mpa'], DEFAULT_CLINCHING_SPEC.yieldStrengthMpa);
+function mapRustSpec(raw: Record<string, unknown>): ClinchingSpec {
   return {
-    t1Mm: Math.max(0.4, getLet(['t1', 't_upper'], DEFAULT_CLINCHING_SPEC.t1Mm)),
-    t2Mm: Math.max(0.4, getLet(['t2', 't_lower'], DEFAULT_CLINCHING_SPEC.t2Mm)),
-    punchRadiusMm: Math.max(1.2, getLet(['Rp', 'r_punch'], DEFAULT_CLINCHING_SPEC.punchRadiusMm)),
-    clearanceMm: Math.max(0.3, getLet(['c_die', 'clearance'], DEFAULT_CLINCHING_SPEC.clearanceMm)),
-    punchFilletMm: Math.max(0.08, getLet(['r_fillet', 'rp_fillet'], DEFAULT_CLINCHING_SPEC.punchFilletMm)),
-    bottomThicknessXMm: Math.max(0.25, Math.min(2.2, getLet(['X', 'bottom_x'], DEFAULT_CLINCHING_SPEC.bottomThicknessXMm))),
-    youngsModulusMpa: eMpa,
-    yieldStrengthMpa: syMpa,
-    utsMpa: Math.max(syMpa * 1.15, getLet(['sigma_uts', 'uts_mpa'], DEFAULT_CLINCHING_SPEC.utsMpa)),
-    hollomonKMpa: Math.max(
-      syMpa * 1.3,
-      customMat?.hardening_k ?? getLet(['K_hollomon', 'hollomon_k'], DEFAULT_CLINCHING_SPEC.hollomonKMpa),
-    ),
-    hardeningExponentN: Math.max(
-      0.04,
-      Math.min(
-        0.45,
-        doc.solve?.hardening_n ??
-          customMat?.hardening_n ??
-          getLet(['hardening_n', 'n_hard'], DEFAULT_CLINCHING_SPEC.hardeningExponentN),
-      ),
-    ),
-    frictionMu: Math.max(0.02, Math.min(0.55, getLet(['mu_clinch', 'friction_mu'], DEFAULT_CLINCHING_SPEC.frictionMu))),
-    loadAngleDeg: Math.max(0, Math.min(90, getLet(['load_angle_deg', 'peel_angle'], DEFAULT_CLINCHING_SPEC.loadAngleDeg))),
-    serviceLoadN: Math.max(100, getLet(['F_pull', 'service_load_n'], DEFAULT_CLINCHING_SPEC.serviceLoadN)),
+    t1Mm: Number(raw.t1_mm),
+    t2Mm: Number(raw.t2_mm),
+    punchRadiusMm: Number(raw.punch_radius_mm),
+    clearanceMm: Number(raw.clearance_mm),
+    punchFilletMm: Number(raw.punch_fillet_mm),
+    bottomThicknessXMm: Number(raw.bottom_thickness_x_mm),
+    youngsModulusMpa: Number(raw.youngs_modulus_mpa),
+    yieldStrengthMpa: Number(raw.yield_strength_mpa),
+    utsMpa: Number(raw.uts_mpa),
+    hollomonKMpa: Number(raw.hollomon_k_mpa),
+    hardeningExponentN: Number(raw.hardening_exponent_n),
+    frictionMu: Number(raw.friction_mu),
+    loadAngleDeg: Number(raw.load_angle_deg),
+    serviceLoadN: Number(raw.service_load_n),
   };
 }
 
-export function evaluateClinchingAtX(spec: ClinchingSpec, xOverrideMm?: number): ClinchingPointEvaluation {
-  const tTotal = spec.t1Mm + spec.t2Mm;
-  const xMm = Math.max(0.25, Math.min(tTotal * 0.85, xOverrideMm ?? spec.bottomThicknessXMm));
-  const Rp = spec.punchRadiusMm;
-  const c = spec.clearanceMm;
-  const Rd = Rp + c;
-  const n = spec.hardeningExponentN;
-  const K = spec.hollomonKMpa;
-
-  // 1. Coin compression strain & mean flow stress (Hollomon power law)
-  const coinStrain = Math.max(0.08, Math.log(tTotal / xMm));
-  const coinFlowStressMpa = (K / (n + 1)) * Math.pow(coinStrain, n);
-
-  // 2. Breda-Coppieters-Avitzur axisymmetric upper-bound punch forming force (kN)
-  const mShear = Math.min(0.95, Math.sqrt(3) * spec.frictionMu);
-  const slabFactor =
-    1.0 +
-    (2.0 * mShear * Rp) / (3.0 * Math.sqrt(3) * xMm) +
-    (2.0 / Math.sqrt(3)) * Math.log(Rd / Rp);
-  const formingForceKn = (Math.PI * Rp * Rp * coinFlowStressMpa * slabFactor) * 1e-3;
-
-  // 3. Isochoric neck thickness t_n(X) and interlock undercut t_u(X) (Varis 2003 / Mucha 2011)
-  // Normalised compression stroke xi = (t_total * 0.55 - X) / (t_total * 0.40)
-  const xRef = 0.52 * tTotal; // ~1.56 mm for t1=t2=1.5 mm
-  const strokeDepth = Math.max(0, xRef - xMm);
-  const baseNeck = c * (spec.t1Mm / tTotal) + 0.14 * (spec.t1Mm / 1.5);
-  const neckThinning = 0.28 * Math.pow(strokeDepth / Math.max(0.4, 0.38 * tTotal), 1.28);
-  const neckThicknessMm = Math.max(0.12, Math.min(c * 0.92, baseNeck - neckThinning));
-
-  // Displaced coin volume drives radial extrusion into the annular die groove once X < xRef
-  const radialExtrusion = 0.34 * Math.pow(strokeDepth / Math.max(0.4, 0.36 * tTotal), 1.35);
-  const undercutRigidMm = Math.max(0.015, Math.min(0.52, 0.02 + radialExtrusion));
-
-  // Elastic springback after punch retraction reduces effective interlock t_u^eff
-  const springbackLossMm = Math.min(
-    undercutRigidMm * 0.45,
-    ((coinFlowStressMpa / Math.max(10000, spec.youngsModulusMpa)) * (Rp + neckThicknessMm)) * 2.2,
-  );
-  const undercutEffMm = Math.max(0.008, undercutRigidMm - springbackLossMm);
-
-  // S-lock contact angle alpha_lock (deg) steepens as the interlock hooks into the groove
-  const lockAngleDeg = Math.min(34, 8 + 48 * (undercutEffMm / Math.max(0.3, c)));
-  const alphaRad = (lockAngleDeg * Math.PI) / 180;
-
-  // 4. Lee-Kim (2010) 1D Analytic Failure Loads (Cross-Tension & Shear/Peel)
-  const thetaRad = (spec.loadAngleDeg * Math.PI) / 180;
-  // Shear-tension von Mises interaction factor on the neck ring
-  const shearInteraction = 1.0 / Math.sqrt(Math.pow(Math.cos(thetaRad), 2) + 3.0 * Math.pow(0.45 * Math.sin(thetaRad), 2));
-  const neckRingAreaMm2 = 2.0 * Math.PI * (Rp + 0.5 * neckThicknessMm) * neckThicknessMm;
-  const neckFracture1dN = neckRingAreaMm2 * spec.utsMpa * shearInteraction;
-
-  // Button pull-out (unbuttoning) load: frictional conical sliding + plastic unbending of the S-hook
-  const mu = spec.frictionMu;
-  const frictionTerm =
-    (Math.sin(alphaRad) + mu * Math.cos(alphaRad)) /
-    Math.max(0.15, Math.cos(alphaRad) - mu * Math.sin(alphaRad));
-  const plasticUnbendingTerm = (1.65 * undercutRigidMm) / Math.max(0.25, c + undercutRigidMm);
-  const buttonPullout1dN =
-    2.0 * Math.PI * Rp * undercutRigidMm * coinFlowStressMpa * (frictionTerm + plasticUnbendingTerm);
-
-  const jointStrength1dN = Math.min(neckFracture1dN, buttonPullout1dN);
-
-  // 5. Beyond-Analytic 3D Mechanics: Notch Triaxiality K_t, J2 Hardening Redistribution K_sigma, & Peel Arc Localization
-  const elasticKt = 1.0 + 1.45 * Math.sqrt(neckThicknessMm / Math.max(0.08, spec.punchFilletMm));
-  // Neuber-Hencky plastic stress concentration factor K_sigma = K_t^(2n / (n + 1))
-  const plasticKsigma = Math.pow(elasticKt, (2.0 * n) / (n + 1.0));
-  // Under non-axisymmetric peel/shear (theta_load > 0), only an arc of the circumference carries peak tensile peel
-  const circumferentialArcFactor = 1.0 - 0.34 * Math.sin(thetaRad);
-
-  const firstYield3dLinearN = (neckRingAreaMm2 * spec.yieldStrengthMpa * circumferentialArcFactor) / elasticKt;
-
-  // 3D Nonlinear Elasto-Plastic neck capacity accounts for K_sigma notch triaxiality & peel arc
-  const neckFracture3dNlN =
-    (neckFracture1dN * circumferentialArcFactor) / Math.max(1.0, 0.72 * plasticKsigma);
-  // 3D Nonlinear Elasto-Plastic button pull-out accounts for post-springback undercut t_u^eff
-  const buttonPullout3dNlN =
-    buttonPullout1dN * (undercutEffMm / Math.max(1e-4, undercutRigidMm)) * circumferentialArcFactor;
-  const jointStrength3dNonlinearN = Math.min(neckFracture3dNlN, buttonPullout3dNlN);
-
-  // 6. Stress & Equivalent Plastic Strain at Applied Service Load F_service
-  const nominalNeckStressMpa = spec.serviceLoadN / Math.max(0.2, neckRingAreaMm2 * circumferentialArcFactor);
-  const linearPeakNotchStressMpa = nominalNeckStressMpa * elasticKt;
-
-  let nonlinearPeakNeckStressMpa = linearPeakNotchStressMpa;
-  let nonlinearPeakPlasticStrainPct = 0;
-  if (linearPeakNotchStressMpa > spec.yieldStrengthMpa) {
-    // Neuber energy identity at the yielded clinch neck root: sigma_NL * eps_NL = (sigma_lin)^2 / E_0
-    const overRatio = linearPeakNotchStressMpa / spec.yieldStrengthMpa;
-    nonlinearPeakNeckStressMpa = spec.yieldStrengthMpa * Math.pow(overRatio, (2.0 * n) / (n + 1.0));
-    const epsY = spec.yieldStrengthMpa / Math.max(1000, spec.youngsModulusMpa);
-    const epsTotal = epsY * Math.pow(overRatio, 2.0 / (n + 1.0));
-    const epsElastic = nonlinearPeakNeckStressMpa / Math.max(1000, spec.youngsModulusMpa);
-    nonlinearPeakPlasticStrainPct = Math.max(0, (epsTotal - epsElastic) * 100.0);
-  }
-
-  const ratioDiff = Math.abs(neckFracture1dN - buttonPullout1dN) / Math.max(1, jointStrength1dN);
-  const failureMode: ClinchingPointEvaluation['failureMode'] =
-    ratioDiff < 0.08
-      ? 'optimal_transition'
-      : buttonPullout1dN < neckFracture1dN
-        ? 'button_pullout'
-        : 'neck_fracture';
-
+function mapRustPoint(raw: Record<string, unknown>): ClinchingPointEvaluation {
   return {
-    xMm,
-    coinStrain,
-    coinFlowStressMpa,
-    formingForceKn,
-    neckThicknessMm,
-    undercutRigidMm,
-    springbackLossMm,
-    undercutEffMm,
-    lockAngleDeg,
-    neckFracture1dN,
-    buttonPullout1dN,
-    jointStrength1dN,
-    elasticKt,
-    plasticKsigma,
-    circumferentialArcFactor,
-    firstYield3dLinearN,
-    jointStrength3dNonlinearN,
-    nominalNeckStressMpa,
-    linearPeakNotchStressMpa,
-    nonlinearPeakNeckStressMpa,
-    nonlinearPeakPlasticStrainPct,
-    failureMode,
+    xMm: Number(raw.x_mm),
+    coinStrain: Number(raw.coin_strain),
+    coinFlowStressMpa: Number(raw.coin_flow_stress_mpa),
+    formingForceKn: Number(raw.forming_force_kn),
+    neckThicknessMm: Number(raw.neck_thickness_mm),
+    undercutRigidMm: Number(raw.undercut_rigid_mm),
+    springbackLossMm: Number(raw.springback_loss_mm),
+    undercutEffMm: Number(raw.undercut_eff_mm),
+    lockAngleDeg: Number(raw.lock_angle_deg),
+    neckFracture1dN: Number(raw.neck_fracture_1d_n),
+    buttonPullout1dN: Number(raw.button_pullout_1d_n),
+    jointStrength1dN: Number(raw.joint_strength_1d_n),
+    elasticKt: Number(raw.elastic_kt),
+    plasticKsigma: Number(raw.plastic_ksigma),
+    circumferentialArcFactor: Number(raw.circumferential_arc_factor),
+    firstYield3dLinearN: Number(raw.first_yield_3d_linear_n),
+    jointStrength3dNonlinearN: Number(raw.joint_strength_3d_nonlinear_n),
+    nominalNeckStressMpa: Number(raw.nominal_neck_stress_mpa),
+    linearPeakNotchStressMpa: Number(raw.linear_peak_notch_stress_mpa),
+    nonlinearPeakNeckStressMpa: Number(raw.nonlinear_peak_neck_stress_mpa),
+    nonlinearPeakPlasticStrainPct: Number(raw.nonlinear_peak_plastic_strain_pct),
+    failureMode: raw.failure_mode as ClinchingPointEvaluation['failureMode'],
   };
+}
+
+export function extractClinchingSpecFromDoc(doc: Document): ClinchingSpec {
+  return mapRustSpec(extractClinchingSpecWasm(doc));
+}
+
+export function evaluateClinchingAtX(
+  spec: ClinchingSpec,
+  xOverrideMm?: number,
+): ClinchingPointEvaluation {
+  return mapRustPoint(
+    evaluateClinchingPointWasm(spec as unknown as Record<string, unknown>, xOverrideMm),
+  );
 }
 
 export function analyzeClinchingProcessWindow(spec: ClinchingSpec): ClinchingSweepAnalysis {
-  const curve: ClinchingPointEvaluation[] = [];
-  let bestIdx = 0;
-  let best1d = -1;
-  let best3dNl = -1;
-  const xMin = 0.35;
-  const xMax = 1.60;
-  const steps = 51;
-  for (let i = 0; i < steps; i++) {
-    const x = xMin + ((xMax - xMin) * i) / (steps - 1);
-    const pt = evaluateClinchingAtX(spec, x);
-    curve.push(pt);
-    if (pt.jointStrength1dN > best1d) {
-      best1d = pt.jointStrength1dN;
-      bestIdx = i;
-    }
-    if (pt.jointStrength3dNonlinearN > best3dNl) {
-      best3dNl = pt.jointStrength3dNonlinearN;
-    }
-  }
-  const optimalXMm = curve[bestIdx]?.xMm ?? 0.85;
-  const threshold = 0.85 * best1d;
-  const validXs = curve.filter((p) => p.jointStrength1dN >= threshold).map((p) => p.xMm);
-  const windowRangeMm: [number, number] =
-    validXs.length > 0
-      ? [validXs[0], validXs[validXs.length - 1]]
-      : [optimalXMm - 0.1, optimalXMm + 0.1];
-
+  const raw = analyzeClinchingWindowWasm(spec as unknown as Record<string, unknown>);
+  const win = raw.window_range_mm as [number, number];
+  const curveRaw = (raw.curve as Record<string, unknown>[]) ?? [];
   return {
-    spec,
-    current: evaluateClinchingAtX(spec),
-    optimalXMm,
-    peakStrength1dN: best1d,
-    peakStrength3dNonlinearN: best3dNl,
-    windowRangeMm,
-    curve,
+    spec: mapRustSpec(raw.spec as Record<string, unknown>),
+    current: mapRustPoint(raw.current as Record<string, unknown>),
+    optimalXMm: Number(raw.optimal_x_mm),
+    peakStrength1dN: Number(raw.peak_strength_1d_n),
+    peakStrength3dNonlinearN: Number(raw.peak_strength_3d_nonlinear_n),
+    windowRangeMm: [Number(win[0]), Number(win[1])],
+    curve: curveRaw.map(mapRustPoint),
   };
 }
 
 export function isClinchingDocument(doc: Document): boolean {
-  const nm = (doc.name || '').toLowerCase();
-  if (nm.includes('clinch') || nm.includes('a19') || nm.includes('t19') || nm.includes('s-lock')) {
-    return true;
-  }
-  return !!(doc.lets?.some((l) => l.name === 'c_die' || l.name === 'mu_clinch'));
+  return isClinchingDocWasm(doc);
 }

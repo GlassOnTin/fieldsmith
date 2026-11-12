@@ -49,6 +49,7 @@ fieldsmith 1
 # @theory_body:
 #   Linear Hookean elasticity over-predicts peak stress at the sharp punch-to-neck fillet by the full geometric concentration factor K_t. Fieldsmith's 3D J2 secant elasto-plastic solver iteratively softens yielded elements (E_sec,e < E_0) using `assemble_pcg_multi`, redistributing stress across the neck ligament and recovering the physical plastic strain field ε_p(x).
 # ---
+# @mcp: Evaluate 1D Lee-Kim / Breda Hat-Curve Process Window || evaluate_clinching || {}
 # @mcp: Verify T19 Sheet Metal Clinching Contracts via API || verify || {"dofs":15000}
 #   Run live @assert contract verification on the T19 Sheet Metal Clinching S-Lock model.
 # === END LITERATE HEADER ===

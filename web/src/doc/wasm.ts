@@ -1804,3 +1804,31 @@ export function inspectFixingStackWasm(
   ) as Record<string, unknown> | null;
 }
 
+export function isClinchingDocWasm(doc: Document): boolean {
+  if (!isWasmLoaded()) return false;
+  return w.isClinchingDoc(JSON.stringify(doc));
+}
+
+export function extractClinchingSpecWasm(doc: Document): Record<string, unknown> {
+  return JSON.parse(w.extractClinchingSpec(JSON.stringify(doc))) as Record<string, unknown>;
+}
+
+export function evaluateClinchingPointWasm(
+  spec: Record<string, unknown>,
+  xOverrideMm?: number,
+): Record<string, unknown> {
+  return JSON.parse(
+    w.evaluateClinchingPoint(
+      JSON.stringify(spec),
+      xOverrideMm !== undefined && Number.isFinite(xOverrideMm) ? xOverrideMm : Number.NaN,
+    ),
+  ) as Record<string, unknown>;
+}
+
+export function analyzeClinchingWindowWasm(
+  spec: Record<string, unknown>,
+): Record<string, unknown> {
+  return JSON.parse(w.analyzeClinchingWindow(JSON.stringify(spec))) as Record<string, unknown>;
+}
+
+

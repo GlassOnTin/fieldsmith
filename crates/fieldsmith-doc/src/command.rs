@@ -4,6 +4,7 @@
 //! every surface applies identical validation, parameter propagation (`param::apply`), and
 //! parametric sketch-feature synchronization (`sketch::sync_sketch_features`).
 
+use crate::clinching::{apply_clinching_to_document, ClinchingApplyRequest, ClinchingApplySummary};
 use crate::fixings::{
     insert_fixing_into_document, reconfigure_existing_bolt_stack, FixingInsertRequest,
     FixingInsertSummary, FixingReconfigureSpec, FixingStackInspection,
@@ -139,6 +140,9 @@ pub enum DocCommand {
     ReconfigureFixing {
         request: FixingReconfigureSpec,
     },
+    ApplyClinching {
+        request: ClinchingApplyRequest,
+    },
 }
 
 /// Outcome returned by [`apply_doc_command`].
@@ -158,6 +162,8 @@ pub struct DocCommandOutcome {
     pub fixing: Option<FixingInsertSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixing_stack: Option<FixingStackInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clinching: Option<ClinchingApplySummary>,
     pub problems: Vec<String>,
 }
 
@@ -216,6 +222,7 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
     let mut sketch_feature: Option<SketchFeatureSummary> = None;
     let mut fixing: Option<FixingInsertSummary> = None;
     let mut fixing_stack: Option<FixingStackInspection> = None;
+    let mut clinching: Option<ClinchingApplySummary> = None;
 
     match cmd {
         DocCommand::SetMaterial { material, node } => {
@@ -709,6 +716,21 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             action = Some("updated".into());
             fixing_stack = Some(stack);
         }
+        DocCommand::ApplyClinching { request } => {
+            let summary = apply_clinching_to_document(doc, &request)?;
+            entity_id = summary
+                .inserted_nodes
+                .first()
+                .cloned()
+                .or_else(|| Some("X".into()));
+            entity_kind = Some("clinching".into());
+            action = Some(if request.insert_joint {
+                "inserted".into()
+            } else {
+                "updated".into()
+            });
+            clinching = Some(summary);
+        }
     }
 
     Ok(DocCommandOutcome {
@@ -719,6 +741,7 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
         sketch_feature,
         fixing,
         fixing_stack,
+        clinching,
         problems: doc.validate(),
     })
 }
@@ -1179,6 +1202,44 @@ support fix1 top_face fixed=xyz
 
         let canon = fsm::print(&doc);
         let reparsed = fsm::parse(&canon).expect("reparse fixing fsm");
+        assert_eq!(reparsed, doc);
+        assert_eq!(fsm::print(&reparsed), canon);
+    }
+
+    #[test]
+    fn apply_clinching_stamps_host_sheet_and_round_trips_through_fsm() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"DC04 Lap Sheet\"\n\
+             material mat_dc04\n\
+             box sheet size=(40, 26, 3.0) at=(0, 0, 1.5)\n\
+             region clamp_end = sheet.nx\n\
+             support fix clamp_end fixed=xyz\n",
+        )
+        .expect("parse DC04 sheet");
+
+        let ins = apply_doc_command(
+            &mut doc,
+            DocCommand::ApplyClinching {
+                request: ClinchingApplyRequest {
+                    insert_joint: true,
+                    host_id: Some("sheet".into()),
+                    dial_optimal_x: true,
+                    j2_plasticity: Some(true),
+                    bottom_x_std_mm: Some(0.04),
+                    ..Default::default()
+                },
+            },
+        )
+        .expect("apply_clinching on host sheet");
+        assert!(ins.problems.is_empty(), "problems: {:?}", ins.problems);
+        assert_eq!(ins.action.as_deref(), Some("inserted"));
+        let sum = ins.clinching.expect("clinching summary");
+        assert!(sum.j2_active);
+        assert!((sum.applied_x_mm - sum.optimal_x_mm).abs() < 1e-9);
+
+        let canon = fsm::print(&doc);
+        let reparsed = fsm::parse(&canon).expect("reparse clinched sheet");
         assert_eq!(reparsed, doc);
         assert_eq!(fsm::print(&reparsed), canon);
     }

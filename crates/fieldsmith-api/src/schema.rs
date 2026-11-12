@@ -12,6 +12,7 @@ use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::sensitivity::SensitivityReport;
 use fieldsmith_core::uq::UqReport;
 use fieldsmith_core::{CaseResult, Provenance};
+use fieldsmith_doc::clinching::{ClinchingSpec, ClinchingSweepAnalysis};
 use fieldsmith_doc::fixings::{
     FailureDistributionFit, FailureSampleRow, FixingEnvelopeInput, FixingEnvelopeReport,
     OpenStandardBenchmark, SnapFitMechanicsReport,
@@ -177,6 +178,11 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_pf: Option<f64>,
     },
+    /// Sheet-metal clinching (Lee–Kim / Breda / Varis / Neuber–Hencky) process-window analysis (`V63`).
+    Clinching {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spec: Option<ClinchingSpec>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -234,6 +240,9 @@ pub struct Response {
     /// Present for the fastener / preloaded joint / snap-fit mechanics question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixing: Option<FixingAnalysisBundle>,
+    /// Present for the sheet-metal clinching process-window question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clinching: Option<ClinchingSweepAnalysis>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

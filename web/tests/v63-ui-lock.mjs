@@ -1007,7 +1007,112 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[15/15] FixingsModal WASM VDI 2230 envelope + 4-corner flange insertion (${insertedState.preloadCount} preloads + CV=${insertedState.uqCv} UQ) + Inspector reconfigure_fixing (nyloc_nut -> ${reconfState.nutAfterReconf} -> Undo ${reconfState.nutAfterUndo}): PASS`,
+    `[15/16] FixingsModal WASM VDI 2230 envelope + 4-corner flange insertion (${insertedState.preloadCount} preloads + CV=${insertedState.uqCv} UQ) + Inspector reconfigure_fixing (nyloc_nut -> ${reconfState.nutAfterReconf} -> Undo ${reconfState.nutAfterUndo}): PASS`,
+  );
+
+  // 16. ClinchingCalculatorCard WASM Hat-Curve Process Window + Host S-Lock Stamping (`apply_clinching`) + Dial Optimal X* + 45° Mixed-Peel Rotation + J2 Toggle + Undo
+  const clinchSeedFsm = [
+    'fieldsmith 1',
+    'name "UI DC04 Clinching Coupon"',
+    'material mat_dc04',
+    'box sheet size=(40, 26, 3.0) at=(0, 0, 1.5)',
+    'region clamp_edges = sheet.nx + sheet.px',
+    'support fixture clamp_edges fixed=xyz',
+    'solve build=(0, 0)',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.dispatch('Stamp Under-Clinched S-Lock Joint', {
+      cmd: 'apply_clinching',
+      request: {
+        insert_joint: true,
+        host_id: 'sheet',
+        bottom_thickness_x_mm: 1.25,
+        service_load_n: 2200,
+        j2_plasticity: true,
+      },
+    });
+    window.fieldsmith.store.setLens('results');
+  }, clinchSeedFsm);
+
+  await page.waitForSelector('[data-testid="results-clinching-explorer"]', { timeout: 35000 });
+  const clinchCardText = await page.textContent('[data-testid="results-clinching-explorer"]');
+  assert(
+    clinchCardText &&
+      clinchCardText.includes('Optimal X* =') &&
+      clinchCardText.includes('1D Lee–Kim Analytic') &&
+      clinchCardText.includes('Button Pull-Out'),
+    `Expected WASM ClinchingCalculatorCard hat-curve & under-clinched Button Pull-Out mode at X=1.25 mm, got '${clinchCardText}'`,
+  );
+
+  await page.click('[data-testid="clinch-dial-optimal-x"]');
+  await page.click('[data-testid="clinch-angle-45"]');
+  await page.click('[data-testid="clinch-toggle-nonlinear"]');
+
+  const clinchMutState = await page.evaluate(() => {
+    const getLet = (nm) => window.fieldsmith.store.doc.lets?.find((l) => l.name === nm)?.value ?? null;
+    const getPullVec = () => {
+      const ld = window.fieldsmith.store.doc.loads?.find((l) => l.id === 'clinch_pull');
+      return ld && ld.kind.type === 'force' ? ld.kind.vector : null;
+    };
+    const xDialed = getLet('X');
+    const angAfter45 = getLet('load_angle_deg');
+    const vec45 = getPullVec();
+    const plastAfterToggle = window.fieldsmith.store.doc.solve?.plasticity ?? null;
+
+    window.fieldsmith.store.undo(); // undo J2 toggle -> back to 'j2'
+    const plastUndone = window.fieldsmith.store.doc.solve?.plasticity ?? null;
+
+    window.fieldsmith.store.undo(); // undo 45° angle -> back to 0°
+    const angUndone = getLet('load_angle_deg');
+    const vecUndone = getPullVec();
+
+    window.fieldsmith.store.undo(); // undo Dial X* -> back to 1.25 mm
+    const xUndone = getLet('X');
+
+    return {
+      xDialed,
+      angAfter45,
+      vec45,
+      plastAfterToggle,
+      plastUndone,
+      angUndone,
+      vecUndone,
+      xUndone,
+    };
+  });
+
+  assert(
+    clinchMutState.xDialed !== null &&
+      clinchMutState.xDialed >= 0.70 &&
+      clinchMutState.xDialed <= 0.90 &&
+      Math.abs((clinchMutState.xUndone ?? 0) - 1.25) < 1e-9,
+    `Expected Dial X* to move X from 1.25 -> X* in [0.70, 0.90] and Undo back to 1.25, got ${JSON.stringify(clinchMutState)}`,
+  );
+  assert(
+    clinchMutState.angAfter45 === 45 &&
+      Array.isArray(clinchMutState.vec45) &&
+      Math.abs(clinchMutState.vec45[0] - clinchMutState.vec45[2]) < 1.0 &&
+      clinchMutState.vec45[0] > 1400 &&
+      clinchMutState.angUndone === 0 &&
+      Array.isArray(clinchMutState.vecUndone) &&
+      Math.abs(clinchMutState.vecUndone[0]) < 1e-6 &&
+      Math.abs(clinchMutState.vecUndone[2] - 2200) < 1.0,
+    `Expected 45° Mixed Peel button to rotate 3D force vector and Undo back to (0, 0, 2200), got ${JSON.stringify(clinchMutState)}`,
+  );
+  assert(
+    clinchMutState.plastAfterToggle === null && clinchMutState.plastUndone === 'j2',
+    `Expected J2 toggle + Undo to switch plasticity 'j2' -> null -> 'j2', got ${JSON.stringify(clinchMutState)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[16/16] ClinchingCalculatorCard WASM hat-curve + host S-Lock stamping + Dial X* (1.25 -> ${clinchMutState.xDialed.toFixed(3)} mm) + 45° mixed-peel rotation + J2 toggle + Undo: PASS`,
   );
   await page.close();
 } catch (e) {

@@ -1,5 +1,5 @@
 //! V63 — Unified Human ↔ AI Architecture Lock:
-//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 42 MCP tools.
+//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 46 MCP tools.
 //! 2. Executable `# @mcp:` literate directives across every `.fsm` file in `examples/`.
 //! 3. `apiv: 2` same-result envelope parity between `fieldsmith_api::respond` and
 //!    `fieldsmith_mcp::Server::handle` for `QuestionSpec::Verify` (`ok` + `refusal`)
@@ -147,7 +147,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        44.0,
+        46.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -1797,6 +1797,166 @@ solve build=(0, 0)
         0.0,
     ));
 
+    // -------------------------------------------------------------------------
+    // 14. Unified Sheet-Metal Clinching / S-Lock API <-> MCP parity, exact
+    //     Breda-Avitzur & Neuber-Hencky invariants, and 3D J2 co-design
+    // -------------------------------------------------------------------------
+    let a19_path = examples_dir.join("analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm");
+    let a19_raw = std::fs::read_to_string(&a19_path).expect("read A19 .fsm");
+    let api_clinch_req = json!({
+        "apiv": 2,
+        "doc": a19_raw,
+        "question": {
+            "kind": "clinching"
+        }
+    });
+    let api_clinch_reply = fieldsmith_api::respond(&api_clinch_req.to_string());
+    let api_clinch_resp: Value =
+        serde_json::from_str(&api_clinch_reply.body).expect("parse API clinching response");
+    assert_eq!(
+        api_clinch_resp["status"], "ok",
+        "expected ok API clinching response: {api_clinch_resp}"
+    );
+
+    let mut clinch_srv = Server::new();
+    let (cl_open_err, cl_open_body) =
+        mcp_tool_call(&mut clinch_srv, 1201, "open", json!({ "doc": a19_raw }));
+    assert!(!cl_open_err, "open A19 failed: {cl_open_body}");
+    let (cl_eval_err, mcp_clinch_json) =
+        mcp_tool_call(&mut clinch_srv, 1202, "evaluate_clinching", json!({}));
+    assert!(
+        !cl_eval_err,
+        "MCP evaluate_clinching failed: {mcp_clinch_json}"
+    );
+
+    let clinch_mismatch = if canon(&api_clinch_resp) == canon(&mcp_clinch_json) {
+        0.0
+    } else {
+        1.0
+    };
+    report.check(Check::absolute(
+        "apiv:2 API <-> MCP canon parity on QuestionSpec::Clinching",
+        0.0,
+        clinch_mismatch,
+        "mismatches",
+        0.0,
+    ));
+
+    let cur_clinch = &mcp_clinch_json["clinching"]["current"];
+    let rp_mm = 2.6_f64;
+    let rd_mm = 2.6_f64 + 0.75_f64;
+    let x_mm = 0.85_f64;
+    let n_hard = 0.20_f64;
+    let k_holl = 390.0_f64;
+    let eps_coin = (3.0_f64 / x_mm).ln();
+    let sigma_bar = (k_holl / (n_hard + 1.0)) * eps_coin.powf(n_hard);
+    let m_shear = (3.0_f64.sqrt() * 0.18_f64).min(0.95);
+    let slab_factor = 1.0
+        + (2.0 * m_shear * rp_mm) / (3.0 * 3.0_f64.sqrt() * x_mm)
+        + (2.0 / 3.0_f64.sqrt()) * (rd_mm / rp_mm).ln();
+    let exact_fpunch_kn = std::f64::consts::PI * rp_mm * rp_mm * sigma_bar * slab_factor * 1e-3;
+    let measured_fpunch_kn = cur_clinch["forming_force_kn"]
+        .as_f64()
+        .expect("forming_force_kn");
+    report.check(Check::relative(
+        "Breda-Avitzur axisymmetric clinching forming force F_punch(0.85)",
+        exact_fpunch_kn,
+        measured_fpunch_kn,
+        "kN",
+        1e-6,
+    ));
+
+    let measured_kt = cur_clinch["elastic_kt"].as_f64().expect("elastic_kt");
+    let measured_ksigma = cur_clinch["plastic_ksigma"]
+        .as_f64()
+        .expect("plastic_ksigma");
+    let exact_ksigma = measured_kt.powf((2.0 * n_hard) / (n_hard + 1.0));
+    report.check(Check::relative(
+        "Neuber-Hencky J2 clinch-neck stress redistribution K_sigma",
+        exact_ksigma,
+        measured_ksigma,
+        "-",
+        1e-6,
+    ));
+
+    let dc04_seed = "\
+fieldsmith 1
+name \"DC04 Sheet Stack\"
+material mat_dc04
+box sheet size=(40, 26, 3.0) at=(0, 0, 1.5)
+region clamp_edges = sheet.nx + sheet.px
+support fixture clamp_edges fixed=xyz
+solve build=(0, 0)
+";
+    let mut stamp_srv = Server::new();
+    let (st_open_err, _) = mcp_tool_call(&mut stamp_srv, 1203, "open", json!({ "doc": dc04_seed }));
+    assert!(!st_open_err);
+    let (st_ins_err, st_ins_json) = mcp_tool_call(
+        &mut stamp_srv,
+        1204,
+        "apply_clinching",
+        json!({
+            "insert_joint": true,
+            "host_id": "sheet",
+            "bottom_thickness_x_mm": 1.25,
+            "service_load_n": 2200.0,
+            "j2_plasticity": true
+        }),
+    );
+    assert!(
+        !st_ins_err,
+        "MCP apply_clinching stamp failed: {st_ins_json}"
+    );
+    assert_eq!(st_ins_json["clinching"]["j2_active"], true);
+
+    let (st_dial_err, st_dial_json) = mcp_tool_call(
+        &mut stamp_srv,
+        1205,
+        "apply_clinching",
+        json!({
+            "dial_optimal_x": true,
+            "load_angle_deg": 45.0
+        }),
+    );
+    assert!(
+        !st_dial_err,
+        "MCP apply_clinching dial failed: {st_dial_json}"
+    );
+    let x_dialed = st_dial_json["clinching"]["applied_x_mm"]
+        .as_f64()
+        .expect("applied_x_mm");
+    let x_opt = st_dial_json["clinching"]["optimal_x_mm"]
+        .as_f64()
+        .expect("optimal_x_mm");
+    assert!(
+        (x_dialed - x_opt).abs() < 1e-6 && (0.70..=0.90).contains(&x_dialed),
+        "expected X dialed to optimal X* in [0.70, 0.90]: applied={x_dialed}, opt={x_opt}"
+    );
+
+    let (st_doc_err, st_doc_json) = mcp_tool_call(&mut stamp_srv, 1206, "doc_text", json!({}));
+    assert!(!st_doc_err);
+    assert!(
+        st_doc_json["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("plasticity=j2"),
+        "expected printed .fsm to carry solve plasticity=j2: {st_doc_json}"
+    );
+
+    let (st_solve_err, st_solve_json) =
+        mcp_tool_call(&mut stamp_srv, 1207, "solve", json!({ "dofs": 10000 }));
+    assert!(
+        !st_solve_err,
+        "3D J2 solve on stamped clinch joint failed: {st_solve_json}"
+    );
+    let clinch_vm = st_solve_json["single"]["cases"][0]["max_vm_elem"]
+        .as_f64()
+        .expect("clinch max_vm_elem");
+    assert!(
+        clinch_vm > 20.0,
+        "expected positive 3D J2 stress on clinch coupon, got {clinch_vm}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1804,11 +1964,12 @@ solve build=(0, 0)
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
              first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
-             and unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion), \
+             unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion, \
+             and unified Lee–Kim / Breda / Varis–Mucha / Neuber–Hencky sheet-metal clinching process windows + parametric 3D S-Lock stamping & J2 co-design), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1827,7 +1988,8 @@ solve build=(0, 0)
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
-         WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
+         WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
+         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \

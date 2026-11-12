@@ -25,6 +25,9 @@ use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::sensitivity::compute_sensitivities;
 use fieldsmith_core::uq::{compute_uq, UqSpec};
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
+use fieldsmith_doc::clinching::{
+    analyze_clinching_process_window, extract_clinching_spec_from_doc,
+};
 use fieldsmith_doc::fixings::{
     evaluate_fixing_torque_envelope_with_doc, evaluate_open_standard_benchmarks_with_samples,
     evaluate_snap_fit_mechanics, fit_failure_distribution, FixingKind,
@@ -231,6 +234,7 @@ pub fn respond(input: &str) -> Reply {
                         optimisation: None,
                         uq: None,
                         fixing: None,
+                        clinching: None,
                         error: None,
                     })
                 }
@@ -321,6 +325,7 @@ pub fn respond(input: &str) -> Reply {
                                     optimisation: None,
                                     uq: None,
                                     fixing: None,
+                                    clinching: None,
                                     error: None,
                                 })
                             }
@@ -366,6 +371,7 @@ pub fn respond(input: &str) -> Reply {
                             optimisation: None,
                             uq: None,
                             fixing: None,
+                            clinching: None,
                             error: None,
                         })
                     }
@@ -430,6 +436,7 @@ pub fn respond(input: &str) -> Reply {
                         optimisation: None,
                         uq: None,
                         fixing: None,
+                        clinching: None,
                         error: None,
                     })
                 }
@@ -572,6 +579,7 @@ pub fn respond(input: &str) -> Reply {
                 optimisation: None,
                 uq: None,
                 fixing: None,
+                clinching: None,
                 error: None,
             })
         }
@@ -599,6 +607,7 @@ pub fn respond(input: &str) -> Reply {
                     optimisation: None,
                     uq: None,
                     fixing: None,
+                    clinching: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -633,6 +642,7 @@ pub fn respond(input: &str) -> Reply {
                         optimisation: None,
                         uq: None,
                         fixing: None,
+                        clinching: None,
                         error: None,
                     })
                 }
@@ -662,6 +672,7 @@ pub fn respond(input: &str) -> Reply {
                     optimisation: None,
                     uq: None,
                     fixing: None,
+                    clinching: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -706,6 +717,7 @@ pub fn respond(input: &str) -> Reply {
                         optimisation: Some(rep),
                         uq: None,
                         fixing: None,
+                        clinching: None,
                         error: None,
                     })
                 }
@@ -741,6 +753,7 @@ pub fn respond(input: &str) -> Reply {
                     optimisation: None,
                     uq: Some(rep),
                     fixing: None,
+                    clinching: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -792,6 +805,30 @@ pub fn respond(input: &str) -> Reply {
                     snap_fit,
                     failure_fit,
                 }),
+                clinching: None,
+                error: None,
+            })
+        }
+        QuestionSpec::Clinching { spec } => {
+            let active_spec = spec.unwrap_or_else(|| extract_clinching_spec_from_doc(&doc));
+            let sweep = analyze_clinching_process_window(&active_spec);
+            ok_reply(schema::Response {
+                apiv: APIV,
+                engine: store::engine_identity(),
+                status: Status::Ok,
+                name: Some(name),
+                question: Some(echo),
+                warnings,
+                outcome: None,
+                single: None,
+                sweep: None,
+                overhang: None,
+                verification: None,
+                sensitivity: None,
+                optimisation: None,
+                uq: None,
+                fixing: None,
+                clinching: Some(sweep),
                 error: None,
             })
         }
@@ -845,6 +882,7 @@ fn error_reply(
             optimisation: None,
             uq: None,
             fixing: None,
+            clinching: None,
             error: Some(message.into()),
         },
         true,
@@ -1140,5 +1178,20 @@ load push tip force=(0, 0, -100)";
                 .unwrap()
                 > 1.0
         );
+    }
+
+    #[test]
+    fn clinching_question_extracts_doc_spec_and_returns_hat_curve() {
+        let req = serde_json::json!({
+            "apiv": 2,
+            "doc": DOC,
+            "question": {
+                "kind": "clinching"
+            }
+        });
+        let body = envelope(&req.to_string());
+        assert_eq!(body["status"], "ok", "clinching question failed: {body}");
+        assert!(body["clinching"]["optimal_x_mm"].as_f64().unwrap() > 0.5);
+        assert_eq!(body["clinching"]["curve"].as_array().unwrap().len(), 51);
     }
 }

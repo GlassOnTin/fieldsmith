@@ -48,6 +48,7 @@ fieldsmith 1
 # @theory_body:
 #   The 1D Lee–Kim model assumes uniform hoop/axial stress around the 2πR_p neck cylinder and rigid-plastic unbending of t_u. A 3D nonlinear elasto-plastic FEM solver goes beyond the 1D analytic range in four critical ways: (1) resolving 3D notch stress triaxiality K_t at the tight punch corner radius r_p, (2) redistributing the elastic notch peak via J2 strain hardening (K_σ = K_t^{2n/(n+1)}), (3) accounting for radial elastic springback Δt_u after tool retraction, and (4) capturing non-axisymmetric peel localization where only a 60°–90° arc of the neck carries peak tension.
 # ---
+# @mcp: Evaluate 1D Lee-Kim / Breda Hat-Curve Process Window || evaluate_clinching || {}
 # @mcp: Verify A19 Clinching Benchmark Contracts via API || verify || {"dofs":15000}
 #   Run live @assert contract verification on the A19 Sheet Metal Clinching S-Lock benchmark.
 # === END LITERATE HEADER ===

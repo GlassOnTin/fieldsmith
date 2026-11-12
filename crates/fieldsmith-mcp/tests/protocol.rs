@@ -120,6 +120,8 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "insert_fixing",
             "reconfigure_fixing",
             "evaluate_fixing",
+            "apply_clinching",
+            "evaluate_clinching",
             "solve_sketch",
             "upsert_sketch",
             "apply_sketch_feature",
@@ -916,4 +918,62 @@ support base_fix base_root fixed=xyz
     let uq_env = c.tool_ok(14, "uq", json!({"dofs": 14000}));
     assert_eq!(uq_env["status"], "ok", "{uq_env}");
     assert!(uq_env["uq"]["solves_run"].as_u64().unwrap() <= 3);
+}
+
+#[test]
+fn clinching_stamp_dial_optimal_x_evaluate_and_3d_j2_solve_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let fsm_src = "\
+fieldsmith 1
+name \"MCP DC04 Clinch Sheet\"
+material mat_dc04
+box sheet size=(40, 26, 3.0) at=(0, 0, 1.5)
+region clamp_end = sheet.nx
+support fix clamp_end fixed=xyz
+";
+    c.tool_ok(20, "open", json!({"doc": fsm_src}));
+    let stamped = c.tool_ok(
+        21,
+        "apply_clinching",
+        json!({
+            "insert_joint": true,
+            "host_id": "sheet",
+            "bottom_thickness_x_mm": 1.25,
+            "j2_plasticity": true,
+            "bottom_x_std_mm": 0.05
+        }),
+    );
+    assert_eq!(
+        stamped["problems"].as_array().unwrap().len(),
+        0,
+        "{stamped}"
+    );
+    assert_eq!(stamped["uncertainties"].as_u64(), Some(1));
+    assert_eq!(stamped["clinching"]["j2_active"], true);
+
+    let dialed = c.tool_ok(
+        22,
+        "apply_clinching",
+        json!({
+            "dial_optimal_x": true,
+            "load_angle_deg": 45.0
+        }),
+    );
+    let x_opt = dialed["clinching"]["optimal_x_mm"].as_f64().unwrap();
+    let x_app = dialed["clinching"]["applied_x_mm"].as_f64().unwrap();
+    assert!((x_opt - x_app).abs() < 1e-9);
+
+    let eval = c.tool_ok(23, "evaluate_clinching", json!({}));
+    assert_eq!(eval["status"], "ok", "{eval}");
+    assert_eq!(eval["clinching"]["curve"].as_array().unwrap().len(), 51);
+    assert!(
+        eval["clinching"]["peak_strength_3d_nonlinear_n"]
+            .as_f64()
+            .unwrap()
+            > 500.0
+    );
+
+    let solved = c.tool_ok(24, "solve", json!({"kind": "solve", "dofs": 8000}));
+    assert_eq!(solved["status"], "ok", "{solved}");
 }

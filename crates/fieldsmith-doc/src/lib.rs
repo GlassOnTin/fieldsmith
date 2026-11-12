@@ -1,5 +1,6 @@
 //! Fieldsmith document model, `.fsm` text format and material library.
 
+pub mod clinching;
 pub mod command;
 pub mod fixings;
 pub mod fsm;

@@ -3,13 +3,12 @@
 // Extracted from results.tsx so domain-specific 1D closed-form curves stay quarantined
 // from the general 3D continuum FEA results view.
 
-import { applyAddrs, parseAddr } from '../doc/param';
 import { store } from '../doc/store';
 import {
   analyzeClinchingProcessWindow,
   extractClinchingSpecFromDoc,
 } from '../doc/clinching';
-import { isDocJ2Plastic, setDocPlasticity } from '../doc/continuum';
+import { isDocJ2Plastic } from '../doc/continuum';
 import type { LevelResult } from '../doc/wasm';
 import { fmt } from './fields';
 import { ui, useApp, type ResultMode } from './ui';
@@ -29,35 +28,6 @@ export function ClinchingCalculatorCard({
   const cur = sweepRes.current;
   const isNlActive = isDocJ2Plastic(store.doc);
   const peakVm = Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem));
-
-  const setDocLet = (name: string, val: number, label: string) => {
-    const hasExisting = store.doc.lets?.some((l) => l.name === name);
-    store.transact(label, (d) => {
-      if (hasExisting) {
-        const parsed = parseAddr(name);
-        applyAddrs(d, [[parsed, val]], true);
-      } else {
-        if (!d.lets) d.lets = [];
-        d.lets.push({ name, expr: String(val), value: val });
-      }
-      if (name === 'load_angle_deg') {
-        const rad = (val * Math.PI) / 180;
-        for (const ld of d.loads ?? []) {
-          if (ld.kind.type === 'force') {
-            const vx = ld.kind.vector[0];
-            const vy = ld.kind.vector[1];
-            const vz = ld.kind.vector[2];
-            const mag = Math.hypot(vx, vy, vz) || 1200;
-            ld.kind.vector = [
-              Math.round(mag * Math.sin(rad) * 100) / 100,
-              0,
-              Math.round(mag * Math.cos(rad) * 100) / 100,
-            ];
-          }
-        }
-      }
-    });
-  };
 
   const svgW = 320;
   const svgH = 112;
@@ -114,9 +84,9 @@ export function ClinchingCalculatorCard({
             class="mini-btn"
             data-testid="clinch-toggle-nonlinear"
             onClick={() =>
-              store.transact(
+              store.dispatch(
                 isNlActive ? 'Switch to Linear Hookean Solver' : 'Switch to 3D J2 Secant Plasticity Solver',
-                (d) => setDocPlasticity(d, !isNlActive),
+                { cmd: 'apply_clinching', request: { j2_plasticity: !isNlActive } },
               )
             }
             style={
@@ -203,7 +173,7 @@ export function ClinchingCalculatorCard({
         <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
           {[
             { x: 0.5, label: '0.50 mm (Over-Clinched)' },
-            { x: 0.85, label: '0.85 mm (Optimal X*)' },
+            { x: 0.85, label: '0.85 mm (Nominal)' },
             { x: 1.25, label: '1.25 mm (Under-Clinched)' },
           ].map((pr) => (
             <button
@@ -211,7 +181,12 @@ export function ClinchingCalculatorCard({
               type="button"
               class="mini-btn"
               data-testid={`clinch-preset-x-${pr.x.toFixed(2)}`}
-              onClick={() => setDocLet('X', pr.x, `Set Clinch Bottom Thickness X = ${pr.x} mm`)}
+              onClick={() =>
+                store.dispatch(`Set Clinch Bottom Thickness X = ${pr.x} mm`, {
+                  cmd: 'apply_clinching',
+                  request: { bottom_thickness_x_mm: pr.x },
+                })
+              }
               style={
                 Math.abs(cur.xMm - pr.x) < 0.04
                   ? { background: 'rgba(16, 185, 129, 0.22)', borderColor: '#34d399', color: '#ecfdf5', fontWeight: 700, fontSize: '9.5px' }
@@ -221,6 +196,25 @@ export function ClinchingCalculatorCard({
               {pr.label}
             </button>
           ))}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="clinch-dial-optimal-x"
+            onClick={() =>
+              store.dispatch('Dial Optimal Clinch Coin Thickness X*', {
+                cmd: 'apply_clinching',
+                request: { dial_optimal_x: true },
+              })
+            }
+            style={
+              Math.abs(cur.xMm - sweepRes.optimalXMm) < 0.02
+                ? { background: 'rgba(16, 185, 129, 0.3)', borderColor: '#10b981', color: '#ecfdf5', fontWeight: 700, fontSize: '9.5px' }
+                : { fontSize: '9.5px' }
+            }
+            title={`Solve hat-curve process window and set X = X* (${fmt(sweepRes.optimalXMm, 2)} mm)`}
+          >
+            ✨ Dial X* ({fmt(sweepRes.optimalXMm, 2)} mm)
+          </button>
         </div>
       </div>
 
@@ -239,7 +233,12 @@ export function ClinchingCalculatorCard({
               type="button"
               class="mini-btn"
               data-testid={`clinch-angle-${ld.deg}`}
-              onClick={() => setDocLet('load_angle_deg', ld.deg, `Set Clinch Service Load Angle = ${ld.deg}°`)}
+              onClick={() =>
+                store.dispatch(`Set Clinch Service Load Angle = ${ld.deg}°`, {
+                  cmd: 'apply_clinching',
+                  request: { load_angle_deg: ld.deg },
+                })
+              }
               style={
                 Math.abs(spec.loadAngleDeg - ld.deg) < 2
                   ? { background: 'rgba(139, 92, 246, 0.28)', borderColor: '#a78bfa', color: '#f5f3ff', fontWeight: 700, fontSize: '9.5px' }

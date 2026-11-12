@@ -2617,3 +2617,44 @@ pub fn inspect_fixing_stack_wasm(
     let info = inspect_fixing_group_stack(&doc, selected_node_id);
     to_json(&info)
 }
+
+/// Return `true` when `doc_json` represents a clinched S-Lock joint (`clinching.rs`).
+#[wasm_bindgen(js_name = isClinchingDoc)]
+pub fn is_clinching_doc_wasm(doc_json: &str) -> Result<bool, JsValue> {
+    use fieldsmith_doc::clinching::is_clinching_document;
+    let doc = doc_from(doc_json)?;
+    Ok(is_clinching_document(&doc))
+}
+
+/// Extract `ClinchingSpec` from `doc_json` (`clinching.rs`).
+#[wasm_bindgen(js_name = extractClinchingSpec)]
+pub fn extract_clinching_spec_wasm(doc_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_doc::clinching::extract_clinching_spec_from_doc;
+    let doc = doc_from(doc_json)?;
+    let spec = extract_clinching_spec_from_doc(&doc);
+    to_json(&spec)
+}
+
+/// Evaluate single-point clinching mechanics at `x_override_mm` (`NaN` -> `spec.bottom_thickness_x_mm`).
+#[wasm_bindgen(js_name = evaluateClinchingPoint)]
+pub fn evaluate_clinching_point_wasm(
+    spec_json: &str,
+    x_override_mm: f64,
+) -> Result<String, JsValue> {
+    use fieldsmith_doc::clinching::{evaluate_clinching_at_x, ClinchingSpec};
+    let spec: ClinchingSpec = serde_json::from_str(spec_json)
+        .map_err(|e| js_err(format!("invalid ClinchingSpec JSON: {e}")))?;
+    let x_opt = x_override_mm.is_finite().then_some(x_override_mm);
+    let pt = evaluate_clinching_at_x(&spec, x_opt);
+    to_json(&pt)
+}
+
+/// Analyze the 51-point clinching hat-curve process window and optimal `X*` (`clinching.rs`).
+#[wasm_bindgen(js_name = analyzeClinchingWindow)]
+pub fn analyze_clinching_window_wasm(spec_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_doc::clinching::{analyze_clinching_process_window, ClinchingSpec};
+    let spec: ClinchingSpec = serde_json::from_str(spec_json)
+        .map_err(|e| js_err(format!("invalid ClinchingSpec JSON: {e}")))?;
+    let win = analyze_clinching_process_window(&spec);
+    to_json(&win)
+}

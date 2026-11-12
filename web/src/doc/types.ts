@@ -596,7 +596,8 @@ export type DocCommand =
         fastener_material?: string;
         fastenerMaterial?: string;
       };
-    };
+    }
+  | { cmd: 'apply_clinching'; request: Record<string, unknown> };
 
 export interface DocCommandOutcome {
   entity_id?: string;
@@ -606,6 +607,7 @@ export interface DocCommandOutcome {
   sketch_feature?: SketchFeatureSummary;
   fixing?: Record<string, unknown>;
   fixing_stack?: Record<string, unknown>;
+  clinching?: Record<string, unknown>;
   problems: string[];
 }
 
