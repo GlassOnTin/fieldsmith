@@ -733,7 +733,95 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[12/12] Results UI graded TPMS adjoint sensitivity (∂U_y/∂p, ∂U_b/∂p) + lattice optimiser (rho_max: 0.22 -> ${gradedApplied.rhoMaxOpt.toFixed(3)} -> Undo 0.22): PASS`,
+    `[12/13] Results UI graded TPMS adjoint sensitivity (∂U_y/∂p, ∂U_b/∂p) + lattice optimiser (rho_max: 0.22 -> ${gradedApplied.rhoMaxOpt.toFixed(3)} -> Undo 0.22): PASS`,
+  );
+
+  // 13. Results UI Additive Layer-Peel & Overhang Sensitivity (`∂U_peel/∂p`, `∂Overhang/∂p`) + Upright FDM Build-Angle + Shape Co-Optimisation
+  const amUiFsm = [
+    'fieldsmith 1',
+    'name "UI Upright FDM Beam"',
+    'material petg',
+    'let h_root = 8',
+    'box beam size=(60, 14, h_root) at=(30, 0, 0)',
+    'region root = beam.nx',
+    'region tip = beam.px',
+    'support clamp root fixed=xyz',
+    'load push tip force=(0, 0, -240)',
+    'solve build=(90, 0)',
+    'assert "Inter-layer peel limit" metric="max_layer_peel" target="<= 0.65"',
+    'assert "In-plane stress limit" metric="max_vm_elem" target="<= 32" unit="MPa"',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, amUiFsm);
+
+  await page.waitForSelector('[data-testid="results-compute-sensitivities-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-compute-sensitivities-btn"]');
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="results-sensitivity-table"]');
+      return el && el.textContent && el.textContent.includes('∂U_peel/∂p');
+    },
+    { timeout: 25000 },
+  );
+  const amSensText = await page.textContent('[data-testid="results-sensitivity-table"]');
+  assert(
+    amSensText &&
+      amSensText.includes('method: boundary_velocity_adjoint') &&
+      amSensText.includes('∂U_peel/∂p') &&
+      amSensText.includes('∂Overhang/∂p') &&
+      amSensText.includes('solve.build.0=90'),
+    `Expected additive boundary_velocity_adjoint table with ∂U_peel/∂p, ∂Overhang/∂p, and solve.build.0=90, got '${amSensText}'`,
+  );
+
+  await page.selectOption('[data-testid="optimise-objective-select"]', 'mass_g');
+  await page.click('[data-testid="results-run-optimise-btn"]');
+  await page.waitForFunction(
+    () => {
+      const errEl = document.querySelector('[data-testid="results-card-error"]');
+      if (errEl && errEl.textContent) return true;
+      const el = document.querySelector('[data-testid="results-optimisation-output"]');
+      return el && el.textContent && el.textContent.includes('solve.build.0:');
+    },
+    { timeout: 40000 },
+  );
+  const amCardErr = await page.evaluate(
+    () => document.querySelector('[data-testid="results-card-error"]')?.textContent ?? null,
+  );
+  assert(!amCardErr, `Unexpected AM build+shape optimisation error in UI: ${amCardErr}`);
+  const amOptText = await page.textContent('[data-testid="results-optimisation-output"]');
+  assert(
+    amOptText && amOptText.includes('✓ mass_g:') && amOptText.includes('solve.build.0:'),
+    `Expected feasible AM mass_g optimisation output with solve.build.0, got '${amOptText}'`,
+  );
+
+  await page.click('[data-testid="results-apply-optimised-btn"]');
+  const amApplied = await page.evaluate(() => {
+    const thetaOpt = window.fieldsmith.store.doc.solve?.build?.[0] ?? 90;
+    const hOpt = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'h_root')?.value ?? 8;
+    window.fieldsmith.store.undo();
+    const thetaUndone = window.fieldsmith.store.doc.solve?.build?.[0] ?? -1;
+    const hUndone = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'h_root')?.value ?? -1;
+    return { thetaOpt, hOpt, thetaUndone, hUndone };
+  });
+  assert(
+    amApplied.thetaOpt < 25.0 && amApplied.hOpt > 8.2,
+    `Expected applied optimised theta < 25° and h_root > 8.2 mm, got theta=${amApplied.thetaOpt}, h_root=${amApplied.hOpt}`,
+  );
+  assert(
+    Math.abs(amApplied.thetaUndone - 90.0) < 1e-9 && Math.abs(amApplied.hUndone - 8.0) < 1e-9,
+    `Expected Ctrl+Z undo to restore build=(90, 0) & h_root=8.0, got theta=${amApplied.thetaUndone}, h=${amApplied.hUndone}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[13/13] Results UI AM sensitivity (∂U_peel/∂p, ∂Overhang/∂p) + upright FDM build+shape optimiser (theta: 90 -> ${amApplied.thetaOpt.toFixed(1)}°, h_root: 8.0 -> ${amApplied.hOpt.toFixed(2)} mm -> Undo): PASS`,
   );
   await page.close();
 } catch (e) {

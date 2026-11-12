@@ -39,6 +39,8 @@ fieldsmith 1
 #   Align the 3D-printed layers horizontally along the beam length so continuous filament strands carry the bending tension.
 # @mcp: Check Downward Overhang Area (> 45°) via API || solve || {"kind":"overhang","build":[0,0,1],"threshold_deg":45}
 #   Measure how many square millimetres of downward-facing surface tilt past 45° and would need print supports.
+# @mcp: Compute Shape & Print-Angle Adjoint Sensitivities || sensitivity || {"params":["h_root","solve.build.0","solve.build.1"],"dofs":4000}
+#   Differentiate inter-layer peel U_peel and downward overhang area with respect to beam depth h_root and print orientation angles (theta, phi) in O(1) FEA solves.
 # === END LITERATE HEADER ===
 
 name "T5 — Vertical FDM Cantilever (Layer Peel)"

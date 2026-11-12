@@ -20,7 +20,8 @@ use crate::declarative_system::{resolve_system_doc, sync_system_doc_compact};
 use crate::fill::{self, Graded};
 use crate::sensitivity::{
     apply_sens_param, compute_sensitivities_graded_with_base, compute_sensitivities_with_base,
-    default_target_params, read_param_value, CaseSensitivity, ParameterSensitivity,
+    default_target_params, is_solve_param_target, read_param_value, CaseSensitivity,
+    ParameterSensitivity,
 };
 use crate::{analyse_full, Analysis, CaseResult, Clock, Resolution, SetupError};
 use fieldsmith_doc::fsm::{self, LiterateAssert};
@@ -52,6 +53,16 @@ pub enum OptObjective {
         alias = "mode_1_hz"
     )]
     MaxMode1Hz,
+    /// Minimise worst-case inter-layer peel utilization `max_c U_{peel,c}(p)` (dimensionless).
+    #[serde(rename = "max_layer_peel", alias = "layer_peel", alias = "peel")]
+    MaxLayerPeel,
+    /// Minimise downward surface overhang area fraction `f_overhang(p)` in `[0, 1]`.
+    #[serde(
+        rename = "overhang_fraction",
+        alias = "overhang",
+        alias = "overhang_pct"
+    )]
+    OverhangFraction,
 }
 
 impl OptObjective {
@@ -63,6 +74,7 @@ impl OptObjective {
             Self::MaxDisplacement => "mm",
             Self::MaxTemp => "°C",
             Self::MaxMode1Hz => "Hz",
+            Self::MaxLayerPeel | Self::OverhangFraction => "",
         }
     }
 
@@ -209,6 +221,16 @@ fn default_fill_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
     }
 }
 
+fn default_solve_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
+    match (addr.attr.as_str(), addr.comp) {
+        ("build", Some(0)) | ("theta" | "build_theta", None) => {
+            (0.0_f64.min(initial), 90.0_f64.max(initial))
+        }
+        ("build", Some(1)) | ("phi" | "build_phi", None) => (initial - 180.0, initial + 180.0),
+        _ => (initial - 45.0, initial + 45.0),
+    }
+}
+
 fn default_optimise_params(doc: &Document, requested: &[String]) -> Vec<String> {
     if !requested.is_empty() {
         return requested.to_vec();
@@ -217,7 +239,7 @@ fn default_optimise_params(doc: &Document, requested: &[String]) -> Vec<String> 
     candidates
         .into_iter()
         .filter(|name| {
-            if name.starts_with("fill.") {
+            if name.starts_with("fill.") || name.starts_with("solve.") {
                 return true;
             }
             // Always include explicit `system` design levers.
@@ -286,6 +308,8 @@ fn build_param_metas(
             (dp.min, dp.max)
         } else if is_fill_opt_addr(doc, &addr) {
             default_fill_param_bounds(&addr, initial)
+        } else if is_solve_param_target(doc, &addr) {
+            default_solve_param_bounds(&addr, initial)
         } else if initial > 0.0 {
             (0.35 * initial, 2.5 * initial)
         } else if initial < 0.0 {
@@ -387,6 +411,17 @@ fn eval_objective_value(
                         .into(),
                 )
             }),
+        OptObjective::MaxLayerPeel => cases
+            .iter()
+            .map(|c| c.max_layer_peel)
+            .reduce(f64::max)
+            .ok_or_else(|| {
+                SetupError(
+                    "optimise: max_layer_peel objective requires at least one load or thermal case"
+                        .into(),
+                )
+            }),
+        OptObjective::OverhangFraction => Ok(a.overhang.overhang_fraction),
     }
 }
 
@@ -444,6 +479,22 @@ fn eval_objective_grad_p(
                 SetupError("optimise: missing modal sensitivity d_modes_hz[0]".into())
             })
         }
+        OptObjective::MaxLayerPeel => {
+            let (idx, _) = cases
+                .iter()
+                .enumerate()
+                .max_by(|(_, c1), (_, c2)| c1.max_layer_peel.total_cmp(&c2.max_layer_peel))
+                .ok_or_else(|| SetupError("optimise: no solved cases".into()))?;
+            ps.cases
+                .get(idx)
+                .and_then(|c| c.d_max_layer_peel)
+                .ok_or_else(|| {
+                    SetupError("optimise: missing layer-peel sensitivity d_max_layer_peel".into())
+                })
+        }
+        OptObjective::OverhangFraction => ps.d_overhang_fraction.ok_or_else(|| {
+            SetupError("optimise: missing overhang sensitivity d_overhang_fraction".into())
+        }),
     }
 }
 
@@ -469,6 +520,38 @@ fn metric_derivative_for_param(
             let dm_solid = ps.d_solid_mass_g.unwrap_or(0.0);
             return Ok(100.0 * (gr.mass_g * dm_solid - gr.solid_mass_g * dm_graded)
                 / (gr.solid_mass_g * gr.solid_mass_g));
+        }
+        "overhang_fraction" => {
+            return ps.d_overhang_fraction.ok_or_else(|| {
+                SetupError(
+                    "optimise: missing overhang sensitivity d_overhang_fraction on contract".into(),
+                )
+            });
+        }
+        "overhang_pct" => {
+            return ps.d_overhang_fraction.map(|d| 100.0 * d).ok_or_else(|| {
+                SetupError(
+                    "optimise: missing overhang sensitivity d_overhang_fraction on contract".into(),
+                )
+            });
+        }
+        "overhang_area_mm2" | "overhang_area" => {
+            return ps
+                .d_overhang_fraction
+                .map(|d| a.overhang.total_area_mm2 * d)
+                .ok_or_else(|| {
+                    SetupError(
+                        "optimise: missing overhang sensitivity d_overhang_fraction on contract"
+                            .into(),
+                    )
+                });
+        }
+        "max_overhang_deg" | "overhang_deg" => {
+            return ps.d_max_overhang_deg.ok_or_else(|| {
+                SetupError(
+                    "optimise: missing overhang sensitivity d_max_overhang_deg on contract".into(),
+                )
+            });
         }
         "mode_split_12_pct" => {
             let freqs = &a
@@ -580,6 +663,11 @@ fn metric_derivative_for_param(
                     "optimise: contract '{m}' requires a thermal conduction case"
                 ))
             }),
+            "max_layer_peel" | "layer_peel" | "peel" => cs.d_max_layer_peel.ok_or_else(|| {
+                SetupError(format!(
+                    "optimise: missing graded layer-peel sensitivity on contract '{m}'"
+                ))
+            }),
             _ => Err(SetupError(format!(
                 "optimise: contract metric '{m}' is not supported by 3D adjoint differentiation"
             ))),
@@ -615,10 +703,16 @@ fn metric_derivative_for_param(
                 "optimise: contract '{m}' requires a thermal conduction case"
             ))
         }),
+        "max_layer_peel" | "layer_peel" | "peel" => cs.d_max_layer_peel.ok_or_else(|| {
+            SetupError(format!(
+                "optimise: missing layer-peel sensitivity on contract '{m}'"
+            ))
+        }),
         _ => Err(SetupError(format!(
             "optimise: contract metric '{m}' is not supported by 3D adjoint differentiation \
              (supported: mass_g, graded_mass_g, solid_mass_g, mass_saved_pct, compliance, \
-              max_displacement, max_vm_elem, min_safety_factor, max_temp, yield_utilization, \
+              max_displacement, max_vm_elem, min_safety_factor, max_temp, max_layer_peel, \
+              overhang_fraction, overhang_pct, max_overhang_deg, yield_utilization, \
               buckling_utilization, mode_k, mode_split_12_pct)"
         ))),
     }
@@ -1042,7 +1136,8 @@ pub fn optimise_document(
         (None, Some(d)) => Resolution::Dofs(d),
         (None, None) => Resolution::Dofs(6_000),
     };
-    let max_iters = spec.max_iters.unwrap_or(8).clamp(1, 25);
+    let default_iters = if n >= 4 { 10 } else { 8 };
+    let max_iters = spec.max_iters.unwrap_or(default_iters).clamp(1, 25);
 
     let mut z: Vec<f64> = metas.iter().map(|m| m.to_unit(m.initial)).collect();
     let mut cur = evaluate_state(doc, &metas, &z, &asserts, spec.objective, init_res, clock)?;
@@ -1083,10 +1178,30 @@ pub fn optimise_document(
         constraints_g: cur.constraints_g.clone(),
     };
 
+    let has_build_param = metas.iter().any(|m| is_solve_param_target(doc, &m.addr));
+    let am_active_in_opt = has_build_param
+        || matches!(
+            spec.objective,
+            OptObjective::MaxLayerPeel | OptObjective::OverhangFraction
+        )
+        || asserts
+            .iter()
+            .any(|a| a.metric.contains("peel") || a.metric.contains("overhang"));
+
     let need_solid_case_sens = cur.graded.is_some()
         && asserts.iter().any(|a| {
             let m = a.metric.trim();
-            !is_graded_assert_metric(m) && !m.starts_with("mode_")
+            !is_graded_assert_metric(m)
+                && !m.starts_with("mode_")
+                && !matches!(
+                    m,
+                    "overhang_fraction"
+                        | "overhang_pct"
+                        | "overhang_area_mm2"
+                        | "overhang_area"
+                        | "max_overhang_deg"
+                        | "overhang_deg"
+                )
         });
     let non_fill_param_names: Vec<String> = metas
         .iter()
@@ -1099,9 +1214,20 @@ pub fn optimise_document(
     let mut iters_done = 0usize;
 
     for iter in 1..=max_iters {
+        let sens_doc: std::borrow::Cow<'_, Document> =
+            if am_active_in_opt && cur.doc.solve.build.is_none() && cur.doc.asserts.is_empty() {
+                let mut d = cur.doc.clone();
+                d.asserts = asserts.clone();
+                if d.solve.build.is_none() {
+                    d.solve.build = Some([0.0, 0.0]);
+                }
+                std::borrow::Cow::Owned(d)
+            } else {
+                std::borrow::Cow::Borrowed(&cur.doc)
+            };
         let sens = if let Some(gr) = cur.graded.as_ref() {
             compute_sensitivities_graded_with_base(
-                &cur.doc,
+                sens_doc.as_ref(),
                 &cur.sys_doc,
                 &cur.analysis,
                 gr,
@@ -1111,7 +1237,7 @@ pub fn optimise_document(
             )?
         } else {
             compute_sensitivities_with_base(
-                &cur.doc,
+                sens_doc.as_ref(),
                 &cur.sys_doc,
                 &cur.analysis,
                 &param_names,
@@ -1124,7 +1250,7 @@ pub fn optimise_document(
         total_solves += sens.solves_run.saturating_sub(cur.solves);
 
         let solid_sens = if need_solid_case_sens && !non_fill_param_names.is_empty() {
-            let mut s_doc = cur.doc.clone();
+            let mut s_doc = sens_doc.as_ref().clone();
             s_doc.fill = None;
             let mut s_sys_doc = cur.sys_doc.clone();
             s_sys_doc.fill = None;
@@ -1202,8 +1328,34 @@ pub fn optimise_document(
             cushion,
             rho,
         );
+        let [best_th, best_ph] = cur
+            .graded
+            .as_ref()
+            .map(|gr| gr.best_build_angles)
+            .unwrap_or(cur.analysis.best_build_angles);
+        let peel_violated = asserts
+            .iter()
+            .zip(&cur.constraints_g)
+            .any(|(a, &gj)| a.metric.contains("peel") && gj > 0.0);
+        let peel_active_or_violated = spec.objective == OptObjective::MaxLayerPeel || peel_violated;
+        let mut z_orient_dist = 0.0_f64;
+        if has_build_param && peel_active_or_violated {
+            for (m, &zk) in metas.iter().zip(&z) {
+                if is_solve_param_target(doc, &m.addr) {
+                    let target_z = match (m.addr.attr.as_str(), m.addr.comp) {
+                        ("build", Some(0)) | ("theta" | "build_theta", None) => m.to_unit(best_th),
+                        ("build", Some(1)) | ("phi" | "build_phi", None) => m.to_unit(best_ph),
+                        _ => zk,
+                    };
+                    z_orient_dist = z_orient_dist.max((target_z - zk).abs());
+                }
+            }
+        }
+        let try_hemisphere_escape =
+            has_build_param && peel_active_or_violated && z_orient_dist > 0.05;
+
         let max_step = step_s.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-        if max_step < 5e-4 && cur.verification.all_passed {
+        if max_step < 5e-4 && cur.verification.all_passed && !try_hemisphere_escape {
             converged = true;
             break;
         }
@@ -1217,6 +1369,7 @@ pub fn optimise_document(
         let cur_hard = sum_hard_violation(&cur.constraints_g);
 
         let mut accepted: Option<(Vec<f64>, EvalState, f64)> = None;
+        let mut accepted_merit = f64::INFINITY;
         for &alpha in &[1.0, 0.5, 0.25] {
             let z_trial: Vec<f64> = z
                 .iter()
@@ -1253,8 +1406,71 @@ pub fn optimise_document(
             let improved_merit = trial_merit <= cur_merit - 1e-4 * alpha * pred_drop;
             let improved_infeasible = cur_hard > 0.0 && trial_hard < 0.92 * cur_hard;
             if improved_merit || improved_infeasible {
+                accepted_merit = trial_merit;
                 accepted = Some((z_trial, trial, alpha));
                 break;
+            }
+        }
+
+        if try_hemisphere_escape {
+            for non_build_alpha in [1.0_f64, 0.0_f64] {
+                let z_hemi: Vec<f64> = metas
+                    .iter()
+                    .zip(&z)
+                    .zip(&step_s)
+                    .map(|((m, &zk), &sk)| {
+                        if is_solve_param_target(doc, &m.addr) {
+                            match (m.addr.attr.as_str(), m.addr.comp) {
+                                ("build", Some(0)) | ("theta" | "build_theta", None) => {
+                                    m.to_unit(best_th)
+                                }
+                                ("build", Some(1)) | ("phi" | "build_phi", None) => {
+                                    m.to_unit(best_ph)
+                                }
+                                _ => zk,
+                            }
+                        } else {
+                            (zk + non_build_alpha * sk).clamp(0.0, 1.0)
+                        }
+                    })
+                    .collect();
+                if non_build_alpha == 0.0 && non_fill_param_names.len() == metas.len() {
+                    let only_build = metas.iter().all(|m| is_solve_param_target(doc, &m.addr));
+                    if only_build {
+                        continue;
+                    }
+                }
+                let Ok(trial) = evaluate_state(
+                    doc,
+                    &metas,
+                    &z_hemi,
+                    &asserts,
+                    spec.objective,
+                    locked_res,
+                    clock,
+                ) else {
+                    continue;
+                };
+                total_solves += trial.solves;
+                if is_better_state(&trial, &best, min_sign) {
+                    best = BestState {
+                        doc: trial.doc.clone(),
+                        verification: trial.verification.clone(),
+                        objective: trial.objective,
+                        constraints_g: trial.constraints_g.clone(),
+                    };
+                }
+                let trial_merit = eval_merit(
+                    min_sign * trial.objective / obj_scale,
+                    &trial.constraints_g,
+                    cushion,
+                    rho,
+                );
+                let ceiling = accepted_merit.min(cur_merit - 1e-6);
+                if trial_merit < ceiling {
+                    accepted_merit = trial_merit;
+                    accepted = Some((z_hemi, trial, 1.0));
+                }
             }
         }
 
@@ -1734,6 +1950,121 @@ assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit
         assert!(
             d_final > 8.0,
             "expected outer Z-depth d to grow from 7.5 mm for bending stiffness, got {d_final}"
+        );
+    }
+
+    #[test]
+    fn optimise_rotates_upright_fdm_beam_and_sizes_depth_to_repair_layer_peel() {
+        let src = "\
+fieldsmith 1
+name \"Upright FDM Cantilever Synthesis\"
+material petg
+let h_root = 8
+box beam size=(60, 14, h_root) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -240)
+solve build=(90, 0)
+assert \"Inter-layer peel limit\" metric=\"max_layer_peel\" target=\"<= 0.65\"
+assert \"In-plane stress limit\" metric=\"max_vm_elem\" target=\"<= 32\" unit=\"MPa\"
+";
+        let doc = fsm::parse(src).expect("parse upright FDM cantilever");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("h_root".to_string(), [7.0, 20.0]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec!["h_root".to_string(), "solve.build.0".to_string()],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(4_500),
+            h: None,
+        };
+        let (opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("optimise FDM peel+shape");
+        assert_eq!(rep.sensitivity_method, "boundary_velocity_adjoint");
+        assert!(
+            !rep.initial_verification.all_passed,
+            "expected initial upright (90°, 0°) h_root=8 mm beam to fail peel & stress contracts: {:?}",
+            rep.initial_verification
+        );
+        assert!(
+            rep.final_verification.all_passed,
+            "expected rotated + sized FDM beam to pass max_layer_peel <= 0.65 & max_vm_elem <= 32 MPa: {:?}",
+            rep.final_verification
+        );
+        let [theta_final, _] = opt_doc.solve.build.expect("build preserved");
+        let h_final = opt_doc
+            .lets
+            .iter()
+            .find(|l| l.name == "h_root")
+            .unwrap()
+            .value;
+        assert!(
+            theta_final < 25.0,
+            "expected build tilt theta to rotate from 90° toward flat XY layers (< 25°), got {theta_final}"
+        );
+        assert!(
+            h_final > 8.2 && h_final < 16.5,
+            "expected h_root to grow to minimum feasible stress depth without hitting 20 mm cap, got {h_final}"
+        );
+    }
+
+    #[test]
+    fn optimise_three_pillar_shape_orientation_and_graded_tpms_codesign() {
+        let src = "\
+fieldsmith 1
+name \"Three-Pillar Shape + Orientation + Graded TPMS\"
+material petg
+let h_root = 10
+box beam size=(60, 14, h_root) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -90)
+fill gyroid sheet cell=6 rho=(0.18, 0.30) skin=0.7 wall=0.4 margin=1 curve=1.2
+solve build=(90, 0)
+assert \"Graded inter-layer peel\" metric=\"graded.max_layer_peel\" target=\"<= 0.65\"
+assert \"Lattice yield utilization\" metric=\"graded.yield_utilization\" target=\"<= 0.78\"
+assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 22\" unit=\"%\"
+";
+        let doc = fsm::parse(src).expect("parse 3-pillar doc");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("h_root".to_string(), [9.0, 18.0]);
+        bounds.insert("fill.rho_min".to_string(), [0.15, 0.55]);
+        bounds.insert("fill.rho_max".to_string(), [0.25, 0.85]);
+        bounds.insert("fill.skin".to_string(), [0.5, 2.5]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec![
+                "h_root".to_string(),
+                "solve.build.0".to_string(),
+                "fill.rho_min".to_string(),
+                "fill.rho_max".to_string(),
+                "fill.skin".to_string(),
+            ],
+            bounds,
+            max_iters: Some(10),
+            dofs: Some(4_000),
+            h: None,
+        };
+        let (opt_doc, rep) =
+            optimise_document(&doc, Some(src), &spec, zero_clock).expect("3-pillar co-optimise");
+        assert_eq!(rep.sensitivity_method, "boundary_velocity_adjoint");
+        assert!(
+            !rep.initial_verification.all_passed,
+            "expected initial upright graded beam to fail peel/yield contracts: {:?}",
+            rep.initial_verification
+        );
+        assert!(
+            rep.final_verification.all_passed,
+            "expected 3-pillar co-optimiser (shape + orientation + graded TPMS) to pass all contracts: {:?}",
+            rep.final_verification
+        );
+        let [theta_final, _] = opt_doc.solve.build.expect("build preserved");
+        assert!(
+            theta_final < 50.0,
+            "expected 3-pillar co-optimiser to rotate upright build tilt from 90° down to <= 45°, got {theta_final}"
         );
     }
 }

@@ -1318,6 +1318,127 @@ assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit
         0.0,
     ));
 
+    // -------------------------------------------------------------------------
+    // 11. Additive Build-Orientation (`solve.build.*`) O(0)-Extra-Solve Peel/Overhang Sensitivities & Shape+Orientation Co-Optimisation
+    // -------------------------------------------------------------------------
+    let am_fdm_fsm = "\
+fieldsmith 1
+name \"V63 Upright FDM Cantilever Synthesis\"
+material petg
+let h_root = 8
+box beam size=(60, 14, h_root) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -240)
+solve build=(90, 0)
+assert \"Inter-layer peel limit\" metric=\"max_layer_peel\" target=\"<= 0.65\"
+assert \"In-plane stress limit\" metric=\"max_vm_elem\" target=\"<= 32\" unit=\"MPa\"
+";
+    let mut am_srv = Server::new();
+    let (am_open_err, _) = mcp_tool_call(&mut am_srv, 990, "open", json!({ "doc": am_fdm_fsm }));
+    assert!(!am_open_err);
+
+    // Pure `solve.build.*` differentiation runs in 1 primal solve + 0 adjoint solves!
+    let (am_pure_err, am_pure_sens) = mcp_tool_call(
+        &mut am_srv,
+        991,
+        "sensitivity",
+        json!({
+            "params": ["solve.build.0", "solve.build.1"],
+            "dofs": 4500
+        }),
+    );
+    assert!(
+        !am_pure_err,
+        "pure solve.build sensitivity failed: {am_pure_sens}"
+    );
+    assert_eq!(
+        am_pure_sens["sensitivity"]["method"],
+        "boundary_velocity_adjoint"
+    );
+    let am_pure_solves = am_pure_sens["sensitivity"]["solves_run"]
+        .as_u64()
+        .expect("am pure solves_run");
+    assert_eq!(
+        am_pure_solves, 1,
+        "expected O(0)-extra-solve pure build sensitivity (solves_run == 1), got {am_pure_solves}"
+    );
+    report.check(Check::absolute(
+        "Pure additive build-orientation (`solve.build.0`, `solve.build.1`) sensitivity FEA solve count",
+        1.0,
+        am_pure_solves as f64,
+        "solves",
+        0.0,
+    ));
+
+    let am_api_req = json!({
+        "apiv": 2,
+        "doc": am_fdm_fsm,
+        "question": {
+            "kind": "optimise",
+            "objective": "mass_g",
+            "params": ["h_root", "solve.build.0"],
+            "bounds": { "h_root": [7.0, 20.0] },
+            "max_iters": 8,
+            "dofs": 4500,
+        }
+    });
+    let am_api_rep = fieldsmith_api::respond(&am_api_req.to_string());
+    assert!(
+        !am_api_rep.is_error,
+        "API FDM shape+orientation optimise failed: {}",
+        am_api_rep.body
+    );
+    let am_api_json: Value = serde_json::from_str(&am_api_rep.body).expect("am_api_json");
+
+    let (am_opt_err, am_mcp_json) = mcp_tool_call(
+        &mut am_srv,
+        992,
+        "optimise",
+        json!({
+            "objective": "mass_g",
+            "params": ["h_root", "solve.build.0"],
+            "bounds": { "h_root": [7.0, 20.0] },
+            "max_iters": 8,
+            "dofs": 4500,
+            "apply": true,
+        }),
+    );
+    assert!(
+        !am_opt_err,
+        "MCP FDM shape+orientation optimise failed: {am_mcp_json}"
+    );
+    assert_eq!(
+        canon(&am_api_json),
+        canon(&am_mcp_json),
+        "API vs MCP additive FDM shape+orientation optimise envelope mismatch"
+    );
+    assert_eq!(
+        am_mcp_json["optimisation"]["initial_verification"]["all_passed"],
+        false
+    );
+    assert_eq!(
+        am_mcp_json["optimisation"]["final_verification"]["all_passed"],
+        true
+    );
+    let (am_ver_err, am_ver_after) =
+        mcp_tool_call(&mut am_srv, 993, "verify", json!({ "dofs": 4500 }));
+    assert!(!am_ver_err);
+    assert_eq!(
+        am_ver_after["status"], "ok",
+        "expected rotated+sized FDM session doc to pass `verify`: {am_ver_after}"
+    );
+    report.check(Check::absolute(
+        "Co-optimised additive build orientation + 3D shape failed assertions after repair",
+        0.0,
+        am_mcp_json["optimisation"]["final_verification"]["failed"]
+            .as_u64()
+            .unwrap_or(99) as f64,
+        "asserts",
+        0.0,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1326,8 +1447,8 @@ assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
              `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
-             across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, and `O(0)`-extra-solve \
-             Rayleigh-quotient modal sensitivities), \
+             across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
+             `overhang_fraction`, and `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1347,9 +1468,10 @@ assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 25\" unit
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
          WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / modal `∂f₁/∂p` / \
-         graded TPMS `∂U_y/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
+         graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
-         TPMS `fill` (`fill.*` + outer shape `let`s), AND modal vibration cases (including spatial `lerp(...)` \
+         TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
+         (`solve.build.*`), AND modal vibration cases (including spatial `lerp(...)` \
          BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
          adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear solves \
          independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on the \

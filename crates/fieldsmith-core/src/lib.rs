@@ -165,6 +165,7 @@ pub struct Analysis {
     pub min_peak_peel: f64,
     pub worst_build_angles: [f64; 2],
     pub max_peak_peel: f64,
+    pub overhang: crate::overhang::OverhangReport,
     pub cases: Vec<CaseResult>,
     /// Max over cases of nodal von Mises.
     pub envelope: Vec<f64>,
@@ -2220,6 +2221,14 @@ pub fn analyse_full(
     }
     let (best_build_angles, min_peak_peel, worst_build_angles, max_peak_peel) =
         sweep_build_orientations(&cases, yield_z, shear_z, None);
+    let body_expr = expr::compile_body(doc);
+    let overhang = crate::overhang::evaluate_p2_surface_overhang(
+        &mesh.nodes,
+        &surface,
+        &body_expr,
+        b_hat,
+        crate::overhang::DEFAULT_OVERHANG_DEG,
+    );
 
     // Envelope over every case — mechanical and thermal: the tracked readout is the
     // worst stress the part can see from any of them.
@@ -2281,6 +2290,7 @@ pub fn analyse_full(
         min_peak_peel,
         worst_build_angles,
         max_peak_peel,
+        overhang,
         cases,
         envelope,
         envelope_elem,

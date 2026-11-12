@@ -1469,6 +1469,7 @@ export interface CaseSensitivity {
   d_max_temp?: number | null;
   d_yield_utilization?: number | null;
   d_buckling_utilization?: number | null;
+  d_max_layer_peel?: number | null;
 }
 
 export interface ParameterSensitivity {
@@ -1479,6 +1480,8 @@ export interface ParameterSensitivity {
   d_mass_g: number;
   rel_mass: number;
   d_solid_mass_g?: number | null;
+  d_overhang_fraction?: number | null;
+  d_max_overhang_deg?: number | null;
   d_modes_hz?: number[];
   rel_modes?: number[];
   cases: CaseSensitivity[];
@@ -1492,6 +1495,8 @@ export interface SensitivityReport {
   elements: number;
   baseline_mass_g: number;
   baseline_solid_mass_g?: number | null;
+  baseline_overhang_fraction?: number | null;
+  baseline_max_overhang_deg?: number | null;
   baseline_compliance: [string, number][];
   baseline_modes_hz?: number[];
   parameters: ParameterSensitivity[];
@@ -1514,7 +1519,9 @@ export type OptObjective =
   | 'max_vm_elem'
   | 'max_displacement'
   | 'max_temp'
-  | 'max_mode_1_hz';
+  | 'max_mode_1_hz'
+  | 'max_layer_peel'
+  | 'overhang_fraction';
 
 export interface OptimiseSpec {
   objective?: OptObjective;

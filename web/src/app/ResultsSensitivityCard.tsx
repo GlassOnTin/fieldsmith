@@ -23,6 +23,8 @@ const OPT_OBJECTIVES: { value: OptObjective; label: string }[] = [
   { value: 'max_displacement', label: 'Min Deflection ‖u‖ (mm)' },
   { value: 'max_temp', label: 'Min Temp T_max (°C)' },
   { value: 'max_mode_1_hz', label: 'Max Mode f₁ (Hz)' },
+  { value: 'max_layer_peel', label: 'Min Layer Peel U_peel' },
+  { value: 'overhang_fraction', label: 'Min Overhang Area' },
 ];
 
 const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; defaultTarget: string }[] = [
@@ -34,6 +36,9 @@ const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; def
   { value: 'min_temp', label: 'Minimum temperature T_min (min_temp)', defaultUnit: '°C', defaultTarget: '>= 15' },
   { value: 'mass_g', label: 'Part mass (mass_g)', defaultUnit: 'g', defaultTarget: '<= 250' },
   { value: 'max_layer_peel', label: 'Inter-layer peel (max_layer_peel)', defaultUnit: '', defaultTarget: '<= 1.0' },
+  { value: 'graded.max_layer_peel', label: 'Graded layer peel (graded.max_layer_peel)', defaultUnit: '', defaultTarget: '<= 0.85' },
+  { value: 'overhang_pct', label: 'Overhang area % (overhang_pct)', defaultUnit: '%', defaultTarget: '<= 15' },
+  { value: 'max_overhang_deg', label: 'Peak overhang angle (max_overhang_deg)', defaultUnit: '°', defaultTarget: '<= 45' },
   { value: 'mode_1', label: 'Fundamental mode f₁ (mode_1)', defaultUnit: 'Hz', defaultTarget: '>= 100' },
   { value: 'mode_2', label: 'Second mode f₂ (mode_2)', defaultUnit: 'Hz', defaultTarget: '>= 150' },
   { value: 'mode_split_12_pct', label: 'Doublet split |f₂−f₁|/f̄ (mode_split_12_pct)', defaultUnit: '%', defaultTarget: '<= 2.0' },
@@ -49,7 +54,8 @@ export function ResultsSensitivityCard() {
   const letCount = doc.lets?.length ?? 0;
   const sysDesignCount = doc.system_block?.designs?.length ?? 0;
   const fillParamCount = doc.fill != null ? 4 : 0;
-  const paramCount = letCount + sysDesignCount + fillParamCount;
+  const buildParamCount = doc.solve?.build != null ? 2 : 0;
+  const paramCount = letCount + sysDesignCount + fillParamCount + buildParamCount;
   const hasParams = paramCount > 0;
   const asserts = doc.asserts ?? [];
   const hasAsserts = asserts.length > 0;
@@ -181,6 +187,12 @@ export function ResultsSensitivityCard() {
     sensReport?.parameters.some((p) =>
       p.cases.some((c) => c.d_yield_utilization != null || c.d_buckling_utilization != null),
     ),
+  );
+  const hasPeelSens = Boolean(
+    sensReport?.parameters.some((p) => p.cases.some((c) => c.d_max_layer_peel != null)),
+  );
+  const hasOverhangSens = Boolean(
+    sensReport?.parameters.some((p) => p.d_overhang_fraction != null),
   );
 
   return (
@@ -497,6 +509,8 @@ export function ResultsSensitivityCard() {
                 <th style={{ padding: '2px 4px' }}>∂‖u‖/∂p</th>
                 {hasGradedSens && <th style={{ padding: '2px 4px' }}>∂U_y/∂p</th>}
                 {hasGradedSens && <th style={{ padding: '2px 4px' }}>∂U_b/∂p</th>}
+                {hasPeelSens && <th style={{ padding: '2px 4px' }}>∂U_peel/∂p</th>}
+                {hasOverhangSens && <th style={{ padding: '2px 4px' }}>∂Overhang/∂p</th>}
                 {hasThermalSens && <th style={{ padding: '2px 4px' }}>∂T_max/∂p (°C)</th>}
                 {hasModalSens && <th style={{ padding: '2px 4px' }}>∂f₁/∂p (Hz)</th>}
               </tr>
@@ -525,6 +539,16 @@ export function ResultsSensitivityCard() {
                     {hasGradedSens && (
                       <td style={{ padding: '2px 4px' }}>
                         {c0?.d_buckling_utilization != null ? c0.d_buckling_utilization.toFixed(3) : '—'}
+                      </td>
+                    )}
+                    {hasPeelSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {c0?.d_max_layer_peel != null ? c0.d_max_layer_peel.toFixed(3) : '—'}
+                      </td>
+                    )}
+                    {hasOverhangSens && (
+                      <td style={{ padding: '2px 4px' }}>
+                        {p.d_overhang_fraction != null ? p.d_overhang_fraction.toFixed(4) : '—'}
                       </td>
                     )}
                     {hasThermalSens && (

@@ -151,6 +151,10 @@ pub fn resolve_assert_metric(
         }
         "min_peak_peel" => return Ok(a.min_peak_peel),
         "max_peak_peel" => return Ok(a.max_peak_peel),
+        "overhang_fraction" => return Ok(a.overhang.overhang_fraction),
+        "overhang_pct" => return Ok(100.0 * a.overhang.overhang_fraction),
+        "overhang_area_mm2" | "overhang_area" => return Ok(a.overhang.overhang_area_mm2),
+        "max_overhang_deg" | "overhang_deg" => return Ok(a.overhang.max_overhang_deg),
         _ => {}
     }
 
@@ -235,7 +239,7 @@ pub fn resolve_assert_metric(
         "max_vm_elem" | "vm" => Ok(case.max_vm_elem),
         "max_von_mises" => Ok(case.max_von_mises),
         "min_safety_factor" | "safety_factor" => Ok(a.yield_strength / case.max_vm_elem.max(1e-12)),
-        "max_layer_peel" | "peel" => Ok(case.max_layer_peel),
+        "max_layer_peel" | "layer_peel" | "peel" => Ok(case.max_layer_peel),
         "compliance" => Ok(case.compliance),
         "max_plastic_strain" | "plastic_strain" => {
             Ok(case.plastic_strain_elem.iter().copied().fold(0.0, f64::max))

@@ -25,6 +25,9 @@
 
 use crate::contracts::required_modes_for_asserts;
 use crate::declarative_system::resolve_system_doc;
+use crate::overhang::{
+    build_axis_from_angles, evaluate_p2_surface_overhang_smooth, DEFAULT_OVERHANG_DEG,
+};
 use crate::regions::{jacobi3, region_facets, region_facets_exact, Facet};
 use crate::{
     analyse_full, case_convections_all_with_regions, case_force_report_with_regions,
@@ -39,9 +42,10 @@ use fieldsmith_doc::{materials, Document, LoadKind, NodeKind, PlasticityLaw};
 use fieldsmith_field::expr;
 use fieldsmith_solve::assemble::{element_stiffness, RefData};
 use fieldsmith_solve::{
-    assemble_conduction_system_spatial, element_stress_mat, min_compressive,
-    modal_mass_quadratic_form, solve_conduction_multi_rhs, solve_multi_rhs, thermal_load_multi,
-    thermal_load_transpose_multi, von_mises, Material, P2Mesh, SolverOptions, ThermalRefData, V3,
+    assemble_conduction_system_spatial, element_stress_mat, element_stress_thermal,
+    layer_peel_utilization, min_compressive, modal_mass_quadratic_form, solve_conduction_multi_rhs,
+    solve_multi_rhs, thermal_load_multi, thermal_load_transpose_multi, von_mises, Material, P2Mesh,
+    SolverOptions, ThermalRefData, V3,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -68,6 +72,9 @@ pub struct CaseSensitivity {
     /// `∂U_b / ∂p` (per unit of `p`, peak lattice elastic-buckling utilization `|σ_min| / σ_el*(φ)`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub d_buckling_utilization: Option<f64>,
+    /// `∂U_peel / ∂p` (per unit of `p`, peak element-centroid inter-layer peel utilization).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_max_layer_peel: Option<f64>,
 }
 
 /// Sensitivity entry for one named `let` variable or `ParamAddr`.
@@ -84,6 +91,12 @@ pub struct ParameterSensitivity {
     /// `∂m_solid / ∂p` (g per unit of `p`, un-filled solid body mass derivative when `doc.fill` is active).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub d_solid_mass_g: Option<f64>,
+    /// `∂f_overhang / ∂p` (overhang surface fraction in `[0, 1]` per unit of `p`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_overhang_fraction: Option<f64>,
+    /// `∂α_overhang,max / ∂p` (peak overhang angle in deg per unit of `p`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_max_overhang_deg: Option<f64>,
     /// `∂f_n / ∂p` (Hz per unit of `p`) for each solved vibration mode `n = 1..count`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub d_modes_hz: Vec<f64>,
@@ -110,6 +123,10 @@ pub struct SensitivityReport {
     pub baseline_mass_g: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_solid_mass_g: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_overhang_fraction: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_max_overhang_deg: Option<f64>,
     pub baseline_compliance: Vec<(String, f64)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub baseline_modes_hz: Vec<f64>,
@@ -281,6 +298,40 @@ fn is_fill_param_target(doc: &Document, addr: &ParamAddr) -> bool {
         && doc.heat_fluxes.iter().all(|f| f.id != "fill")
 }
 
+pub(crate) fn is_solve_param_target(doc: &Document, addr: &ParamAddr) -> bool {
+    addr.id == "solve"
+        && !addr.attr.is_empty()
+        && doc.find("solve").is_none()
+        && doc.custom_materials.iter().all(|m| m.id != "solve")
+        && doc.loads.iter().all(|l| l.id != "solve")
+        && doc.temperatures.iter().all(|t| t.id != "solve")
+        && doc.convections.iter().all(|c| c.id != "solve")
+        && doc.heat_fluxes.iter().all(|f| f.id != "solve")
+}
+
+fn am_requested_for_doc(doc: &Document, targets: &[String]) -> bool {
+    if doc.solve.build.is_some() {
+        return true;
+    }
+    if doc
+        .asserts
+        .iter()
+        .any(|a| a.metric.contains("peel") || a.metric.contains("overhang"))
+    {
+        return true;
+    }
+    targets.iter().any(|t| {
+        ParamAddr::parse(t).is_ok_and(|addr| {
+            is_solve_param_target(doc, &addr) || matches!(addr.attr.as_str(), "yield_z" | "shear_z")
+        })
+    })
+}
+
+fn doc_build_axis(doc: &Document) -> [f64; 3] {
+    let [th, ph] = doc.solve.build.unwrap_or([0.0, 0.0]);
+    build_axis_from_angles(th, ph)
+}
+
 pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &doc.system_block {
@@ -288,6 +339,14 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
                 return Ok(dp.nominal);
             }
         }
+    }
+    if is_solve_param_target(doc, addr) {
+        let [th, ph] = doc.solve.build.unwrap_or([0.0, 0.0]);
+        return match (addr.attr.as_str(), addr.comp) {
+            ("build", Some(0)) | ("theta" | "build_theta", None) => Ok(th),
+            ("build", Some(1)) | ("phi" | "build_phi", None) => Ok(ph),
+            _ => Err(format!("param {addr}: unsupported solve parameter")),
+        };
     }
     if is_fill_param_target(doc, addr) {
         let f = doc
@@ -315,6 +374,8 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
                 "e" | "young" => Ok(m.e),
                 "nu" | "poisson" => Ok(m.nu),
                 "yield" | "yield_strength" => Ok(m.yield_strength),
+                "yield_z" => Ok(m.effective_layer_strengths().0),
+                "shear_z" => Ok(m.effective_layer_strengths().1),
                 "density" | "rho" => Ok(m.density),
                 "k" | "conductivity" => {
                     m.k.ok_or_else(|| format!("param {addr}: custommaterial has no k"))
@@ -407,6 +468,29 @@ pub(crate) fn apply_sens_param(
                 return Ok(());
             }
         }
+    }
+    if is_solve_param_target(doc, addr) {
+        let mut b = doc.solve.build.unwrap_or([0.0, 0.0]);
+        return match (addr.attr.as_str(), addr.comp) {
+            ("build", Some(0)) | ("theta" | "build_theta", None) => {
+                let lo = 0.0_f64.min(b[0]);
+                let hi = 90.0_f64.max(b[0]);
+                if val < lo || val > hi {
+                    return Err(format!(
+                        "param {addr}: build tilt theta must lie in [{lo}, {hi}] deg"
+                    ));
+                }
+                b[0] = val;
+                doc.solve.build = Some(b);
+                Ok(())
+            }
+            ("build", Some(1)) | ("phi" | "build_phi", None) => {
+                b[1] = val;
+                doc.solve.build = Some(b);
+                Ok(())
+            }
+            _ => Err(format!("param {addr}: unsupported solve parameter")),
+        };
     }
     if is_fill_param_target(doc, addr) {
         let f = doc
@@ -522,6 +606,20 @@ pub(crate) fn apply_sens_param(
                     m.yield_strength = val;
                     Ok(())
                 }
+                "yield_z" => {
+                    if val <= 0.0 {
+                        return Err(format!("param {addr}: yield_z must be > 0"));
+                    }
+                    m.yield_z = Some(val);
+                    Ok(())
+                }
+                "shear_z" => {
+                    if val <= 0.0 {
+                        return Err(format!("param {addr}: shear_z must be > 0"));
+                    }
+                    m.shear_z = Some(val);
+                    Ok(())
+                }
                 "density" | "rho" => {
                     if val <= 0.0 {
                         return Err(format!("param {addr}: density must be > 0"));
@@ -597,6 +695,13 @@ pub(crate) fn default_target_params(doc: &Document, params: &[String]) -> Vec<St
         for fp in ["fill.rho_min", "fill.rho_max", "fill.skin", "fill.cell"] {
             if !names.iter().any(|n| n == fp) {
                 names.push(fp.to_string());
+            }
+        }
+    }
+    if doc.solve.build.is_some() && doc.find("solve").is_none() {
+        for sp in ["solve.build.0", "solve.build.1"] {
+            if !names.iter().any(|n| n == sp) {
+                names.push(sp.to_string());
             }
         }
     }
@@ -831,6 +936,7 @@ struct LinearCaseAdjoint {
     lambda_vm: Vec<f64>,
     yield_util: Option<(usize, Vec<f64>)>,
     buckling_util: Option<(usize, Vec<f64>)>,
+    peel_util: Option<(usize, Vec<f64>)>,
 }
 
 struct GradedAdjointCtx<'a> {
@@ -840,6 +946,15 @@ struct GradedAdjointCtx<'a> {
     class: &'a [u8],
     rho_elem: &'a [f64],
     sigma_min_elem: &'a [f64],
+}
+
+struct PeelAdjointCtx<'a> {
+    b_hat: [f64; 3],
+    yield_z: f64,
+    shear_z: f64,
+    class: Option<&'a [u8]>,
+    thermal_dt_elem: Option<&'a [f64]>,
+    alphas: Option<&'a [f64]>,
 }
 
 struct ThermalCaseAdjoint {
@@ -852,6 +967,7 @@ struct ThermalCaseAdjoint {
     lambda_t_u: Vec<f64>,
     lambda_t_vm: Vec<f64>,
     lambda_t_max: Vec<f64>,
+    peel_util: Option<(usize, Vec<f64>, Vec<f64>)>,
 }
 
 enum CaseAdjoint {
@@ -864,6 +980,29 @@ fn peak_temperature_opt(t: Option<&[f64]>) -> Option<f64> {
     t.map(|vals| vals.iter().copied().fold(f64::NEG_INFINITY, f64::max))
 }
 
+fn eval_elem_peel_ctx(
+    mesh: &P2Mesh,
+    u: &[f64],
+    e: usize,
+    mat: &Material,
+    pctx: &PeelAdjointCtx<'_>,
+) -> f64 {
+    let s = match (pctx.thermal_dt_elem, pctx.alphas) {
+        (Some(dt_elem), Some(alphas)) => element_stress_thermal(
+            mesh,
+            u,
+            e,
+            mat.young[e],
+            mat.poisson,
+            alphas[e],
+            dt_elem[e],
+            [0.25; 3],
+        ),
+        _ => element_stress_mat(mesh, u, e, mat, [0.25; 3]),
+    };
+    layer_peel_utilization(&s, pctx.b_hat, pctx.yield_z, pctx.shear_z)
+}
+
 fn build_linear_case_adjoint_mat(
     mesh: &P2Mesh,
     mat: &Material,
@@ -871,6 +1010,7 @@ fn build_linear_case_adjoint_mat(
     u_0: &[f64],
     vm_elem: &[f64],
     graded_ctx: Option<&GradedAdjointCtx<'_>>,
+    peel_ctx: Option<&PeelAdjointCtx<'_>>,
 ) -> Result<(LinearCaseAdjoint, usize), SetupError> {
     let ndofs = mesh.ndofs();
     let nn = mesh.nodes.len();
@@ -935,6 +1075,7 @@ fn build_linear_case_adjoint_mat(
     let mut rhs_list = vec![c_u, c_vm];
     let mut uy_elem: Option<usize> = None;
     let mut ub_elem: Option<usize> = None;
+    let mut peel_elem: Option<usize> = None;
 
     if let Some(gctx) = graded_ctx {
         if gctx.yield_strength > 0.0 && !mesh.tets.is_empty() {
@@ -1066,9 +1207,59 @@ fn build_linear_case_adjoint_mat(
         }
     }
 
+    if let Some(pctx) = peel_ctx {
+        if pctx.yield_z > 0.0 && pctx.shear_z > 0.0 && !mesh.tets.is_empty() {
+            let mut e_p = None;
+            let mut p_max = 0.0f64;
+            for e in 0..mesh.tets.len() {
+                if let Some(cls) = pctx.class {
+                    if cls.get(e).copied() == Some(crate::fill::CLASS_VOID) {
+                        continue;
+                    }
+                }
+                let pu = eval_elem_peel_ctx(mesh, u_0, e, mat, pctx);
+                if pu > p_max {
+                    p_max = pu;
+                    e_p = Some(e);
+                }
+            }
+            if let Some(ep) = e_p {
+                let mut c_peel = vec![0.0f64; ndofs];
+                let tet = mesh.tets[ep];
+                let mut max_u_loc = 0.0f64;
+                for &n in &tet {
+                    for c in 0..3 {
+                        max_u_loc = max_u_loc.max(u_0[3 * n as usize + c].abs());
+                    }
+                }
+                let du = 1e-7 * max_u_loc.max(1.0);
+                let mut u_work = u_0.to_vec();
+                for &n in &tet {
+                    let ni = n as usize;
+                    for c in 0..3 {
+                        if is_fixed_dof(fixed, ni, c) {
+                            continue;
+                        }
+                        let dof = 3 * ni + c;
+                        let orig = u_work[dof];
+                        u_work[dof] = orig + du;
+                        let p_hi = eval_elem_peel_ctx(mesh, &u_work, ep, mat, pctx);
+                        u_work[dof] = orig - du;
+                        let p_lo = eval_elem_peel_ctx(mesh, &u_work, ep, mat, pctx);
+                        u_work[dof] = orig;
+                        c_peel[dof] = (p_hi - p_lo) / (2.0 * du);
+                    }
+                }
+                peel_elem = Some(ep);
+                rhs_list.push(c_peel);
+            }
+        }
+    }
+
     let n_rhs = rhs_list.len();
     let mut solved = solve_multi_rhs(mesh, mat, fixed, &rhs_list, SolverOptions::default())
         .map_err(SetupError)?;
+    let peel_util = peel_elem.map(|ep| (ep, solved.pop().expect("c_peel solution").0));
     let buckling_util = ub_elem.map(|eb| (eb, solved.pop().expect("c_ub solution").0));
     let yield_util = uy_elem.map(|ey| (ey, solved.pop().expect("c_uy solution").0));
     let (lambda_vm, _) = solved.pop().expect("c_vm solution");
@@ -1080,6 +1271,7 @@ fn build_linear_case_adjoint_mat(
             lambda_vm,
             yield_util,
             buckling_util,
+            peel_util,
         },
         n_rhs,
     ))
@@ -1092,9 +1284,10 @@ fn build_linear_case_adjoint(
     fixed: &[u8],
     u_0: &[f64],
     vm_elem: &[f64],
-) -> Result<LinearCaseAdjoint, SetupError> {
+    peel_ctx: Option<&PeelAdjointCtx<'_>>,
+) -> Result<(LinearCaseAdjoint, usize), SetupError> {
     let mat = Material::iso(young.to_vec(), poisson);
-    build_linear_case_adjoint_mat(mesh, &mat, fixed, u_0, vm_elem, None).map(|(adj, _)| adj)
+    build_linear_case_adjoint_mat(mesh, &mat, fixed, u_0, vm_elem, None, peel_ctx)
 }
 
 /// Precompute staggered thermo-elastic discrete adjoints (`K_u λ_u = c_u`, `K_u λ_vm = c_vm`,
@@ -1114,6 +1307,7 @@ fn build_thermal_case_adjoint(
     fixed: &[u8],
     bc: &CaseResult,
     thermal_lookup: &RegionLookup<'_>,
+    peel_ctx: Option<&PeelAdjointCtx<'_>>,
 ) -> Result<(ThermalCaseAdjoint, usize), SetupError> {
     let d_0 =
         case_temperatures_with_regions(doc, mesh, facets, case_name, base_h, Some(thermal_lookup))?;
@@ -1179,15 +1373,49 @@ fn build_thermal_case_adjoint(
                 lambda_t_u: Vec::new(),
                 lambda_t_vm: Vec::new(),
                 lambda_t_max,
+                peel_util: None,
             },
             1,
         ));
     }
 
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let phi_c = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
+    let tref_0 = doc.solve.t_ref.unwrap_or(20.0);
+    let dt_elem: Vec<f64> = if peel_ctx.is_some() {
+        mesh.tets
+            .iter()
+            .map(|tet| {
+                tet.iter()
+                    .zip(phi_c.iter())
+                    .map(|(&n, &ph)| (t_0[n as usize] - tref_0) * ph)
+                    .sum()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let pctx_th = peel_ctx.map(|p| PeelAdjointCtx {
+        b_hat: p.b_hat,
+        yield_z: p.yield_z,
+        shear_z: p.shear_z,
+        class: p.class,
+        thermal_dt_elem: Some(&dt_elem),
+        alphas: Some(alphas),
+    });
+
     // Notice `element_stress_thermal` subtracts isotropic `beta * dt * I`, and von Mises stress
-    // is invariant to hydrostatic pressure (`∂σ_vM / ∂T|_{u} ≡ 0`), so `build_linear_case_adjoint`
-    // builds the exact mechanical adjoints `λ_u`, `λ_vm`.
-    let mech_adj = build_linear_case_adjoint(mesh, young, poisson, fixed, &bc.u, &bc.vm_elem)?;
+    // is invariant to hydrostatic pressure (`∂σ_vM / ∂T|_{u} ≡ 0`), whereas inter-layer normal
+    // traction `σ_nn = b̂ᵀ σ b̂` includes the hydrostatic thermal term `c_peel_t_direct`.
+    let (mech_adj, mech_solves) = build_linear_case_adjoint(
+        mesh,
+        young,
+        poisson,
+        fixed,
+        &bc.u,
+        &bc.vm_elem,
+        pctx_th.as_ref(),
+    )?;
     let th_rd = ThermalRefData::new();
     let b_u0 = thermal_load_transpose_multi(mesh, &bc.u, young, poisson, alphas, &th_rd);
     let rhs_t_comp: Vec<f64> = b_u0.into_iter().map(|v| 2.0 * v).collect();
@@ -1196,6 +1424,48 @@ fn build_thermal_case_adjoint(
     let rhs_t_vm =
         thermal_load_transpose_multi(mesh, &mech_adj.lambda_vm, young, poisson, alphas, &th_rd);
 
+    let mut t_rhs_list = vec![rhs_t_comp, rhs_t_u, rhs_t_vm, rhs_t_max];
+    let mut peel_mech_pair: Option<(usize, Vec<f64>)> = None;
+    if let (Some((ep, lambda_u_peel)), Some(pctx)) = (mech_adj.peel_util, peel_ctx) {
+        let mut rhs_t_peel =
+            thermal_load_transpose_multi(mesh, &lambda_u_peel, young, poisson, alphas, &th_rd);
+        let dt_step = 1e-5_f64;
+        let dt0 = dt_elem[ep];
+        for (a, &na_u32) in mesh.tets[ep].iter().enumerate() {
+            let na = na_u32 as usize;
+            if d_0[na].is_some() {
+                rhs_t_peel[na] = 0.0;
+                continue;
+            }
+            let s_hi = element_stress_thermal(
+                mesh,
+                &bc.u,
+                ep,
+                young[ep],
+                poisson,
+                alphas[ep],
+                dt0 + phi_c[a] * dt_step,
+                [0.25; 3],
+            );
+            let s_lo = element_stress_thermal(
+                mesh,
+                &bc.u,
+                ep,
+                young[ep],
+                poisson,
+                alphas[ep],
+                dt0 - phi_c[a] * dt_step,
+                [0.25; 3],
+            );
+            let p_hi = layer_peel_utilization(&s_hi, pctx.b_hat, pctx.yield_z, pctx.shear_z);
+            let p_lo = layer_peel_utilization(&s_lo, pctx.b_hat, pctx.yield_z, pctx.shear_z);
+            rhs_t_peel[na] += (p_hi - p_lo) / (2.0 * dt_step);
+        }
+        peel_mech_pair = Some((ep, lambda_u_peel));
+        t_rhs_list.push(rhs_t_peel);
+    }
+
+    let n_t_solves = t_rhs_list.len();
     let mut solved_t = solve_conduction_multi_rhs(
         mesh,
         &d_0,
@@ -1204,10 +1474,14 @@ fn build_thermal_case_adjoint(
         &s_robin_0,
         &flux_0,
         &s_flux_0,
-        &[rhs_t_comp, rhs_t_u, rhs_t_vm, rhs_t_max],
+        &t_rhs_list,
         SolverOptions::default(),
     )
     .map_err(SetupError)?;
+    let peel_util = peel_mech_pair.map(|(ep, lu)| {
+        let (lt, _) = solved_t.pop().expect("lambda_t_peel");
+        (ep, lu, lt)
+    });
     let (lambda_t_max, _) = solved_t.pop().expect("lambda_t_max");
     let (lambda_t_vm, _) = solved_t.pop().expect("lambda_t_vm");
     let (lambda_t_u, _) = solved_t.pop().expect("lambda_t_u");
@@ -1224,8 +1498,9 @@ fn build_thermal_case_adjoint(
             lambda_t_u,
             lambda_t_vm,
             lambda_t_max,
+            peel_util,
         },
-        6,
+        mech_solves + n_t_solves,
     ))
 }
 
@@ -1409,6 +1684,33 @@ struct FixedCaseMetrics {
     max_displacement: f64,
     max_vm_elem: f64,
     max_temp: Option<f64>,
+    max_layer_peel: f64,
+}
+
+fn peak_case_peel_for_doc(
+    sdoc: &Document,
+    stress_elem: &[fieldsmith_solve::Stress],
+    class: Option<&[u8]>,
+) -> Result<f64, SetupError> {
+    let mat = material_of(sdoc)?;
+    let (yz, sz) = mat.effective_layer_strengths();
+    if yz <= 0.0 || sz <= 0.0 {
+        return Ok(0.0);
+    }
+    let b_hat = doc_build_axis(sdoc);
+    let mut peak = 0.0_f64;
+    for (e, s) in stress_elem.iter().enumerate() {
+        if let Some(cls) = class {
+            if cls.get(e).copied() == Some(crate::fill::CLASS_VOID) {
+                continue;
+            }
+        }
+        let u = layer_peel_utilization(s, b_hat, yz, sz);
+        if u > peak {
+            peak = u;
+        }
+    }
+    Ok(peak)
 }
 
 /// Evaluate all mechanical and thermal cases of `d_pert` on a fixed-topology deformed mesh
@@ -1428,6 +1730,8 @@ fn evaluate_cases_on_fixed_mesh(
     let sdoc = structural_doc(sys_resolved.as_ref());
     let doc = sdoc.as_ref();
     let props = eval_element_materials(doc, locked_elem_mats)?;
+    let (yz, sz) = props.base_mat.effective_layer_strengths();
+    let b_hat = doc_build_axis(doc);
     let nl_plastic = doc.solve.plasticity == Some(PlasticityLaw::J2);
     let hardening_n = doc
         .solve
@@ -1451,7 +1755,7 @@ fn evaluate_cases_on_fixed_mesh(
             node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
         }
         let prescribed = prescribed_fn(&node_key, &prescribed_map);
-        let case = if nl_plastic
+        let mut case = if nl_plastic
             && (props.base_mat.yield_strength > 0.0 || props.yield_elem.iter().any(|&y| y > 0.0))
         {
             run_case_elastoplastic(
@@ -1478,12 +1782,14 @@ fn evaluate_cases_on_fixed_mesh(
                 &prescribed,
             )?
         };
+        crate::populate_case_peel(&mut case, b_hat, yz, sz);
         solves += 1;
         metrics.push(FixedCaseMetrics {
             compliance: case.compliance,
             max_displacement: case.max_displacement,
             max_vm_elem: case.max_vm_elem,
             max_temp: None,
+            max_layer_peel: case.max_layer_peel,
         });
     }
 
@@ -1505,7 +1811,7 @@ fn evaluate_cases_on_fixed_mesh(
             alphas.resize(props.alpha_elem.len(), 0.0);
         }
         for name in thermal_cases {
-            let case = run_thermal_case_multi_with_regions(
+            let mut case = run_thermal_case_multi_with_regions(
                 doc,
                 mesh_pert,
                 &props.young,
@@ -1519,12 +1825,14 @@ fn evaluate_cases_on_fixed_mesh(
                 false,
                 Some(thermal_lookup),
             )?;
+            crate::populate_case_peel(&mut case, b_hat, yz, sz);
             solves += 1;
             metrics.push(FixedCaseMetrics {
                 compliance: case.compliance,
                 max_displacement: case.max_displacement,
                 max_vm_elem: case.max_vm_elem,
                 max_temp: peak_temperature_opt(case.temperature.as_deref()),
+                max_layer_peel: case.max_layer_peel,
             });
         }
     }
@@ -1534,6 +1842,7 @@ fn evaluate_cases_on_fixed_mesh(
             max_displacement: 0.0,
             max_vm_elem: 0.0,
             max_temp: None,
+            max_layer_peel: 0.0,
         });
     }
 
@@ -1541,9 +1850,9 @@ fn evaluate_cases_on_fixed_mesh(
 }
 
 /// Compute 3D P2 sensitivities for `params` (if non-empty) or all non-derived `let` / `system`
-/// design / `fill.*` variables in `doc`, using fixed-topology boundary-velocity discrete
-/// mechanical, staggered thermo-elastic, and graded TPMS lattice adjoints (`O(1)` linear solves in
-/// parameter count `k`) whenever `solve plasticity=j2` is not active.
+/// design / `fill.*` / `solve.build.*` variables in `doc`, using fixed-topology boundary-velocity
+/// discrete mechanical, staggered thermo-elastic, and graded TPMS lattice adjoints (`O(1)` linear
+/// solves in parameter count `k`) whenever `solve plasticity=j2` is not active.
 pub fn compute_sensitivities(
     doc: &Document,
     params: &[String],
@@ -1591,6 +1900,12 @@ pub(crate) fn compute_sensitivities_with_base(
         );
     }
 
+    let need_am = am_requested_for_doc(doc, &targets);
+    let all_pure_build = !targets.is_empty()
+        && targets
+            .iter()
+            .all(|t| ParamAddr::parse(t).is_ok_and(|a| is_solve_param_target(doc, &a)));
+
     let sys_doc_0 = std::borrow::Cow::Borrowed(sys_doc_0_ref);
     let sdoc_0_cow = structural_doc(sys_doc_0.as_ref());
     let sdoc_0 = sdoc_0_cow.as_ref();
@@ -1598,6 +1913,16 @@ pub(crate) fn compute_sensitivities_with_base(
     let locked_elem_mats = lock_element_material_ids(sdoc_0, &base.mesh, base_h)?;
     let props_0 = eval_element_materials(sdoc_0, &locked_elem_mats)?;
     let base_mass = fixed_mesh_mass_grams(&base.mesh, &props_0.rho_elem);
+    let (yz_0, sz_0) = props_0.base_mat.effective_layer_strengths();
+    let b_hat_0 = doc_build_axis(sdoc_0);
+    let peel_ctx_0 = need_am.then_some(PeelAdjointCtx {
+        b_hat: b_hat_0,
+        yield_z: yz_0,
+        shear_z: sz_0,
+        class: None,
+        thermal_dt_elem: None,
+        alphas: None,
+    });
 
     let facets: Vec<Facet> = base.surface.iter().map(|&nodes| Facet { nodes }).collect();
 
@@ -1645,7 +1970,7 @@ pub(crate) fn compute_sensitivities_with_base(
     let use_adjoint = !nl_plastic;
 
     let mut base_alphas = Vec::new();
-    if use_adjoint && !thermal_cases.is_empty() {
+    if use_adjoint && !all_pure_build && !thermal_cases.is_empty() {
         let has_supports = base.fixed.iter().any(|&m| m != 0);
         if has_supports {
             for &a in &props_0.alpha_elem {
@@ -1665,18 +1990,19 @@ pub(crate) fn compute_sensitivities_with_base(
     let base_modal_solves = usize::from(base.modes.is_some());
     let mut solves_run = (base_static_solves + base_modal_solves).max(1);
     let mut adjoints: Vec<CaseAdjoint> = Vec::new();
-    if use_adjoint && !targets.is_empty() {
+    if use_adjoint && !targets.is_empty() && !all_pure_build {
         for (idx, bc) in base.cases.iter().enumerate() {
             if idx < mech_cases.len() {
-                let adj = build_linear_case_adjoint(
+                let (adj, adj_solves) = build_linear_case_adjoint(
                     &base.mesh,
                     &base.young,
                     base.poisson,
                     &base.fixed,
                     &bc.u,
                     &bc.vm_elem,
+                    peel_ctx_0.as_ref(),
                 )?;
-                solves_run += 2;
+                solves_run += adj_solves;
                 adjoints.push(CaseAdjoint::Mechanical(adj));
             } else if idx < mech_cases.len() + thermal_cases.len() {
                 let tname = &thermal_cases[idx - mech_cases.len()];
@@ -1693,6 +2019,7 @@ pub(crate) fn compute_sensitivities_with_base(
                     &base.fixed,
                     bc,
                     &thermal_lookup,
+                    peel_ctx_0.as_ref(),
                 )?;
                 solves_run += extra_solves;
                 adjoints.push(CaseAdjoint::Thermal(tadj));
@@ -1706,11 +2033,80 @@ pub(crate) fn compute_sensitivities_with_base(
     let vert_adj = build_vertex_adjacency(&base.mesh);
     let rd = RefData::new();
     let th_rd = ThermalRefData::new();
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let phi_c = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
     let mut out_params = Vec::with_capacity(targets.len());
 
     for pname in &targets {
         let addr = ParamAddr::parse(pname).map_err(SetupError)?;
         let p0 = read_param_value(doc, &addr).map_err(SetupError)?;
+        let is_solve_param = is_solve_param_target(doc, &addr);
+
+        if is_solve_param {
+            let eps_p = 1e-4_f64;
+            let mut d_plus = doc.clone();
+            let mut d_minus = doc.clone();
+            let ok_plus = apply_sens_param(&mut d_plus, &addr, p0 + eps_p);
+            let ok_minus = apply_sens_param(&mut d_minus, &addr, p0 - eps_p);
+            let (d_hi_raw, d_lo_raw, denom, scheme) = match (ok_plus, ok_minus) {
+                (Ok(()), Ok(())) => (&d_plus, &d_minus, 2.0 * eps_p, "central"),
+                (Ok(()), Err(_)) => (&d_plus, doc, eps_p, "forward"),
+                (Err(_), Ok(())) => (doc, &d_minus, eps_p, "backward"),
+                (Err(ep), Err(_)) => return Err(SetupError(ep)),
+            };
+            let b_hi = doc_build_axis(d_hi_raw);
+            let b_lo = doc_build_axis(d_lo_raw);
+            let (_, _, oh_frac_hi, oh_deg_hi) = evaluate_p2_surface_overhang_smooth(
+                &base.mesh.nodes,
+                &base.surface,
+                &e0,
+                b_hi,
+                DEFAULT_OVERHANG_DEG,
+            );
+            let (_, _, oh_frac_lo, oh_deg_lo) = evaluate_p2_surface_overhang_smooth(
+                &base.mesh.nodes,
+                &base.surface,
+                &e0,
+                b_lo,
+                DEFAULT_OVERHANG_DEG,
+            );
+            let d_overhang_fraction = Some((oh_frac_hi - oh_frac_lo) / denom);
+            let d_max_overhang_deg = Some((oh_deg_hi - oh_deg_lo) / denom);
+
+            let mut cases = Vec::with_capacity(base.cases.len());
+            for bc in &base.cases {
+                let p_hi = peak_case_peel_for_doc(d_hi_raw, &bc.stress_elem, None)?;
+                let p_lo = peak_case_peel_for_doc(d_lo_raw, &bc.stress_elem, None)?;
+                cases.push(CaseSensitivity {
+                    case: bc.name.clone(),
+                    d_compliance: 0.0,
+                    rel_compliance: 0.0,
+                    d_max_displacement: 0.0,
+                    d_max_vm_elem: 0.0,
+                    d_max_temp: bc.temperature.as_ref().map(|_| 0.0),
+                    d_yield_utilization: None,
+                    d_buckling_utilization: None,
+                    d_max_layer_peel: Some((p_hi - p_lo) / denom),
+                });
+            }
+            let n_modes = base.modes.as_ref().map_or(0, |m| m.frequencies.len());
+            out_params.push(ParameterSensitivity {
+                param: pname.clone(),
+                nominal: p0,
+                step: eps_p,
+                scheme: scheme.to_string(),
+                d_mass_g: 0.0,
+                rel_mass: 0.0,
+                d_solid_mass_g: None,
+                d_overhang_fraction,
+                d_max_overhang_deg,
+                d_modes_hz: vec![0.0; n_modes],
+                rel_modes: vec![0.0; n_modes],
+                cases,
+            });
+            continue;
+        }
+
         let vel =
             compute_mesh_velocity(doc, &addr, p0, &e0, &base.mesh, &facets, &vert_adj, base_h)?;
         let v_max = vel
@@ -1764,6 +2160,42 @@ pub(crate) fn compute_sensitivities_with_base(
         let m_lo = fixed_mesh_mass_grams(&mesh_lo, &props_lo.rho_elem);
         let d_mass_g = (m_hi - m_lo) / denom;
         let rel_mass = rel_elasticity(p0, base_mass, d_mass_g);
+
+        let (d_overhang_fraction, d_max_overhang_deg) = if need_am {
+            let b_hi = doc_build_axis(sdoc_hi.as_ref());
+            let b_lo = doc_build_axis(sdoc_lo.as_ref());
+            if v_max > 0.0 || b_hi != b_lo {
+                let f_hi = expr::compile_body(sdoc_hi.as_ref());
+                let f_lo = expr::compile_body(sdoc_lo.as_ref());
+                let (_, _, oh_f_hi, oh_d_hi) = evaluate_p2_surface_overhang_smooth(
+                    &mesh_hi.nodes,
+                    &base.surface,
+                    &f_hi,
+                    b_hi,
+                    DEFAULT_OVERHANG_DEG,
+                );
+                let (_, _, oh_f_lo, oh_d_lo) = evaluate_p2_surface_overhang_smooth(
+                    &mesh_lo.nodes,
+                    &base.surface,
+                    &f_lo,
+                    b_lo,
+                    DEFAULT_OVERHANG_DEG,
+                );
+                (
+                    Some((oh_f_hi - oh_f_lo) / denom),
+                    Some((oh_d_hi - oh_d_lo) / denom),
+                )
+            } else {
+                (Some(0.0), Some(0.0))
+            }
+        } else {
+            (None, None)
+        };
+
+        let (yz_hi, sz_hi) = props_hi.base_mat.effective_layer_strengths();
+        let (yz_lo, sz_lo) = props_lo.base_mat.effective_layer_strengths();
+        let b_hat_hi = doc_build_axis(sdoc_hi.as_ref());
+        let b_hat_lo = doc_build_axis(sdoc_lo.as_ref());
 
         let mut cases = Vec::with_capacity(base.cases.len());
         if use_adjoint {
@@ -1824,6 +2256,27 @@ pub(crate) fn compute_sensitivities_with_base(
                             0.0
                         };
                         let d_max_vm_elem = d_vm_explicit + dot_slice(&adj.lambda_vm, &r_k);
+                        let d_max_layer_peel = if need_am {
+                            if let Some((ep, ref lambda_peel)) = adj.peel_util {
+                                let p_hi = layer_peel_utilization(
+                                    &element_stress_mat(&mesh_hi, &bc.u, ep, &mat_hi, [0.25; 3]),
+                                    b_hat_hi,
+                                    yz_hi,
+                                    sz_hi,
+                                );
+                                let p_lo = layer_peel_utilization(
+                                    &element_stress_mat(&mesh_lo, &bc.u, ep, &mat_lo, [0.25; 3]),
+                                    b_hat_lo,
+                                    yz_lo,
+                                    sz_lo,
+                                );
+                                Some((p_hi - p_lo) / denom + dot_slice(lambda_peel, &r_k))
+                            } else {
+                                Some(0.0)
+                            }
+                        } else {
+                            None
+                        };
 
                         cases.push(CaseSensitivity {
                             case: bc.name.clone(),
@@ -1834,6 +2287,7 @@ pub(crate) fn compute_sensitivities_with_base(
                             d_max_temp: None,
                             d_yield_utilization: None,
                             d_buckling_utilization: None,
+                            d_max_layer_peel,
                         });
                     }
                     CaseAdjoint::Thermal(tadj) => {
@@ -1880,6 +2334,7 @@ pub(crate) fn compute_sensitivities_with_base(
                                 d_max_temp: Some(d_max_temp),
                                 d_yield_utilization: None,
                                 d_buckling_utilization: None,
+                                d_max_layer_peel: need_am.then_some(0.0),
                             });
                         } else {
                             let alphas_hi: Vec<f64> = props_hi
@@ -1960,6 +2415,59 @@ pub(crate) fn compute_sensitivities_with_base(
                             let d_max_vm_elem = d_vm_explicit
                                 + dot_slice(&tadj.lambda_vm, &r_u_explicit)
                                 + dot_slice(&tadj.lambda_t_vm, &r_t);
+                            let d_max_layer_peel = if need_am {
+                                if let Some((ep, ref lu_peel, ref lt_peel)) = tadj.peel_util {
+                                    let dt_c_hi: f64 = mesh_hi.tets[ep]
+                                        .iter()
+                                        .zip(phi_c.iter())
+                                        .map(|(&n, &ph)| dt_lift_hi[n as usize] * ph)
+                                        .sum();
+                                    let dt_c_lo: f64 = mesh_lo.tets[ep]
+                                        .iter()
+                                        .zip(phi_c.iter())
+                                        .map(|(&n, &ph)| dt_lift_lo[n as usize] * ph)
+                                        .sum();
+                                    let p_hi = layer_peel_utilization(
+                                        &element_stress_thermal(
+                                            &mesh_hi,
+                                            &bc.u,
+                                            ep,
+                                            mat_hi.young[ep],
+                                            mat_hi.poisson,
+                                            alphas_hi[ep],
+                                            dt_c_hi,
+                                            [0.25; 3],
+                                        ),
+                                        b_hat_hi,
+                                        yz_hi,
+                                        sz_hi,
+                                    );
+                                    let p_lo = layer_peel_utilization(
+                                        &element_stress_thermal(
+                                            &mesh_lo,
+                                            &bc.u,
+                                            ep,
+                                            mat_lo.young[ep],
+                                            mat_lo.poisson,
+                                            alphas_lo[ep],
+                                            dt_c_lo,
+                                            [0.25; 3],
+                                        ),
+                                        b_hat_lo,
+                                        yz_lo,
+                                        sz_lo,
+                                    );
+                                    Some(
+                                        (p_hi - p_lo) / denom
+                                            + dot_slice(lu_peel, &r_u_explicit)
+                                            + dot_slice(lt_peel, &r_t),
+                                    )
+                                } else {
+                                    Some(0.0)
+                                }
+                            } else {
+                                None
+                            };
 
                             cases.push(CaseSensitivity {
                                 case: bc.name.clone(),
@@ -1970,6 +2478,7 @@ pub(crate) fn compute_sensitivities_with_base(
                                 d_max_temp: Some(d_max_temp),
                                 d_yield_utilization: None,
                                 d_buckling_utilization: None,
+                                d_max_layer_peel,
                             });
                         }
                     }
@@ -1983,6 +2492,7 @@ pub(crate) fn compute_sensitivities_with_base(
                             d_max_temp: None,
                             d_yield_utilization: None,
                             d_buckling_utilization: None,
+                            d_max_layer_peel: need_am.then_some(0.0),
                         });
                     }
                 }
@@ -1997,6 +2507,7 @@ pub(crate) fn compute_sensitivities_with_base(
                             max_displacement: c.max_displacement,
                             max_vm_elem: c.max_vm_elem,
                             max_temp: peak_temperature_opt(c.temperature.as_deref()),
+                            max_layer_peel: c.max_layer_peel,
                         })
                         .collect(),
                     0,
@@ -2022,6 +2533,7 @@ pub(crate) fn compute_sensitivities_with_base(
                             max_displacement: c.max_displacement,
                             max_vm_elem: c.max_vm_elem,
                             max_temp: peak_temperature_opt(c.temperature.as_deref()),
+                            max_layer_peel: c.max_layer_peel,
                         })
                         .collect(),
                     0,
@@ -2056,6 +2568,8 @@ pub(crate) fn compute_sensitivities_with_base(
                     d_max_temp,
                     d_yield_utilization: None,
                     d_buckling_utilization: None,
+                    d_max_layer_peel: need_am
+                        .then(|| (hm.max_layer_peel - lm.max_layer_peel) / denom),
                 });
             }
         }
@@ -2084,6 +2598,8 @@ pub(crate) fn compute_sensitivities_with_base(
             d_mass_g,
             rel_mass,
             d_solid_mass_g: None,
+            d_overhang_fraction,
+            d_max_overhang_deg,
             d_modes_hz,
             rel_modes,
             cases,
@@ -2104,6 +2620,8 @@ pub(crate) fn compute_sensitivities_with_base(
         elements: base.provenance.elements,
         baseline_mass_g: base_mass,
         baseline_solid_mass_g: None,
+        baseline_overhang_fraction: need_am.then_some(base.overhang.overhang_fraction),
+        baseline_max_overhang_deg: need_am.then_some(base.overhang.max_overhang_deg),
         baseline_compliance: base
             .cases
             .iter()
@@ -2132,6 +2650,12 @@ pub(crate) fn compute_sensitivities_graded_with_base(
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
     let targets = default_target_params(doc, params);
+    let need_am = am_requested_for_doc(doc, &targets);
+    let all_pure_build = !targets.is_empty()
+        && targets
+            .iter()
+            .all(|t| ParamAddr::parse(t).is_ok_and(|a| is_solve_param_target(doc, &a)));
+
     let sys_doc_0 = std::borrow::Cow::Borrowed(sys_doc_0_ref);
     let sdoc_0_cow = structural_doc(sys_doc_0.as_ref());
     let sdoc_0 = sdoc_0_cow.as_ref();
@@ -2146,6 +2670,16 @@ pub(crate) fn compute_sensitivities_graded_with_base(
     )?;
     let base_mass = graded_0.mass_g;
     let base_solid_mass = graded_0.solid_mass_g;
+    let (yz_0, sz_0) = elem_props_0.base_mat.effective_layer_strengths();
+    let b_hat_0 = doc_build_axis(sdoc_0);
+    let peel_ctx_0 = need_am.then_some(PeelAdjointCtx {
+        b_hat: b_hat_0,
+        yield_z: yz_0,
+        shear_z: sz_0,
+        class: Some(&graded_0.class),
+        thermal_dt_elem: None,
+        alphas: None,
+    });
 
     let facets: Vec<Facet> = solid_base
         .surface
@@ -2193,7 +2727,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
     let mech_cases = case_names(sdoc_0);
     let thermal_cases = sdoc_0.thermal_cases();
     let mut base_alphas = Vec::new();
-    if !thermal_cases.is_empty() {
+    if !all_pure_build && !thermal_cases.is_empty() {
         let has_supports = solid_base.fixed.iter().any(|&m| m != 0);
         if has_supports {
             for &a in &elem_props_0.alpha_elem {
@@ -2213,7 +2747,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
     let base_modal_solves = usize::from(solid_base.modes.is_some());
     let mut solves_run = (2 * base_static_solves + base_modal_solves).max(1);
     let mut adjoints: Vec<CaseAdjoint> = Vec::new();
-    if !targets.is_empty() {
+    if !targets.is_empty() && !all_pure_build {
         for gc in &graded_0.cases {
             let gctx = GradedAdjointCtx {
                 spec: &graded_0.spec,
@@ -2230,6 +2764,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                 &gc.u,
                 &gc.vm_elem,
                 Some(&gctx),
+                peel_ctx_0.as_ref(),
             )?;
             solves_run += adj_solves;
             adjoints.push(CaseAdjoint::Mechanical(adj));
@@ -2249,6 +2784,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                 &solid_base.fixed,
                 gc,
                 &thermal_lookup,
+                peel_ctx_0.as_ref(),
             )?;
             solves_run += extra_solves;
             adjoints.push(CaseAdjoint::Thermal(tadj));
@@ -2259,11 +2795,95 @@ pub(crate) fn compute_sensitivities_graded_with_base(
     let vert_adj = build_vertex_adjacency(&solid_base.mesh);
     let rd = RefData::new();
     let th_rd = ThermalRefData::new();
+    use fenics_element::{FiniteElement, P2Tetrahedron};
+    let phi_c = P2Tetrahedron.evaluate_basis(&[0.25, 0.25, 0.25]);
     let mut out_params = Vec::with_capacity(targets.len());
+
+    let all_graded_cases: Vec<&CaseResult> = graded_0
+        .cases
+        .iter()
+        .chain(graded_0.thermal_cases.iter())
+        .collect();
 
     for pname in &targets {
         let addr = ParamAddr::parse(pname).map_err(SetupError)?;
         let p0 = read_param_value(doc, &addr).map_err(SetupError)?;
+        if is_solve_param_target(doc, &addr) {
+            let eps_p = 1e-4_f64;
+            let mut d_plus = doc.clone();
+            let mut d_minus = doc.clone();
+            let ok_plus = apply_sens_param(&mut d_plus, &addr, p0 + eps_p);
+            let ok_minus = apply_sens_param(&mut d_minus, &addr, p0 - eps_p);
+            let (d_hi_raw, d_lo_raw, denom, scheme) = match (ok_plus, ok_minus) {
+                (Ok(()), Ok(())) => (&d_plus, &d_minus, 2.0 * eps_p, "central"),
+                (Ok(()), Err(_)) => (&d_plus, doc, eps_p, "forward"),
+                (Err(_), Ok(())) => (doc, &d_minus, eps_p, "backward"),
+                (Err(ep), Err(_)) => return Err(SetupError(ep)),
+            };
+            let b_hi = doc_build_axis(d_hi_raw);
+            let b_lo = doc_build_axis(d_lo_raw);
+            let (_, _, oh_frac_hi, oh_deg_hi) = evaluate_p2_surface_overhang_smooth(
+                &solid_base.mesh.nodes,
+                &solid_base.surface,
+                &e0,
+                b_hi,
+                DEFAULT_OVERHANG_DEG,
+            );
+            let (_, _, oh_frac_lo, oh_deg_lo) = evaluate_p2_surface_overhang_smooth(
+                &solid_base.mesh.nodes,
+                &solid_base.surface,
+                &e0,
+                b_lo,
+                DEFAULT_OVERHANG_DEG,
+            );
+            let d_overhang_fraction = Some((oh_frac_hi - oh_frac_lo) / denom);
+            let d_max_overhang_deg = Some((oh_deg_hi - oh_deg_lo) / denom);
+
+            let n_mech = graded_0.cases.len();
+            let mut cases = Vec::with_capacity(all_graded_cases.len());
+            for (idx, gc) in all_graded_cases.iter().enumerate() {
+                let p_hi =
+                    peak_case_peel_for_doc(d_hi_raw, &gc.stress_elem, Some(&graded_0.class))?;
+                let p_lo =
+                    peak_case_peel_for_doc(d_lo_raw, &gc.stress_elem, Some(&graded_0.class))?;
+                cases.push(CaseSensitivity {
+                    case: gc.name.clone(),
+                    d_compliance: 0.0,
+                    rel_compliance: 0.0,
+                    d_max_displacement: 0.0,
+                    d_max_vm_elem: 0.0,
+                    d_max_temp: gc.temperature.as_ref().map(|_| 0.0),
+                    d_yield_utilization: (idx < n_mech)
+                        .then(|| {
+                            graded_0
+                                .yield_utilization
+                                .get(idx)
+                                .and_then(|v| *v)
+                                .map(|_| 0.0)
+                        })
+                        .flatten(),
+                    d_buckling_utilization: (idx < n_mech).then_some(0.0),
+                    d_max_layer_peel: Some((p_hi - p_lo) / denom),
+                });
+            }
+            let n_modes = solid_base.modes.as_ref().map_or(0, |m| m.frequencies.len());
+            out_params.push(ParameterSensitivity {
+                param: pname.clone(),
+                nominal: p0,
+                step: eps_p,
+                scheme: scheme.to_string(),
+                d_mass_g: 0.0,
+                rel_mass: 0.0,
+                d_solid_mass_g: Some(0.0),
+                d_overhang_fraction,
+                d_max_overhang_deg,
+                d_modes_hz: vec![0.0; n_modes],
+                rel_modes: vec![0.0; n_modes],
+                cases,
+            });
+            continue;
+        }
+
         let vel = if is_fill_param_target(doc, &addr) {
             vec![[0.0; 3]; solid_base.mesh.nodes.len()]
         } else {
@@ -2347,11 +2967,42 @@ pub(crate) fn compute_sensitivities_graded_with_base(
         let d_solid_mass_g = (gprops_hi.solid_mass_g - gprops_lo.solid_mass_g) / denom;
         let rel_mass = rel_elasticity(p0, base_mass, d_mass_g);
 
-        let all_graded_cases: Vec<&CaseResult> = graded_0
-            .cases
-            .iter()
-            .chain(graded_0.thermal_cases.iter())
-            .collect();
+        let (d_overhang_fraction, d_max_overhang_deg) = if need_am {
+            let b_hi = doc_build_axis(sdoc_hi.as_ref());
+            let b_lo = doc_build_axis(sdoc_lo.as_ref());
+            if v_max > 0.0 || b_hi != b_lo {
+                let f_hi = expr::compile_body(sdoc_hi.as_ref());
+                let f_lo = expr::compile_body(sdoc_lo.as_ref());
+                let (_, _, oh_f_hi, oh_d_hi) = evaluate_p2_surface_overhang_smooth(
+                    &mesh_hi.nodes,
+                    &solid_base.surface,
+                    &f_hi,
+                    b_hi,
+                    DEFAULT_OVERHANG_DEG,
+                );
+                let (_, _, oh_f_lo, oh_d_lo) = evaluate_p2_surface_overhang_smooth(
+                    &mesh_lo.nodes,
+                    &solid_base.surface,
+                    &f_lo,
+                    b_lo,
+                    DEFAULT_OVERHANG_DEG,
+                );
+                (
+                    Some((oh_f_hi - oh_f_lo) / denom),
+                    Some((oh_d_hi - oh_d_lo) / denom),
+                )
+            } else {
+                (Some(0.0), Some(0.0))
+            }
+        } else {
+            (None, None)
+        };
+
+        let (yz_hi, sz_hi) = gprops_hi.base_mat.effective_layer_strengths();
+        let (yz_lo, sz_lo) = gprops_lo.base_mat.effective_layer_strengths();
+        let b_hat_hi = doc_build_axis(sdoc_hi.as_ref());
+        let b_hat_lo = doc_build_axis(sdoc_lo.as_ref());
+
         let mut cases = Vec::with_capacity(all_graded_cases.len());
 
         for (idx, gc) in all_graded_cases.iter().enumerate() {
@@ -2498,6 +3149,40 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                             Some(0.0)
                         };
 
+                    let d_max_layer_peel = if need_am {
+                        if let Some((ep, ref lambda_peel)) = adj.peel_util {
+                            let p_hi = layer_peel_utilization(
+                                &element_stress_mat(
+                                    &mesh_hi,
+                                    &gc.u,
+                                    ep,
+                                    &gprops_hi.material,
+                                    [0.25; 3],
+                                ),
+                                b_hat_hi,
+                                yz_hi,
+                                sz_hi,
+                            );
+                            let p_lo = layer_peel_utilization(
+                                &element_stress_mat(
+                                    &mesh_lo,
+                                    &gc.u,
+                                    ep,
+                                    &gprops_lo.material,
+                                    [0.25; 3],
+                                ),
+                                b_hat_lo,
+                                yz_lo,
+                                sz_lo,
+                            );
+                            Some((p_hi - p_lo) / denom + dot_slice(lambda_peel, &r_k))
+                        } else {
+                            Some(0.0)
+                        }
+                    } else {
+                        None
+                    };
+
                     cases.push(CaseSensitivity {
                         case: gc.name.clone(),
                         d_compliance,
@@ -2507,6 +3192,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                         d_max_temp: None,
                         d_yield_utilization,
                         d_buckling_utilization,
+                        d_max_layer_peel,
                     });
                 }
                 CaseAdjoint::Thermal(tadj) => {
@@ -2553,6 +3239,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                             d_max_temp: Some(d_max_temp),
                             d_yield_utilization: None,
                             d_buckling_utilization: None,
+                            d_max_layer_peel: need_am.then_some(0.0),
                         });
                     } else {
                         let alphas_hi: Vec<f64> = elem_props_hi
@@ -2637,6 +3324,59 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                         let d_max_vm_elem = d_vm_explicit
                             + dot_slice(&tadj.lambda_vm, &r_u_explicit)
                             + dot_slice(&tadj.lambda_t_vm, &r_t);
+                        let d_max_layer_peel = if need_am {
+                            if let Some((ep, ref lu_peel, ref lt_peel)) = tadj.peel_util {
+                                let dt_c_hi: f64 = mesh_hi.tets[ep]
+                                    .iter()
+                                    .zip(phi_c.iter())
+                                    .map(|(&n, &ph)| dt_lift_hi[n as usize] * ph)
+                                    .sum();
+                                let dt_c_lo: f64 = mesh_lo.tets[ep]
+                                    .iter()
+                                    .zip(phi_c.iter())
+                                    .map(|(&n, &ph)| dt_lift_lo[n as usize] * ph)
+                                    .sum();
+                                let p_hi = layer_peel_utilization(
+                                    &element_stress_thermal(
+                                        &mesh_hi,
+                                        &gc.u,
+                                        ep,
+                                        iso_hi.young[ep],
+                                        iso_hi.poisson,
+                                        alphas_hi[ep],
+                                        dt_c_hi,
+                                        [0.25; 3],
+                                    ),
+                                    b_hat_hi,
+                                    yz_hi,
+                                    sz_hi,
+                                );
+                                let p_lo = layer_peel_utilization(
+                                    &element_stress_thermal(
+                                        &mesh_lo,
+                                        &gc.u,
+                                        ep,
+                                        iso_lo.young[ep],
+                                        iso_lo.poisson,
+                                        alphas_lo[ep],
+                                        dt_c_lo,
+                                        [0.25; 3],
+                                    ),
+                                    b_hat_lo,
+                                    yz_lo,
+                                    sz_lo,
+                                );
+                                Some(
+                                    (p_hi - p_lo) / denom
+                                        + dot_slice(lu_peel, &r_u_explicit)
+                                        + dot_slice(lt_peel, &r_t),
+                                )
+                            } else {
+                                Some(0.0)
+                            }
+                        } else {
+                            None
+                        };
 
                         cases.push(CaseSensitivity {
                             case: gc.name.clone(),
@@ -2647,6 +3387,7 @@ pub(crate) fn compute_sensitivities_graded_with_base(
                             d_max_temp: Some(d_max_temp),
                             d_yield_utilization: None,
                             d_buckling_utilization: None,
+                            d_max_layer_peel,
                         });
                     }
                 }
@@ -2678,6 +3419,8 @@ pub(crate) fn compute_sensitivities_graded_with_base(
             d_mass_g,
             rel_mass,
             d_solid_mass_g: Some(d_solid_mass_g),
+            d_overhang_fraction,
+            d_max_overhang_deg,
             d_modes_hz,
             rel_modes,
             cases,
@@ -2693,6 +3436,8 @@ pub(crate) fn compute_sensitivities_graded_with_base(
         elements: solid_base.provenance.elements,
         baseline_mass_g: base_mass,
         baseline_solid_mass_g: Some(base_solid_mass),
+        baseline_overhang_fraction: need_am.then_some(solid_base.overhang.overhang_fraction),
+        baseline_max_overhang_deg: need_am.then_some(solid_base.overhang.max_overhang_deg),
         baseline_compliance: graded_0
             .cases
             .iter()
@@ -2741,6 +3486,7 @@ fn compute_sensitivities_remesh_graded_with_base(
     t0: f64,
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
+    let need_am = am_requested_for_doc(doc, targets);
     let sys_doc_0 = resolve_system_doc(doc)?;
     let base_h = solid_base.provenance.element_size;
     let locked_res = Resolution::Size(base_h);
@@ -2823,6 +3569,12 @@ fn compute_sensitivities_remesh_graded_with_base(
         let d_mass_g = (g_hi_ref.mass_g - g_lo_ref.mass_g) / denom;
         let d_solid_mass_g = (g_hi_ref.solid_mass_g - g_lo_ref.solid_mass_g) / denom;
         let rel_mass = rel_elasticity(p0, graded_0.mass_g, d_mass_g);
+        let d_overhang_fraction = need_am.then(|| {
+            (a_hi_ref.overhang.overhang_fraction - a_lo_ref.overhang.overhang_fraction) / denom
+        });
+        let d_max_overhang_deg = need_am.then(|| {
+            (a_hi_ref.overhang.max_overhang_deg - a_lo_ref.overhang.max_overhang_deg) / denom
+        });
 
         let mut d_modes_hz = Vec::new();
         let mut rel_modes = Vec::new();
@@ -2908,6 +3660,7 @@ fn compute_sensitivities_remesh_graded_with_base(
                 d_max_temp,
                 d_yield_utilization,
                 d_buckling_utilization,
+                d_max_layer_peel: need_am.then(|| (ch.max_layer_peel - cl.max_layer_peel) / denom),
             });
         }
 
@@ -2919,6 +3672,8 @@ fn compute_sensitivities_remesh_graded_with_base(
             d_mass_g,
             rel_mass,
             d_solid_mass_g: Some(d_solid_mass_g),
+            d_overhang_fraction,
+            d_max_overhang_deg,
             d_modes_hz,
             rel_modes,
             cases,
@@ -2934,6 +3689,8 @@ fn compute_sensitivities_remesh_graded_with_base(
         elements: solid_base.provenance.elements,
         baseline_mass_g: graded_0.mass_g,
         baseline_solid_mass_g: Some(graded_0.solid_mass_g),
+        baseline_overhang_fraction: need_am.then_some(solid_base.overhang.overhang_fraction),
+        baseline_max_overhang_deg: need_am.then_some(solid_base.overhang.max_overhang_deg),
         baseline_compliance: graded_0
             .cases
             .iter()
@@ -2957,6 +3714,7 @@ fn compute_sensitivities_remesh_with_base(
     t0: f64,
     clock: Clock,
 ) -> Result<SensitivityReport, SetupError> {
+    let need_am = am_requested_for_doc(doc, targets);
     let sys_doc_0 = resolve_system_doc(doc)?;
     let base_mass = mesh_mass_grams(sys_doc_0.as_ref(), base);
     let base_h = base.provenance.element_size;
@@ -3033,6 +3791,12 @@ fn compute_sensitivities_remesh_with_base(
 
         let d_mass_g = (m_hi - m_lo) / denom;
         let rel_mass = rel_elasticity(p0, base_mass, d_mass_g);
+        let d_overhang_fraction = need_am.then(|| {
+            (a_hi_ref.overhang.overhang_fraction - a_lo_ref.overhang.overhang_fraction) / denom
+        });
+        let d_max_overhang_deg = need_am.then(|| {
+            (a_hi_ref.overhang.max_overhang_deg - a_lo_ref.overhang.max_overhang_deg) / denom
+        });
 
         let mut d_modes_hz = Vec::new();
         let mut rel_modes = Vec::new();
@@ -3080,6 +3844,7 @@ fn compute_sensitivities_remesh_with_base(
                 d_max_temp,
                 d_yield_utilization: None,
                 d_buckling_utilization: None,
+                d_max_layer_peel: need_am.then(|| (ch.max_layer_peel - cl.max_layer_peel) / denom),
             });
         }
 
@@ -3091,6 +3856,8 @@ fn compute_sensitivities_remesh_with_base(
             d_mass_g,
             rel_mass,
             d_solid_mass_g: None,
+            d_overhang_fraction,
+            d_max_overhang_deg,
             d_modes_hz,
             rel_modes,
             cases,
@@ -3106,6 +3873,8 @@ fn compute_sensitivities_remesh_with_base(
         elements: base.provenance.elements,
         baseline_mass_g: base_mass,
         baseline_solid_mass_g: None,
+        baseline_overhang_fraction: need_am.then_some(base.overhang.overhang_fraction),
+        baseline_max_overhang_deg: need_am.then_some(base.overhang.max_overhang_deg),
         baseline_compliance: base
             .cases
             .iter()
@@ -3968,5 +4737,130 @@ fill gyroid sheet cell=6 skin=1.2 rho=(0.22, 0.55) curve=1.0 wall=0.4
                 cs.d_buckling_utilization.unwrap()
             );
         }
+    }
+
+    #[test]
+    fn additive_build_orientation_peel_and_overhang_sensitivities_match_analytical_laws() {
+        let src = r#"fieldsmith 1
+material petg
+let h_root = 10
+box arm size=(60, 12, h_root) at=(30, 0, 0)
+region wall = arm.nx
+region tip = arm.px
+support fix wall fixed=xyz
+load pull tip force=(0, 0, -120)
+solve build=(35, 0)
+assert "Peel limit" metric="max_layer_peel" target="<= 0.80"
+"#;
+        let doc = fsm::parse(src).expect("parse AM cantilever");
+
+        // 1. Pure build-orientation differentiation needs ZERO extra FEA solves (`solves_run == 1`).
+        let pure_rep = compute_sensitivities(
+            &doc,
+            &["solve.build.0".to_string(), "solve.build.1".to_string()],
+            Resolution::Size(4.0),
+            zero_clock,
+        )
+        .expect("pure build sensitivity");
+        assert_eq!(pure_rep.method, "boundary_velocity_adjoint");
+        assert_eq!(
+            pure_rep.solves_run, 1,
+            "pure solve.build.* sensitivities must reuse the single primal solve with 0 adjoint solves"
+        );
+        let p_th = &pure_rep.parameters[0];
+        // At `theta = 35°, phi = 0°`, the `-Z` bottom ceiling has normal `[0, 0, -1]` (`55°` overhang
+        // decreasing at `-1.0 deg/deg`), while the `-X` fixed wall has normal `[-1, 0, 0]` (`35°`
+        // overhang increasing at `+1.0 deg/deg`), so `-Z` dominates and `∂α_max / ∂θ = -1.0 deg/deg`.
+        let d_oh_deg = p_th.d_max_overhang_deg.expect("d_max_overhang_deg");
+        assert!(
+            (d_oh_deg - (-1.0)).abs() < 2e-2,
+            "expected d_max_overhang_deg ≈ -1.0 deg/deg at theta=35°, got {d_oh_deg}"
+        );
+        // Increasing tilt `theta` toward `+X` aligns the build axis with longitudinal bending stress
+        // `σ_xx`, monotonically increasing inter-layer peel (`∂U_peel / ∂θ > 0`).
+        let d_peel_th = p_th.cases[0]
+            .d_max_layer_peel
+            .expect("d_max_layer_peel wrt theta");
+        assert!(
+            d_peel_th > 1e-3,
+            "expected positive ∂U_peel/∂θ toward upright X build, got {d_peel_th}"
+        );
+
+        // 2. Mixed geometric + build-orientation differentiation runs in 1 primal + 3-RHS adjoint
+        //    (`solves_run == 4`) and matches fixed-mesh finite differences on `∂U_peel / ∂h_root`.
+        let mix_rep = compute_sensitivities(&doc, &[], Resolution::Size(4.0), zero_clock)
+            .expect("mixed h_root + solve.build sensitivity");
+        assert_eq!(mix_rep.solves_run, 4);
+        assert_eq!(mix_rep.parameters.len(), 3);
+        let p_h = mix_rep
+            .parameters
+            .iter()
+            .find(|p| p.param == "h_root")
+            .expect("h_root param");
+        let adj_d_peel_h = p_h.cases[0]
+            .d_max_layer_peel
+            .expect("d_max_layer_peel wrt h_root");
+        assert!(
+            adj_d_peel_h < 0.0,
+            "thickening beam depth h_root must reduce inter-layer peel: got {adj_d_peel_h}"
+        );
+
+        // Independent fixed-mesh central-difference verification on `h_root`:
+        let base = analyse(&doc, Resolution::Size(4.0), zero_clock).expect("base analyse");
+        let sdoc_0 = structural_doc(&doc);
+        let base_h = base.provenance.element_size;
+        let locked_mats = lock_element_material_ids(sdoc_0.as_ref(), &base.mesh, base_h).unwrap();
+        let facets: Vec<Facet> = base.surface.iter().map(|&nodes| Facet { nodes }).collect();
+        let mut exact_map = HashMap::new();
+        for l in &sdoc_0.loads {
+            exact_map.insert(
+                l.region.clone(),
+                region_facets_exact(sdoc_0.as_ref(), &l.region, &base.mesh, &facets, base_h)
+                    .unwrap(),
+            );
+        }
+        let exact_lookup = |rid: &str| Ok(exact_map[rid].clone());
+        let thermal_lookup = |_rid: &str| Ok(Vec::new());
+        let addr_h = ParamAddr::parse("h_root").unwrap();
+        let e0 = expr::compile_body(sdoc_0.as_ref());
+        let vadj = build_vertex_adjacency(&base.mesh);
+        let vel =
+            compute_mesh_velocity(&doc, &addr_h, 10.0, &e0, &base.mesh, &facets, &vadj, base_h)
+                .unwrap();
+        let eps = 1e-4;
+        let mut d_hi = doc.clone();
+        let mut d_lo = doc.clone();
+        apply_sens_param(&mut d_hi, &addr_h, 10.0 + eps).unwrap();
+        apply_sens_param(&mut d_lo, &addr_h, 10.0 - eps).unwrap();
+        let m_hi = deform_mesh_checked(&base.mesh, &vel, eps).unwrap();
+        let m_lo = deform_mesh_checked(&base.mesh, &vel, -eps).unwrap();
+        let (cm_hi, _) = evaluate_cases_on_fixed_mesh(
+            &d_hi,
+            &m_hi,
+            &facets,
+            &base.fixed,
+            base_h,
+            &locked_mats,
+            &exact_lookup,
+            &thermal_lookup,
+        )
+        .unwrap();
+        let (cm_lo, _) = evaluate_cases_on_fixed_mesh(
+            &d_lo,
+            &m_lo,
+            &facets,
+            &base.fixed,
+            base_h,
+            &locked_mats,
+            &exact_lookup,
+            &thermal_lookup,
+        )
+        .unwrap();
+        let fd_d_peel_h = (cm_hi[0].max_layer_peel - cm_lo[0].max_layer_peel) / (2.0 * eps);
+        let rel_err = (adj_d_peel_h - fd_d_peel_h).abs() / fd_d_peel_h.abs().max(1e-8);
+        assert!(
+            rel_err < 1e-3,
+            "discrete adjoint ∂U_peel/∂h_root ({adj_d_peel_h}) must match fixed-mesh FD ({fd_d_peel_h}), rel_err={rel_err}"
+        );
     }
 }
