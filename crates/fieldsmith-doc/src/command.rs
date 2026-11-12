@@ -4,6 +4,10 @@
 //! every surface applies identical validation, parameter propagation (`param::apply`), and
 //! parametric sketch-feature synchronization (`sketch::sync_sketch_features`).
 
+use crate::fixings::{
+    insert_fixing_into_document, reconfigure_existing_bolt_stack, FixingInsertRequest,
+    FixingInsertSummary, FixingReconfigureSpec, FixingStackInspection,
+};
 use crate::materials::Material;
 use crate::model::*;
 use crate::param::{self, ParamAddr};
@@ -129,6 +133,12 @@ pub enum DocCommand {
     DeleteUncertainty {
         index: usize,
     },
+    InsertFixing {
+        request: FixingInsertRequest,
+    },
+    ReconfigureFixing {
+        request: FixingReconfigureSpec,
+    },
 }
 
 /// Outcome returned by [`apply_doc_command`].
@@ -144,6 +154,10 @@ pub struct DocCommandOutcome {
     pub sketch_report: Option<SketchSolveReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sketch_feature: Option<SketchFeatureSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixing: Option<FixingInsertSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixing_stack: Option<FixingStackInspection>,
     pub problems: Vec<String>,
 }
 
@@ -200,6 +214,8 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
     let action: Option<String>;
     let mut sketch_report: Option<SketchSolveReport> = None;
     let mut sketch_feature: Option<SketchFeatureSummary> = None;
+    let mut fixing: Option<FixingInsertSummary> = None;
+    let mut fixing_stack: Option<FixingStackInspection> = None;
 
     match cmd {
         DocCommand::SetMaterial { material, node } => {
@@ -674,6 +690,25 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             entity_kind = Some("uncertainty".into());
             action = Some("deleted".into());
         }
+        DocCommand::InsertFixing { request } => {
+            let summary = insert_fixing_into_document(doc, &request);
+            entity_id = Some(summary.first_new_id.clone());
+            entity_kind = Some("fixing".into());
+            action = Some("inserted".into());
+            fixing = Some(summary);
+        }
+        DocCommand::ReconfigureFixing { request } => {
+            let Some(stack) = reconfigure_existing_bolt_stack(doc, &request) else {
+                return Err(format!(
+                    "reconfigure_fixing: node {:?} is not an inspectable bolt or screw stack",
+                    request.selected_node_id
+                ));
+            };
+            entity_id = Some(stack.hw_group_id.clone());
+            entity_kind = Some("fixing".into());
+            action = Some("updated".into());
+            fixing_stack = Some(stack);
+        }
     }
 
     Ok(DocCommandOutcome {
@@ -682,6 +717,8 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
         action,
         sketch_report,
         sketch_feature,
+        fixing,
+        fixing_stack,
         problems: doc.validate(),
     })
 }
@@ -1075,5 +1112,74 @@ support fix1 top_face fixed=xyz
             .expect("delete uncertainty");
         assert_eq!(del.action.as_deref(), Some("deleted"));
         assert!(doc.uncertainties.is_empty());
+    }
+
+    #[test]
+    fn insert_and_reconfigure_fixing_round_trip_through_fsm() {
+        use crate::fixings::{AssociatedNutKind, FixingKind, FixingPlacementMode};
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"Bolted Flange Test\"\n\
+             material al7075\n\
+             box flange size=(80, 60, 12) at=(0, 0, 6)\n",
+        )
+        .expect("parse flange");
+
+        let out = apply_doc_command(
+            &mut doc,
+            DocCommand::InsertFixing {
+                request: FixingInsertRequest {
+                    kind: FixingKind::HexCapBolt,
+                    size: "M5".into(),
+                    engagement_mm: 10.0,
+                    host_id: Some("flange".into()),
+                    host_face: Some(Face::Top),
+                    placement_mode: Some(FixingPlacementMode::Flange4Corners),
+                    flange_inset_x_mm: Some(12.0),
+                    flange_inset_y_mm: Some(10.0),
+                    include_washer: true,
+                    associated_nut: AssociatedNutKind::NylocNut,
+                    preload_cv: Some(0.15),
+                    fastener_material: "steel_10_9".into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .expect("insert_fixing command");
+
+        assert!(out.problems.is_empty(), "problems: {:?}", out.problems);
+        assert_eq!(out.action.as_deref(), Some("inserted"));
+        assert_eq!(out.entity_kind.as_deref(), Some("fixing"));
+        let summary = out.fixing.expect("fixing summary");
+        assert_eq!(summary.loads_added.len(), 4);
+        assert_eq!(doc.uncertainties.len(), 1);
+        assert_eq!(doc.uncertainties[0].cv, Some(0.15));
+
+        let reconf = apply_doc_command(
+            &mut doc,
+            DocCommand::ReconfigureFixing {
+                request: FixingReconfigureSpec {
+                    selected_node_id: summary.first_new_id.clone(),
+                    include_washer: false,
+                    associated_nut: AssociatedNutKind::HexNut,
+                    fastener_material: Some("ti64".into()),
+                },
+            },
+        )
+        .expect("reconfigure_fixing command");
+        assert!(
+            reconf.problems.is_empty(),
+            "problems: {:?}",
+            reconf.problems
+        );
+        let stack = reconf.fixing_stack.expect("fixing stack");
+        assert!(!stack.include_washer);
+        assert_eq!(stack.associated_nut, AssociatedNutKind::HexNut);
+        assert_eq!(stack.fastener_material, "ti64");
+
+        let canon = fsm::print(&doc);
+        let reparsed = fsm::parse(&canon).expect("reparse fixing fsm");
+        assert_eq!(reparsed, doc);
+        assert_eq!(fsm::print(&reparsed), canon);
     }
 }

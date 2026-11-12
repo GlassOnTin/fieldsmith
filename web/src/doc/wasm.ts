@@ -1745,3 +1745,62 @@ export function applyDocCommand(
   return res;
 }
 
+export function evaluateFixingEnvelopeWasm(
+  input: Record<string, unknown>,
+  doc?: Document,
+): Record<string, unknown> {
+  return JSON.parse(
+    w.evaluateFixingEnvelope(doc ? JSON.stringify(doc) : '', JSON.stringify(input)),
+  ) as Record<string, unknown>;
+}
+
+export function fitFixingFailureDistributionWasm(
+  samples: Record<string, unknown>[],
+  targetPf: number,
+): Record<string, unknown> {
+  return JSON.parse(
+    w.fitFixingFailureDistribution(JSON.stringify(samples), targetPf),
+  ) as Record<string, unknown>;
+}
+
+export function evaluateFixingSnapFitWasm(
+  nominalDMm: number,
+  engagementLengthMm: number,
+  substrateMaterial: string,
+  muJoint: number,
+  doc?: Document,
+): Record<string, unknown> {
+  return JSON.parse(
+    w.evaluateFixingSnapFit(
+      doc ? JSON.stringify(doc) : '',
+      nominalDMm,
+      engagementLengthMm,
+      substrateMaterial,
+      muJoint,
+    ),
+  ) as Record<string, unknown>;
+}
+
+export function evaluateFixingBenchmarksWasm(
+  input: Record<string, unknown>,
+  samples: Record<string, unknown>[] | undefined,
+  targetPf: number,
+): Record<string, unknown>[] {
+  return JSON.parse(
+    w.evaluateFixingBenchmarks(
+      JSON.stringify(input),
+      samples && samples.length > 0 ? JSON.stringify(samples) : '',
+      targetPf,
+    ),
+  ) as Record<string, unknown>[];
+}
+
+export function inspectFixingStackWasm(
+  doc: Document,
+  selectedNodeId: string,
+): Record<string, unknown> | null {
+  return JSON.parse(
+    w.inspectFixingStack(JSON.stringify(doc), selectedNodeId),
+  ) as Record<string, unknown> | null;
+}
+

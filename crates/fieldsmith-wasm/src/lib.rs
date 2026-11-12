@@ -2529,3 +2529,91 @@ pub fn apply_doc_command_wasm(doc_json: &str, cmd_json: &str) -> Result<String, 
         "outcome": outcome,
     }))
 }
+
+/// Evaluate the first-principles fastener torque & VDI 2230 holdable-forces envelope (`fixings.rs`).
+#[wasm_bindgen(js_name = evaluateFixingEnvelope)]
+pub fn evaluate_fixing_envelope_wasm(doc_json: &str, input_json: &str) -> Result<String, JsValue> {
+    use fieldsmith_doc::fixings::{evaluate_fixing_torque_envelope_with_doc, FixingEnvelopeInput};
+    let doc_opt = if doc_json.trim().is_empty() {
+        None
+    } else {
+        serde_json::from_str::<Document>(doc_json).ok()
+    };
+    let inp: FixingEnvelopeInput = serde_json::from_str(input_json)
+        .map_err(|e| js_err(format!("invalid FixingEnvelopeInput JSON: {e}")))?;
+    let rep = evaluate_fixing_torque_envelope_with_doc(doc_opt.as_ref(), &inp);
+    to_json(&rep)
+}
+
+/// Fit 2-parameter Weibull + Log-Normal failure distributions (`fixings.rs`).
+#[wasm_bindgen(js_name = fitFixingFailureDistribution)]
+pub fn fit_fixing_failure_distribution_wasm(
+    samples_json: &str,
+    target_pf: f64,
+) -> Result<String, JsValue> {
+    use fieldsmith_doc::fixings::{fit_failure_distribution, FailureSampleRow};
+    let samples: Vec<FailureSampleRow> = serde_json::from_str(samples_json)
+        .map_err(|e| js_err(format!("invalid FailureSampleRow[] JSON: {e}")))?;
+    let fit = fit_failure_distribution(&samples, target_pf);
+    to_json(&fit)
+}
+
+/// Evaluate VDI 2251 tapered cantilever snap-fit mechanics (`fixings.rs`).
+#[wasm_bindgen(js_name = evaluateFixingSnapFit)]
+pub fn evaluate_fixing_snap_fit_wasm(
+    doc_json: &str,
+    nominal_d_mm: f64,
+    engagement_length_mm: f64,
+    substrate_material: &str,
+    mu_joint: f64,
+) -> Result<String, JsValue> {
+    use fieldsmith_doc::fixings::evaluate_snap_fit_mechanics;
+    let doc_opt = if doc_json.trim().is_empty() {
+        None
+    } else {
+        serde_json::from_str::<Document>(doc_json).ok()
+    };
+    let rep = evaluate_snap_fit_mechanics(
+        doc_opt.as_ref(),
+        nominal_d_mm,
+        engagement_length_mm,
+        substrate_material,
+        mu_joint,
+    );
+    to_json(&rep)
+}
+
+/// Evaluate the 4 open-standard fastener benchmarks (`fixings.rs`).
+#[wasm_bindgen(js_name = evaluateFixingBenchmarks)]
+pub fn evaluate_fixing_benchmarks_wasm(
+    input_json: &str,
+    samples_json: &str,
+    target_pf: f64,
+) -> Result<String, JsValue> {
+    use fieldsmith_doc::fixings::{
+        evaluate_open_standard_benchmarks_with_samples, FailureSampleRow, FixingEnvelopeInput,
+    };
+    let inp: FixingEnvelopeInput = serde_json::from_str(input_json)
+        .map_err(|e| js_err(format!("invalid FixingEnvelopeInput JSON: {e}")))?;
+    let samples: Vec<FailureSampleRow> = if samples_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(samples_json)
+            .map_err(|e| js_err(format!("invalid FailureSampleRow[] JSON: {e}")))?
+    };
+    let active = (!samples.is_empty()).then_some(samples.as_slice());
+    let rows = evaluate_open_standard_benchmarks_with_samples(&inp, active, target_pf);
+    to_json(&rows)
+}
+
+/// Inspect an existing bolt/screw hardware stack by node ID (`fixings.rs`).
+#[wasm_bindgen(js_name = inspectFixingStack)]
+pub fn inspect_fixing_stack_wasm(
+    doc_json: &str,
+    selected_node_id: &str,
+) -> Result<String, JsValue> {
+    use fieldsmith_doc::fixings::inspect_fixing_group_stack;
+    let doc = doc_from(doc_json)?;
+    let info = inspect_fixing_group_stack(&doc, selected_node_id);
+    to_json(&info)
+}

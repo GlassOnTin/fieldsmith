@@ -25,6 +25,10 @@ use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::sensitivity::compute_sensitivities;
 use fieldsmith_core::uq::{compute_uq, UqSpec};
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
+use fieldsmith_doc::fixings::{
+    evaluate_fixing_torque_envelope_with_doc, evaluate_open_standard_benchmarks_with_samples,
+    evaluate_snap_fit_mechanics, fit_failure_distribution, FixingKind,
+};
 use fieldsmith_doc::{fsm, param, Document, NodeKind};
 use fieldsmith_field::expr;
 use fieldsmith_field::meshfield::{key_from_hex, lookup};
@@ -226,6 +230,7 @@ pub fn respond(input: &str) -> Reply {
                         sensitivity: None,
                         optimisation: None,
                         uq: None,
+                        fixing: None,
                         error: None,
                     })
                 }
@@ -315,6 +320,7 @@ pub fn respond(input: &str) -> Reply {
                                     sensitivity: None,
                                     optimisation: None,
                                     uq: None,
+                                    fixing: None,
                                     error: None,
                                 })
                             }
@@ -359,6 +365,7 @@ pub fn respond(input: &str) -> Reply {
                             sensitivity: None,
                             optimisation: None,
                             uq: None,
+                            fixing: None,
                             error: None,
                         })
                     }
@@ -422,6 +429,7 @@ pub fn respond(input: &str) -> Reply {
                         sensitivity: None,
                         optimisation: None,
                         uq: None,
+                        fixing: None,
                         error: None,
                     })
                 }
@@ -563,6 +571,7 @@ pub fn respond(input: &str) -> Reply {
                 sensitivity: None,
                 optimisation: None,
                 uq: None,
+                fixing: None,
                 error: None,
             })
         }
@@ -589,6 +598,7 @@ pub fn respond(input: &str) -> Reply {
                     sensitivity: None,
                     optimisation: None,
                     uq: None,
+                    fixing: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -622,6 +632,7 @@ pub fn respond(input: &str) -> Reply {
                         sensitivity: None,
                         optimisation: None,
                         uq: None,
+                        fixing: None,
                         error: None,
                     })
                 }
@@ -650,6 +661,7 @@ pub fn respond(input: &str) -> Reply {
                     sensitivity: Some(rep),
                     optimisation: None,
                     uq: None,
+                    fixing: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -693,6 +705,7 @@ pub fn respond(input: &str) -> Reply {
                         sensitivity: None,
                         optimisation: Some(rep),
                         uq: None,
+                        fixing: None,
                         error: None,
                     })
                 }
@@ -727,10 +740,60 @@ pub fn respond(input: &str) -> Reply {
                     sensitivity: None,
                     optimisation: None,
                     uq: Some(rep),
+                    fixing: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
+        }
+        QuestionSpec::Fixing {
+            mut input,
+            samples,
+            target_pf,
+        } => {
+            if input.substrate_material.trim().is_empty() {
+                input.substrate_material = doc.material.clone();
+            }
+            let pf = target_pf
+                .unwrap_or(input.target_failure_prob)
+                .clamp(1.0e-12, 0.5);
+            let envelope = evaluate_fixing_torque_envelope_with_doc(Some(&doc), &input);
+            let active_samples = (!samples.is_empty()).then_some(samples.as_slice());
+            let benchmarks =
+                evaluate_open_standard_benchmarks_with_samples(&input, active_samples, pf);
+            let snap_fit = (input.fixing_kind == FixingKind::HookClipBox).then(|| {
+                evaluate_snap_fit_mechanics(
+                    Some(&doc),
+                    input.nominal_d_mm,
+                    input.engagement_length_mm,
+                    &input.substrate_material,
+                    input.mu_joint,
+                )
+            });
+            let failure_fit = active_samples.map(|rows| fit_failure_distribution(rows, pf));
+            ok_reply(schema::Response {
+                apiv: APIV,
+                engine: store::engine_identity(),
+                status: Status::Ok,
+                name: Some(name),
+                question: Some(echo),
+                warnings,
+                outcome: None,
+                single: None,
+                sweep: None,
+                overhang: None,
+                verification: None,
+                sensitivity: None,
+                optimisation: None,
+                uq: None,
+                fixing: Some(schema::FixingAnalysisBundle {
+                    envelope,
+                    benchmarks,
+                    snap_fit,
+                    failure_fit,
+                }),
+                error: None,
+            })
         }
     }
 }
@@ -781,6 +844,7 @@ fn error_reply(
             sensitivity: None,
             optimisation: None,
             uq: None,
+            fixing: None,
             error: Some(message.into()),
         },
         true,
@@ -1034,5 +1098,47 @@ load push tip force=(0, 0, -100)";
         let text = e["error"].as_str().expect("error text");
         assert!(text.contains("written by an expression"), "{text}");
         assert!(text.contains("sweep the let that drives it"), "{text}");
+    }
+
+    #[test]
+    fn fixing_question_returns_envelope_benchmarks_and_weibull_fit() {
+        let req = serde_json::json!({
+            "apiv": 2,
+            "doc": DOC,
+            "question": {
+                "kind": "fixing",
+                "input": {
+                    "fixing_kind": "hex_cap_bolt",
+                    "nominal_d_mm": 5.0,
+                    "pitch_mm": 0.8,
+                    "engagement_length_mm": 10.0,
+                    "substrate_material": "al7075",
+                    "fastener_material": "steel_10_9",
+                    "include_washer": true,
+                    "associated_nut": "nyloc_nut"
+                },
+                "samples": [
+                    {"sample_id": "C1", "torque_nm": 7.5, "principal_stress_mpa": 420.0},
+                    {"sample_id": "C2", "torque_nm": 8.4, "principal_stress_mpa": 470.0},
+                    {"sample_id": "C3", "torque_nm": 9.1, "principal_stress_mpa": 510.0}
+                ],
+                "target_pf": 0.001
+            }
+        });
+        let body = envelope(&req.to_string());
+        assert_eq!(body["status"], "ok", "fixing question failed: {body}");
+        assert!(
+            body["fixing"]["envelope"]["recommended_torque_nm"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert_eq!(body["fixing"]["benchmarks"].as_array().unwrap().len(), 4);
+        assert!(
+            body["fixing"]["failure_fit"]["weibull_modulus_m"]
+                .as_f64()
+                .unwrap()
+                > 1.0
+        );
     }
 }

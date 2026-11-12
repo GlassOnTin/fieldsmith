@@ -1,0 +1,48 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T22
+# @code: T22
+# @category: tutorial
+# @level: Advanced
+# @title: Host-Associative Bolted Flange Joint, VDI 2230 Preload Envelope, & 3D ISO 16047 Scatter UQ
+# @subtitle: Evaluate Motosh + FED-STD-H28 + VDI 2230 fastener mechanics, insert a 4-corner M5 cap-bolt + washer + nyloc-nut pattern onto a 3D Al7075 flange via `DocCommand`, reconfigure hardware in place, and propagate 15% ISO 16047 tightening-torque scatter in O(1) 3D FEA solves.
+# @verification_badge: Verified by V57 & V63 · Unified Rust Fastener Kernel + 3D Preload Adjoint UQ
+# @doc_path: docs/tutorials/T22-preloaded-bolted-flange-joint.md
+# @fsm_path: examples/tutorials/T22-preloaded-bolted-flange-joint.fsm
+# @starter_fsm_name: t22-preloaded-bolted-flange-joint.fsm
+# @verification_refs: crates/fieldsmith-verify/tests/v57_fixings_torque_weibull.rs, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
+# ---
+# @mcp: Evaluate M5 Class 10.9 bolt + washer + nyloc envelope & open-standard benchmarks || evaluate_fixing || {"input":{"fixing_kind":"hex_cap_bolt","nominal_d_mm":5.0,"pitch_mm":0.8,"engagement_length_mm":10.0,"substrate_material":"al7075","fastener_material":"steel_10_9","include_washer":true,"associated_nut":"nyloc_nut","vibration_g":12.0,"payload_mass_kg":1.8}}
+# @mcp: Insert 4-corner M5 cap-bolt + washer + nyloc stack with 15% ISO 16047 preload UQ || insert_fixing || {"kind":"hex_cap_bolt","size":"M5","engagement_mm":10.0,"host_id":"flange","host_face":"top","placement_mode":"flange_4_corners","flange_inset_x_mm":12.0,"flange_inset_y_mm":10.0,"fastener_material":"steel_10_9","include_washer":true,"associated_nut":"nyloc_nut","preload_cv":0.15,"vibration_g":12.0,"payload_mass_kg":1.8}
+# @mcp: Reconfigure inserted bolt stack to Ti-6Al-4V + ISO 4032 hex nut || reconfigure_fixing || {"selected_node_id":"hex_cap_bolt_1","include_washer":true,"associated_nut":"hex_nut","fastener_material":"ti64"}
+# @mcp: Propagate 15% ISO 16047 preload scatter across the 3D bolted flange in O(1) FEA solves || uq || {"dofs":14000}
+# @mcp: Verify 3D flange stress and yield safety contracts under bolt preload + tip shear || verify || {"dofs":14000}
+# ---
+# @assert: Flange 90th-percentile peak von Mises stress bounded || p90.max_vm_elem || <= 480.0 || <= 480.0 || MPa
+# @assert: Flange 10th-percentile yield safety factor bounded || p10.min_safety_factor || >= 1.05 || >= 1.05 || -
+# ---
+# @step: 1. Open Fixings & Fasteners Catalogue and Inspect VDI 2230 / Motosh Envelope || part
+#   Select `flange` in the scene tree, open **Fixings & Fasteners**, choose **Hex Cap Bolt (M5)** with **Flat Washer (ISO 7089)** + **Nyloc Nut (ISO 10511)** in **4-Corner Flange** mode, and enable **Emit Preload UQ (CV = 15%, ISO 16047)**. The WASM kernel computes `T_rec`, `F_preload`, `F_sep`, `p_brg`, and `P_f` directly from `fieldsmith-doc::fixings`.
+# @expected:
+#   Inserting carves 4 collapsible `<inst>_bore` clearance holes, places 4 hardware groups, binds `hex_cap_bolt_1_preload_n` across all 4 `preload` clamp loads, and appends `uncertainty` on preload scatter.
+# @step: 2. Reconfigure Hardware in Inspector & Run O(1)-Solve 3D Preload UQ || results
+#   Select `hex_cap_bolt_1` to swap nut/washer/grade in **Bolt Hardware & Holdable Forces** (`reconfigure_fixing` via `DocCommand`), then switch to **Results (3)** and click **Compute UQ**.
+# @expected:
+#   `results-uq-table` propagates the 15% preload scatter across all 4 bolted seats in ≤ 4 linear FEA solves.
+# === END LITERATE HEADER ===
+
+name "Preloaded 4-Bolt Al7075 Cantilever Flange"
+material al7075
+
+box flange size=(70, 50, 12) at=(35, 0, 6)
+
+region root = flange.nx
+region tip = flange.px
+
+support clamp root fixed=xyz
+load tip_shear tip force=(0, 0, -600)
+
+solve build=(0, 0)
+
+assert "Flange 90th-percentile peak von Mises stress bounded" metric="p90.max_vm_elem" target="<= 480.0" tol="<= 480.0" unit="MPa"
+assert "Flange 10th-percentile yield safety factor bounded" metric="p10.min_safety_factor" target=">= 1.05" tol=">= 1.05" unit="-"

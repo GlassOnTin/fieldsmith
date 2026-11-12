@@ -923,7 +923,91 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[14/14] Results UI epistemic UQ (Compute UQ, 4 solves) + robust p90.max_vm_elem optimiser (d: 8.00 -> ${uqApplied.dOpt.toFixed(2)} mm -> Undo 8.00): PASS`,
+    `[14/15] Results UI epistemic UQ (Compute UQ, 4 solves) + robust p90.max_vm_elem optimiser (d: 8.00 -> ${uqApplied.dOpt.toFixed(2)} mm -> Undo 8.00): PASS`,
+  );
+
+  // 15. FixingsModal WASM VDI 2230 / Motosh Envelope + 4-Corner Flange Insertion (`insert_fixing` + Preload UQ) + Inspector Stack Reconfiguration (`reconfigure_fixing`) + Undo
+  const flangeUiFsm = [
+    'fieldsmith 1',
+    'name "UI 4-Bolt Al7075 Flange"',
+    'material al7075',
+    'box flange size=(70, 50, 12) at=(35, 0, 6)',
+    'region root = flange.nx',
+    'region tip = flange.px',
+    'support clamp root fixed=xyz',
+    'load tip_shear tip force=(0, 0, -600)',
+    'solve build=(0, 0)',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('shape');
+    window.fieldsmith.store.select({ kind: 'node', id: 'flange' });
+  }, flangeUiFsm);
+
+  await page.waitForSelector('[data-testid="hud-open-fixings-catalog"]', { timeout: 15000 });
+  await page.click('[data-testid="hud-open-fixings-catalog"]');
+  await page.waitForSelector('[data-testid="fixings-catalog-modal"]', { timeout: 15000 });
+  await page.click('[data-testid="fixing-card-hex_cap_bolt"]');
+  await page.selectOption('[data-testid="fixing-size-select"]', 'M5');
+  await page.waitForSelector('[data-testid="fixing-torque-envelope-card"]', { timeout: 10000 });
+
+  const envelopeText = await page.textContent('[data-testid="fixing-torque-envelope-card"]');
+  const forcesText = await page.textContent('[data-testid="fixing-holdable-forces-card"]');
+  assert(
+    envelopeText && envelopeText.includes('N·m') && forcesText && forcesText.includes('N'),
+    `Expected WASM-computed N·m torque envelope & N holdable forces in FixingsModal, got envelope='${envelopeText}', forces='${forcesText}'`,
+  );
+
+  await page.click('[data-testid="fixing-mode-flange_4_corners"]');
+  await page.selectOption('[data-testid="fixing-associated-nut-select"]', 'nyloc_nut');
+  await page.check('[data-testid="fixings-preload-uq-toggle"]');
+  await page.click('[data-testid="insert-fixing-confirm"]');
+
+  const insertedState = await page.evaluate(() => {
+    const doc = window.fieldsmith.store.doc;
+    const preloads = doc.loads.filter((l) => l.kind.type === 'preload');
+    const uqs = doc.uncertainties ?? [];
+    window.fieldsmith.store.select({ kind: 'node', id: 'hex_cap_bolt_1' });
+    return {
+      preloadCount: preloads.length,
+      uqCount: uqs.length,
+      uqCv: uqs[0]?.cv ?? null,
+      uqParam: uqs[0]?.param ?? null,
+    };
+  });
+  assert(
+    insertedState.preloadCount === 4 &&
+      insertedState.uqCount === 1 &&
+      Math.abs((insertedState.uqCv ?? 0) - 0.15) < 1e-9,
+    `Expected 4 bolt preload BCs and 1 ISO 16047 preload UQ (cv=0.15), got ${JSON.stringify(insertedState)}`,
+  );
+
+  await page.waitForSelector('[data-testid="inspector-fixing-hardware-card"]', { timeout: 15000 });
+  await page.selectOption('[data-testid="inspector-fixing-nut-select"]', 'hex_nut');
+
+  const reconfState = await page.evaluate(async () => {
+    const fixings = await import('/src/doc/fixings-catalog.ts');
+    const afterReconf = fixings.inspectFixingGroupStack(window.fieldsmith.store.doc, 'hex_cap_bolt_1');
+    window.fieldsmith.store.undo();
+    const afterUndo = fixings.inspectFixingGroupStack(window.fieldsmith.store.doc, 'hex_cap_bolt_1');
+    return {
+      nutAfterReconf: afterReconf?.associatedNut ?? null,
+      nutAfterUndo: afterUndo?.associatedNut ?? null,
+    };
+  });
+  assert(
+    reconfState.nutAfterReconf === 'hex_nut' && reconfState.nutAfterUndo === 'nyloc_nut',
+    `Expected Inspector reconfigure_fixing to switch nut nyloc_nut -> hex_nut -> Undo nyloc_nut, got ${JSON.stringify(reconfState)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[15/15] FixingsModal WASM VDI 2230 envelope + 4-corner flange insertion (${insertedState.preloadCount} preloads + CV=${insertedState.uqCv} UQ) + Inspector reconfigure_fixing (nyloc_nut -> ${reconfState.nutAfterReconf} -> Undo ${reconfState.nutAfterUndo}): PASS`,
   );
   await page.close();
 } catch (e) {

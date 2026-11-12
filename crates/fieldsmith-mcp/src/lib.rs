@@ -26,7 +26,7 @@ use fieldsmith_core::channel::{
 use fieldsmith_core::declarative_system::DeclarativeCoupledSystem;
 use fieldsmith_core::fsmz;
 use fieldsmith_doc::command::{apply_doc_command, DocCommand};
-use fieldsmith_doc::fixings::{insert_fixing_into_document, FixingInsertRequest, FixingKind};
+use fieldsmith_doc::fixings::{FixingInsertRequest, FixingReconfigureSpec};
 use fieldsmith_doc::sketch::{
     preset_sketch_template, solve_sketch as solve_sketch_doc, ParametricSketch,
     SketchFeatureRequest,
@@ -290,6 +290,8 @@ impl Server {
             "list_shapes" => self.list_shapes(args),
             "upsert_shape" | "add_primitive" => self.upsert_shape(args),
             "insert_fixing" => self.insert_fixing(args),
+            "reconfigure_fixing" => self.reconfigure_fixing(args),
+            "evaluate_fixing" => self.evaluate_fixing(args),
             "solve_sketch" => self.solve_sketch(args),
             "upsert_sketch" | "save_sketch" => self.upsert_sketch(args),
             "apply_sketch_feature" => self.apply_sketch_feature(args),
@@ -337,6 +339,7 @@ impl Server {
                     | "upsert_shape"
                     | "add_primitive"
                     | "insert_fixing"
+                    | "reconfigure_fixing"
                     | "upsert_sketch"
                     | "save_sketch"
                     | "apply_sketch_feature"
@@ -1460,68 +1463,69 @@ impl Server {
     /// the open document, automatically drilling/tapping/counterboring the fixed host object
     /// and computing the minimal (`T_min`) and maximal (`T_max`) torque envelope.
     fn insert_fixing(&mut self, args: Value) -> Result<Value, String> {
-        let kind_str = args
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("self_tapping_screw");
-        let kind = FixingKind::parse(kind_str).ok_or_else(|| {
-            format!(
-                "insert_fixing: unknown kind {kind_str:?} (expected self_tapping_screw|hex_head_screw|hex_cap_bolt|washer|hex_nut|nyloc_nut|hook_clip_box)"
-            )
-        })?;
-        let req = FixingInsertRequest {
-            kind,
-            size: args
-                .get("size")
-                .and_then(Value::as_str)
-                .unwrap_or("M4")
-                .to_string(),
-            engagement_mm: args
-                .get("engagement_mm")
-                .and_then(Value::as_f64)
-                .unwrap_or(8.0),
-            at: args
-                .get("at")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            id_prefix: args
-                .get("id_prefix")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            host_id: args
-                .get("host_id")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            fastener_material: args
-                .get("fastener_material")
-                .and_then(Value::as_str)
-                .unwrap_or("ti64")
-                .to_string(),
-            substrate_material: args
-                .get("substrate_material")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            vibration_g: args
-                .get("vibration_g")
-                .and_then(Value::as_f64)
-                .unwrap_or(12.0),
-            payload_mass_kg: args
-                .get("payload_mass_kg")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.15),
-        };
+        let payload = args.get("request").cloned().unwrap_or(args);
+        let request: FixingInsertRequest =
+            serde_json::from_value(payload).map_err(|e| format!("insert_fixing: {e}"))?;
         if self.doc.is_none() {
             self.doc = Some(Document::default());
         }
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
-        let summary = insert_fixing_into_document(d, &req);
-        let problems = d.validate();
+        let out = apply_doc_command(d, DocCommand::InsertFixing { request })?;
         Ok(json!({
-            "fixing": summary,
+            "fixing": out.fixing,
             "shapes": d.root.len(),
             "regions": d.regions.len(),
             "loads": d.loads.len(),
-            "problems": problems,
+            "uncertainties": d.uncertainties.len(),
+            "problems": out.problems,
         }))
+    }
+
+    /// Reconfigure an existing bolt or screw stack in-place (adding/removing an ISO 7089 washer,
+    /// changing mated nut between `none`, `hex_nut`, and `nyloc_nut`, or changing fastener grade),
+    /// updating 3D CSG geometry, `let` preload, and `LoadKind::Preload` simultaneously.
+    fn reconfigure_fixing(&mut self, args: Value) -> Result<Value, String> {
+        let payload = args.get("request").cloned().unwrap_or(args);
+        let request: FixingReconfigureSpec =
+            serde_json::from_value(payload).map_err(|e| format!("reconfigure_fixing: {e}"))?;
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(d, DocCommand::ReconfigureFixing { request })?;
+        Ok(json!({
+            "fixing_stack": out.fixing_stack,
+            "problems": out.problems,
+        }))
+    }
+
+    /// Evaluate fastener / preloaded joint / snap-fit mechanics, VDI 2230 holdable forces,
+    /// 4 open-standard benchmarks, and optional 2-parameter Weibull coupon regression via `QuestionSpec::Fixing`.
+    fn evaluate_fixing(&mut self, args: Value) -> Result<Value, String> {
+        let mut q = if args.get("input").is_some() {
+            args
+        } else {
+            let samples = args.get("samples").cloned().unwrap_or_else(|| json!([]));
+            let target_pf = args.get("target_pf").cloned();
+            let mut input_obj = args;
+            if let Some(map) = input_obj.as_object_mut() {
+                map.remove("samples");
+                map.remove("target_pf");
+                map.remove("kind");
+            }
+            let mut base = json!({
+                "input": input_obj,
+                "samples": samples,
+            });
+            if let Some(pf) = target_pf {
+                if !pf.is_null() {
+                    base["target_pf"] = pf;
+                }
+            }
+            base
+        };
+        if self.doc.is_none() {
+            self.doc = Some(Document::default());
+        }
+        q["kind"] = json!("fixing");
+        self.solve(q)
     }
 
     /// Solve a 2D parametric sketch (points, segments, circles, 12 geometric + 6 dimensional
@@ -2647,11 +2651,13 @@ const TOOLS_JSON: &str = r#"[
  {"name":"inspect","description":"The open document's analysis setup: regions, supports, loads, temperatures, convections, heat fluxes, custom materials, coupled system, asserts, fill, solve settings, validate problems, missing mesh grids.","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"list_shapes","description":"Inspect the open document's 3D CSG/SDF shape tree (`shapes`), `lets` variables, and `consumed` expressions.","inputSchema":{"type":"object","additionalProperties":false}},
  {"name":"upsert_shape","description":"Create or update a 3D CAD primitive or profile-swept shape (`box`, `cylinder`, `sphere`, `capsule`, `torus`, `extrude`, `revolve`) in the open document's root CSG/SDF tree.","inputSchema":{"type":"object","required":["kind"],"properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["box","cylinder","sphere","capsule","torus","extrude","revolve"]},"op":{"type":"string","enum":["add","subtract","intersect"]},"blend":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"length":{"type":"number"},"major":{"type":"number"},"minor":{"type":"number"},"round":{"type":"number"},"angle":{"type":"number"},"profile":{"type":"array","items":{"type":["object","array"]}},"color":{"type":"string"},"material":{"type":"string"},"suppressed":{"type":"boolean"}}}},
- {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) from the built-in geometry catalogue, automatically drilling/tapping/counterboring the fixed object and calculating minimal (`T_min`) and maximal (`T_max`) torque.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
+ {"name":"insert_fixing","description":"Insert an engineering fixing (`self_tapping_screw`, `hex_head_screw`, `hex_cap_bolt`, `washer`, `hex_nut`, `nyloc_nut`, or `hook_clip_box`) onto any face (`top`, `bottom`, `px`, `nx`, `py`, `ny`) and pattern (`edge`, `center`, `flange_4_corners`, `bolt_circle`, `sketch_points`) of a host part, automatically drilling/tapping/counterboring, adding optional ISO 7089 washer & mated hex/nyloc nut, binding `let` preload + optional `preload_cv` epistemic UQ, and calculating `T_min` / `T_max` / holdable forces.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"size":{"type":"string","enum":["M2.5","M3","M4","M5","M6","M8"]},"engagement_mm":{"type":"number"},"at":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"id_prefix":{"type":"string"},"host_id":{"type":"string"},"host_face":{"type":"string","enum":["top","bottom","px","nx","py","ny","pz","nz","side"]},"placement_mode":{"type":"string","enum":["edge","center","flange_4_corners","bolt_circle","sketch_points"]},"dx_edge_mm":{"type":"number"},"dy_edge_mm":{"type":"number"},"u_offset_mm":{"type":"number"},"v_offset_mm":{"type":"number"},"flange_inset_x_mm":{"type":"number"},"flange_inset_y_mm":{"type":"number"},"bolt_circle_radius_mm":{"type":"number"},"bolt_circle_count":{"type":"integer"},"bolt_circle_start_deg":{"type":"number"},"custom_points_uv":{"type":"array","items":{"type":"object","required":["u","v"],"properties":{"u":{"type":"number"},"v":{"type":"number"}}}},"group_in_tree":{"type":"boolean"},"associate_with_host_group":{"type":"boolean"},"bind_surface_lets":{"type":"boolean"},"include_washer":{"type":"boolean"},"associated_nut":{"type":"string","enum":["none","hex_nut","nyloc_nut"]},"preload_cv":{"type":"number"},"fastener_material":{"type":"string"},"substrate_material":{"type":"string"},"vibration_g":{"type":"number"},"payload_mass_kg":{"type":"number"}}}},
+ {"name":"reconfigure_fixing","description":"Reconfigure an existing bolt or screw stack (`selected_node_id`) in-place: toggle ISO 7089 bearing washer (`include_washer`), change mated nut (`none`, `hex_nut`, `nyloc_nut`), or change `fastener_material`, keeping 3D CSG geometry, `let` preload, and `LoadKind::Preload` synchronized.","inputSchema":{"type":"object","required":["selected_node_id"],"properties":{"selected_node_id":{"type":"string"},"include_washer":{"type":"boolean"},"associated_nut":{"type":"string","enum":["none","hex_nut","nyloc_nut"]},"fastener_material":{"type":"string"}}}},
+ {"name":"evaluate_fixing","description":"Evaluate first-principles fastener, preloaded joint, & snap-fit mechanics (`QuestionSpec::Fixing`): Motosh `T_min` / `T_max` / `T_rec`, VDI 2230 axial gapping & friction slip capacities, 4 open-standard benchmarks (FED-STD-H28, NASA-STD-5020B, NIST/SEMATECH 8.1.6.2, NASA-HDBK-7005), VDI 2251 snap-fit forces, and optional 2-parameter Weibull coupon regression (`samples`).","inputSchema":{"type":"object","properties":{"input":{"type":"object"},"fixing_kind":{"type":"string","enum":["self_tapping_screw","hex_head_screw","hex_cap_bolt","washer","hex_nut","nyloc_nut","hook_clip_box"]},"nominal_d_mm":{"type":"number"},"pitch_mm":{"type":"number"},"engagement_length_mm":{"type":"number"},"boss_od_mm":{"type":"number"},"substrate_material":{"type":"string"},"fastener_material":{"type":"string"},"vibration_g":{"type":"number"},"shock_g":{"type":"number"},"payload_mass_kg":{"type":"number"},"num_fixings":{"type":"integer"},"delta_temp_c":{"type":"number"},"service_hours":{"type":"number"},"target_failure_prob":{"type":"number"},"mu_thread":{"type":"number"},"mu_head":{"type":"number"},"mu_joint":{"type":"number"},"include_washer":{"type":"boolean"},"associated_nut":{"type":"string","enum":["none","hex_nut","nyloc_nut"]},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"}}}},
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
  {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -2669,7 +2675,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"upsert_uncertainty","description":"Create or update an epistemic / manufacturing parameter uncertainty (`uncertainty` statement) in the open `.fsm` document (`param` such as a `let` name, `pull.force.1`, `ss316l.e`, `ss316l.yield`, `fill.rho_min`, `solve.build.0`, or `system` `epistemic`, with `std` and/or relative `cv`).","inputSchema":{"type":"object","required":["param"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"},"std":{"type":"number"},"sigma":{"type":"number"},"cv":{"type":"number"},"unit":{"type":"string"}}}},
  {"name":"delete_uncertainty","description":"Delete an `uncertainty` declaration from the open `.fsm` document by `index`, `label`, or `param`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise/fixing) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise","fixing"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"input":{"type":"object"},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts (including `p90.<metric>` and `p10.<metric>` epistemic quantile contracts) on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, `df_n/dp`, additive `d_max_layer_peel`, `d_overhang_fraction`, `d_max_overhang_deg`, plus graded TPMS lattice `dU_yield/dp`, `dU_buckling/dp`, and `d_solid_mass_g`) across `params` (or all non-derived `let`, `system`, `fill.*` grading, and `solve.build.0` / `solve.build.1` build-orientation variables in the open `.fsm` document) using mechanical, staggered thermo-elastic, and two-pass homogenised TPMS discrete adjoints plus `O(0)`-extra-solve Rayleigh-quotient modal and build-orientation differentiation (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"uq","description":"Run `O(1)`-solve 3D continuum epistemic uncertainty quantification (`QuestionSpec::Uq`): propagates `uncertainties` (or all `uncertainty` statements + `system` `epistemic` closures in the open `.fsm` document) across `metrics` via discrete 3D adjoint sensitivities, returning `p10`, `p50`, `p90`, `std_dev`, and ranked `variance_share` contributors.","inputSchema":{"type":"object","properties":{"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},

@@ -147,7 +147,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        42.0,
+        44.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -1597,6 +1597,206 @@ assert \"Robust p90 stress\" metric=\"p90.max_vm_elem\" target=\"<= 175\" unit=\
         0.025,
     ));
 
+    // -------------------------------------------------------------------------
+    // 13. Unified Fastener & Preloaded-Joint Mechanics (`QuestionSpec::Fixing`,
+    //     `evaluate_fixing` API<->MCP canon parity, `DocCommand::InsertFixing` /
+    //     `ReconfigureFixing`, and 3D 4-Bolt Flange ISO 16047 Preload UQ)
+    // -------------------------------------------------------------------------
+    let fixing_fsm = "\
+fieldsmith 1
+name \"V63 4-Bolt Al7075 Flange\"
+material al7075
+box flange size=(70, 50, 12) at=(35, 0, 6)
+region root = flange.nx
+region tip = flange.px
+support clamp root fixed=xyz
+load tip_shear tip force=(0, 0, -600)
+solve build=(0, 0)
+";
+    let fixing_input = json!({
+        "fixing_kind": "hex_cap_bolt",
+        "nominal_d_mm": 5.0,
+        "pitch_mm": 0.8,
+        "engagement_length_mm": 10.0,
+        "substrate_material": "al7075",
+        "fastener_material": "steel_10_9",
+        "include_washer": true,
+        "associated_nut": "nyloc_nut",
+        "mu_thread": 0.14,
+        "mu_head": 0.14,
+        "vibration_g": 12.0,
+        "payload_mass_kg": 1.8,
+    });
+    let coupon_samples = json!([
+        {"sample_id": "C1", "torque_nm": 7.5, "principal_stress_mpa": 420.0},
+        {"sample_id": "C2", "torque_nm": 8.4, "principal_stress_mpa": 470.0},
+        {"sample_id": "C3", "torque_nm": 9.1, "principal_stress_mpa": 510.0},
+        {"sample_id": "C4", "torque_nm": 9.6, "principal_stress_mpa": 540.0},
+    ]);
+    let api_fixing_str = fieldsmith_api::respond(
+        &json!({
+            "apiv": 2,
+            "doc": fixing_fsm,
+            "question": {
+                "kind": "fixing",
+                "input": fixing_input.clone(),
+                "samples": coupon_samples.clone(),
+                "target_pf": 1e-3,
+            }
+        })
+        .to_string(),
+    );
+    let api_fixing_resp: Value =
+        serde_json::from_str(&api_fixing_str.body).expect("api fixing json");
+    assert_eq!(
+        api_fixing_resp["status"], "ok",
+        "API fixing failed: {api_fixing_resp}"
+    );
+
+    let mut fix_srv = Server::new();
+    let (fix_open_err, _) = mcp_tool_call(&mut fix_srv, 1100, "open", json!({ "doc": fixing_fsm }));
+    assert!(!fix_open_err);
+    let (mcp_fix_err, mcp_fix_json) = mcp_tool_call(
+        &mut fix_srv,
+        1101,
+        "evaluate_fixing",
+        json!({
+            "input": fixing_input.clone(),
+            "samples": coupon_samples,
+            "target_pf": 1e-3,
+        }),
+    );
+    assert!(!mcp_fix_err, "MCP evaluate_fixing failed: {mcp_fix_json}");
+    assert_eq!(
+        api_fixing_resp["canon"], mcp_fix_json["canon"],
+        "API QuestionSpec::Fixing and MCP evaluate_fixing must produce byte-identical canon hashes"
+    );
+
+    let actual_k = mcp_fix_json["fixing"]["envelope"]["nut_factor_k"]
+        .as_f64()
+        .expect("nut_factor_k");
+    let actual_arm = mcp_fix_json["fixing"]["envelope"]["motosh_torque_arm_mm"]
+        .as_f64()
+        .expect("motosh_torque_arm_mm");
+    report.check(Check::relative(
+        "Motosh (1976) / ISO 16047 dimensionless nut factor K = K_torque / d on M5x0.8",
+        actual_arm / 5.0,
+        actual_k,
+        "",
+        1e-9,
+    ));
+
+    let mut bare_input = fixing_input.clone();
+    bare_input["include_washer"] = json!(false);
+    let (bare_err, bare_json) = mcp_tool_call(
+        &mut fix_srv,
+        1102,
+        "evaluate_fixing",
+        json!({ "input": bare_input }),
+    );
+    assert!(!bare_err, "MCP bare evaluate_fixing failed: {bare_json}");
+    let a_brg_washer = mcp_fix_json["fixing"]["envelope"]["bearing_area_mm2"]
+        .as_f64()
+        .expect("bearing_area_mm2 washer");
+    let a_brg_bare = bare_json["fixing"]["envelope"]["bearing_area_mm2"]
+        .as_f64()
+        .expect("bearing_area_mm2 bare");
+    let crush_washer = mcp_fix_json["fixing"]["envelope"]["mode_limits_nm"]
+        ["underhead_bearing_crush_nm"]
+        .as_f64()
+        .expect("underhead_bearing_crush_nm washer");
+    let crush_bare = bare_json["fixing"]["envelope"]["mode_limits_nm"]
+        ["underhead_bearing_crush_nm"]
+        .as_f64()
+        .expect("underhead_bearing_crush_nm bare");
+    assert!(
+        a_brg_washer > 1.3 * a_brg_bare && crush_washer > 1.2 * crush_bare,
+        "expected ISO 7089 washer to expand bearing area & bearing-crush torque capacity: A_brg({a_brg_washer} vs {a_brg_bare}), T_crush({crush_washer} vs {crush_bare})"
+    );
+
+    let (ins_err, ins_json) = mcp_tool_call(
+        &mut fix_srv,
+        1103,
+        "insert_fixing",
+        json!({
+            "kind": "hex_cap_bolt",
+            "size": "M5",
+            "engagement_mm": 10.0,
+            "host_id": "flange",
+            "host_face": "top",
+            "placement_mode": "flange_4_corners",
+            "flange_inset_x_mm": 12.0,
+            "flange_inset_y_mm": 10.0,
+            "fastener_material": "steel_10_9",
+            "include_washer": true,
+            "associated_nut": "nyloc_nut",
+            "preload_cv": 0.15,
+            "vibration_g": 12.0,
+            "payload_mass_kg": 1.8
+        }),
+    );
+    assert!(!ins_err, "MCP insert_fixing failed: {ins_json}");
+    assert_eq!(
+        ins_json["loads"].as_u64(),
+        Some(5),
+        "expected tip_shear + 4 bolt preloads: {ins_json}"
+    );
+    assert_eq!(
+        ins_json["uncertainties"].as_u64(),
+        Some(1),
+        "expected 1 preload UQ entry: {ins_json}"
+    );
+    let first_bolt_id = ins_json["fixing"]["first_new_id"]
+        .as_str()
+        .expect("first_new_id")
+        .to_string();
+
+    let (reconf_err, reconf_json) = mcp_tool_call(
+        &mut fix_srv,
+        1104,
+        "reconfigure_fixing",
+        json!({
+            "selected_node_id": first_bolt_id,
+            "include_washer": true,
+            "associated_nut": "hex_nut",
+            "fastener_material": "ti64"
+        }),
+    );
+    assert!(!reconf_err, "MCP reconfigure_fixing failed: {reconf_json}");
+    assert_eq!(reconf_json["fixing_stack"]["associated_nut"], "hex_nut");
+
+    let (add_uq_err, _) = mcp_tool_call(
+        &mut fix_srv,
+        1105,
+        "upsert_uncertainty",
+        json!({
+            "label": "Service shear scatter",
+            "param": "tip_shear.force.2",
+            "cv": 0.08,
+            "unit": "N"
+        }),
+    );
+    assert!(!add_uq_err);
+
+    let (bolt_uq_err, bolt_uq_json) =
+        mcp_tool_call(&mut fix_srv, 1106, "uq", json!({ "dofs": 14000 }));
+    assert!(!bolt_uq_err, "MCP 4-bolt flange uq failed: {bolt_uq_json}");
+    assert_eq!(
+        bolt_uq_json["uq"]["method"], "boundary_velocity_adjoint",
+        "expected boundary_velocity_adjoint on 4-bolt flange UQ: {bolt_uq_json}"
+    );
+    let bolt_uq_solves = bolt_uq_json["uq"]["solves_run"]
+        .as_u64()
+        .expect("bolt uq solves_run");
+    // Two mechanical load cases (`default` 4-bolt preload + `tip_shear` external load) × 4 linear solves/case = 8 solves total across k=2 uncertainties.
+    report.check(Check::absolute(
+        "3D 4-bolt flange 2-case ISO 16047 preload + shear UQ linear FEA solves (4/case, O(1) in k)",
+        8.0,
+        bolt_uq_solves as f64,
+        "solves",
+        0.0,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1604,10 +1804,11 @@ assert \"Robust p90 stress\" metric=\"p90.max_vm_elem\" target=\"<= 175\" unit=\
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
-             and first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing), \
+             first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
+             and unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1626,7 +1827,7 @@ assert \"Robust p90 stress\" metric=\"p90.max_vm_elem\" target=\"<= 175\" unit=\
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
-         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
+         WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \

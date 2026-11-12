@@ -39,6 +39,7 @@ fn v57_all_seven_catalogue_fixings_auto_tap_host_and_solve_3d_fea() {
             substrate_material: None,
             vibration_g: 12.0,
             payload_mass_kg: 0.15,
+            ..Default::default()
         };
         let summary = insert_fixing_into_document(&mut doc, &req);
 
@@ -97,14 +98,11 @@ fn v57_all_seven_catalogue_fixings_auto_tap_host_and_solve_3d_fea() {
             substrate_material: Some("petg".into()),
             vibration_g: 10.0,
             payload_mass_kg: 0.35,
+            ..Default::default()
         },
     );
-    let analysis = fieldsmith_core::analyse(
-        &doc,
-        fieldsmith_core::Resolution::Size(4.0),
-        || 0.0,
-    )
-    .expect("3D P2 FEA on self-tapping fixing");
+    let analysis = fieldsmith_core::analyse(&doc, fieldsmith_core::Resolution::Size(4.0), || 0.0)
+        .expect("3D P2 FEA on self-tapping fixing");
     let case = &analysis.cases[0];
     assert!(case.max_displacement > 0.0 && case.max_displacement.is_finite());
     assert!(case.max_von_mises > 0.0 && case.max_von_mises.is_finite());
@@ -138,6 +136,7 @@ fn v57_plastic_vs_metal_vs_jwst_composite_torque_envelope_physics() {
         mu_joint: 0.25,
         weibull_m_override: None,
         weibull_sigma0_override_mpa: None,
+        ..Default::default()
     };
 
     let plastic_env = evaluate_fixing_torque_envelope(&base_input);
@@ -281,7 +280,12 @@ fn v57_monolithic_72dof_fastener_system_and_mcp_roundtrip() {
     let payload: Value =
         serde_json::from_str(v["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(payload["problems"].as_array().unwrap().len(), 0);
-    assert!(payload["fixing"]["envelope"]["max_torque_nm"].as_f64().unwrap() > 0.5);
+    assert!(
+        payload["fixing"]["envelope"]["max_torque_nm"]
+            .as_f64()
+            .unwrap()
+            > 0.5
+    );
 
     let coupled_resp = srv
         .handle(
@@ -328,6 +332,7 @@ fn v57_open_standards_quick_lookup_vs_apriori_rederivation_benchmarks() {
         target_failure_prob: 1.0e-4,
         weibull_m_override: None,
         weibull_sigma0_override_mpa: None,
+        ..Default::default()
     };
 
     let benchmarks = evaluate_open_standard_benchmarks(&inp);

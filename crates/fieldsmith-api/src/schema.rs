@@ -12,6 +12,10 @@ use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::sensitivity::SensitivityReport;
 use fieldsmith_core::uq::UqReport;
 use fieldsmith_core::{CaseResult, Provenance};
+use fieldsmith_doc::fixings::{
+    FailureDistributionFit, FailureSampleRow, FixingEnvelopeInput, FixingEnvelopeReport,
+    OpenStandardBenchmark, SnapFitMechanicsReport,
+};
 use fieldsmith_doc::UncertaintySpec;
 
 use crate::question::{Met, Projection, Unmet};
@@ -164,6 +168,15 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         h: Option<f64>,
     },
+    /// First-principles fastener / preloaded joint / snap-fit mechanics & Weibull coupon regression (`V63`).
+    Fixing {
+        #[serde(default)]
+        input: FixingEnvelopeInput,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        samples: Vec<FailureSampleRow>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pf: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -218,8 +231,22 @@ pub struct Response {
     /// Present for the epistemic uncertainty quantification question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uq: Option<UqReport>,
+    /// Present for the fastener / preloaded joint / snap-fit mechanics question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixing: Option<FixingAnalysisBundle>,
     /// Named error for `status: error`.
     pub error: Option<String>,
+}
+
+/// Complete fastener & joint mechanics answer returned for [`QuestionSpec::Fixing`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FixingAnalysisBundle {
+    pub envelope: FixingEnvelopeReport,
+    pub benchmarks: Vec<OpenStandardBenchmark>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snap_fit: Option<SnapFitMechanicsReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_fit: Option<FailureDistributionFit>,
 }
 
 /// The ladder answer: records, totals, costs, notes, and the met/refusal components.

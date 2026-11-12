@@ -68,7 +68,11 @@ impl Client {
         }));
         let reply = self.next_reply();
         let result = &reply["result"];
-        assert_ne!(result["isError"].as_bool(), Some(true));
+        assert_ne!(
+            result["isError"].as_bool(),
+            Some(true),
+            "tool {name} failed: {result}"
+        );
         serde_json::from_str(result["content"][0]["text"].as_str().unwrap())
             .unwrap_or_else(|_| result["content"][0]["text"].as_str().expect("text").into())
     }
@@ -114,6 +118,8 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "list_shapes",
             "upsert_shape",
             "insert_fixing",
+            "reconfigure_fixing",
+            "evaluate_fixing",
             "solve_sketch",
             "upsert_sketch",
             "apply_sketch_feature",
@@ -829,4 +835,85 @@ load pull tip force=(0, -600, 0)
     assert_eq!(opt["status"], "ok", "{opt}");
     let ver_after = c.tool_ok(9, "verify", json!({"dofs": 6000}));
     assert_eq!(ver_after["status"], "ok", "{ver_after}");
+}
+
+#[test]
+fn bolted_flange_insert_reconfigure_evaluate_and_preload_uq_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let fsm_src = "\
+fieldsmith 1
+name \"MCP Bolted Flange\"
+material al7075
+box flange size=(70, 50, 12) at=(0, 0, 6)
+region base_root = flange.nx
+support base_fix base_root fixed=xyz
+";
+    c.tool_ok(10, "open", json!({"doc": fsm_src}));
+    let ins = c.tool_ok(
+        11,
+        "insert_fixing",
+        json!({
+            "kind": "hex_cap_bolt",
+            "size": "M5",
+            "engagement_mm": 10.0,
+            "host_id": "flange",
+            "host_face": "top",
+            "placement_mode": "flange_4_corners",
+            "flange_inset_x_mm": 12.0,
+            "flange_inset_y_mm": 10.0,
+            "include_washer": true,
+            "associated_nut": "nyloc_nut",
+            "preload_cv": 0.15,
+            "fastener_material": "steel_10_9"
+        }),
+    );
+    assert_eq!(ins["problems"].as_array().unwrap().len(), 0, "{ins}");
+    assert_eq!(ins["loads"].as_u64(), Some(4));
+    assert_eq!(ins["uncertainties"].as_u64(), Some(1));
+    let first_id = ins["fixing"]["first_new_id"]
+        .as_str()
+        .expect("first_new_id")
+        .to_string();
+
+    let reconf = c.tool_ok(
+        12,
+        "reconfigure_fixing",
+        json!({
+            "selected_node_id": first_id,
+            "include_washer": true,
+            "associated_nut": "hex_nut",
+            "fastener_material": "ti64"
+        }),
+    );
+    assert_eq!(reconf["problems"].as_array().unwrap().len(), 0, "{reconf}");
+    assert_eq!(reconf["fixing_stack"]["associated_nut"], "hex_nut");
+    assert_eq!(reconf["fixing_stack"]["fastener_material"], "ti64");
+
+    let eval = c.tool_ok(
+        13,
+        "evaluate_fixing",
+        json!({
+            "fixing_kind": "hex_cap_bolt",
+            "nominal_d_mm": 5.0,
+            "pitch_mm": 0.8,
+            "engagement_length_mm": 10.0,
+            "substrate_material": "al7075",
+            "fastener_material": "ti64",
+            "include_washer": true,
+            "associated_nut": "hex_nut"
+        }),
+    );
+    assert_eq!(eval["status"], "ok", "{eval}");
+    assert!(
+        eval["fixing"]["envelope"]["holdable_forces"]["safe_working_axial_load_n"]
+            .as_f64()
+            .unwrap()
+            > 100.0
+    );
+    assert_eq!(eval["fixing"]["benchmarks"].as_array().unwrap().len(), 4);
+
+    let uq_env = c.tool_ok(14, "uq", json!({"dofs": 14000}));
+    assert_eq!(uq_env["status"], "ok", "{uq_env}");
+    assert!(uq_env["uq"]["solves_run"].as_u64().unwrap() <= 3);
 }

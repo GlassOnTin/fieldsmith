@@ -107,6 +107,7 @@ export function FixingsCatalogueModal() {
   const [bindSurfaceLets, setBindSurfaceLets] = useState<boolean>(true);
   const [includeWasher, setIncludeWasher] = useState<boolean>(false);
   const [associatedNut, setAssociatedNut] = useState<AssociatedNutKind>('none');
+  const [preloadUqEnabled, setPreloadUqEnabled] = useState<boolean>(false);
 
   useEffect(() => {
     if (!fixingsModalOpenState) return;
@@ -250,6 +251,7 @@ export function FixingsCatalogueModal() {
         bindSurfaceLets,
         includeWasher: isBoltOrScrew && includeWasher,
         associatedNut: isBoltOrScrew ? associatedNut : 'none',
+        preloadCv: isBoltOrScrew && preloadUqEnabled ? 0.15 : undefined,
         fastenerMaterial: fastenerMat,
         substrateMaterial: substrateMat,
         vibrationG,
@@ -834,6 +836,21 @@ export function FixingsCatalogueModal() {
                   <code>{placementMode === 'center' ? '_u, _v' : '_dx, _dy'}</code>)
                 </span>
               </label>
+              {isBoltOrScrew && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={preloadUqEnabled}
+                    data-testid="fixings-preload-uq-toggle"
+                    style={{ width: '14px', height: '14px', margin: 0, flex: 'none' }}
+                    onChange={(e) => setPreloadUqEnabled((e.target as HTMLInputElement).checked)}
+                  />
+                  <span>
+                    Register ISO 16047 preload torque scatter UQ (<code>CV = 0.15</code> on{' '}
+                    <code>_preload_n</code>)
+                  </span>
+                </label>
+              )}
             </div>
           </div>
 

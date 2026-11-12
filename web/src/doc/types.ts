@@ -582,7 +582,21 @@ export type DocCommand =
   | { cmd: 'upsert_uncertainty'; index?: number; uncertainty: UncertaintySpec }
   | { cmd: 'delete_uncertainty'; index: number }
   | { cmd: 'upsert_assert'; index?: number; assertion: LiterateAssert }
-  | { cmd: 'delete_assert'; index: number };
+  | { cmd: 'delete_assert'; index: number }
+  | { cmd: 'insert_fixing'; request: Record<string, unknown> }
+  | {
+      cmd: 'reconfigure_fixing';
+      request: {
+        selected_node_id?: string;
+        selectedNodeId?: string;
+        include_washer?: boolean;
+        includeWasher?: boolean;
+        associated_nut?: 'none' | 'hex_nut' | 'nyloc_nut';
+        associatedNut?: 'none' | 'hex_nut' | 'nyloc_nut';
+        fastener_material?: string;
+        fastenerMaterial?: string;
+      };
+    };
 
 export interface DocCommandOutcome {
   entity_id?: string;
@@ -590,6 +604,8 @@ export interface DocCommandOutcome {
   action?: string;
   sketch_report?: SketchSolveReport;
   sketch_feature?: SketchFeatureSummary;
+  fixing?: Record<string, unknown>;
+  fixing_stack?: Record<string, unknown>;
   problems: string[];
 }
 

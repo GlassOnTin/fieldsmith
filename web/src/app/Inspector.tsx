@@ -47,7 +47,6 @@ import { addShape } from './commands';
 import {
   FASTENER_MATERIAL_GROUPS,
   inspectFixingGroupStack,
-  reconfigureExistingBoltStack,
   type AssociatedNutKind,
 } from '../doc/fixings-catalog';
 import {
@@ -590,14 +589,16 @@ function BoltHardwareAndForcesPanel({ node }: { node: Node }) {
     nextNut: AssociatedNutKind,
     nextMat = fastenerMaterial,
   ) => {
-    store.transact(
+    store.dispatch(
       `Update ${hwGroupId} hardware stack (washer=${nextWasher}, nut=${nextNut}, mat=${nextMat})`,
-      (d) => {
-        reconfigureExistingBoltStack(d, hwGroupId, {
-          includeWasher: nextWasher,
-          associatedNut: nextNut,
-          fastenerMaterial: nextMat,
-        });
+      {
+        cmd: 'reconfigure_fixing',
+        request: {
+          selected_node_id: hwGroupId,
+          include_washer: nextWasher,
+          associated_nut: nextNut,
+          fastener_material: nextMat,
+        },
       },
     );
     ui.notify(
