@@ -132,10 +132,13 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "set_build",
             "upsert_assert",
             "delete_assert",
+            "upsert_uncertainty",
+            "delete_uncertainty",
             "doc_text",
             "solve",
             "verify",
             "sensitivity",
+            "uq",
             "optimise",
             "analyze_sdf_channel",
             "export",
@@ -771,4 +774,59 @@ solve size=6 tref=20 build=(0, 0)
         fea["single"]["cases"][0]["max_von_mises"].as_f64().unwrap() > 0.0,
         "{fea}"
     );
+}
+
+#[test]
+fn epistemic_uq_and_robust_p90_contract_optimisation_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let fsm_src = "\
+fieldsmith 1
+name \"MCP Epistemic Cantilever\"
+material ss316l
+let d = 9.0
+box beam size=(80, d, 12) at=(40, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load pull tip force=(0, -600, 0)
+";
+    c.tool_ok(2, "open", json!({"doc": fsm_src}));
+    c.tool_ok(
+        3,
+        "upsert_uncertainty",
+        json!({"label": "Depth tolerance", "param": "d", "std": 0.30, "unit": "mm"}),
+    );
+    c.tool_ok(
+        4,
+        "upsert_uncertainty",
+        json!({"label": "Load jitter", "param": "pull.force.1", "cv": 0.12, "unit": "N"}),
+    );
+    let uq_env = c.tool_ok(5, "uq", json!({"dofs": 6000}));
+    assert_eq!(uq_env["status"], "ok");
+    assert!(uq_env["uq"]["solves_run"].as_u64().unwrap() <= 3);
+    let vm_row = uq_env["uq"]["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["metric"] == "max_vm_elem")
+        .expect("max_vm_elem row");
+    assert!(vm_row["p90"].as_f64().unwrap() > vm_row["p50"].as_f64().unwrap() + 15.0);
+
+    c.tool_ok(
+        6,
+        "upsert_assert",
+        json!({"label": "Robust p90 stress", "metric": "p90.max_vm_elem", "target": "<= 190", "unit": "MPa"}),
+    );
+    let ver_before = c.tool_ok(7, "verify", json!({"dofs": 6000}));
+    assert_eq!(ver_before["status"], "refusal");
+
+    let opt = c.tool_ok(
+        8,
+        "optimise",
+        json!({"objective": "mass_g", "params": ["d"], "bounds": {"d": [8.5, 16.0]}, "dofs": 6000}),
+    );
+    assert_eq!(opt["status"], "ok", "{opt}");
+    let ver_after = c.tool_ok(9, "verify", json!({"dofs": 6000}));
+    assert_eq!(ver_after["status"], "ok", "{ver_after}");
 }

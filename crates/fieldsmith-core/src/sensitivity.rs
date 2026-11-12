@@ -332,11 +332,38 @@ fn doc_build_axis(doc: &Document) -> [f64; 3] {
     build_axis_from_angles(th, ph)
 }
 
+pub(crate) fn resolve_material_param_id<'a>(
+    doc: &'a Document,
+    addr: &'a ParamAddr,
+) -> Option<&'a str> {
+    if addr.attr.is_empty() || addr.comp.is_some() {
+        return None;
+    }
+    if doc.find(&addr.id).is_some()
+        || doc.loads.iter().any(|l| l.id == addr.id)
+        || doc.temperatures.iter().any(|t| t.id == addr.id)
+        || doc.convections.iter().any(|c| c.id == addr.id)
+        || doc.heat_fluxes.iter().any(|f| f.id == addr.id)
+    {
+        return None;
+    }
+    if addr.id == "material" {
+        return Some(doc.material.as_str());
+    }
+    if materials::find(doc, &addr.id).is_some() {
+        return Some(addr.id.as_str());
+    }
+    None
+}
+
 pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, String> {
     if addr.attr.is_empty() && !doc.lets.iter().any(|l| l.name == addr.id) {
         if let Some(sb) = &doc.system_block {
             if let Some(dp) = sb.designs.iter().find(|d| d.name == addr.id) {
                 return Ok(dp.nominal);
+            }
+            if let Some(ep) = sb.epistemics.iter().find(|e| e.name == addr.id) {
+                return Ok(ep.nominal);
             }
         }
     }
@@ -368,8 +395,8 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
             _ => Err(format!("param {addr}: unsupported fill parameter")),
         };
     }
-    if !addr.attr.is_empty() && addr.comp.is_none() {
-        if let Some(m) = doc.custom_materials.iter().find(|m| m.id == addr.id) {
+    if let Some(mat_id) = resolve_material_param_id(doc, addr) {
+        if let Some(m) = materials::find(doc, mat_id) {
             return match addr.attr.as_str() {
                 "e" | "young" => Ok(m.e),
                 "nu" | "poisson" => Ok(m.nu),
@@ -378,14 +405,14 @@ pub(crate) fn read_param_value(doc: &Document, addr: &ParamAddr) -> Result<f64, 
                 "shear_z" => Ok(m.effective_layer_strengths().1),
                 "density" | "rho" => Ok(m.density),
                 "k" | "conductivity" => {
-                    m.k.ok_or_else(|| format!("param {addr}: custommaterial has no k"))
+                    m.k.ok_or_else(|| format!("param {addr}: material has no k"))
                 }
                 "a" | "alpha" => m
                     .alpha
-                    .ok_or_else(|| format!("param {addr}: custommaterial has no alpha")),
+                    .ok_or_else(|| format!("param {addr}: material has no alpha")),
                 _ => Err(format!(
-                    "param {addr}: custommaterial {:?} has no numeric parameter {:?}",
-                    addr.id, addr.attr
+                    "param {addr}: material {:?} has no numeric parameter {:?}",
+                    mat_id, addr.attr
                 )),
             };
         }
@@ -465,6 +492,10 @@ pub(crate) fn apply_sens_param(
         if let Some(sb) = &mut doc.system_block {
             if let Some(dp) = sb.designs.iter_mut().find(|d| d.name == addr.id) {
                 dp.nominal = val;
+                return Ok(());
+            }
+            if let Some(ep) = sb.epistemics.iter_mut().find(|e| e.name == addr.id) {
+                ep.nominal = val;
                 return Ok(());
             }
         }
@@ -585,8 +616,13 @@ pub(crate) fn apply_sens_param(
             _ => Err(format!("param {addr}: unsupported fill parameter")),
         };
     }
-    if !addr.attr.is_empty() && addr.comp.is_none() {
-        if let Some(m) = doc.custom_materials.iter_mut().find(|m| m.id == addr.id) {
+    if let Some(mat_id) = resolve_material_param_id(doc, addr).map(str::to_string) {
+        if !doc.custom_materials.iter().any(|m| m.id == mat_id) {
+            if let Some(base_m) = materials::find(doc, &mat_id) {
+                doc.custom_materials.push(base_m);
+            }
+        }
+        if let Some(m) = doc.custom_materials.iter_mut().find(|m| m.id == mat_id) {
             return match addr.attr.as_str() {
                 "e" | "young" => {
                     if val <= 0.0 {
@@ -639,8 +675,8 @@ pub(crate) fn apply_sens_param(
                     Ok(())
                 }
                 _ => Err(format!(
-                    "param {addr}: custommaterial {:?} has no numeric parameter {:?}",
-                    addr.id, addr.attr
+                    "param {addr}: material {:?} has no numeric parameter {:?}",
+                    mat_id, addr.attr
                 )),
             };
         }
@@ -653,6 +689,9 @@ pub(crate) fn apply_sens_param(
         if let Some(sb) = &mut doc.system_block {
             if let Some(dp) = sb.designs.iter_mut().find(|d| d.name == addr.id) {
                 dp.nominal = val;
+            }
+            if let Some(ep) = sb.epistemics.iter_mut().find(|e| e.name == addr.id) {
+                ep.nominal = val;
             }
         }
     }

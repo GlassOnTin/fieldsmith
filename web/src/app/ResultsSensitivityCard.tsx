@@ -7,11 +7,13 @@ import { useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import {
   computeFsmSensitivities,
+  computeFsmUq,
   optimiseFsmDocument,
   verifyFsmContracts,
   type OptObjective,
   type OptimiseBundle,
   type SensitivityReport,
+  type UqReport,
   type VerificationReport,
 } from '../doc/wasm';
 import { ui, useApp } from './ui';
@@ -46,6 +48,12 @@ const CONTRACT_METRICS: { value: string; label: string; defaultUnit: string; def
   { value: 'graded.buckling_utilization', label: 'Lattice buckling util U_b (graded.buckling_utilization)', defaultUnit: '', defaultTarget: '<= 0.85' },
   { value: 'graded.deflection', label: 'Graded deflection ‖u‖ (graded.deflection)', defaultUnit: 'mm', defaultTarget: '<= 0.50' },
   { value: 'mass_saved_pct', label: 'Lattice mass saved (mass_saved_pct)', defaultUnit: '%', defaultTarget: '>= 25' },
+  { value: 'p90.max_vm_elem', label: 'Robust p90 von Mises σ_vM (p90.max_vm_elem)', defaultUnit: 'MPa', defaultTarget: '<= 180' },
+  { value: 'p10.min_safety_factor', label: 'Robust p10 safety factor (p10.min_safety_factor)', defaultUnit: '', defaultTarget: '>= 1.5' },
+  { value: 'p90.max_layer_peel', label: 'Robust p90 layer peel (p90.max_layer_peel)', defaultUnit: '', defaultTarget: '<= 1.0' },
+  { value: 'p90.max_temp', label: 'Robust p90 peak temp (p90.max_temp)', defaultUnit: '°C', defaultTarget: '<= 120' },
+  { value: 'p10.mode_1', label: 'Robust p10 mode f₁ (p10.mode_1)', defaultUnit: 'Hz', defaultTarget: '>= 100' },
+  { value: 'p90.graded.yield_utilization', label: 'Robust p90 lattice U_y (p90.graded.yield_utilization)', defaultUnit: '', defaultTarget: '<= 0.85' },
 ];
 
 export function ResultsSensitivityCard() {
@@ -57,14 +65,20 @@ export function ResultsSensitivityCard() {
   const buildParamCount = doc.solve?.build != null ? 2 : 0;
   const paramCount = letCount + sysDesignCount + fillParamCount + buildParamCount;
   const hasParams = paramCount > 0;
+  const uncertainties = doc.uncertainties ?? [];
+  const sysEpistemicCount =
+    doc.system_block?.epistemics?.filter((e) => e.sigma > 0).length ?? 0;
+  const uqCount = uncertainties.length + sysEpistemicCount;
+  const hasUq = uqCount > 0;
   const asserts = doc.asserts ?? [];
   const hasAsserts = asserts.length > 0;
 
   const [sensReport, setSensReport] = useState<SensitivityReport | null>(null);
+  const [uqReport, setUqReport] = useState<UqReport | null>(null);
   const [contractReport, setContractReport] = useState<VerificationReport | null>(null);
   const [optBundle, setOptBundle] = useState<OptimiseBundle | null>(null);
   const [optObjective, setOptObjective] = useState<OptObjective>('mass_g');
-  const [busy, setBusy] = useState<'sens' | 'verify' | 'opt' | null>(null);
+  const [busy, setBusy] = useState<'sens' | 'uq' | 'verify' | 'opt' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -73,6 +87,13 @@ export function ResultsSensitivityCard() {
   const [target, setTarget] = useState('<= 180');
   const [tolerance, setTolerance] = useState('');
   const [unit, setUnit] = useState('MPa');
+
+  const [addUqOpen, setAddUqOpen] = useState(false);
+  const [uqLabel, setUqLabel] = useState('Manufacturing scatter');
+  const [uqParam, setUqParam] = useState(doc.lets?.[0]?.name ?? `${doc.material}.e`);
+  const [uqMode, setUqMode] = useState<'std' | 'cv'>('cv');
+  const [uqVal, setUqVal] = useState('0.08');
+  const [uqUnit, setUqUnit] = useState('');
 
   const runSensitivities = () => {
     setBusy('sens');
@@ -85,6 +106,23 @@ export function ResultsSensitivityCard() {
         const msg = e instanceof Error ? e.message : String(e);
         setErr(msg);
         ui.notify(`Sensitivity error: ${msg}`, 'error');
+      } finally {
+        setBusy(null);
+      }
+    }, 10);
+  };
+
+  const runUq = () => {
+    setBusy('uq');
+    setErr(null);
+    window.setTimeout(() => {
+      try {
+        const rep = computeFsmUq(store.doc, { dofs: 4000 });
+        setUqReport(rep);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setErr(msg);
+        ui.notify(`UQ error: ${msg}`, 'error');
       } finally {
         setBusy(null);
       }
@@ -134,8 +172,41 @@ export function ResultsSensitivityCard() {
     if (!optBundle) return;
     store.applyExternalDoc(optBundle.doc, 'Apply 3D Adjoint Optimisation');
     setSensReport(null);
+    setUqReport(null);
     setOptBundle(null);
     ui.notify('Applied optimised .fsm parameters (Ctrl+Z to undo)');
+  };
+
+  const saveUncertainty = () => {
+    const trimmedParam = uqParam.trim();
+    const numVal = Number(uqVal.trim());
+    if (!trimmedParam || !Number.isFinite(numVal) || numVal <= 0) {
+      setErr('Uncertainty parameter and a positive std / cv value are required.');
+      return;
+    }
+    setErr(null);
+    store.dispatch('add epistemic uncertainty', {
+      cmd: 'upsert_uncertainty',
+      uncertainty: {
+        label: uqLabel.trim() || trimmedParam,
+        param: trimmedParam,
+        std: uqMode === 'std' ? numVal : null,
+        cv: uqMode === 'cv' ? numVal : null,
+        unit: uqUnit.trim(),
+      },
+    });
+    setUqReport(null);
+    setContractReport(null);
+    setAddUqOpen(false);
+  };
+
+  const removeUncertainty = (index: number) => {
+    store.dispatch('delete epistemic uncertainty', {
+      cmd: 'delete_uncertainty',
+      index,
+    });
+    setUqReport(null);
+    setContractReport(null);
   };
 
   const onMetricChange = (nextMetric: string) => {
@@ -267,6 +338,27 @@ export function ResultsSensitivityCard() {
               {busy === 'verify' ? 'Verifying…' : `Verify Asserts (${asserts.length})`}
             </button>
           )}
+          {hasUq && (
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="results-compute-uq-btn"
+              disabled={busy !== null}
+              onClick={runUq}
+              title="Propagate epistemic uncertainties in O(1) FEA solves to p10 / p50 / p90 quantiles & variance shares"
+            >
+              {busy === 'uq' ? 'Computing UQ…' : `Compute UQ (${uqCount})`}
+            </button>
+          )}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="results-toggle-add-uncertainty-btn"
+            onClick={() => setAddUqOpen((v) => !v)}
+            title="Author an epistemic / manufacturing uncertainty (uncertainty ...)"
+          >
+            {addUqOpen ? 'Cancel UQ' : '+ Add Uncertainty'}
+          </button>
           <button
             type="button"
             class="mini-btn"
@@ -278,6 +370,125 @@ export function ResultsSensitivityCard() {
           </button>
         </div>
       </div>
+
+      {addUqOpen && (
+        <div
+          data-testid="results-add-uncertainty-form"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))',
+            gap: '4px',
+            padding: '6px',
+            borderRadius: '4px',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            alignItems: 'end',
+          }}
+        >
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Label
+            <input
+              type="text"
+              class="input"
+              data-testid="uncertainty-label-input"
+              value={uqLabel}
+              onInput={(e) => setUqLabel((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Param Addr
+            <input
+              type="text"
+              class="input"
+              data-testid="uncertainty-param-input"
+              placeholder="d or ss316l.e"
+              value={uqParam}
+              onInput={(e) => setUqParam((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Spread (1-σ)
+            <div style={{ display: 'flex', gap: '3px' }}>
+              <select
+                class="select"
+                data-testid="uncertainty-mode-select"
+                value={uqMode}
+                onChange={(e) => setUqMode((e.target as HTMLSelectElement).value as 'std' | 'cv')}
+                style={{ width: '46%', fontSize: '10px', padding: '2px 3px' }}
+              >
+                <option value="cv">cv</option>
+                <option value="std">std</option>
+              </select>
+              <input
+                type="text"
+                class="input"
+                data-testid="uncertainty-val-input"
+                value={uqVal}
+                onInput={(e) => setUqVal((e.target as HTMLInputElement).value)}
+                style={{ width: '54%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              />
+            </div>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Unit
+            <input
+              type="text"
+              class="input"
+              data-testid="uncertainty-unit-input"
+              placeholder="mm / MPa"
+              value={uqUnit}
+              onInput={(e) => setUqUnit((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+            />
+          </label>
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="uncertainty-save-btn"
+            onClick={saveUncertainty}
+            style={{ height: '22px', fontWeight: 700, color: '#6ee7b7' }}
+          >
+            Save UQ
+          </button>
+        </div>
+      )}
+
+      {uncertainties.length > 0 && (
+        <div data-testid="results-authored-uncertainties-list" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {uncertainties.map((u, i) => (
+            <div
+              key={`${u.param}-${i}`}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '6px',
+                fontFamily: 'var(--mono)',
+                fontSize: '9.5px',
+                color: 'var(--text-2)',
+              }}
+            >
+              <span>
+                ± {u.label || u.param}: {u.param}{' '}
+                {u.std != null ? `std=${u.std}` : u.cv != null ? `cv=${u.cv}` : ''}{' '}
+                {u.unit ?? ''}
+              </span>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid={`delete-uncertainty-${i}`}
+                onClick={() => removeUncertainty(i)}
+                title="Remove epistemic uncertainty from .fsm document"
+                style={{ padding: '0 4px', lineHeight: 1.2 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {addOpen && (
         <div
@@ -491,6 +702,47 @@ export function ResultsSensitivityCard() {
               </span>
             ))}
           </div>
+        </div>
+      )}
+
+      {uqReport && uqReport.metrics.length > 0 && (
+        <div style={{ overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' }} data-testid="results-uq-table">
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--text-3)' }}>
+            uq: {uqReport.method} · {uqReport.inputs.length} inputs · {uqReport.solves_run} solves · h={uqReport.h.toFixed(2)} mm ({uqReport.elements} P2 tets)
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: '9.5px' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-3)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
+                <th style={{ textAlign: 'left', padding: '2px 4px' }}>metric</th>
+                <th style={{ padding: '2px 4px' }}>p10</th>
+                <th style={{ padding: '2px 4px' }}>p50</th>
+                <th style={{ padding: '2px 4px' }}>p90</th>
+                <th style={{ padding: '2px 4px' }}>±σ</th>
+                <th style={{ textAlign: 'left', padding: '2px 4px' }}>top variance driver</th>
+              </tr>
+            </thead>
+            <tbody>
+              {uqReport.metrics.map((m) => {
+                const top = m.contributors[0];
+                return (
+                  <tr key={m.metric} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
+                    <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
+                      {m.metric} {m.unit ? `(${m.unit})` : ''}
+                    </td>
+                    <td style={{ padding: '2px 4px' }}>{m.p10.toPrecision(4)}</td>
+                    <td style={{ padding: '2px 4px' }}>{m.p50.toPrecision(4)}</td>
+                    <td style={{ padding: '2px 4px', color: '#fbbf24', fontWeight: 600 }}>{m.p90.toPrecision(4)}</td>
+                    <td style={{ padding: '2px 4px' }}>±{m.std_dev.toPrecision(3)}</td>
+                    <td style={{ textAlign: 'left', padding: '2px 4px', color: 'var(--text-2)' }}>
+                      {top && top.variance_share > 0
+                        ? `${top.param} (${(top.variance_share * 100).toFixed(0)}%)`
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 

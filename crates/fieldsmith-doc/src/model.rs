@@ -49,6 +49,11 @@ pub struct Document {
     /// `.fsm` parse/print round-trips and evaluated by `QuestionSpec::Verify`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub asserts: Vec<crate::fsm::LiterateAssert>,
+    /// Epistemic / manufacturing parameter uncertainties (`uncertainty ...`), propagated
+    /// through the 3D discrete adjoint (`QuestionSpec::Uq`) and robust quantile contracts
+    /// (`p90.<metric>`, `p10.<metric>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncertainties: Vec<UncertaintySpec>,
     /// Parametric 2D sketches (`sketch <id> ... { ... }`), preserved across `.fsm` and JSON
     /// round-trips so interactive edits and `let` sweeps re-solve from constraint truth.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -82,9 +87,60 @@ impl Default for Document {
             solve: SolveSettings::default(),
             coupled_system: None,
             asserts: Vec::new(),
+            uncertainties: Vec::new(),
             sketches: Vec::new(),
             sketch_features: Vec::new(),
             system_block: None,
+        }
+    }
+}
+
+/// Epistemic or manufacturing parameter uncertainty (`uncertainty "<label>" param="<addr>" std=<σ> | cv=<c>`).
+///
+/// Propagated through the 3D discrete adjoint (`QuestionSpec::Uq`) and robust quantile contracts
+/// (`p90.<metric>`, `p10.<metric>`) in `O(1)` linear FEA solves regardless of parameter count.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UncertaintySpec {
+    #[serde(default)]
+    pub label: String,
+    pub param: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub std: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cv: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
+}
+
+impl UncertaintySpec {
+    /// Effective 1-σ standard deviation at `nominal`, combining additive `std` and relative
+    /// coefficient of variation `cv · |nominal|` in quadrature when both are specified.
+    pub fn effective_sigma(&self, nominal: f64) -> f64 {
+        let s_abs = self.std.unwrap_or(0.0).max(0.0);
+        let s_rel = self.cv.unwrap_or(0.0).max(0.0) * nominal.abs();
+        match (self.std.is_some(), self.cv.is_some()) {
+            (true, false) => s_abs,
+            (false, true) => s_rel,
+            (true, true) => s_abs.hypot(s_rel),
+            (false, false) => 0.0,
+        }
+    }
+
+    /// Derivative `∂σ_eff / ∂nominal` when `nominal` is also an active design parameter.
+    pub fn effective_sigma_deriv(&self, nominal: f64) -> f64 {
+        let cv = self.cv.unwrap_or(0.0).max(0.0);
+        if cv <= 0.0 || nominal == 0.0 {
+            return 0.0;
+        }
+        if self.std.is_some() {
+            let sig = self.effective_sigma(nominal);
+            if sig > 1e-30 {
+                (cv * cv * nominal) / sig
+            } else {
+                0.0
+            }
+        } else {
+            cv * nominal.signum()
         }
     }
 }
@@ -1027,7 +1083,9 @@ impl Document {
                         ));
                     }
                     match crate::spatial::SpatialFn::compile_with_lets(src, &let_values) {
-                        Ok(f) => errs.extend(f.static_checks(&format!("{what} pressure_fn"), false)),
+                        Ok(f) => {
+                            errs.extend(f.static_checks(&format!("{what} pressure_fn"), false))
+                        }
                         Err(e) => errs.push(format!("{what}: pressure_fn: {e}")),
                     }
                 }
@@ -1267,13 +1325,12 @@ impl Document {
         }
         if let Some(cs) = &self.coupled_system {
             if !crate::fsm::is_ident(cs) {
-                errs.push(format!(
-                    "coupled system '{cs}' is not a valid identifier"
-                ));
+                errs.push(format!("coupled system '{cs}' is not a valid identifier"));
             }
         }
         for a in &self.asserts {
-            if a.label.trim().is_empty() || a.metric.trim().is_empty() || a.target.trim().is_empty() {
+            if a.label.trim().is_empty() || a.metric.trim().is_empty() || a.target.trim().is_empty()
+            {
                 errs.push(format!(
                     "assert '{}' must state non-empty label, metric, and target",
                     a.label
@@ -1490,6 +1547,38 @@ impl Document {
         }
         if let Some(sys) = &self.system_block {
             errs.extend(sys.validate(self));
+        }
+        for u in &self.uncertainties {
+            let p = u.param.trim();
+            if p.is_empty() {
+                errs.push("Uncertainty parameter address cannot be empty".into());
+            } else if let Err(msg) = crate::param::ParamAddr::parse(p) {
+                errs.push(format!("Uncertainty '{}': {msg}", u.label));
+            }
+            if let Some(s) = u.std {
+                if !s.is_finite() || s < 0.0 {
+                    errs.push(format!(
+                        "Uncertainty '{}' on '{}': std must be finite and >= 0",
+                        u.label, u.param
+                    ));
+                }
+            }
+            if let Some(c) = u.cv {
+                if !c.is_finite() || c < 0.0 {
+                    errs.push(format!(
+                        "Uncertainty '{}' on '{}': cv must be finite and >= 0",
+                        u.label, u.param
+                    ));
+                }
+            }
+            let pos_std = u.std.is_some_and(|s| s.is_finite() && s > 0.0);
+            let pos_cv = u.cv.is_some_and(|c| c.is_finite() && c > 0.0);
+            if !pos_std && !pos_cv {
+                errs.push(format!(
+                    "Uncertainty '{}' on '{}': specify std > 0 or cv > 0",
+                    u.label, u.param
+                ));
+            }
         }
         errs
     }

@@ -1,5 +1,5 @@
 //! V63 — Unified Human ↔ AI Architecture Lock:
-//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 36 MCP tools.
+//! 1. 1:1 `TOOLS_JSON` ↔ `Server::tool` dispatch symmetry across all 42 MCP tools.
 //! 2. Executable `# @mcp:` literate directives across every `.fsm` file in `examples/`.
 //! 3. `apiv: 2` same-result envelope parity between `fieldsmith_api::respond` and
 //!    `fieldsmith_mcp::Server::handle` for `QuestionSpec::Verify` (`ok` + `refusal`)
@@ -147,7 +147,7 @@ fn v63_architecture_lock() {
 
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        39.0,
+        42.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -219,6 +219,7 @@ fn v63_architecture_lock() {
                 let reparsed =
                     fsm::parse(&printed).unwrap_or_else(|e| panic!("reparse printed {rel}: {e}"));
                 if reparsed.coupled_system == doc.coupled_system
+                    && reparsed.uncertainties == doc.uncertainties
                     && reparsed.asserts == doc.asserts
                     && reparsed.solve.plasticity == doc.solve.plasticity
                     && reparsed.solve.hardening_n == doc.solve.hardening_n
@@ -1439,6 +1440,163 @@ assert \"In-plane stress limit\" metric=\"max_vm_elem\" target=\"<= 32\" unit=\"
         0.0,
     ));
 
+    // -------------------------------------------------------------------------
+    // 12. Epistemic UQ (`QuestionSpec::Uq` / MCP `uq`) O(1)-Solve Propagation, API<->MCP Parity & Robust p90 Sizing
+    // -------------------------------------------------------------------------
+    let uq_fsm = "\
+fieldsmith 1
+name \"V63 Epistemic Cantilever\"
+material ss316l
+let d = 10
+box beam size=(60, 12, d) at=(30, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load push tip force=(0, 0, -550)
+solve build=(0, 0)
+uncertainty \"Depth tolerance\" param=\"d\" cv=0.03 unit=\"mm\"
+uncertainty \"Tip force scatter\" param=\"push.force.2\" cv=0.08 unit=\"N\"
+uncertainty \"Modulus scatter\" param=\"ss316l.e\" cv=0.05 unit=\"MPa\"
+uncertainty \"Yield scatter\" param=\"ss316l.yield\" cv=0.06 unit=\"MPa\"
+assert \"Robust p90 stress\" metric=\"p90.max_vm_elem\" target=\"<= 175\" unit=\"MPa\"
+";
+    let uq_api_req = json!({
+        "apiv": 2,
+        "doc": uq_fsm,
+        "question": {
+            "kind": "uq",
+            "dofs": 4500,
+        }
+    });
+    let uq_api_rep = fieldsmith_api::respond(&uq_api_req.to_string());
+    assert!(!uq_api_rep.is_error, "API uq failed: {}", uq_api_rep.body);
+    let uq_api_json: Value = serde_json::from_str(&uq_api_rep.body).expect("uq_api_json");
+
+    let mut uq_srv = Server::new();
+    let (uq_open_err, _) = mcp_tool_call(&mut uq_srv, 1000, "open", json!({ "doc": uq_fsm }));
+    assert!(!uq_open_err);
+    let (uq_mcp_err, uq_mcp_json) = mcp_tool_call(&mut uq_srv, 1001, "uq", json!({ "dofs": 4500 }));
+    assert!(!uq_mcp_err, "MCP uq failed: {uq_mcp_json}");
+    assert_eq!(
+        canon(&uq_api_json),
+        canon(&uq_mcp_json),
+        "API vs MCP `uq` envelope mismatch"
+    );
+
+    let uq_solves = uq_mcp_json["uq"]["solves_run"]
+        .as_u64()
+        .expect("uq solves_run");
+    // 1 primal solve + 3 mechanical adjoints (σ_vM, ‖u‖, and additive U_peel since build=(0,0) is set) = 4 solves,
+    // strictly O(1) regardless of parameter count k. Verify k=2 and k=4 execute identical solve counts:
+    let (uq2_err, uq2_json) = mcp_tool_call(
+        &mut uq_srv,
+        1005,
+        "uq",
+        json!({
+            "dofs": 4500,
+            "uncertainties": [
+                { "label": "Depth tolerance", "param": "d", "cv": 0.03, "unit": "mm" },
+                { "label": "Tip force scatter", "param": "push.force.2", "cv": 0.08, "unit": "N" }
+            ]
+        }),
+    );
+    assert!(!uq2_err, "MCP 2-param uq failed: {uq2_json}");
+    let uq2_solves = uq2_json["uq"]["solves_run"]
+        .as_u64()
+        .expect("uq2 solves_run");
+    assert_eq!(
+        uq_solves, uq2_solves,
+        "expected O(1) linear FEA solve count invariant in k (k=4 vs k=2)"
+    );
+    assert_eq!(
+        uq_solves, 4,
+        "expected 1 primal + 3 adjoint solves = 4 for build-enabled 3D cantilever, got {uq_solves}"
+    );
+    let uq_metrics = uq_mcp_json["uq"]["metrics"]
+        .as_array()
+        .expect("uq metrics array");
+    let vm_m = uq_metrics
+        .iter()
+        .find(|m| m["metric"] == "max_vm_elem")
+        .expect("max_vm_elem summary in uq");
+    let vm_p50 = vm_m["p50"].as_f64().unwrap();
+    let vm_std = vm_m["std_dev"].as_f64().unwrap();
+    // Closed-form Euler-Bernoulli CV(σ) = sqrt((2 * CV_d)^2 + CV_F^2) = sqrt(0.06^2 + 0.08^2) = 0.10.
+    let expected_cv_vm = ((2.0_f64 * 0.03).powi(2) + 0.08_f64.powi(2)).sqrt();
+    report.check(Check::absolute(
+        "4-parameter 3D epistemic UQ linear FEA solve count (1 primal + 3 adjoints, matching k=2)",
+        4.0,
+        uq_solves as f64,
+        "solves",
+        0.0,
+    ));
+    report.check(Check::relative(
+        "3D FOSM adjoint stress CV (std_dev / p50) vs closed-form Gaussian propagation",
+        expected_cv_vm,
+        vm_std / vm_p50,
+        "",
+        0.03,
+    ));
+
+    // Compare robust p90.max_vm_elem <= 175 sizing vs deterministic max_vm_elem <= 175 sizing
+    let (rob_opt_err, rob_opt_json) = mcp_tool_call(
+        &mut uq_srv,
+        1002,
+        "optimise",
+        json!({
+            "objective": "mass_g",
+            "params": ["d"],
+            "bounds": { "d": [8.5, 16.0] },
+            "max_iters": 7,
+            "dofs": 4000,
+            "apply": true,
+        }),
+    );
+    assert!(
+        !rob_opt_err,
+        "MCP robust p90 optimise failed: {rob_opt_json}"
+    );
+    assert_eq!(
+        rob_opt_json["optimisation"]["final_verification"]["all_passed"],
+        true
+    );
+    let d_rob = rob_opt_json["optimisation"]["parameters"][0]["final_value"]
+        .as_f64()
+        .expect("d_rob");
+
+    let det_fsm = uq_fsm.replace("p90.max_vm_elem", "max_vm_elem");
+    let mut det_srv = Server::new();
+    let (det_open_err, _) = mcp_tool_call(&mut det_srv, 1003, "open", json!({ "doc": det_fsm }));
+    assert!(!det_open_err);
+    let (det_opt_err, det_opt_json) = mcp_tool_call(
+        &mut det_srv,
+        1004,
+        "optimise",
+        json!({
+            "objective": "mass_g",
+            "params": ["d"],
+            "bounds": { "d": [8.5, 16.0] },
+            "max_iters": 7,
+            "dofs": 4000,
+            "apply": true,
+        }),
+    );
+    assert!(
+        !det_opt_err,
+        "MCP deterministic p50 optimise failed: {det_opt_json}"
+    );
+    let d_det = det_opt_json["optimisation"]["parameters"][0]["final_value"]
+        .as_f64()
+        .expect("d_det");
+    // Analytical ratio: d_rob / d_det ≈ sqrt(1 + z_0.90 * CV_σ) = sqrt(1 + 1.28155 * 0.10) = 1.0621.
+    report.check(Check::relative(
+        "Robust p90 vs deterministic p50 optimal cantilever depth ratio d_rob / d_det",
+        (1.0 + 1.281_551_565_544_600_4 * expected_cv_vm).sqrt(),
+        d_rob / d_det,
+        "",
+        0.025,
+    ));
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -1446,9 +1604,10 @@ assert \"In-plane stress limit\" metric=\"max_vm_elem\" target=\"<= 32\" unit=\"
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
-             `overhang_fraction`, and `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities), \
+             `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
+             and first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -1466,17 +1625,19 @@ assert \"In-plane stress limit\" metric=\"max_vm_elem\" target=\"<= 32\" unit=\"
     report.section(
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
-         `SketchWorkbench` -> `DocCommand` dispatch, contract authoring (`upsert_assert` / `delete_assert`), \
-         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / modal `∂f₁/∂p` / \
+         `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
+         WASM declarative `system` authoring (`set_system_block`), and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
          (`solve.build.*`), AND modal vibration cases (including spatial `lerp(...)` \
          BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
          adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear solves \
-         independent of parameter count `k`); nonlinear `J2` elastoplastic cases evaluate on the \
-         fixed-topology `V_k`-deformed mesh (`method: \"boundary_velocity_fixed_mesh\"`), and discrete \
-         topology jumps fall back to locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
+         independent of parameter count `k`); epistemic UQ (`uq`) uses first-order second-moment (FOSM) \
+         independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`); \
+         nonlinear `J2` elastoplastic cases evaluate on the fixed-topology `V_k`-deformed mesh \
+         (`method: \"boundary_velocity_fixed_mesh\"`), and discrete topology jumps fall back to \
+         locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
          `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );

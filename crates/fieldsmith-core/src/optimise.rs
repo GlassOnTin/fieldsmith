@@ -13,8 +13,8 @@
 //! merit line search at locked element spacing `h`.
 
 use crate::contracts::{
-    evaluate_contracts, is_graded_assert_metric, parse_mode_metric_index,
-    required_modes_for_asserts, resolve_assert_metric, VerificationReport,
+    evaluate_contracts_with_uq, is_graded_assert_metric, parse_mode_metric_index,
+    required_modes_for_asserts, VerificationReport,
 };
 use crate::declarative_system::{resolve_system_doc, sync_system_doc_compact};
 use crate::fill::{self, Graded};
@@ -181,6 +181,7 @@ struct EvalState {
     verification: VerificationReport,
     objective: f64,
     constraints_g: Vec<f64>,
+    primal_solves: usize,
     solves: usize,
 }
 
@@ -498,7 +499,8 @@ fn eval_objective_grad_p(
     }
 }
 
-fn metric_derivative_for_param(
+pub(crate) fn metric_derivative_for_param(
+    doc: &Document,
     metric: &str,
     a: &Analysis,
     g: Option<&Graded>,
@@ -506,6 +508,17 @@ fn metric_derivative_for_param(
     solid_ps: Option<&ParameterSensitivity>,
 ) -> Result<f64, SetupError> {
     let m = metric.trim();
+    let d_sigma_y = ParamAddr::parse(&ps.param)
+        .ok()
+        .and_then(|addr| {
+            if matches!(addr.attr.as_str(), "yield" | "yield_strength") {
+                let mid = crate::sensitivity::resolve_material_param_id(doc, &addr)?;
+                (mid == doc.material).then_some(1.0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0);
     match m {
         "mass_g" | "graded_mass_g" => return Ok(ps.d_mass_g),
         "solid_mass_g" => return Ok(ps.d_solid_mass_g.unwrap_or(ps.d_mass_g)),
@@ -656,7 +669,7 @@ fn metric_derivative_for_param(
             "max_vm_elem" | "vm" | "max_von_mises" => Ok(cs.d_max_vm_elem),
             "min_safety_factor" | "safety_factor" => {
                 let denom = bc.max_vm_elem.max(1e-9);
-                Ok(-a.yield_strength * cs.d_max_vm_elem / (denom * denom))
+                Ok((d_sigma_y * denom - a.yield_strength * cs.d_max_vm_elem) / (denom * denom))
             }
             "max_temp" => cs.d_max_temp.ok_or_else(|| {
                 SetupError(format!(
@@ -696,7 +709,7 @@ fn metric_derivative_for_param(
         "max_vm_elem" | "vm" | "max_von_mises" => Ok(cs.d_max_vm_elem),
         "min_safety_factor" | "safety_factor" => {
             let denom = bc.max_vm_elem.max(1e-9);
-            Ok(-a.yield_strength * cs.d_max_vm_elem / (denom * denom))
+            Ok((d_sigma_y * denom - a.yield_strength * cs.d_max_vm_elem) / (denom * denom))
         }
         "max_temp" => cs.d_max_temp.ok_or_else(|| {
             SetupError(format!(
@@ -1044,23 +1057,23 @@ fn evaluate_state(
         None
     };
 
-    let verification =
-        evaluate_contracts(asserts, &analysis, graded.as_ref()).map_err(SetupError)?;
+    let (verification, uq_opt) =
+        evaluate_contracts_with_uq(&doc, &sys_doc, asserts, &analysis, graded.as_ref(), clock)
+            .map_err(SetupError)?;
     let objective = eval_objective_value(obj, &analysis, graded.as_ref())?;
     let mut constraints_g = Vec::with_capacity(asserts.len());
-    for asrt in asserts {
-        let val =
-            resolve_assert_metric(&asrt.metric, &analysis, graded.as_ref()).map_err(SetupError)?;
-        let (g, _) = contract_residual_and_grad(asrt, val, None)?;
+    for (asrt, out) in asserts.iter().zip(&verification.outcomes) {
+        let (g, _) = contract_residual_and_grad(asrt, out.value, None)?;
         constraints_g.push(g);
     }
     let sdoc = crate::structural_doc(&sys_doc);
     let static_solves = crate::case_names(sdoc.as_ref()).len() + sdoc.thermal_cases().len();
-    let solves = if graded.is_some() {
+    let primal_solves = if graded.is_some() {
         (2 * static_solves + usize::from(analysis.modes.is_some())).max(1)
     } else {
         (static_solves + usize::from(analysis.modes.is_some())).max(1)
     };
+    let solves = uq_opt.map(|u| u.solves_run).unwrap_or(primal_solves);
     Ok(EvalState {
         doc,
         sys_doc,
@@ -1069,6 +1082,7 @@ fn evaluate_state(
         verification,
         objective,
         constraints_g,
+        primal_solves,
         solves,
     })
 }
@@ -1178,7 +1192,30 @@ pub fn optimise_document(
         constraints_g: cur.constraints_g.clone(),
     };
 
-    let has_build_param = metas.iter().any(|m| is_solve_param_target(doc, &m.addr));
+    let has_quantile = crate::uq::has_quantile_asserts(&asserts);
+    let uq_inputs_0 = if has_quantile {
+        let list = crate::uq::collect_effective_uncertainties(doc, &[]);
+        if list.is_empty() {
+            return Err(SetupError(
+                "optimise: quantile contract (`p90.`/`p10.`) requires at least one `uncertainty` or `system` `epistemic` parameter"
+                    .into(),
+            ));
+        }
+        list
+    } else {
+        Vec::new()
+    };
+    let mut sens_param_names = param_names.clone();
+    for u in &uq_inputs_0 {
+        let up = u.param.trim();
+        if !sens_param_names.iter().any(|x| x == up) {
+            sens_param_names.push(up.to_string());
+        }
+    }
+
+    let has_build_param = sens_param_names
+        .iter()
+        .any(|p| ParamAddr::parse(p).is_ok_and(|addr| is_solve_param_target(doc, &addr)));
     let am_active_in_opt = has_build_param
         || matches!(
             spec.objective,
@@ -1190,7 +1227,7 @@ pub fn optimise_document(
 
     let need_solid_case_sens = cur.graded.is_some()
         && asserts.iter().any(|a| {
-            let m = a.metric.trim();
+            let (_, m) = crate::uq::strip_quantile_prefix(&a.metric);
             !is_graded_assert_metric(m)
                 && !m.starts_with("mode_")
                 && !matches!(
@@ -1203,10 +1240,10 @@ pub fn optimise_document(
                         | "overhang_deg"
                 )
         });
-    let non_fill_param_names: Vec<String> = metas
+    let non_fill_param_names: Vec<String> = sens_param_names
         .iter()
-        .filter(|m| !is_fill_opt_addr(doc, &m.addr))
-        .map(|m| m.name.clone())
+        .filter(|p| ParamAddr::parse(p).is_ok_and(|addr| !is_fill_opt_addr(doc, &addr)))
+        .cloned()
         .collect();
 
     let mut trust_delta = 0.28f64;
@@ -1231,7 +1268,7 @@ pub fn optimise_document(
                 &cur.sys_doc,
                 &cur.analysis,
                 gr,
-                &param_names,
+                &sens_param_names,
                 clock(),
                 clock,
             )?
@@ -1240,14 +1277,14 @@ pub fn optimise_document(
                 sens_doc.as_ref(),
                 &cur.sys_doc,
                 &cur.analysis,
-                &param_names,
+                &sens_param_names,
                 clock(),
                 clock,
             )?
         };
         sensitivity_method = sens.method.clone();
-        // `sens.solves_run` includes the baseline solve count; add only the adjoint/perturbation solves.
-        total_solves += sens.solves_run.saturating_sub(cur.solves);
+        // `sens.solves_run` includes the baseline primal solve count; add only the adjoint/perturbation solves.
+        total_solves += sens.solves_run.saturating_sub(cur.primal_solves);
 
         let solid_sens = if need_solid_case_sens && !non_fill_param_names.is_empty() {
             let mut s_doc = sens_doc.as_ref().clone();
@@ -1293,22 +1330,85 @@ pub fn optimise_document(
         for (j, asrt) in asserts.iter().enumerate() {
             let val = cur.verification.outcomes[j].value;
             let mut dv_dp = Vec::with_capacity(n);
-            for meta in &metas {
-                let ps = sens
-                    .parameters
-                    .iter()
-                    .find(|p| p.param == meta.name)
-                    .unwrap();
-                let solid_ps = solid_sens
-                    .as_ref()
-                    .and_then(|sr| sr.parameters.iter().find(|p| p.param == meta.name));
-                dv_dp.push(metric_derivative_for_param(
-                    &asrt.metric,
-                    &cur.analysis,
-                    cur.graded.as_ref(),
-                    ps,
-                    solid_ps,
-                )?);
+            if let (Some(qk), base_m) = crate::uq::strip_quantile_prefix(&asrt.metric) {
+                let cur_uq_inputs = crate::uq::collect_effective_uncertainties(&cur.doc, &[]);
+                let mut var_sum = 0.0f64;
+                let mut contribs = Vec::with_capacity(cur_uq_inputs.len());
+                for u in &cur_uq_inputs {
+                    let up = u.param.trim();
+                    let ups = sens
+                        .parameters
+                        .iter()
+                        .find(|p| p.param == up)
+                        .ok_or_else(|| {
+                            SetupError(format!("optimise: missing UQ sensitivity for '{up}'"))
+                        })?;
+                    let usolid = solid_sens
+                        .as_ref()
+                        .and_then(|sr| sr.parameters.iter().find(|p| p.param == up));
+                    let sig = u.effective_sigma(ups.nominal);
+                    let dm_du = metric_derivative_for_param(
+                        &cur.doc,
+                        base_m,
+                        &cur.analysis,
+                        cur.graded.as_ref(),
+                        ups,
+                        usolid,
+                    )?;
+                    var_sum += (sig * dm_du) * (sig * dm_du);
+                    contribs.push((up, sig, dm_du, u));
+                }
+                let std_m = var_sum.sqrt();
+                let z_q = qk.z_score();
+                for meta in &metas {
+                    let ps = sens
+                        .parameters
+                        .iter()
+                        .find(|p| p.param == meta.name)
+                        .unwrap();
+                    let solid_ps = solid_sens
+                        .as_ref()
+                        .and_then(|sr| sr.parameters.iter().find(|p| p.param == meta.name));
+                    let mut dq_dp = metric_derivative_for_param(
+                        &cur.doc,
+                        base_m,
+                        &cur.analysis,
+                        cur.graded.as_ref(),
+                        ps,
+                        solid_ps,
+                    )?;
+                    if std_m > 1e-30 {
+                        for &(up, sig, dm_du, u_spec) in &contribs {
+                            if up == meta.name {
+                                let dsig_dp = u_spec.effective_sigma_deriv(ps.nominal);
+                                if dsig_dp != 0.0 {
+                                    let dstd_dsig = (sig * dm_du * dm_du) / std_m;
+                                    dq_dp += z_q * dstd_dsig * dsig_dp;
+                                }
+                            }
+                        }
+                    }
+                    dv_dp.push(dq_dp);
+                }
+            } else {
+                for meta in &metas {
+                    let ps = sens
+                        .parameters
+                        .iter()
+                        .find(|p| p.param == meta.name)
+                        .unwrap();
+                    let solid_ps = solid_sens
+                        .as_ref()
+                        .and_then(|sr| sr.parameters.iter().find(|p| p.param == meta.name));
+                    dv_dp.push(metric_derivative_for_param(
+                        &cur.doc,
+                        &asrt.metric,
+                        &cur.analysis,
+                        cur.graded.as_ref(),
+                        ps,
+                        solid_ps,
+                    )?);
+                }
             }
             let (_, dg_dp) = contract_residual_and_grad(asrt, val, Some(&dv_dp))?;
             let dg_dz: Vec<f64> = dg_dp
@@ -2065,6 +2165,60 @@ assert \"Mass savings vs solid\" metric=\"mass_saved_pct\" target=\">= 22\" unit
         assert!(
             theta_final < 50.0,
             "expected 3-pillar co-optimiser to rotate upright build tilt from 90° down to <= 45°, got {theta_final}"
+        );
+    }
+
+    #[test]
+    fn optimise_robust_p90_stress_sizes_thicker_margin_than_deterministic_p50() {
+        let base_src = "\
+fieldsmith 1
+name \"Robust Cantilever Sizing\"
+material ss316l
+let d = 9.0
+box beam size=(80, d, 12) at=(40, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load pull tip force=(0, -600, 0)
+uncertainty \"Machining tolerance\" param=d std=0.30 unit=\"mm\"
+uncertainty \"Load jitter\" param=\"pull.force.1\" cv=0.12 unit=\"N\"
+assert \"Stress cap\" metric=\"max_vm_elem\" target=\"<= 190\" unit=\"MPa\"
+";
+        let det_doc = fsm::parse(base_src).expect("parse det doc");
+        let mut bounds = BTreeMap::new();
+        bounds.insert("d".to_string(), [8.5, 16.0]);
+        let spec = OptimiseSpec {
+            objective: OptObjective::MassG,
+            params: vec!["d".to_string()],
+            bounds,
+            max_iters: Some(8),
+            dofs: Some(6_000),
+            h: None,
+        };
+        let (det_opt, det_rep) =
+            optimise_document(&det_doc, None, &spec, zero_clock).expect("det optimise");
+        assert!(det_rep.final_verification.all_passed, "{det_rep:?}");
+        let d_det = det_opt.lets[0].value;
+
+        let mut rob_doc = det_doc.clone();
+        rob_doc.asserts[0].metric = "p90.max_vm_elem".into();
+        let (rob_opt, rob_rep) =
+            optimise_document(&rob_doc, None, &spec, zero_clock).expect("robust p90 optimise");
+        assert_eq!(rob_rep.sensitivity_method, "boundary_velocity_adjoint");
+        assert!(
+            !rob_rep.initial_verification.all_passed,
+            "expected initial d=9 mm beam to violate p90.max_vm_elem <= 190: {:?}",
+            rob_rep.initial_verification
+        );
+        assert!(
+            rob_rep.final_verification.all_passed,
+            "expected robust p90 optimiser to satisfy p90.max_vm_elem <= 190: {:?}",
+            rob_rep.final_verification
+        );
+        let d_rob = rob_opt.lets[0].value;
+        assert!(
+            d_rob > d_det + 0.55,
+            "expected robust p90 beam depth ({d_rob:.3} mm) to carry substantial safety margin over deterministic p50 depth ({d_det:.3} mm)"
         );
     }
 }

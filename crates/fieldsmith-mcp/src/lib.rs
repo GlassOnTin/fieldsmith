@@ -33,7 +33,7 @@ use fieldsmith_doc::sketch::{
 };
 use fieldsmith_doc::{
     canonical_color, fsm, materials, Document, Family, FillMode, LoadKind, MaterialRole, Node,
-    NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform,
+    NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform, UncertaintySpec,
 };
 use fieldsmith_solve::antenna::{
     analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
@@ -308,10 +308,13 @@ impl Server {
             "set_build" => self.set_build(args),
             "upsert_assert" => self.upsert_assert(args),
             "delete_assert" => self.delete_assert(args),
+            "upsert_uncertainty" => self.upsert_uncertainty(args),
+            "delete_uncertainty" => self.delete_uncertainty(args),
             "doc_text" | "export_fsm" => self.doc_text(args),
             "solve" | "solve_study" => self.solve(args),
             "verify" => self.verify(args),
             "sensitivity" => self.sensitivity(args),
+            "uq" => self.uq(args),
             "optimise" | "optimize" => self.optimise(args),
             "analyze_sdf_channel" => self.analyze_sdf_channel(args),
             "export" => self.export(args),
@@ -353,6 +356,8 @@ impl Server {
                     | "set_build"
                     | "upsert_assert"
                     | "delete_assert"
+                    | "upsert_uncertainty"
+                    | "delete_uncertainty"
                     | "solve"
                     | "solve_study"
                     | "optimise"
@@ -434,6 +439,7 @@ impl Server {
             "coupled_system": d.coupled_system,
             "system_block": d.system_block,
             "asserts": d.asserts,
+            "uncertainties": d.uncertainties,
             "lets": d.lets,
             "sketches": d.sketches,
             "sketch_features": d.sketch_features,
@@ -824,6 +830,75 @@ impl Server {
         }))
     }
 
+    fn upsert_uncertainty(&mut self, args: Value) -> Result<Value, String> {
+        let index = args
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        let param = text_field("param", &args)?;
+        let std = args
+            .get("std")
+            .or_else(|| args.get("sigma"))
+            .and_then(Value::as_f64);
+        let cv = args.get("cv").and_then(Value::as_f64);
+        let label = args
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let unit = args
+            .get("unit")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertUncertainty {
+                index,
+                uncertainty: UncertaintySpec {
+                    label,
+                    param,
+                    std,
+                    cv,
+                    unit,
+                },
+            },
+        )?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "uncertainties": d.uncertainties,
+            "problems": out.problems,
+        }))
+    }
+
+    fn delete_uncertainty(&mut self, args: Value) -> Result<Value, String> {
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let idx = if let Some(i) = args.get("index").and_then(Value::as_u64) {
+            i as usize
+        } else if let Some(lbl) = args.get("label").and_then(Value::as_str) {
+            d.uncertainties
+                .iter()
+                .position(|u| u.label == lbl)
+                .ok_or_else(|| format!("delete_uncertainty: no uncertainty with label {lbl:?}"))?
+        } else if let Some(prm) = args.get("param").and_then(Value::as_str) {
+            d.uncertainties
+                .iter()
+                .position(|u| u.param == prm)
+                .ok_or_else(|| format!("delete_uncertainty: no uncertainty on param {prm:?}"))?
+        } else {
+            return Err("delete_uncertainty: provide 'index', 'label', or 'param'".into());
+        };
+        let out = apply_doc_command(d, DocCommand::DeleteUncertainty { index: idx })?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "uncertainties": d.uncertainties,
+            "problems": out.problems,
+        }))
+    }
+
     /// Configure or update the document's `fill` specification (TPMS family, mode, cell,
     /// skin, `skin_max`, density range, curve, min_wall, protected shapes, margin, case,
     /// or lattice rotation), or clear it when `"clear": true` is passed.
@@ -1080,6 +1155,12 @@ impl Server {
     fn sensitivity(&mut self, args: Value) -> Result<Value, String> {
         let mut q = args;
         q["kind"] = json!("sensitivity");
+        self.solve(q)
+    }
+
+    fn uq(&mut self, args: Value) -> Result<Value, String> {
+        let mut q = args;
+        q["kind"] = json!("uq");
         self.solve(q)
     }
 
@@ -2570,7 +2651,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
  {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -2583,13 +2664,16 @@ const TOOLS_JSON: &str = r#"[
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
  {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
  {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, and constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]}}}},
- {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `min_safety_factor`, `mass_g`, `max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `mode_1`, `graded.yield_utilization`, `graded.buckling_utilization`, `graded.max_layer_peel`, `graded_mass_g`, `mass_saved_pct`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
+ {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `p90.max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `p90.max_temp`, `min_safety_factor`, `p10.min_safety_factor`, `mass_g`, `max_layer_peel`, `p90.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `mode_1`, `p10.mode_1`, `graded.yield_utilization`, `p90.graded.yield_utilization`, `graded.buckling_utilization`, `graded.max_layer_peel`, `graded_mass_g`, `mass_saved_pct`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
  {"name":"delete_assert","description":"Delete an executable `assert` engineering contract from the open `.fsm` document by `index` or `label`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"}}}},
+ {"name":"upsert_uncertainty","description":"Create or update an epistemic / manufacturing parameter uncertainty (`uncertainty` statement) in the open `.fsm` document (`param` such as a `let` name, `pull.force.1`, `ss316l.e`, `ss316l.yield`, `fill.rho_min`, `solve.build.0`, or `system` `epistemic`, with `std` and/or relative `cv`).","inputSchema":{"type":"object","required":["param"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"},"std":{"type":"number"},"sigma":{"type":"number"},"cv":{"type":"number"},"unit":{"type":"string"}}}},
+ {"name":"delete_uncertainty","description":"Delete an `uncertainty` declaration from the open `.fsm` document by `index`, `label`, or `param`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/optimise) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","optimise"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
- {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts (including `p90.<metric>` and `p10.<metric>` epistemic quantile contracts) on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, `df_n/dp`, additive `d_max_layer_peel`, `d_overhang_fraction`, `d_max_overhang_deg`, plus graded TPMS lattice `dU_yield/dp`, `dU_buckling/dp`, and `d_solid_mass_g`) across `params` (or all non-derived `let`, `system`, `fill.*` grading, and `solve.build.0` / `solve.build.1` build-orientation variables in the open `.fsm` document) using mechanical, staggered thermo-elastic, and two-pass homogenised TPMS discrete adjoints plus `O(0)`-extra-solve Rayleigh-quotient modal and build-orientation differentiation (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
- {"name":"optimise","description":"Contract-constrained 3D continuum, additive build-orientation (`solve.build.0`, `solve.build.1`), graded TPMS lattice (`fill.*`), & coupled 0D/1D+3D parameter optimiser: minimises `objective` (`mass_g` default, `compliance`, `max_vm_elem`, `max_displacement`, `max_temp`, `max_layer_peel`, `overhang_fraction`) or maximises fundamental natural frequency (`max_mode_1_hz`) across `params` (or all non-load `let`, `system` design, `solve.build.*`, and `fill.*` grading variables) subject to every `.fsm` `assert` contract (including `max_layer_peel`, `graded.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `graded.yield_utilization`, `graded.buckling_utilization`, `mass_saved_pct`, `mode_k`, and `mode_split_12_pct`) using `O(1)` discrete adjoints (`trust_region_sqp_adjoint`). Updates the open session document when `apply` is true (default).","inputSchema":{"type":"object","properties":{"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"params":{"type":"array","items":{"type":"string"}},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"dofs":{"type":"integer"},"h":{"type":"number"},"apply":{"type":"boolean"}}}},
+ {"name":"uq","description":"Run `O(1)`-solve 3D continuum epistemic uncertainty quantification (`QuestionSpec::Uq`): propagates `uncertainties` (or all `uncertainty` statements + `system` `epistemic` closures in the open `.fsm` document) across `metrics` via discrete 3D adjoint sensitivities, returning `p10`, `p50`, `p90`, `std_dev`, and ranked `variance_share` contributors.","inputSchema":{"type":"object","properties":{"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"optimise","description":"Contract-constrained 3D continuum, additive build-orientation (`solve.build.0`, `solve.build.1`), graded TPMS lattice (`fill.*`), & coupled 0D/1D+3D parameter optimiser: minimises `objective` (`mass_g` default, `compliance`, `max_vm_elem`, `max_displacement`, `max_temp`, `max_layer_peel`, `overhang_fraction`) or maximises fundamental natural frequency (`max_mode_1_hz`) across `params` (or all non-load `let`, `system` design, `solve.build.*`, and `fill.*` grading variables) subject to every `.fsm` `assert` contract (including epistemic quantile contracts `p90.<metric>` / `p10.<metric>`, `max_layer_peel`, `graded.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `graded.yield_utilization`, `graded.buckling_utilization`, `mass_saved_pct`, `mode_k`, and `mode_split_12_pct`) using `O(1)` discrete adjoints (`trust_region_sqp_adjoint`). Updates the open session document when `apply` is true (default).","inputSchema":{"type":"object","properties":{"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"params":{"type":"array","items":{"type":"string"}},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"dofs":{"type":"integer"},"h":{"type":"number"},"apply":{"type":"boolean"}}}},
  {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},
  {"name":"list_coupled_systems","description":"List all available CoupledEngineeringSystem models, including any user-authored declarative `system <id> { ... }` block in the open `.fsm` document plus built-in reference packs.","inputSchema":{"type":"object","additionalProperties":false}},

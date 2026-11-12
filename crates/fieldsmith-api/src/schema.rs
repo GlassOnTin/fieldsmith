@@ -10,7 +10,9 @@ use fieldsmith_core::optimise::{OptObjective, OptimisationReport};
 use fieldsmith_core::overhang::OverhangReport;
 use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::sensitivity::SensitivityReport;
+use fieldsmith_core::uq::UqReport;
 use fieldsmith_core::{CaseResult, Provenance};
+use fieldsmith_doc::UncertaintySpec;
 
 use crate::question::{Met, Projection, Unmet};
 use serde::{Deserialize, Serialize};
@@ -148,6 +150,20 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         h: Option<f64>,
     },
+    /// `O(1)`-solve 3D continuum epistemic uncertainty quantification (`V63`):
+    /// propagates `uncertainties` (or `doc.uncertainties` + `system` `epistemic` closures when
+    /// omitted) across `metrics` via discrete adjoint sensitivities, returning `p10`, `p50`,
+    /// `p90`, `std_dev`, and ranked `variance_share` contributors.
+    Uq {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        uncertainties: Vec<UncertaintySpec>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        metrics: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -199,6 +215,9 @@ pub struct Response {
     /// Present for the contract-constrained optimise question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub optimisation: Option<OptimisationReport>,
+    /// Present for the epistemic uncertainty quantification question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uq: Option<UqReport>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

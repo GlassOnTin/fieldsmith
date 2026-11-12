@@ -15,6 +15,7 @@ pub mod rung;
 pub mod sensitivity;
 pub mod step;
 pub mod steptess;
+pub mod uq;
 pub mod voxel;
 
 use fieldsmith_doc::loaddist::LoadFn;

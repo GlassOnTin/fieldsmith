@@ -16,6 +16,7 @@ import type {
   SketchMacro,
   SketchPresetMeta,
   SketchSolveReport,
+  UncertaintySpec,
   Vec3,
 } from './types';
 import { withLetTables } from './types';
@@ -1584,6 +1585,51 @@ export function optimiseFsmDocument(
   const res: OptimiseBundle = JSON.parse(w.optimiseFsmDocument(payload, specJson));
   withLetTables(res.doc);
   return res;
+}
+
+export interface UqSpec {
+  uncertainties?: UncertaintySpec[];
+  metrics?: string[];
+  dofs?: number;
+  h?: number;
+}
+
+export interface UqContributor {
+  param: string;
+  label: string;
+  nominal: number;
+  sigma: number;
+  unit?: string;
+  sensitivity: number;
+  std_contribution: number;
+  variance_share: number;
+}
+
+export interface UqMetricSummary {
+  metric: string;
+  unit?: string;
+  p50: number;
+  std_dev: number;
+  p10: number;
+  p90: number;
+  contributors: UqContributor[];
+}
+
+export interface UqReport {
+  method: string;
+  solves_run: number;
+  h: number;
+  nodes: number;
+  elements: number;
+  inputs: UncertaintySpec[];
+  metrics: UqMetricSummary[];
+  elapsed_ms: number;
+}
+
+export function computeFsmUq(docOrFsm: Document | string, spec?: UqSpec): UqReport {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  const specJson = spec ? JSON.stringify(spec) : undefined;
+  return JSON.parse(w.computeFsmUq(payload, specJson)) as UqReport;
 }
 
 export interface ChannelFlowSpec {

@@ -980,6 +980,71 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     doc.asserts.push(item);
                 }
             }
+            "uncertainty" => {
+                if !stack.is_empty() {
+                    return Err(err("uncertainty is only allowed at the top level".into()));
+                }
+                let pos_label = match (c.toks.get(c.pos), c.toks.get(c.pos + 1)) {
+                    (Some(Tok::Str(_)), _) => match c.next() {
+                        Some(Tok::Str(s)) => Some(s),
+                        _ => unreachable!(),
+                    },
+                    (Some(Tok::Ident(_)), Some(Tok::Sym('='))) => None,
+                    (Some(Tok::Ident(_)), _) => match c.next() {
+                        Some(Tok::Ident(s)) => Some(s),
+                        _ => unreachable!(),
+                    },
+                    _ => None,
+                };
+                let mut a = c.attrs("", &let_scope(&doc))?;
+                let opt_label = a.string("label")?;
+                let param = a
+                    .string("param")?
+                    .ok_or_else(|| err("uncertainty needs param=\"...\"".into()))?;
+                if let Err(m) = crate::param::ParamAddr::parse(param.trim()) {
+                    return Err(err(m));
+                }
+                let std = a.num("std")?.or(a.num("sigma")?);
+                let cv = a.num("cv")?;
+                if let Some(s) = std {
+                    if !s.is_finite() || s < 0.0 {
+                        return Err(err("uncertainty 'std' must be finite and >= 0".into()));
+                    }
+                }
+                if let Some(v) = cv {
+                    if !v.is_finite() || v < 0.0 {
+                        return Err(err("uncertainty 'cv' must be finite and >= 0".into()));
+                    }
+                }
+                if std.unwrap_or(0.0) <= 0.0 && cv.unwrap_or(0.0) <= 0.0 {
+                    return Err(err(
+                        "uncertainty needs std=<positive> and/or cv=<positive>".into()
+                    ));
+                }
+                let unit = a.string("unit")?.unwrap_or_default();
+                a.finish()?;
+                let label = pos_label
+                    .or(opt_label)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| param.clone());
+                if let Some(slot) = doc
+                    .uncertainties
+                    .iter_mut()
+                    .find(|x| x.param == param && x.label == label)
+                {
+                    slot.std = std;
+                    slot.cv = cv;
+                    slot.unit = unit;
+                } else {
+                    doc.uncertainties.push(UncertaintySpec {
+                        label,
+                        param,
+                        std,
+                        cv,
+                        unit,
+                    });
+                }
+            }
             "color" => {
                 // `#` outside a quoted string starts a comment, so the hex travels quoted
                 // in the text form; the document stores it canonical `#RRGGBB[AA]`.
@@ -3299,6 +3364,24 @@ pub fn print(doc: &Document) -> String {
         o.push('\n');
         print_system(&mut o, sys);
     }
+    for u in &doc.uncertainties {
+        let lbl = if u.label.is_empty() {
+            &u.param
+        } else {
+            &u.label
+        };
+        let mut line = format!("uncertainty {} param={}", q(lbl), q(&u.param));
+        if let Some(s) = u.std {
+            line += &format!(" std={}", n(s));
+        }
+        if let Some(c) = u.cv {
+            line += &format!(" cv={}", n(c));
+        }
+        if !u.unit.is_empty() {
+            line += &format!(" unit={}", q(&u.unit));
+        }
+        let _ = writeln!(o, "{line}");
+    }
     for a in &doc.asserts {
         let mut line = format!(
             "assert {} metric={} target={}",
@@ -5193,6 +5276,32 @@ heatflux q_var wall q=0.8 q_fn=\"0.2 + q_peak * exp(-((z - 30) / 10)^2)\" case=\
         assert!(doc.validate().is_empty(), "{:?}", doc.validate());
         let printed = print(&doc);
         let reparsed = parse(&printed).expect("reparse spatial BCs");
+        assert_eq!(reparsed, doc);
+    }
+
+    #[test]
+    fn uncertainty_declarations_round_trip_and_validate() {
+        let raw = "\
+fieldsmith 1
+name \"Epistemic Cantilever\"
+material ss316l
+let d = 10
+box beam size=(80, d, 12) at=(40, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support fix root
+load pull tip force=(0, -500, 0)
+uncertainty \"Machining tolerance\" param=d std=0.15 unit=\"mm\"
+uncertainty \"Tip load jitter\" param=\"pull.force.1\" cv=0.08 unit=\"N\"
+assert \"Robust peak stress\" metric=\"p90.max_vm_elem\" target=\"<= 160\" unit=\"MPa\"
+";
+        let doc = parse(raw).expect("parse uncertainties");
+        assert_eq!(doc.uncertainties.len(), 2);
+        assert_eq!(doc.uncertainties[0].effective_sigma(10.0), 0.15);
+        assert!((doc.uncertainties[1].effective_sigma(-500.0) - 40.0).abs() < 1e-12);
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+        let printed = print(&doc);
+        let reparsed = parse(&printed).expect("reparse uncertainties");
         assert_eq!(reparsed, doc);
     }
 }

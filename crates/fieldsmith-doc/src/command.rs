@@ -121,6 +121,14 @@ pub enum DocCommand {
     DeleteAssert {
         index: usize,
     },
+    UpsertUncertainty {
+        #[serde(default)]
+        index: Option<usize>,
+        uncertainty: UncertaintySpec,
+    },
+    DeleteUncertainty {
+        index: usize,
+    },
 }
 
 /// Outcome returned by [`apply_doc_command`].
@@ -601,6 +609,71 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             entity_kind = Some("assert".into());
             action = Some("deleted".into());
         }
+        DocCommand::UpsertUncertainty {
+            index,
+            mut uncertainty,
+        } => {
+            uncertainty.label = uncertainty.label.trim().to_string();
+            uncertainty.param = uncertainty.param.trim().to_string();
+            uncertainty.unit = uncertainty.unit.trim().to_string();
+            if uncertainty.param.is_empty() {
+                return Err("upsert_uncertainty: param cannot be empty".into());
+            }
+            ParamAddr::parse(&uncertainty.param).map_err(|m| format!("upsert_uncertainty: {m}"))?;
+            if let Some(s) = uncertainty.std {
+                if !s.is_finite() || s < 0.0 {
+                    return Err("upsert_uncertainty: std must be finite and >= 0".into());
+                }
+            }
+            if let Some(c) = uncertainty.cv {
+                if !c.is_finite() || c < 0.0 {
+                    return Err("upsert_uncertainty: cv must be finite and >= 0".into());
+                }
+            }
+            if uncertainty.std.unwrap_or(0.0) <= 0.0 && uncertainty.cv.unwrap_or(0.0) <= 0.0 {
+                return Err("upsert_uncertainty: specify std > 0 and/or cv > 0".into());
+            }
+            if uncertainty.label.is_empty() {
+                uncertainty.label = uncertainty.param.clone();
+            }
+            let lbl = uncertainty.label.clone();
+            let act = if let Some(idx) = index {
+                if idx < doc.uncertainties.len() {
+                    doc.uncertainties[idx] = uncertainty;
+                    "updated"
+                } else {
+                    return Err(format!(
+                        "upsert_uncertainty: index {idx} out of bounds (len {})",
+                        doc.uncertainties.len()
+                    ));
+                }
+            } else if let Some(slot) = doc
+                .uncertainties
+                .iter_mut()
+                .find(|u| u.param == uncertainty.param && u.label == lbl)
+            {
+                *slot = uncertainty;
+                "updated"
+            } else {
+                doc.uncertainties.push(uncertainty);
+                "created"
+            };
+            entity_id = Some(lbl);
+            entity_kind = Some("uncertainty".into());
+            action = Some(act.into());
+        }
+        DocCommand::DeleteUncertainty { index } => {
+            if index >= doc.uncertainties.len() {
+                return Err(format!(
+                    "delete_uncertainty: index {index} out of bounds (len {})",
+                    doc.uncertainties.len()
+                ));
+            }
+            let removed = doc.uncertainties.remove(index);
+            entity_id = Some(removed.label);
+            entity_kind = Some("uncertainty".into());
+            action = Some("deleted".into());
+        }
     }
 
     Ok(DocCommandOutcome {
@@ -963,5 +1036,44 @@ support fix1 top_face fixed=xyz
             .expect("delete assert");
         assert_eq!(del.action.as_deref(), Some("deleted"));
         assert!(doc.asserts.is_empty());
+    }
+
+    #[test]
+    fn upsert_and_delete_uncertainty_round_trip_through_fsm() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"UQ Command Test\"\n\
+             material ss316l\n\
+             let d = 10\n\
+             box b size=(20, d, 10)\n",
+        )
+        .expect("parse");
+        let out = apply_doc_command(
+            &mut doc,
+            DocCommand::UpsertUncertainty {
+                index: None,
+                uncertainty: UncertaintySpec {
+                    label: "Depth tolerance".into(),
+                    param: "d".into(),
+                    std: Some(0.12),
+                    cv: None,
+                    unit: "mm".into(),
+                },
+            },
+        )
+        .expect("upsert uncertainty");
+        assert_eq!(out.action.as_deref(), Some("created"));
+        assert_eq!(doc.uncertainties.len(), 1);
+        let printed = fsm::print(&doc);
+        assert!(
+            printed.contains("uncertainty \"Depth tolerance\" param=\"d\" std=0.12 unit=\"mm\"")
+        );
+        let reparsed = fsm::parse(&printed).expect("reparse");
+        assert_eq!(reparsed.uncertainties, doc.uncertainties);
+
+        let del = apply_doc_command(&mut doc, DocCommand::DeleteUncertainty { index: 0 })
+            .expect("delete uncertainty");
+        assert_eq!(del.action.as_deref(), Some("deleted"));
+        assert!(doc.uncertainties.is_empty());
     }
 }

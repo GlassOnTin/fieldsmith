@@ -62,7 +62,7 @@ pub fn required_modes_for_asserts(
 ) -> Option<usize> {
     let mut needed = doc_modes.unwrap_or(0);
     for a in asserts {
-        let m = a.metric.trim();
+        let (_, m) = crate::uq::strip_quantile_prefix(&a.metric);
         if m == "mode_split_12_pct" {
             needed = needed.max(2);
         } else if let Some(idx1) = parse_mode_metric_index(m) {
@@ -75,7 +75,7 @@ pub fn required_modes_for_asserts(
 /// Whether an `@assert` / `assert` metric requires a [`Graded`] lattice re-solve when `doc.fill`
 /// is present.
 pub fn is_graded_assert_metric(metric: &str) -> bool {
-    let m = metric.trim();
+    let (_, m) = crate::uq::strip_quantile_prefix(metric);
     if m.starts_with("graded.")
         || matches!(
             m,
@@ -109,6 +109,11 @@ pub fn resolve_assert_metric(
     g: Option<&Graded>,
 ) -> Result<f64, String> {
     let m = metric.trim();
+    if crate::uq::strip_quantile_prefix(m).0.is_some() {
+        return Err(format!(
+            "quantile contract metric '{m}' requires document uncertainty propagation (use verify_document)"
+        ));
+    }
     if m == "mode_split_12_pct" {
         let freqs = &a
             .modes
@@ -270,13 +275,8 @@ pub fn resolve_assert_metric(
     }
 }
 
-/// Evaluate a single [`LiterateAssert`] against solved solid/modal/graded results.
-pub fn evaluate_assert(
-    asrt: &LiterateAssert,
-    a: &Analysis,
-    g: Option<&Graded>,
-) -> Result<(f64, String, bool), String> {
-    let val = resolve_assert_metric(&asrt.metric, a, g)?;
+/// Check an already-resolved scalar `val` against a [`LiterateAssert`] bound or tolerance.
+pub fn check_assert_target(asrt: &LiterateAssert, val: f64) -> Result<(f64, String, bool), String> {
     let tgt = asrt.target.trim();
     let tol_raw = asrt.tolerance.trim();
 
@@ -345,6 +345,16 @@ pub fn evaluate_assert(
     Ok((val, format!("±{abs_err:.4}"), ok))
 }
 
+/// Evaluate a single [`LiterateAssert`] against solved solid/modal/graded results.
+pub fn evaluate_assert(
+    asrt: &LiterateAssert,
+    a: &Analysis,
+    g: Option<&Graded>,
+) -> Result<(f64, String, bool), String> {
+    let val = resolve_assert_metric(&asrt.metric, a, g)?;
+    check_assert_target(asrt, val)
+}
+
 /// Evaluate a slice of [`LiterateAssert`] contracts against an already-computed [`Analysis`].
 pub fn evaluate_contracts(
     asserts: &[LiterateAssert],
@@ -380,9 +390,96 @@ pub fn evaluate_contracts(
     })
 }
 
+/// Evaluate deterministic and `p10.`/`p90.` epistemic quantile contracts against `(a, g)`.
+/// When `asserts` contains no quantile contracts, runs zero sensitivity work (`O(0)` overhead).
+pub fn evaluate_contracts_with_uq(
+    doc: &Document,
+    sys_doc: &Document,
+    asserts: &[LiterateAssert],
+    a: &Analysis,
+    g: Option<&Graded>,
+    clock: Clock,
+) -> Result<(VerificationReport, Option<crate::uq::UqReport>), String> {
+    if !crate::uq::has_quantile_asserts(asserts) {
+        return Ok((evaluate_contracts(asserts, a, g)?, None));
+    }
+    let mut needed_metrics = Vec::new();
+    for asrt in asserts {
+        if let (Some(_), base_m) = crate::uq::strip_quantile_prefix(&asrt.metric) {
+            if !needed_metrics.iter().any(|x| x == base_m) {
+                needed_metrics.push(base_m.to_string());
+            }
+        }
+    }
+    let sdoc = crate::structural_doc(sys_doc);
+    let static_solves = crate::case_names(sdoc.as_ref()).len() + sdoc.thermal_cases().len();
+    let base_solves = if g.is_some() {
+        (2 * static_solves + usize::from(a.modes.is_some())).max(1)
+    } else {
+        (static_solves + usize::from(a.modes.is_some())).max(1)
+    };
+    let uq = crate::uq::compute_uq_with_base(
+        doc,
+        sys_doc,
+        a,
+        g,
+        &[],
+        &needed_metrics,
+        base_solves,
+        clock(),
+        clock,
+    )
+    .map_err(|e| e.0)?;
+
+    let mut outcomes = Vec::with_capacity(asserts.len());
+    let mut passed = 0usize;
+    for asrt in asserts {
+        let (value, error_or_margin, ok) =
+            if let (Some(qk), base_m) = crate::uq::strip_quantile_prefix(&asrt.metric) {
+                let ms = uq
+                    .metrics
+                    .iter()
+                    .find(|m| m.metric == base_m)
+                    .ok_or_else(|| format!("missing UQ summary for '{base_m}'"))?;
+                let qval = match qk {
+                    crate::uq::QuantileKind::P10 => ms.p10,
+                    crate::uq::QuantileKind::P90 => ms.p90,
+                };
+                check_assert_target(asrt, qval)?
+            } else {
+                evaluate_assert(asrt, a, g)?
+            };
+        if ok {
+            passed += 1;
+        }
+        outcomes.push(AssertOutcome {
+            label: asrt.label.clone(),
+            metric: asrt.metric.clone(),
+            target: asrt.target.clone(),
+            tolerance: asrt.tolerance.clone(),
+            unit: asrt.unit.clone(),
+            value,
+            error_or_margin,
+            passed: ok,
+        });
+    }
+    let total = outcomes.len();
+    let failed = total - passed;
+    Ok((
+        VerificationReport {
+            total,
+            passed,
+            failed,
+            all_passed: failed == 0,
+            outcomes,
+        },
+        Some(uq),
+    ))
+}
+
 /// Run the document's required solver pass(es) (solid, modal if `solve modes=...`, graded TPMS if
-/// `fill ...`) and evaluate all `doc.asserts` (plus any header `@assert:` lines from `raw_fsm` if
-/// `doc.asserts` is empty).
+/// `fill ...`, plus `O(1)`-solve adjoint FOSM UQ if any `p10.`/`p90.` contracts exist) and evaluate
+/// all `doc.asserts` (plus any header `@assert:` lines from `raw_fsm` if `doc.asserts` is empty).
 pub fn verify_document(
     doc: &Document,
     raw_fsm: Option<&str>,
@@ -399,20 +496,41 @@ pub fn verify_document(
         Vec::new()
     };
 
+    let am_needed = asserts
+        .iter()
+        .any(|a| a.metric.contains("peel") || a.metric.contains("overhang"));
+    let solve_doc: std::borrow::Cow<'_, Document> = if am_needed && doc.solve.build.is_none() {
+        let mut d = doc.clone();
+        d.solve.build = Some([0.0, 0.0]);
+        std::borrow::Cow::Owned(d)
+    } else {
+        std::borrow::Cow::Borrowed(doc)
+    };
+
+    let sys_cow =
+        crate::declarative_system::resolve_system_doc(solve_doc.as_ref()).map_err(|e| e.0)?;
+
     let need_graded =
-        doc.fill.is_some() && asserts.iter().any(|a| is_graded_assert_metric(&a.metric));
+        sys_cow.fill.is_some() && asserts.iter().any(|a| is_graded_assert_metric(&a.metric));
 
-    let modes_count = required_modes_for_asserts(doc.solve.modes, &asserts);
+    let modes_count = required_modes_for_asserts(sys_cow.solve.modes, &asserts);
 
-    let a = analyse_full(doc, res, clock, modes_count, false).map_err(|e| e.0)?;
+    let analysis =
+        analyse_full(sys_cow.as_ref(), res, clock, modes_count, false).map_err(|e| e.0)?;
     let graded_opt = if need_graded {
-        Some(fill::graded_of(doc, &a, clock, false).map_err(|e| e.0)?)
+        Some(fill::graded_of(sys_cow.as_ref(), &analysis, clock, false).map_err(|e| e.0)?)
     } else {
         None
     };
-    let analysis = a;
 
-    let report = evaluate_contracts(&asserts, &analysis, graded_opt.as_ref())?;
+    let (report, _uq) = evaluate_contracts_with_uq(
+        solve_doc.as_ref(),
+        sys_cow.as_ref(),
+        &asserts,
+        &analysis,
+        graded_opt.as_ref(),
+        clock,
+    )?;
     Ok((analysis, graded_opt, report))
 }
 
@@ -458,5 +576,47 @@ assert \"Peak stress bounded\" metric=\"max_vm_elem\" target=\"<= 250\" tol=\"<=
                 .expect("verify with failing contract");
         assert!(!rep2.all_passed);
         assert_eq!(rep2.failed, 1);
+    }
+
+    #[test]
+    fn verify_document_evaluates_p90_and_p10_epistemic_quantile_contracts() {
+        let src = "\
+fieldsmith 1
+name \"Quantile Contract Cantilever\"
+material ss316l
+let d = 10
+box beam size=(80, d, 12) at=(40, 0, 0)
+region root = beam.nx
+region tip = beam.px
+support clamp root fixed=xyz
+load pull tip force=(0, -600, 0)
+uncertainty \"Machining depth\" param=d std=0.35 unit=\"mm\"
+uncertainty \"Load jitter\" param=\"pull.force.1\" cv=0.10 unit=\"N\"
+assert \"Deterministic stress\" metric=\"max_vm_elem\" target=\"<= 265\" unit=\"MPa\"
+assert \"Robust p90 stress\" metric=\"p90.max_vm_elem\" target=\"<= 265\" unit=\"MPa\"
+assert \"Robust p10 safety factor\" metric=\"p10.min_safety_factor\" target=\">= 1.3\"
+";
+        let doc = fsm::parse(src).expect("parse quantile contract doc");
+        let (_a, _g, rep) = verify_document(&doc, Some(src), Resolution::Dofs(8_000), zero_clock)
+            .expect("verify quantile contracts");
+        assert_eq!(rep.total, 3);
+        let p50_vm = rep.outcomes[0].value;
+        let p90_vm = rep.outcomes[1].value;
+        assert!(
+            p90_vm > p50_vm + 15.0,
+            "expected p90.max_vm_elem ({p90_vm:.2}) > p50 ({p50_vm:.2}) + 15 MPa"
+        );
+        // Tightening the p90 cap between p50 and p90 proves deterministic passes while p90 fails!
+        let mid_cap = 0.5 * (p50_vm + p90_vm);
+        let mut tight_doc = doc.clone();
+        tight_doc.asserts[0].target = format!("<= {mid_cap:.2}");
+        tight_doc.asserts[1].target = format!("<= {mid_cap:.2}");
+        let (_a2, _g2, rep2) =
+            verify_document(&tight_doc, None, Resolution::Dofs(8_000), zero_clock)
+                .expect("verify tight p90");
+        assert!(
+            rep2.outcomes[0].passed && !rep2.outcomes[1].passed,
+            "expected deterministic p50 to pass and epistemic p90 to fail at cap {mid_cap:.2}: {rep2:?}"
+        );
     }
 }

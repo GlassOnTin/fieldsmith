@@ -821,7 +821,109 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[13/13] Results UI AM sensitivity (∂U_peel/∂p, ∂Overhang/∂p) + upright FDM build+shape optimiser (theta: 90 -> ${amApplied.thetaOpt.toFixed(1)}°, h_root: 8.0 -> ${amApplied.hOpt.toFixed(2)} mm -> Undo): PASS`,
+    `[13/14] Results UI AM sensitivity (∂U_peel/∂p, ∂Overhang/∂p) + upright FDM build+shape optimiser (theta: 90 -> ${amApplied.thetaOpt.toFixed(1)}°, h_root: 8.0 -> ${amApplied.hOpt.toFixed(2)} mm -> Undo): PASS`,
+  );
+
+  // 14. Results UI Epistemic UQ Authoring (`+ Add Uncertainty`), O(1)-Solve `Compute UQ`, and Robust `p90.max_vm_elem` Sizing
+  const uqUiFsm = [
+    'fieldsmith 1',
+    'name "UI Epistemic Robust Beam"',
+    'material ss316l',
+    'let d = 8',
+    'box beam size=(60, 12, d) at=(30, 0, 0)',
+    'region root = beam.nx',
+    'region tip = beam.px',
+    'support clamp root fixed=xyz',
+    'load push tip force=(0, 0, -550)',
+    'solve build=(0, 0)',
+    'uncertainty "Tip force scatter" param="push.force.2" cv=0.08 unit="N"',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, uqUiFsm);
+
+  await page.waitForSelector('[data-testid="results-toggle-add-uncertainty-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-toggle-add-uncertainty-btn"]');
+  await page.waitForSelector('[data-testid="results-add-uncertainty-form"]', { timeout: 10000 });
+  await page.fill('[data-testid="uncertainty-label-input"]', 'Machining depth scatter');
+  await page.fill('[data-testid="uncertainty-param-input"]', 'd');
+  await page.selectOption('[data-testid="uncertainty-mode-select"]', 'std');
+  await page.fill('[data-testid="uncertainty-val-input"]', '0.35');
+  await page.fill('[data-testid="uncertainty-unit-input"]', 'mm');
+  await page.click('[data-testid="uncertainty-save-btn"]');
+
+  await page.waitForSelector('[data-testid="results-compute-uq-btn"]', { timeout: 10000 });
+  const uqBtnLabel = await page.textContent('[data-testid="results-compute-uq-btn"]');
+  assert(
+    uqBtnLabel && uqBtnLabel.includes('Compute UQ (2)'),
+    `Expected 'Compute UQ (2)' after adding second uncertainty, got '${uqBtnLabel}'`,
+  );
+
+  await page.click('[data-testid="results-compute-uq-btn"]');
+  await page.waitForSelector('[data-testid="results-uq-table"]', { timeout: 25000 });
+  const uqTableText = await page.textContent('[data-testid="results-uq-table"]');
+  assert(
+    uqTableText &&
+      uqTableText.includes('uq: boundary_velocity_adjoint') &&
+      uqTableText.includes('2 inputs') &&
+      uqTableText.includes('4 solves') &&
+      uqTableText.includes('max_vm_elem'),
+    `Expected O(1)-solve boundary_velocity_adjoint UQ table with 2 inputs & 4 solves, got '${uqTableText}'`,
+  );
+
+  // Add robust `p90.max_vm_elem <= 150` contract and run Optimise
+  await page.click('[data-testid="results-toggle-add-contract-btn"]');
+  await page.waitForSelector('[data-testid="results-add-contract-form"]', { timeout: 10000 });
+  await page.selectOption('[data-testid="contract-metric-select"]', 'p90.max_vm_elem');
+  await page.fill('[data-testid="contract-target-input"]', '<= 150');
+  await page.click('[data-testid="contract-save-btn"]');
+
+  await page.selectOption('[data-testid="optimise-objective-select"]', 'mass_g');
+  await page.click('[data-testid="results-run-optimise-btn"]');
+  await page.waitForFunction(
+    () => {
+      const errEl = document.querySelector('[data-testid="results-card-error"]');
+      if (errEl && errEl.textContent) return true;
+      const el = document.querySelector('[data-testid="results-optimisation-output"]');
+      return el && el.textContent && el.textContent.includes('d:');
+    },
+    { timeout: 35000 },
+  );
+  const uqCardErr = await page.evaluate(
+    () => document.querySelector('[data-testid="results-card-error"]')?.textContent ?? null,
+  );
+  assert(!uqCardErr, `Unexpected robust p90 optimisation error in UI: ${uqCardErr}`);
+  const uqOptText = await page.textContent('[data-testid="results-optimisation-output"]');
+  assert(
+    uqOptText && uqOptText.includes('✓ mass_g:') && uqOptText.includes('d:'),
+    `Expected feasible robust p90.max_vm_elem mass_g optimisation output, got '${uqOptText}'`,
+  );
+
+  await page.click('[data-testid="results-apply-optimised-btn"]');
+  const uqApplied = await page.evaluate(() => {
+    const dOpt = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'd')?.value ?? 8.0;
+    window.fieldsmith.store.undo();
+    const dUndone = window.fieldsmith.store.doc.lets?.find((l) => l.name === 'd')?.value ?? -1;
+    return { dOpt, dUndone };
+  });
+  assert(
+    uqApplied.dOpt > 9.6,
+    `Expected robust p90 optimiser to thicken d > 9.6 mm from 8.0 mm, got ${uqApplied.dOpt}`,
+  );
+  assert(
+    Math.abs(uqApplied.dUndone - 8.0) < 1e-9,
+    `Expected Ctrl+Z undo to restore d=8.0 mm, got ${uqApplied.dUndone}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[14/14] Results UI epistemic UQ (Compute UQ, 4 solves) + robust p90.max_vm_elem optimiser (d: 8.00 -> ${uqApplied.dOpt.toFixed(2)} mm -> Undo 8.00): PASS`,
   );
   await page.close();
 } catch (e) {

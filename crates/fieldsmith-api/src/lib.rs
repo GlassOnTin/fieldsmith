@@ -23,6 +23,7 @@ use fieldsmith_core::optimise::{optimise_document, OptimiseSpec};
 use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
 use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::sensitivity::compute_sensitivities;
+use fieldsmith_core::uq::{compute_uq, UqSpec};
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
 use fieldsmith_doc::{fsm, param, Document, NodeKind};
 use fieldsmith_field::expr;
@@ -224,6 +225,7 @@ pub fn respond(input: &str) -> Reply {
                         verification: None,
                         sensitivity: None,
                         optimisation: None,
+                        uq: None,
                         error: None,
                     })
                 }
@@ -312,6 +314,7 @@ pub fn respond(input: &str) -> Reply {
                                     verification: None,
                                     sensitivity: None,
                                     optimisation: None,
+                                    uq: None,
                                     error: None,
                                 })
                             }
@@ -355,6 +358,7 @@ pub fn respond(input: &str) -> Reply {
                             verification: None,
                             sensitivity: None,
                             optimisation: None,
+                            uq: None,
                             error: None,
                         })
                     }
@@ -417,6 +421,7 @@ pub fn respond(input: &str) -> Reply {
                         verification: None,
                         sensitivity: None,
                         optimisation: None,
+                        uq: None,
                         error: None,
                     })
                 }
@@ -557,6 +562,7 @@ pub fn respond(input: &str) -> Reply {
                 verification: None,
                 sensitivity: None,
                 optimisation: None,
+                uq: None,
                 error: None,
             })
         }
@@ -582,6 +588,7 @@ pub fn respond(input: &str) -> Reply {
                     verification: None,
                     sensitivity: None,
                     optimisation: None,
+                    uq: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -614,6 +621,7 @@ pub fn respond(input: &str) -> Reply {
                         verification: Some(rep),
                         sensitivity: None,
                         optimisation: None,
+                        uq: None,
                         error: None,
                     })
                 }
@@ -641,6 +649,7 @@ pub fn respond(input: &str) -> Reply {
                     verification: None,
                     sensitivity: Some(rep),
                     optimisation: None,
+                    uq: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -683,9 +692,43 @@ pub fn respond(input: &str) -> Reply {
                         verification: None,
                         sensitivity: None,
                         optimisation: Some(rep),
+                        uq: None,
                         error: None,
                     })
                 }
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
+        }
+        QuestionSpec::Uq {
+            uncertainties,
+            metrics,
+            dofs,
+            h,
+        } => {
+            let spec = UqSpec {
+                uncertainties,
+                metrics,
+                dofs,
+                h,
+            };
+            match compute_uq(&doc, &spec, question::clock) {
+                Ok(rep) => ok_reply(schema::Response {
+                    apiv: APIV,
+                    engine: store::engine_identity(),
+                    status: Status::Ok,
+                    name: Some(name),
+                    question: Some(echo),
+                    warnings,
+                    outcome: None,
+                    single: None,
+                    sweep: None,
+                    overhang: None,
+                    verification: None,
+                    sensitivity: None,
+                    optimisation: None,
+                    uq: Some(rep),
+                    error: None,
+                }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
@@ -737,6 +780,7 @@ fn error_reply(
             verification: None,
             sensitivity: None,
             optimisation: None,
+            uq: None,
             error: Some(message.into()),
         },
         true,

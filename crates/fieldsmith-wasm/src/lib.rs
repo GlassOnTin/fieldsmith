@@ -2387,6 +2387,26 @@ pub fn optimise_fsm_document_wasm(
     }))
 }
 
+/// `O(1)`-solve 3D continuum epistemic uncertainty quantification (`uq`):
+/// propagates `doc.uncertainties` + `system` `epistemic` closures through the 3D discrete adjoint
+/// and returns `UqReport` (`p10`, `p50`, `p90`, `std_dev`, ranked `variance_share` contributors).
+#[wasm_bindgen(js_name = computeFsmUq)]
+pub fn compute_fsm_uq_wasm(doc_or_fsm: &str, spec_json: Option<String>) -> Result<String, JsValue> {
+    use fieldsmith_core::uq::{compute_uq, UqSpec};
+    let doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let mut spec: UqSpec = match spec_json.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => {
+            serde_json::from_str(s).map_err(|e| js_err(format!("invalid UqSpec JSON: {e}")))?
+        }
+        _ => UqSpec::default(),
+    };
+    if spec.dofs.is_none() && spec.h.is_none() && doc.solve.size.is_none() {
+        spec.dofs = Some(8_000);
+    }
+    let report = compute_uq(&doc, &spec, clock).map_err(js_err)?;
+    to_json(&report)
+}
+
 /// Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`)
 /// directly from a `.fsm` or JSON `Document` SDF along `axis`, march 1D Darcy–Weisbach +
 /// Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto
