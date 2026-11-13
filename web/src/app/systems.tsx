@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
+  bodyBounds,
   listCoupledSystems,
   parseFsm,
   printFsm,
@@ -5280,7 +5281,7 @@ function extractSystemBlockText(): string {
   return m ? m[0] : '';
 }
 
-function buildDeclarativeSystemTemplate(kind: '0d' | '1d'): string {
+function buildDeclarativeSystemTemplate(kind: '0d' | '1d' | 'sdf1d'): string {
   const convId = store.doc.convections?.[0]?.id;
   if (kind === '0d') {
     const bindLines = convId ? [`  bind ${convId} attr=tinf expr="T_node"`] : [];
@@ -5303,6 +5304,53 @@ function buildDeclarativeSystemTemplate(kind: '0d' | '1d'): string {
         `  bind ${convId} attr=tinf expr="T_f"`,
       ]
     : [];
+  if (kind === 'sdf1d') {
+    let axis: 'x' | 'y' | 'z' = 'z';
+    let s0 = 2.0;
+    let s1 = 38.0;
+    try {
+      const bb = bodyBounds(store.doc);
+      if (bb) {
+        const spans: ['x' | 'y' | 'z', number, number, number][] = [
+          ['x', bb[1][0] - bb[0][0], bb[0][0], bb[1][0]],
+          ['y', bb[1][1] - bb[0][1], bb[0][1], bb[1][1]],
+          ['z', bb[1][2] - bb[0][2], bb[0][2], bb[1][2]],
+        ];
+        spans.sort((a, b) => b[1] - a[1]);
+        const best = spans[0];
+        if (best[1] > 1.0) {
+          axis = best[0];
+          const pad = Math.min(0.5, 0.05 * best[1]);
+          s0 = Number((best[2] + pad).toFixed(2));
+          s1 = Number((best[3] - pad).toFixed(2));
+        }
+      }
+    } catch {
+      // fall back to z in [2, 38]
+    }
+    return [
+      `system sdf_channel_1d title="3D SDF Cross-Section Coupled Channel" sector="3D-1D Coupled Fluids" nodes=15 span=(${s0}, ${s1}) axis=${axis} {`,
+      '  section A_flow prop=area mode=auto h=0.35',
+      '  section P_wet prop=perimeter mode=auto h=0.35',
+      '  section D_h prop=dh mode=auto h=0.35',
+      '  design mdot nominal=0.03 min=0.008 max=0.15 unit="kg/s" symbol="m_dot" category=process',
+      '  epistemic h_mult nominal=1.0 sigma=0.08 min=0.75 max=1.25 unit="-" symbol="k_h"',
+      '  state p_f init="100" scale=100 unit="kPa" symbol="p_f"',
+      '  state T_f init="25" scale=50 unit="C" symbol="T_f"',
+      '  aux A_eff expr="max(A_flow, 1.0)"',
+      '  aux D_eff expr="max(D_h, 0.5)"',
+      '  aux u_f expr="(mdot / 0.998) / (A_eff * 1e-6)"',
+      '  aux dp_ds expr="-32 * 0.001 * u_f / (D_eff * D_eff)"',
+      '  aux h_film expr="h_mult * 3.66 * 0.0006 / D_eff"',
+      '  aux q_lin expr="0.18 * max(P_wet, 2.0)"',
+      '  residual p_f eq="d_ds(p_f) - dp_ds" bc_left="p_f - 100"',
+      '  residual T_f eq="4180 * mdot * d_ds(T_f) - q_lin" bc_left="T_f - 25"',
+      '  objective dp_drop expr="100 - p_f" reduce=exit kind=upper limit=15.0 unit="kPa" symbol="dp"',
+      '  objective t_exit expr="T_f" reduce=exit kind=upper limit=48.0 unit="C" symbol="T_out"',
+      ...bindLines,
+      '}',
+    ].join('\n');
+  }
   return [
     'system coolant_1d title="1D Convective Channel" sector="Custom Thermal" nodes=21 span=(0, 40) axis=z {',
     '  design mdot nominal=0.04 min=0.015 max=0.15 unit="kg/s" symbol="m_dot" category=process',
@@ -5426,7 +5474,7 @@ export function SystemsWorkbench() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [ui.systemsOpen]);
+  }, [ui.systemsOpen, store.docVersion]);
 
   if (!ui.systemsOpen) return null;
 
@@ -5855,6 +5903,17 @@ export function SystemsWorkbench() {
                   }}
                 >
                   Template: 1D Convective Pipe
+                </button>
+                <button
+                  type="button"
+                  class="btn small"
+                  data-testid="sys-tpl-sdf-1d"
+                  onClick={() => {
+                    setAuthorErr(null);
+                    setAuthorText(buildDeclarativeSystemTemplate('sdf1d'));
+                  }}
+                >
+                  Template: 1D SDF Channel
                 </button>
                 {store.doc.system_block && (
                   <button
@@ -6514,6 +6573,46 @@ function DeclarativeSystemPanel({ vis }: { vis: DeclarativeSystemVisual }) {
             ))}
           </tbody>
         </table>
+      )}
+
+      {(vis.sections?.length ?? 0) > 0 && (
+        <div style={{ marginTop: '8px' }} data-testid="declarative-sections-wrap">
+          <div class="sys-card-bar">
+            <span class="sys-card-title">Extracted 3D SDF &amp; TPMS Cross-Section Profiles</span>
+          </div>
+          <table class="sys-table num" data-testid="declarative-sections-table">
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Property</th>
+                <th>Target</th>
+                <th>Entry → Exit</th>
+                <th>Mean</th>
+                <th>Range [min .. max]</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(vis.sections ?? []).map((sec) => (
+                <tr key={sec.name}>
+                  <td style={{ fontFamily: 'var(--sans)', fontWeight: 600 }}>{sec.name}</td>
+                  <td>
+                    {sec.prop} ({sec.mode})
+                  </td>
+                  <td>{sec.shape ?? 'whole body'}</td>
+                  <td>
+                    {sec.entry.toFixed(3)} → {sec.exit.toFixed(3)} {sec.unit}
+                  </td>
+                  <td>
+                    {sec.mean.toFixed(3)} {sec.unit}
+                  </td>
+                  <td>
+                    [{sec.min.toFixed(3)} .. {sec.max.toFixed(3)}] {sec.unit}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {vis.bindings.length > 0 && (

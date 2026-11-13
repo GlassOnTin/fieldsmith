@@ -1465,7 +1465,134 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[19/19] TPMS Porous Flow & Conjugate HX Fill (add-hx + Undo/Redo) + T26 Graded Gyroid Recuperator card (${(hxNumerics.hx.heat_duty_w / 1000).toFixed(2)} kW, ${hxNumerics.hx.pressure_drop_kpa.toFixed(2)} kPa) & 3D porous_pressure colourmap: PASS`,
+    `[19/20] TPMS Porous Flow & Conjugate HX Fill (add-hx + Undo/Redo) + T26 Graded Gyroid Recuperator card (${(hxNumerics.hx.heat_duty_w / 1000).toFixed(2)} kW, ${hxNumerics.hx.pressure_drop_kpa.toFixed(2)} kPa) & 3D porous_pressure colourmap: PASS`,
+  );
+
+  // -------------------------------------------------------------------------
+  // 20. 3D SDF & Graded-TPMS Cross-Section Coupled Declarative Systems (`sys-tpl-sdf-1d` + `T27`)
+  // -------------------------------------------------------------------------
+  const hollowTubeFsm = [
+    'fieldsmith 1',
+    'material al6061',
+    'cylinder jacket r=14 h=60 at=(0, 0, 30)',
+    'cylinder bore r=7 h=64 at=(0, 0, 30) subtract',
+    'region base = jacket.bottom',
+    'region inner = bore.side',
+    'support fix base fixed=xyz',
+    'load p_in inner pressure=1.5 case="Burst"',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('setup');
+    window.fieldsmith.ui.set('systemsOpen', true);
+  }, hollowTubeFsm);
+
+  await page.waitForSelector('[data-testid="open-declarative-author-btn"]', { timeout: 5000 });
+  await page.click('[data-testid="open-declarative-author-btn"]');
+  await page.waitForSelector('[data-testid="declarative-author-panel"]', { timeout: 5000 });
+  await page.click('[data-testid="sys-tpl-sdf-1d"]');
+  await page.click('[data-testid="decl-system-apply-btn"]');
+  await page.waitForSelector('[data-testid="declarative-sections-table"]', { timeout: 10000 });
+
+  const tplSecText = await page.textContent('[data-testid="declarative-sections-table"]');
+  assert(
+    tplSecText &&
+      tplSecText.includes('A_flow') &&
+      tplSecText.includes('P_wet') &&
+      tplSecText.includes('D_h') &&
+      tplSecText.includes('153.8') &&
+      tplSecText.includes('13.99'),
+    `Expected sys-tpl-sdf-1d template to extract A_flow ≈ π·7² = 153.9 mm² (153.872), P_wet, D_h ≈ 14.0 mm into declarative-sections-table, got '${tplSecText}'`,
+  );
+
+  // Load T27 3D Contoured AlSi10Mg Regenerative Cooling Jacket with Section-Coupled Graded Gyroid Core
+  const t27Path = resolve(repoRoot, 'examples/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.fsm');
+  const t27Raw = readFileSync(t27Path, 'utf-8');
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.ui.set('systemsOpen', true);
+  }, t27Raw);
+
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="declarative-sections-table"]');
+      return el && (el.textContent || '').includes('A_core');
+    },
+    null,
+    { timeout: 15000 },
+  );
+
+  const t27SecText = await page.textContent('[data-testid="declarative-sections-table"]');
+  const t27AdjText = await page.textContent('[data-testid="adjoint-matrix-table"]');
+  assert(
+    t27SecText &&
+      t27SecText.includes('A_core') &&
+      t27SecText.includes('fill_area') &&
+      t27SecText.includes('K_perm') &&
+      t27SecText.includes('fill_perm') &&
+      t27SecText.includes('a_wet') &&
+      t27SecText.includes('fill_awet') &&
+      t27SecText.includes('696.') &&
+      t27AdjText &&
+      t27AdjText.includes('a_cell') &&
+      t27AdjText.includes('R_out'),
+    `Expected T27 Systems (4) workbench to show extracted Gyroid section profiles (A_core max ≈ 696.2 mm², K_perm, a_wet) & two-way Adjoint Jacobian, got sections='${t27SecText}', adj='${t27AdjText}'`,
+  );
+
+  await page.evaluate(() => {
+    window.fieldsmith.ui.set('systemsOpen', false);
+    window.fieldsmith.store.setLens('results');
+  });
+
+  await page.waitForFunction(
+    () => {
+      const a = window.fieldsmith?.analysis;
+      const s = window.fieldsmith?.store;
+      return (
+        a &&
+        s &&
+        a.state.status === 'ready' &&
+        a.state.resultsFor === s.docVersion &&
+        a.state.levels.length > 0 &&
+        Boolean(a.state.levels[a.state.levels.length - 1]?.meta?.system)
+      );
+    },
+    null,
+    { timeout: 45000 },
+  );
+
+  const t27MetaSys = await page.evaluate(() => {
+    const lvls = window.fieldsmith.analysis.state.levels;
+    return lvls[lvls.length - 1]?.meta?.system ?? null;
+  });
+  assert(
+    t27MetaSys &&
+      Array.isArray(t27MetaSys.sections) &&
+      t27MetaSys.sections.length === 7 &&
+      Array.isArray(t27MetaSys.objectives) &&
+      t27MetaSys.objectives.length === 3,
+    `Expected T27 3D Results LevelResult.meta.system to expose 7 extracted sections & 3 objectives, got ${JSON.stringify(t27MetaSys)}`,
+  );
+
+  await page.waitForSelector('[data-testid="results-verify-contracts-btn"]', { timeout: 15000 });
+  await page.click('[data-testid="results-verify-contracts-btn"]');
+  await page.waitForSelector('[data-testid="results-contracts-output"]', { timeout: 30000 });
+  const t27ContractOut = await page.textContent('[data-testid="results-contracts-output"]');
+  assert(
+    t27ContractOut && t27ContractOut.includes('7/7 .fsm contracts passed'),
+    `Expected T27 Results contract verifier to report '7/7 .fsm contracts passed', got '${t27ContractOut}'`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[20/20] 3D SDF & Graded-TPMS Cross-Section Coupled Declarative Systems (sys-tpl-sdf-1d + T27 A_core/K_perm/a_wet + Results meta.system): PASS`,
   );
   await page.close();
 } catch (e) {

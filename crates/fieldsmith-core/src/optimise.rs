@@ -508,6 +508,11 @@ pub(crate) fn metric_derivative_for_param(
     solid_ps: Option<&ParameterSensitivity>,
 ) -> Result<f64, SetupError> {
     let m = metric.trim();
+    if let Some(res) =
+        crate::declarative_system::system_metric_derivative_for_param(doc, m, &ps.param, ps.nominal)
+    {
+        return res;
+    }
     let d_sigma_y = ParamAddr::parse(&ps.param)
         .ok()
         .and_then(|addr| {

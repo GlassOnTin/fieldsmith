@@ -403,6 +403,14 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
                 entity_id = Some(id);
                 entity_kind = Some("heatflux".into());
                 action = Some("deleted".into());
+            } else if id == "fill" && doc.fill.is_some() {
+                doc.fill = None;
+                doc.hx = None;
+                doc.consumed
+                    .retain(|c| c.target != "fill" && c.target != "hx");
+                entity_id = Some(id);
+                entity_kind = Some("fill".into());
+                action = Some("deleted".into());
             } else if id == "hx" && doc.hx.is_some() {
                 doc.hx = None;
                 doc.consumed.retain(|c| c.target != "hx");
@@ -565,6 +573,7 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             action = Some("upserted".into());
         }
         DocCommand::SetFill { fill } => {
+            doc.consumed.retain(|c| c.target != "fill");
             doc.fill = fill;
             entity_kind = Some("fill".into());
             action = Some("updated".into());

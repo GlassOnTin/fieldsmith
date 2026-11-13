@@ -346,9 +346,27 @@ pub(crate) fn evaluate_uq_from_sensitivities(
                 .total_cmp(&a.variance_share)
                 .then_with(|| a.param.cmp(&b.param))
         });
+        let mut unit_str = default_metric_unit(base_m).to_string();
+        if unit_str.is_empty() {
+            if let Some(ref vis) = a.system {
+                if let Some(oname) = base_m
+                    .strip_prefix("sys.")
+                    .or_else(|| base_m.strip_prefix("sys_"))
+                {
+                    if let Some(o) = vis.objectives.iter().find(|o| o.name == oname.trim()) {
+                        unit_str = o.unit.clone();
+                    }
+                } else if let Some(rest) = base_m.strip_prefix("section.") {
+                    let sname = rest.split_once('.').map(|(n, _)| n).unwrap_or(rest).trim();
+                    if let Some(s) = vis.sections.iter().find(|s| s.name == sname) {
+                        unit_str = s.unit.clone();
+                    }
+                }
+            }
+        }
         summaries.push(UqMetricSummary {
             metric: base_m.to_string(),
-            unit: default_metric_unit(base_m).to_string(),
+            unit: unit_str,
             p50,
             std_dev,
             p10: p50 - Z_90 * std_dev,

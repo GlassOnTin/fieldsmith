@@ -258,6 +258,31 @@ export type DeclAxis = 'x' | 'y' | 'z' | 'r';
 export type DeclDesignCategory = 'geometry' | 'hardware' | 'actuator' | 'process';
 export type DeclReduce = 'value' | 'entry' | 'exit' | 'mean' | 'integral' | 'max' | 'min';
 
+export type DeclSectionProp =
+  | 'area'
+  | 'perimeter'
+  | 'dh'
+  | 'count'
+  | 'fill_area'
+  | 'fill_rho'
+  | 'fill_porosity'
+  | 'fill_cell'
+  | 'fill_dh'
+  | 'fill_perm'
+  | 'fill_beta'
+  | 'fill_awet';
+
+export type DeclSectionMode = 'auto' | 'void' | 'solid' | 'outer';
+
+export interface DeclSection {
+  name: string;
+  prop?: DeclSectionProp;
+  mode?: DeclSectionMode;
+  shape?: string;
+  axis?: DeclAxis;
+  h?: number;
+}
+
 export type DeclObjKind =
   | { kind: 'minimize' }
   | { kind: 'maximize' }
@@ -359,6 +384,7 @@ export interface DeclarativeSystem {
   nodes?: number;
   span?: [number, number];
   axis?: DeclAxis;
+  sections?: DeclSection[];
   designs?: DeclDesignParam[];
   epistemics?: DeclEpistemicParam[];
   states: DeclStateField[];

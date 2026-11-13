@@ -205,6 +205,9 @@ pub struct Analysis {
     /// Transient thermo-elastic trajectory per thermal case when `doc.solve.t_end` is set.
     /// Empty for steady-state solves.
     pub transient: Vec<transient::TransientCaseReport>,
+    /// Solved 0D/1D declarative `system` profiles, 3D `section` extractions, and converged
+    /// `objectives` when `doc.system_block` is `Some`.
+    pub system: Option<declarative_system::DeclarativeSystemVisual>,
 }
 
 /// Problems the user can fix, reported in their words.
@@ -2293,7 +2296,8 @@ pub fn analyse_full(
     modes: Option<usize>,
     equilibrate: bool,
 ) -> Result<Analysis, SetupError> {
-    let sys_resolved = crate::declarative_system::resolve_system_doc(doc)?;
+    let (sys_resolved, system_visual) =
+        crate::declarative_system::resolve_system_doc_and_visual(doc)?;
     let sdoc = structural_doc(sys_resolved.as_ref());
     let doc = sdoc.as_ref();
     let Prepared {
@@ -2580,6 +2584,7 @@ pub fn analyse_full(
         provenance,
         modes: modal,
         transient,
+        system: system_visual,
     })
 }
 

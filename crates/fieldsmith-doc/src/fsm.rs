@@ -717,6 +717,30 @@ impl Attrs {
             Some(_) => self.err(format!("'{key}' must be (a, b)")),
         }
     }
+    fn expr_pair(
+        &mut self,
+        key: &str,
+        attr0: &str,
+        attr1: &str,
+    ) -> Result<Option<(f64, f64)>, ParseError> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Some(Val::Tuple(t))) if t.len() == 2 => {
+                let eval_slot = |s: &mut Self, v: &Val, attr: &str| -> Result<f64, ParseError> {
+                    match v {
+                        Val::Num(x) => Ok(*x),
+                        Val::Ident(id) => s.eval_for(key, attr, None, id),
+                        Val::Expr { txt } => s.eval_for(key, attr, None, txt),
+                        _ => s.err(format!("'{key}' must be (a, b)")),
+                    }
+                };
+                let a = eval_slot(self, &t[0], attr0)?;
+                let b = eval_slot(self, &t[1], attr1)?;
+                Ok(Some((a, b)))
+            }
+            Some(_) => self.err(format!("'{key}' must be (a, b)")),
+        }
+    }
     fn string(&mut self, key: &str) -> Result<Option<String>, ParseError> {
         match self.take(key) {
             None => Ok(None),
@@ -1565,9 +1589,11 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     "network" => FillMode::Network,
                     m => return Err(err(format!("unknown fill mode '{m}'"))),
                 };
-                let mut a = c.attrs("", &let_scope(&doc))?;
+                let mut a = c.attrs("fill", &let_scope(&doc))?;
                 let d = Fill::default();
-                let (rho_min, rho_max) = a.pair("rho")?.unwrap_or((d.rho_min, d.rho_max));
+                let (rho_min, rho_max) = a
+                    .expr_pair("rho", "rho_min", "rho_max")?
+                    .unwrap_or((d.rho_min, d.rho_max));
                 let morph = match a.string("morph")?.as_deref() {
                     None => None,
                     Some("gyroid") => Some(Family::Gyroid),
@@ -1578,21 +1604,22 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 let fill = Fill {
                     family,
                     mode,
-                    cell: a.num_or("cell", d.cell)?,
-                    cell_min: a.num("cell_min")?,
+                    cell: a.expr_num_or("cell", "cell", d.cell)?,
+                    cell_min: a.expr_num("cell_min", "cell_min")?,
                     morph,
-                    skin: a.num_or("skin", d.skin)?,
-                    skin_max: a.num("skin_max")?,
+                    skin: a.expr_num_or("skin", "skin", d.skin)?,
+                    skin_max: a.expr_num("skin_max", "skin_max")?,
                     erode: a.num("erode")?.filter(|&er| er != 0.0),
                     rho_min,
                     rho_max,
-                    curve: a.num_or("curve", d.curve)?,
-                    min_wall: a.num_or("wall", d.min_wall)?,
+                    curve: a.expr_num_or("curve", "curve", d.curve)?,
+                    min_wall: a.expr_num_or("wall", "min_wall", d.min_wall)?,
                     protect: a.idents("protect")?,
                     margin: a.num_or("margin", d.margin)?,
                     case: a.string("case")?,
                     rotate: a.vec3("rotate")?.unwrap_or(d.rotate),
                 };
+                doc.consumed.append(&mut a.consumed);
                 a.finish()?;
                 doc.fill = Some(fill);
             }
@@ -1827,6 +1854,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     axis,
                     designs: Vec::new(),
                     epistemics: Vec::new(),
+                    sections: Vec::new(),
                     states: Vec::new(),
                     aux: Vec::new(),
                     residuals: Vec::new(),
@@ -2766,9 +2794,9 @@ fn parse_system_body_line(
     c: &mut Cursor,
 ) -> Result<(), ParseError> {
     use crate::system::{
-        DeclAudit, DeclAuxVar, DeclBindAttr, DeclCadBinding, DeclDesignCategory, DeclDesignParam,
-        DeclEpistemicParam, DeclObjKind, DeclObjective, DeclReduce, DeclResidual, DeclScenario,
-        DeclStateField,
+        DeclAudit, DeclAuxVar, DeclAxis, DeclBindAttr, DeclCadBinding, DeclDesignCategory,
+        DeclDesignParam, DeclEpistemicParam, DeclObjKind, DeclObjective, DeclReduce, DeclResidual,
+        DeclScenario, DeclSection, DeclSectionMode, DeclSectionProp, DeclStateField,
     };
     let line = c.line;
     let err = |m: String| ParseError { line, message: m };
@@ -2825,6 +2853,50 @@ fn parse_system_body_line(
                 unit,
                 symbol,
                 mechanism,
+            });
+        }
+        "section" => {
+            let name = c.ident("a section variable name")?;
+            let mut a = c.attrs("", &[])?;
+            let prop = match a.string("prop")?.as_deref() {
+                None => DeclSectionProp::Area,
+                Some(p) => DeclSectionProp::parse(p).ok_or_else(|| {
+                    err(format!(
+                        "section '{name}': prop must be area, perimeter, dh, count, fill_area, fill_rho, fill_porosity, fill_cell, fill_dh, fill_perm, fill_beta, or fill_awet"
+                    ))
+                })?,
+            };
+            let mode = match a.string("mode")?.as_deref() {
+                None => DeclSectionMode::Auto,
+                Some(m) => DeclSectionMode::parse(m).ok_or_else(|| {
+                    err(format!(
+                        "section '{name}': mode must be auto, void, solid, or outer"
+                    ))
+                })?,
+            };
+            let shape = a.string("shape")?;
+            let axis = match a.string("axis")?.as_deref() {
+                None => None,
+                Some(ax) => {
+                    let parsed = DeclAxis::parse(ax)
+                        .ok_or_else(|| err(format!("section '{name}': axis must be x, y, or z")))?;
+                    if parsed == DeclAxis::R {
+                        return Err(err(format!(
+                            "section '{name}': axis must be x, y, or z (not r)"
+                        )));
+                    }
+                    Some(parsed)
+                }
+            };
+            let h = a.num("h")?;
+            a.finish()?;
+            sys.sections.push(DeclSection {
+                name,
+                prop,
+                mode,
+                shape,
+                axis,
+                h,
             });
         }
         "state" => {
@@ -2968,7 +3040,9 @@ fn parse_system_body_line(
 }
 
 fn print_system(o: &mut String, sys: &crate::system::DeclarativeSystem) {
-    use crate::system::{DeclAxis, DeclDesignCategory, DeclObjKind, DeclReduce};
+    use crate::system::{
+        DeclAxis, DeclDesignCategory, DeclObjKind, DeclReduce, DeclSectionMode, DeclSectionProp,
+    };
     let mut hdr = format!("system {}", id_tok(&sys.id));
     if !sys.title.is_empty() {
         hdr += &format!(" title={}", q(&sys.title));
@@ -3030,6 +3104,28 @@ fn print_system(o: &mut String, sys: &crate::system::DeclarativeSystem) {
         }
         if !ep.mechanism.is_empty() {
             line += &format!(" mechanism={}", q(&ep.mechanism));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+
+    for sec in &sys.sections {
+        let mut line = format!("  section {}", id_tok(&sec.name));
+        if sec.prop != DeclSectionProp::Area {
+            line += &format!(" prop={}", sec.prop.name());
+        } else {
+            line += " prop=area";
+        }
+        if sec.mode != DeclSectionMode::Auto {
+            line += &format!(" mode={}", sec.mode.name());
+        }
+        if let Some(ref sh) = sec.shape {
+            line += &format!(" shape={}", id_tok(sh));
+        }
+        if let Some(ax) = sec.axis {
+            line += &format!(" axis={}", ax.name());
+        }
+        if let Some(hv) = sec.h {
+            line += &format!(" h={}", n(hv));
         }
         let _ = writeln!(o, "{line}");
     }
@@ -3443,12 +3539,12 @@ pub fn print(doc: &Document) -> String {
                 FillMode::Sheet => "sheet",
                 FillMode::Network => "network",
             },
-            n(f.cell),
-            n(f.skin),
-            n(f.rho_min),
-            n(f.rho_max),
-            n(f.curve),
-            n(f.min_wall)
+            p.num_for("fill", "cell", None, f.cell),
+            p.num_for("fill", "skin", None, f.skin),
+            p.num_for("fill", "rho_min", None, f.rho_min),
+            p.num_for("fill", "rho_max", None, f.rho_max),
+            p.num_for("fill", "curve", None, f.curve),
+            p.num_for("fill", "min_wall", None, f.min_wall),
         );
         if !f.protect.is_empty() {
             line += &format!(" protect=({})", f.protect.join(", "));
@@ -3458,13 +3554,13 @@ pub fn print(doc: &Document) -> String {
             line += &format!(" case={}", q(c));
         }
         if f.rotate != [0.0; 3] {
-            line += &format!(" rotate={}", v3(f.rotate));
+            line += &format!(" rotate={}", p.v3_for("fill", "rotate", f.rotate));
         }
         if let Some(sm) = f.skin_max {
-            line += &format!(" skin_max={}", n(sm));
+            line += &format!(" skin_max={}", p.num_for("fill", "skin_max", None, sm));
         }
         if let Some(cm) = f.cell_min {
-            line += &format!(" cell_min={}", n(cm));
+            line += &format!(" cell_min={}", p.num_for("fill", "cell_min", None, cm));
         }
         if let Some(m) = f.morph {
             line += &format!(" morph={}", m.name());
@@ -4141,9 +4237,30 @@ solve size=2.5
         );
         // Non-consumer vocabulary refuses expression values.
         assert!(
-            with_lets("let w = 4\nfill gyroid sheet cell=w").contains("'cell' must be a number"),
-            "fill cell"
+            with_lets("let w = 4\nfill gyroid sheet margin=w")
+                .contains("'margin' must be a number"),
+            "fill margin"
         );
+        // Consumer attributes on fill accept let bindings and propagate updates.
+        let mut fill_doc = parse(
+            "fieldsmith 1\nlet c = 6\nlet rhi = 0.45\nbox b size=(20, 20, 20)\nfill gyroid sheet cell=c rho=(0.2, rhi)\n",
+        )
+        .expect("let-driven fill parses");
+        assert_eq!(fill_doc.fill.as_ref().unwrap().cell, 6.0);
+        assert_eq!(fill_doc.fill.as_ref().unwrap().rho_max, 0.45);
+        let fill_printed = print(&fill_doc);
+        assert!(
+            fill_printed.contains("cell=c") && fill_printed.contains("rho=(0.2, rhi)"),
+            "printed fill preserves let consumers: {fill_printed}"
+        );
+        let c_addr = crate::param::ParamAddr::parse("c").expect("parse let c");
+        crate::param::resolve(&fill_doc, &c_addr).expect("resolve let c");
+        crate::param::apply(&mut fill_doc, &c_addr, 8.5).expect("apply let c");
+        assert_eq!(fill_doc.fill.as_ref().unwrap().cell, 8.5);
+        let fill_skin_addr = crate::param::ParamAddr::parse("fill.skin").expect("parse fill.skin");
+        crate::param::resolve(&fill_doc, &fill_skin_addr).expect("resolve fill.skin");
+        crate::param::apply(&mut fill_doc, &fill_skin_addr, 1.4).expect("apply fill.skin");
+        assert_eq!(fill_doc.fill.as_ref().unwrap().skin, 1.4);
         assert!(
             with_lets("let w = 4\nbox beam size=(4, 4, 4) blend=w")
                 .contains("'blend' must be a number"),

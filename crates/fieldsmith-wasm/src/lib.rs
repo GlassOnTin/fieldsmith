@@ -700,6 +700,8 @@ struct AnalysisMeta {
     modes: Option<fieldsmith_solve::ModalResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     transient: Vec<fieldsmith_core::transient::TransientCaseReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system: Option<fieldsmith_core::declarative_system::DeclarativeSystemVisual>,
 }
 
 /// One analysis, kept in wasm and queried through typed-array getters.
@@ -754,6 +756,7 @@ impl AnalysisOut {
             poisson: self.a.poisson,
             modes: self.a.modes.clone(),
             transient: self.a.transient.clone(),
+            system: self.a.system.clone(),
         })
     }
 
@@ -1061,6 +1064,8 @@ struct GradedMeta {
     poisson: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     transient: Vec<fieldsmith_core::transient::TransientCaseReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system: Option<fieldsmith_core::declarative_system::DeclarativeSystemVisual>,
 }
 
 /// A graded-fill analysis: the solid mesh plus the graded re-solve and fill result. The solid
@@ -1168,6 +1173,7 @@ impl GradedOut {
             max_peak_peel: self.g.max_peak_peel,
             poisson: self.base.poisson,
             transient: self.base.transient.clone(),
+            system: self.base.system.clone(),
         })
     }
 

@@ -24,7 +24,7 @@
 //!    positive element volumes on the fixed topology.
 
 use crate::contracts::required_modes_for_asserts;
-use crate::declarative_system::resolve_system_doc;
+use crate::declarative_system::{resolve_system_doc, resolve_system_doc_with_ref};
 use crate::overhang::{
     build_axis_from_angles, evaluate_p2_surface_overhang_smooth, DEFAULT_OVERHANG_DEG,
 };
@@ -791,8 +791,8 @@ fn compute_mesh_velocity(
         let ok_lo = apply_sens_param(&mut d_lo, addr, p0 - delta);
         match (ok_hi, ok_lo) {
             (Ok(()), Ok(())) => {
-                let rhi = resolve_system_doc(&d_hi)?;
-                let rlo = resolve_system_doc(&d_lo)?;
+                let rhi = resolve_system_doc_with_ref(&d_hi, doc)?;
+                let rlo = resolve_system_doc_with_ref(&d_lo, doc)?;
                 let shi = structural_doc(rhi.as_ref());
                 let slo = structural_doc(rlo.as_ref());
                 Ok((
@@ -802,12 +802,12 @@ fn compute_mesh_velocity(
                 ))
             }
             (Ok(()), Err(_)) => {
-                let rhi = resolve_system_doc(&d_hi)?;
+                let rhi = resolve_system_doc_with_ref(&d_hi, doc)?;
                 let shi = structural_doc(rhi.as_ref());
                 Ok((expr::compile_body(shi.as_ref()), e0.clone(), delta))
             }
             (Err(_), Ok(())) => {
-                let rlo = resolve_system_doc(&d_lo)?;
+                let rlo = resolve_system_doc_with_ref(&d_lo, doc)?;
                 let slo = structural_doc(rlo.as_ref());
                 Ok((e0.clone(), expr::compile_body(slo.as_ref()), delta))
             }
@@ -1756,6 +1756,7 @@ fn peak_case_peel_for_doc(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_cases_on_fixed_mesh(
     d_pert: &Document,
+    ref_doc: &Document,
     mesh_pert: &P2Mesh,
     facets: &[Facet],
     fixed: &[u8],
@@ -1764,7 +1765,7 @@ fn evaluate_cases_on_fixed_mesh(
     exact_lookup: &RegionLookup<'_>,
     thermal_lookup: &RegionLookup<'_>,
 ) -> Result<(Vec<FixedCaseMetrics>, usize), SetupError> {
-    let sys_resolved = resolve_system_doc(d_pert)?;
+    let sys_resolved = resolve_system_doc_with_ref(d_pert, ref_doc)?;
     let sdoc = structural_doc(sys_resolved.as_ref());
     let doc = sdoc.as_ref();
     let props = eval_element_materials(doc, locked_elem_mats)?;
@@ -2189,12 +2190,12 @@ pub(crate) fn compute_sensitivities_with_base(
         let d_hi_sys = if scheme == "backward" {
             std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
         } else {
-            resolve_system_doc(d_hi_raw)?
+            resolve_system_doc_with_ref(d_hi_raw, doc)?
         };
         let d_lo_sys = if scheme == "forward" {
             std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
         } else {
-            resolve_system_doc(d_lo_raw)?
+            resolve_system_doc_with_ref(d_lo_raw, doc)?
         };
 
         let sdoc_hi = structural_doc(d_hi_sys.as_ref());
@@ -2563,6 +2564,7 @@ pub(crate) fn compute_sensitivities_with_base(
             } else {
                 evaluate_cases_on_fixed_mesh(
                     d_hi_sys.as_ref(),
+                    doc,
                     &mesh_hi,
                     &facets,
                     &base.fixed,
@@ -2589,6 +2591,7 @@ pub(crate) fn compute_sensitivities_with_base(
             } else {
                 evaluate_cases_on_fixed_mesh(
                     d_lo_sys.as_ref(),
+                    doc,
                     &mesh_lo,
                     &facets,
                     &base.fixed,
@@ -2982,12 +2985,12 @@ pub(crate) fn compute_sensitivities_graded_with_base(
         let d_hi_sys = if scheme == "backward" {
             std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
         } else {
-            resolve_system_doc(d_hi_raw)?
+            resolve_system_doc_with_ref(d_hi_raw, doc)?
         };
         let d_lo_sys = if scheme == "forward" {
             std::borrow::Cow::Borrowed(sys_doc_0.as_ref())
         } else {
-            resolve_system_doc(d_lo_raw)?
+            resolve_system_doc_with_ref(d_lo_raw, doc)?
         };
 
         let sdoc_hi = structural_doc(d_hi_sys.as_ref());
@@ -3554,7 +3557,7 @@ fn compute_sensitivities_remesh_graded_with_base(
         let eval_at = |val: f64| -> Result<(Analysis, crate::fill::Graded), SetupError> {
             let mut d_pert = doc.clone();
             apply_sens_param(&mut d_pert, &addr, val).map_err(SetupError)?;
-            let r_pert = resolve_system_doc(&d_pert)?;
+            let r_pert = resolve_system_doc_with_ref(&d_pert, doc)?;
             let a = analyse_full(r_pert.as_ref(), locked_res, clock, modes_count, false)?;
             let g = crate::fill::graded_of(r_pert.as_ref(), &a, clock, false)?;
             Ok((a, g))
@@ -3783,7 +3786,7 @@ fn compute_sensitivities_remesh_with_base(
         let eval_at = |val: f64| -> Result<(Analysis, f64), SetupError> {
             let mut d_pert = doc.clone();
             apply_sens_param(&mut d_pert, &addr, val).map_err(SetupError)?;
-            let r_pert = resolve_system_doc(&d_pert)?;
+            let r_pert = resolve_system_doc_with_ref(&d_pert, doc)?;
             let a = analyse_full(r_pert.as_ref(), locked_res, clock, modes_count, false)?;
             let m = mesh_mass_grams(r_pert.as_ref(), &a);
             Ok((a, m))
@@ -4058,6 +4061,7 @@ load push tip force=(0, 0, tip_f)
             let m_lo = deform_mesh_checked(&base.mesh, &vel, -eps).unwrap();
             let (hi_m, _) = evaluate_cases_on_fixed_mesh(
                 &d_hi,
+                &doc,
                 &m_hi,
                 &facets,
                 &base.fixed,
@@ -4069,6 +4073,7 @@ load push tip force=(0, 0, tip_f)
             .unwrap();
             let (lo_m, _) = evaluate_cases_on_fixed_mesh(
                 &d_lo,
+                &doc,
                 &m_lo,
                 &facets,
                 &base.fixed,
@@ -4328,6 +4333,7 @@ solve tref=20
             apply_sens_param(&mut d_lo, &addr, p0 - eps).unwrap();
             let (m_hi, _) = evaluate_cases_on_fixed_mesh(
                 &d_hi,
+                &doc,
                 &mesh_hi,
                 &facets,
                 &base.fixed,
@@ -4339,6 +4345,7 @@ solve tref=20
             .unwrap();
             let (m_lo, _) = evaluate_cases_on_fixed_mesh(
                 &d_lo,
+                &doc,
                 &mesh_lo,
                 &facets,
                 &base.fixed,
@@ -4884,6 +4891,7 @@ assert "Peel limit" metric="max_layer_peel" target="<= 0.80"
         let m_lo = deform_mesh_checked(&base.mesh, &vel, -eps).unwrap();
         let (cm_hi, _) = evaluate_cases_on_fixed_mesh(
             &d_hi,
+            &doc,
             &m_hi,
             &facets,
             &base.fixed,
@@ -4895,6 +4903,7 @@ assert "Peel limit" metric="max_layer_peel" target="<= 0.80"
         .unwrap();
         let (cm_lo, _) = evaluate_cases_on_fixed_mesh(
             &d_lo,
+            &doc,
             &m_lo,
             &facets,
             &base.fixed,

@@ -2074,10 +2074,16 @@ impl Server {
         if doc_decl_id.as_deref() == Some(system_id.as_str()) {
             let doc_ref = self.doc.as_ref().expect("checked doc_decl_id");
             let sys = DeclarativeCoupledSystem::from_document(doc_ref)?;
-            let p = req_p
+            let explicit_p: Option<Vec<f64>> = args
+                .get("design_p")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            let explicit_theta: Option<Vec<f64>> = args
+                .get("epistemic_theta")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            let p = explicit_p
                 .filter(|v| v.len() == sys.design_parameters().len())
                 .unwrap_or_else(|| sys.nominal_design_vector());
-            let theta = req_theta
+            let theta = explicit_theta
                 .filter(|v| v.len() == sys.epistemic_parameters().len())
                 .unwrap_or_else(|| sys.nominal_epistemic_vector());
             let cfg = sys.engine_config();
@@ -2405,9 +2411,21 @@ impl Server {
         if doc_decl_id.as_deref() == Some(system_id.as_str()) {
             let doc_clone = self.doc.clone().expect("checked doc_decl_id");
             let sys = DeclarativeCoupledSystem::from_document(&doc_clone)?;
+            let explicit_p: Option<Vec<f64>> = args
+                .get("design_p")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            let explicit_theta: Option<Vec<f64>> = args
+                .get("epistemic_theta")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
             let cfg = sys.engine_config();
-            return self
-                .run_adjoint_optimisation_loop(&sys, &cfg, req_p, req_theta, steps, sync_cad);
+            return self.run_adjoint_optimisation_loop(
+                &sys,
+                &cfg,
+                explicit_p,
+                explicit_theta,
+                steps,
+                sync_cad,
+            );
         }
 
         if system_id == "pilkington_float_bath_cvd_coater_v1" {

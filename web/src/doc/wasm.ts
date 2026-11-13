@@ -557,6 +557,8 @@ export interface AnalysisMeta {
   fill?: FillInfo;
   /** When the document's `solve modes` asks for it: the first modes of the static mesh. */
   modes?: ModalInfo;
+  /** When `doc.system_block` is present: solved 0D/1D station profiles, extracted 3D `section` summaries, and converged objectives. */
+  system?: DeclarativeSystemVisual;
 }
 
 /** The wasm `AnalysisOut` handle. Typed arrays are views into wasm memory — copy before
@@ -1140,6 +1142,28 @@ export interface DeclarativeFieldProfile {
   values: number[];
 }
 
+export interface DeclarativeSectionSummary {
+  name: string;
+  prop: string;
+  mode: string;
+  shape?: string;
+  unit: string;
+  min: number;
+  max: number;
+  mean: number;
+  entry: number;
+  exit: number;
+  values: number[];
+}
+
+export interface DeclarativeObjectiveSummary {
+  name: string;
+  symbol: string;
+  unit: string;
+  kind: string;
+  value: number;
+}
+
 export interface DeclarativeBindingSummary {
   target: string;
   attr: string;
@@ -1154,6 +1178,8 @@ export interface DeclarativeSystemVisual {
   nodes: number;
   stations: number[];
   fields: DeclarativeFieldProfile[];
+  sections?: DeclarativeSectionSummary[];
+  objectives?: DeclarativeObjectiveSummary[];
   bindings: DeclarativeBindingSummary[];
 }
 

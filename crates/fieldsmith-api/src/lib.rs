@@ -321,6 +321,7 @@ pub fn respond(input: &str) -> Reply {
                                             solve_ms: g.solve_ms,
                                         }),
                                         transient: a.transient,
+                                        system: a.system,
                                     }),
                                     sweep: None,
                                     overhang: None,
@@ -355,6 +356,7 @@ pub fn respond(input: &str) -> Reply {
                             provenance,
                             cases,
                             transient,
+                            system,
                             ..
                         } = a;
                         ok_reply(schema::Response {
@@ -372,6 +374,7 @@ pub fn respond(input: &str) -> Reply {
                                 peel,
                                 graded: None,
                                 transient,
+                                system,
                             }),
                             sweep: None,
                             overhang: None,
@@ -439,6 +442,7 @@ pub fn respond(input: &str) -> Reply {
                             peel: None,
                             graded: None,
                             transient: Vec::new(),
+                            system: None,
                         }),
                         sweep: None,
                         overhang: None,

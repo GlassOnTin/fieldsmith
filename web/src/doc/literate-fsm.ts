@@ -122,6 +122,20 @@ export function evaluateLiterateAssertOnLevel(
         } | null;
       };
       modes?: { frequencies: number[] };
+      system?: {
+        sections?: {
+          name: string;
+          min: number;
+          max: number;
+          mean: number;
+          entry: number;
+          exit: number;
+        }[];
+        objectives?: {
+          name: string;
+          value: number;
+        }[];
+      };
       transient?: {
         case_name: string;
         peak_vm_elem: number;
@@ -172,6 +186,23 @@ export function evaluateLiterateAssertOnLevel(
     val = lvl.meta.min_peak_peel ?? null;
   } else if (m === 'max_peak_peel') {
     val = lvl.meta.max_peak_peel ?? null;
+  } else if (m.startsWith('sys.') || m.startsWith('sys_')) {
+    const objName = m.startsWith('sys.') ? m.slice('sys.'.length) : m.slice('sys_'.length);
+    const obj = (lvl.meta.system?.objectives ?? []).find((o) => o.name === objName);
+    val = obj ? obj.value : null;
+  } else if (m.startsWith('section.')) {
+    const restSec = m.slice('section.'.length);
+    const dot = restSec.indexOf('.');
+    const secName = dot >= 0 ? restSec.slice(0, dot) : restSec;
+    const red = dot >= 0 ? restSec.slice(dot + 1) : 'mean';
+    const sec = (lvl.meta.system?.sections ?? []).find((s) => s.name === secName);
+    if (sec) {
+      if (red === 'mean' || red === 'avg') val = sec.mean;
+      else if (red === 'min') val = sec.min;
+      else if (red === 'max') val = sec.max;
+      else if (red === 'entry' || red === 'inlet') val = sec.entry;
+      else if (red === 'exit' || red === 'outlet') val = sec.exit;
+    }
   } else {
     const hxKey = m.startsWith('graded.') ? m.slice('graded.'.length) : m;
     const hx = lvl.meta.fill?.hx ?? null;
@@ -492,6 +523,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T24: 'docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md',
   T25: 'docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md',
   T26: 'docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md',
+  T27: 'docs/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -514,6 +546,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A20: 'docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md',
   A21: 'docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md',
   A22: 'docs/analytic-tests/A22-darcy-forchheimer-tpms-porous-hx.md',
+  A23: 'docs/analytic-tests/A23-sdf-venturi-section-and-coupled-1d-flow.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -543,6 +576,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T24: 'examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm',
   T25: 'examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm',
   T26: 'examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm',
+  T27: 'examples/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -565,6 +599,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A20: 'examples/analytic/A20-transient-biot-quench-thermal-shock.fsm',
   A21: 'examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm',
   A22: 'examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm',
+  A23: 'examples/analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -594,6 +629,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T24: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   T25: ['docs/verification/V57.md', 'docs/verification/V63.md'],
   T26: ['docs/verification/V36.md', 'docs/verification/V54.md', 'docs/verification/V63.md'],
+  T27: ['docs/verification/V20.md', 'docs/verification/V36.md', 'docs/verification/V63.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -616,6 +652,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A20: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   A21: ['docs/verification/V63.md'],
   A22: ['docs/verification/V36.md', 'docs/verification/V63.md'],
+  A23: ['docs/verification/V20.md', 'docs/verification/V63.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

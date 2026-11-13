@@ -524,7 +524,7 @@ fn check_spec(spec: &Fill) -> Result<(), SetupError> {
 
 /// Union of the fill's protected zones: each protected shape as placed (patterns
 /// included), offset outward by the margin. `Empty` when the fill protects nothing.
-fn keep_zones(doc: &fieldsmith_doc::Document, spec: &Fill) -> Result<Expr, SetupError> {
+pub(crate) fn keep_zones(doc: &fieldsmith_doc::Document, spec: &Fill) -> Result<Expr, SetupError> {
     let mut keep = Expr::Empty;
     for name in &spec.protect {
         let shape = expr::placed_shape(doc, name)

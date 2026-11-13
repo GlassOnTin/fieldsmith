@@ -2296,6 +2296,157 @@ solve build=(0, 0)
         "expected T26 graded Gyroid recuperator @assert contracts to pass verify: {t26_ver_json}"
     );
 
+    // -----------------------------------------------------------------------
+    // 18. 3D SDF & Graded-TPMS Cross-Section Coupled Declarative Systems (A23 + T27)
+    //     Parse/print round-trip, API <-> MCP canon parity, closed-form Venturi
+    //     section & Bernoulli-Poiseuille checks, and two-way TPMS adjoint derivatives.
+    // -----------------------------------------------------------------------
+    let a23_path = examples_dir.join("analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm");
+    let a23_raw = std::fs::read_to_string(&a23_path).expect("read A23 .fsm");
+    let a23_doc_1 = fieldsmith_doc::fsm::parse(&a23_raw).expect("parse A23 .fsm");
+    let a23_printed = fieldsmith_doc::fsm::print(&a23_doc_1);
+    let a23_doc_2 = fieldsmith_doc::fsm::parse(&a23_printed).expect("reparse printed A23 .fsm");
+    assert_eq!(
+        a23_doc_1
+            .system_block
+            .as_ref()
+            .expect("A23 system_block")
+            .sections,
+        a23_doc_2
+            .system_block
+            .as_ref()
+            .expect("A23 reparsed system_block")
+            .sections,
+        "expected A23 .fsm section declarations to round-trip identically"
+    );
+
+    let a23_api_req = json!({
+        "apiv": 2,
+        "doc": &a23_raw,
+        "question": {
+            "kind": "solve",
+            "dofs": 14000,
+        },
+    });
+    let a23_api_reply = fieldsmith_api::respond(&a23_api_req.to_string());
+    assert!(
+        !a23_api_reply.is_error,
+        "API A23 solve failed: {}",
+        a23_api_reply.body
+    );
+    let a23_api_json: Value = serde_json::from_str(&a23_api_reply.body).expect("API A23 JSON");
+
+    let mut a23_srv = Server::new();
+    let (a23_open_err, a23_open_body) =
+        mcp_tool_call(&mut a23_srv, 1601, "open", json!({ "doc": a23_raw }));
+    assert!(!a23_open_err, "open A23 failed: {a23_open_body}");
+    let (a23_mcp_err, a23_mcp_json) = mcp_tool_call(
+        &mut a23_srv,
+        1602,
+        "solve",
+        json!({ "kind": "solve", "dofs": 14000 }),
+    );
+    assert!(!a23_mcp_err, "MCP A23 solve failed: {a23_mcp_json}");
+    assert_eq!(
+        canon(&a23_api_json),
+        canon(&a23_mcp_json),
+        "API <-> MCP canon mismatch on 3D SDF section-coupled Venturi solve"
+    );
+
+    let a23_sys = &a23_mcp_json["single"]["system"];
+    let a23_secs = a23_sys["sections"].as_array().expect("A23 system.sections");
+    let a_flow_sec = a23_secs
+        .iter()
+        .find(|s| s["name"] == "A_flow")
+        .expect("A23 A_flow section");
+    let a23_objs = a23_sys["objectives"]
+        .as_array()
+        .expect("A23 system.objectives");
+    let find_obj = |name: &str| -> f64 {
+        a23_objs
+            .iter()
+            .find(|o| o["name"] == name)
+            .and_then(|o| o["value"].as_f64())
+            .unwrap_or_else(|| panic!("missing A23 objective {name}"))
+    };
+
+    report.check(Check::relative(
+        "3D revolved SDF Venturi extracted inlet bore area A(0) = 64π",
+        64.0 * std::f64::consts::PI,
+        a_flow_sec["entry"].as_f64().expect("A_flow.entry"),
+        "mm²",
+        0.005,
+    ));
+    report.check(Check::relative(
+        "3D revolved SDF Venturi extracted throat bore area A(40) = 16π",
+        16.0 * std::f64::consts::PI,
+        a_flow_sec["min"].as_f64().expect("A_flow.min"),
+        "mm²",
+        0.005,
+    ));
+    report.check(Check::relative(
+        "Section-coupled 1D Bernoulli + Poiseuille throat suction Δp_th",
+        7.785,
+        find_obj("dp_throat"),
+        "kPa",
+        0.01,
+    ));
+    report.check(Check::relative(
+        "Section-coupled 1D diffuser exit viscous loss Δp_exit",
+        0.6977,
+        find_obj("dp_exit"),
+        "kPa",
+        0.02,
+    ));
+    report.check(Check::relative(
+        "Section-coupled 1D Venturi coolant exit temperature T_out",
+        25.4207,
+        find_obj("t_exit"),
+        "°C",
+        0.005,
+    ));
+
+    let (a23_ver_err, a23_ver_json) =
+        mcp_tool_call(&mut a23_srv, 1603, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !a23_ver_err && a23_ver_json["status"] == "ok",
+        "expected A23 SDF Venturi @assert contracts to pass verify: {a23_ver_json}"
+    );
+
+    let t27_path = examples_dir.join("tutorials/T27-sdf-coupled-regenerative-cooling-jacket.fsm");
+    let t27_raw = std::fs::read_to_string(&t27_path).expect("read T27 .fsm");
+    let mut t27_srv = Server::new();
+    let (t27_open_err, t27_open_body) =
+        mcp_tool_call(&mut t27_srv, 1604, "open", json!({ "doc": t27_raw }));
+    assert!(!t27_open_err, "open T27 failed: {t27_open_body}");
+
+    let (t27_sys_err, t27_sys_json) =
+        mcp_tool_call(&mut t27_srv, 1605, "solve_coupled_system", json!({}));
+    assert!(
+        !t27_sys_err,
+        "T27 solve_coupled_system failed: {t27_sys_json}"
+    );
+    let d_dp_dc = t27_sys_json["analysis"]["design_sensitivities"][0][0]
+        .as_f64()
+        .expect("d(dp_jacket)/d(c_cell)");
+    let d_tw_dc = t27_sys_json["analysis"]["design_sensitivities"][1][0]
+        .as_f64()
+        .expect("d(t_liner_max)/d(c_cell)");
+    let d_dp_dr = t27_sys_json["analysis"]["design_sensitivities"][0][1]
+        .as_f64()
+        .expect("d(dp_jacket)/d(r_jacket)");
+    assert!(
+        d_dp_dc < -0.5 && d_tw_dc > 1.0 && d_dp_dr < -0.2,
+        "expected two-way 3D SDF/TPMS section sensitivities d(dp)/d(c_cell) < 0 ({d_dp_dc}), d(T_w)/d(c_cell) > 0 ({d_tw_dc}), d(dp)/d(r_jacket) < 0 ({d_dp_dr})"
+    );
+
+    let (t27_ver_err, t27_ver_json) =
+        mcp_tool_call(&mut t27_srv, 1606, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !t27_ver_err && t27_ver_json["status"] == "ok",
+        "expected T27 SDF+TPMS regenerative cooling jacket @assert contracts to pass verify: {t27_ver_json}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -2303,7 +2454,7 @@ solve build=(0, 0)
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` & TPMS porous `hx` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` / TPMS porous `hx` / 3D SDF-section-coupled `system` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
              first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
@@ -2314,8 +2465,9 @@ solve build=(0, 0)
              and 3D P2 nonlinear Darcy–Forchheimer TPMS porous-media flow + two-stream conjugate `ε–NTU` heat exchange across Gyroid/Diamond/Primitive lattices with skin port collars & solid boss detours), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
-             stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
-             `lerp(...)` 3D BC projection, and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
+             stiffness scaling, two-way 3D SDF & graded-TPMS `section`-coupled 0D/1D `.fsm` `system` blocks \
+             (`area`, `perimeter`, `dh`, `fill_area`, `fill_perm`, `fill_beta`, `fill_awet`, `fill_dh`, spatial `d_ds` / `d2_ds2` stencils, Dual-AD Jacobians & `lerp(...)` 3D BC projection), \
+             and optimistic concurrency (`409 Conflict`) on `/api/workspace` and `/api/mcp`.",
             fsm_files.len(),
             mcp_directives_total,
             tool_count,
@@ -2330,13 +2482,13 @@ solve build=(0, 0)
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
-         WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
+         WASM declarative `system` authoring (`set_system_block` + 3D SDF `section` profile extraction), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
          WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, WASM TPMS porous `hx` authoring (`add-hx` / `set_hx`) + Results `💧 Porous Pressure p` colourmap, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
          (`solve.build.*`), AND modal vibration cases (including spatial `lerp(...)` \
-         BCs and embedded `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
+         BCs and 3D SDF `section`-coupled `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
          adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear solves \
          independent of parameter count `k`); epistemic UQ (`uq`) uses first-order second-moment (FOSM) \
          independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`); \

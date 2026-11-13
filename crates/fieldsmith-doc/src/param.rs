@@ -244,6 +244,25 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             )),
         };
     }
+    if id == "fill" && doc.fill.is_some() && doc.find("fill").is_none() {
+        return match (attr, addr.comp) {
+            (
+                "cell" | "cell_min" | "skin" | "skin_max" | "rho_min" | "rho_max" | "curve"
+                | "min_wall" | "wall",
+                None,
+            ) => Ok(()),
+            ("rotate", Some(k)) if k < 3 => Ok(()),
+            ("rotate", _) => Err(format!("param {addr}: rotate expects component 0..2")),
+            (
+                "cell" | "cell_min" | "skin" | "skin_max" | "rho_min" | "rho_max" | "curve"
+                | "min_wall" | "wall",
+                Some(_),
+            ) => Err(format!("param {addr}: {attr} takes no component index")),
+            _ => Err(format!(
+                "param {addr}: fill has no numeric parameter {attr:?} — cell, cell_min, skin, skin_max, rho_min, rho_max, curve, min_wall, rotate[0-2]"
+            )),
+        };
+    }
     if id == "hx" && doc.hx.is_some() {
         return match (attr, addr.comp) {
             ("mdot" | "tin" | "cold_mdot" | "cold_tin" | "pout", None) => Ok(()),
@@ -421,6 +440,23 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
             _ => unreachable!("the writer was checked against this statement"),
         }
         return;
+    }
+    if target == "fill" {
+        if let Some(f) = doc.fill.as_mut() {
+            match (attr, comp) {
+                ("cell", None) => f.cell = v,
+                ("cell_min", None) => f.cell_min = Some(v),
+                ("skin", None) => f.skin = v,
+                ("skin_max", None) => f.skin_max = Some(v),
+                ("rho_min", None) => f.rho_min = v,
+                ("rho_max", None) => f.rho_max = v,
+                ("curve", None) => f.curve = v,
+                ("min_wall" | "wall", None) => f.min_wall = v,
+                ("rotate", Some(k)) => f.rotate[k] = v,
+                _ => unreachable!("the writer was checked against this statement"),
+            }
+            return;
+        }
     }
     if target == "hx" {
         if let Some(hx) = doc.hx.as_mut() {

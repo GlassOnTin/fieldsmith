@@ -337,6 +337,8 @@ pub struct SingleResult {
     pub graded: Option<GradedSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transient: Vec<TransientCaseReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<fieldsmith_core::declarative_system::DeclarativeSystemVisual>,
 }
 
 /// Solid inter-layer peel and mass summary attached to [`SingleResult`] when `solve build=(...)`

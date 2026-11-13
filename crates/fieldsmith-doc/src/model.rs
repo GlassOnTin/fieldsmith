@@ -1134,6 +1134,7 @@ impl Document {
             let named = ids.contains(&c.target)
                 || self.loads.iter().any(|l| l.id == c.target)
                 || self.contacts.iter().any(|ct| ct.id == c.target)
+                || (c.target == "fill" && self.fill.is_some())
                 || (c.target == "hx" && self.hx.is_some())
                 || self.temperatures.iter().any(|t| t.id == c.target)
                 || self.convections.iter().any(|v| v.id == c.target)

@@ -61,7 +61,7 @@ system coolant_liner_1d title="1D Cooled SS316L Liner" sector="Thermal-Fluids" n
   state P_f init="0.8" scale=1 unit="MPa" symbol="P_f"
   aux cp expr="4180"
   aux r_out expr="6 + wall_t"
-  aux q_lin expr="2 * pi * r_out * 2.0 * (1 + 0.2 * sin(pi * s / 60))"
+  aux q_lin expr="2 * pi * r_out * 0.12 * (1 + 0.2 * sin(pi * s / 60))"
   aux h_film expr="h_mult * 0.025 * pow(mdot / 0.012, 0.8)"
   residual T_f eq="mdot * cp * d_ds(T_f) - q_lin" bc_left="T_f - 25"
   residual P_f eq="d_ds(P_f) + 0.0025 * pow(mdot / 0.012, 1.8)" bc_left="P_f - 0.8"

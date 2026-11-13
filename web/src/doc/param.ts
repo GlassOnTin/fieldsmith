@@ -157,6 +157,7 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
       capsule: ['radius', 'length'],
       torus: ['major', 'minor'],
       extrude: ['height'],
+      revolve: ['angle'],
     };
     if (scalar[k.type]?.includes(attr)) {
       noIndex(addr, attr);
@@ -231,6 +232,33 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
     }
     noIndex(addr, attr);
     return;
+  }
+  if (id === 'fill' && doc.fill && !findNode(doc, 'fill')) {
+    if (attr === 'rotate') {
+      if (addr.comp === null || addr.comp < 0 || addr.comp > 2) {
+        throw new Error(`param ${addrText(addr)}: rotate expects component 0..2`);
+      }
+      return;
+    }
+    if (
+      [
+        'cell',
+        'cell_min',
+        'skin',
+        'skin_max',
+        'rho_min',
+        'rho_max',
+        'curve',
+        'min_wall',
+        'wall',
+      ].includes(attr)
+    ) {
+      noIndex(addr, attr);
+      return;
+    }
+    throw new Error(
+      `param ${addrText(addr)}: fill has no numeric parameter ${JSON.stringify(attr)} — cell, cell_min, skin, skin_max, rho_min, rho_max, curve, min_wall, rotate[0-2]`,
+    );
   }
   if (id === 'hx' && doc.hx) {
     if (!['mdot', 'tin', 'cold_mdot', 'cold_tin', 'pout'].includes(attr)) {
@@ -391,6 +419,7 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
       if (attr === 'major') k.major = v;
       else k.minor = v;
     } else if (k.type === 'extrude') k.height = v;
+    else if (k.type === 'revolve') k.angle = v;
     return;
   }
   const load = doc.loads.find((l) => l.id === target);
@@ -414,6 +443,21 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   if (contact) {
     if (attr === 'k') contact.k = v;
     else if (attr === 'gap') contact.gap = v;
+    return;
+  }
+  if (target === 'fill' && doc.fill) {
+    if (attr === 'cell') doc.fill.cell = v;
+    else if (attr === 'cell_min') doc.fill.cell_min = v;
+    else if (attr === 'skin') doc.fill.skin = v;
+    else if (attr === 'skin_max') doc.fill.skin_max = v;
+    else if (attr === 'rho_min') doc.fill.rho_min = v;
+    else if (attr === 'rho_max') doc.fill.rho_max = v;
+    else if (attr === 'curve') doc.fill.curve = v;
+    else if (attr === 'min_wall' || attr === 'wall') doc.fill.min_wall = v;
+    else if (attr === 'rotate') {
+      doc.fill.rotate ??= [0, 0, 0];
+      doc.fill.rotate[comp as number] = v;
+    }
     return;
   }
   if (target === 'hx' && doc.hx) {
@@ -704,6 +748,7 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
     if (k.type === 'capsule') return addr.attr === 'radius' ? k.radius : k.length;
     if (k.type === 'torus') return addr.attr === 'major' ? k.major : k.minor;
     if (k.type === 'extrude') return k.height;
+    if (k.type === 'revolve') return k.angle;
     return null;
   }
   const load = doc.loads.find((l) => l.id === addr.id);
@@ -721,6 +766,17 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
   if (flux) return flux.q;
   const contact = (doc.contacts ?? []).find((c) => c.id === addr.id);
   if (contact) return addr.attr === 'k' ? contact.k : contact.gap;
+  if (addr.id === 'fill' && doc.fill && !findNode(doc, 'fill')) {
+    if (addr.attr === 'cell') return doc.fill.cell;
+    if (addr.attr === 'cell_min') return doc.fill.cell_min ?? null;
+    if (addr.attr === 'skin') return doc.fill.skin;
+    if (addr.attr === 'skin_max') return doc.fill.skin_max ?? null;
+    if (addr.attr === 'rho_min') return doc.fill.rho_min;
+    if (addr.attr === 'rho_max') return doc.fill.rho_max;
+    if (addr.attr === 'curve') return doc.fill.curve;
+    if (addr.attr === 'min_wall' || addr.attr === 'wall') return doc.fill.min_wall;
+    if (addr.attr === 'rotate') return (doc.fill.rotate ?? [0, 0, 0])[addr.comp as number];
+  }
   if (addr.id === 'hx' && doc.hx) {
     if (addr.attr === 'mdot') return doc.hx.mdot;
     if (addr.attr === 'tin') return doc.hx.tin;
@@ -775,6 +831,18 @@ export function addressableParams(doc: Document): { addr: string; value: number 
   for (const c of doc.contacts ?? []) {
     push(c.id, 'k', null, c.k);
     push(c.id, 'gap', null, c.gap);
+  }
+  if (doc.fill && !findNode(doc, 'fill')) {
+    push('fill', 'cell', null, doc.fill.cell);
+    if (doc.fill.cell_min != null) push('fill', 'cell_min', null, doc.fill.cell_min);
+    push('fill', 'skin', null, doc.fill.skin);
+    if (doc.fill.skin_max != null) push('fill', 'skin_max', null, doc.fill.skin_max);
+    push('fill', 'rho_min', null, doc.fill.rho_min);
+    push('fill', 'rho_max', null, doc.fill.rho_max);
+    push('fill', 'curve', null, doc.fill.curve);
+    push('fill', 'min_wall', null, doc.fill.min_wall);
+    const rot = doc.fill.rotate ?? [0, 0, 0];
+    for (let i = 0; i < 3; i++) push('fill', 'rotate', i, rot[i]);
   }
   if (doc.hx) {
     push('hx', 'mdot', null, doc.hx.mdot);

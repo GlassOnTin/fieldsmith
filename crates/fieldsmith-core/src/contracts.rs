@@ -119,6 +119,15 @@ pub fn resolve_assert_metric(
             "quantile contract metric '{m}' requires document uncertainty propagation (use verify_document)"
         ));
     }
+    if m.starts_with("sys.") || m.starts_with("sys_") || m.starts_with("section.") {
+        let vis = a
+            .system
+            .as_ref()
+            .ok_or_else(|| format!("metric '{m}' requires a `system` block"))?;
+        if let Some(res) = crate::declarative_system::resolve_system_visual_metric(vis, m) {
+            return res;
+        }
+    }
     if m == "mode_split_12_pct" {
         let freqs = &a
             .modes
@@ -626,6 +635,45 @@ pub fn evaluate_contracts_with_uq(
 ) -> Result<(VerificationReport, Option<crate::uq::UqReport>), String> {
     if !crate::uq::has_quantile_asserts(asserts) {
         return Ok((evaluate_contracts(asserts, a, g)?, None));
+    }
+    let has_epistemic_sources = !doc.uncertainties.is_empty()
+        || doc
+            .system_block
+            .as_ref()
+            .is_some_and(|sb| !sb.epistemics.is_empty());
+    if !has_epistemic_sources {
+        let mut outcomes = Vec::with_capacity(asserts.len());
+        let mut passed = 0usize;
+        for asrt in asserts {
+            let (_, base_m) = crate::uq::strip_quantile_prefix(&asrt.metric);
+            let val = resolve_assert_metric(base_m, a, g)?;
+            let (value, error_or_margin, ok) = check_assert_target(asrt, val)?;
+            if ok {
+                passed += 1;
+            }
+            outcomes.push(AssertOutcome {
+                label: asrt.label.clone(),
+                metric: asrt.metric.clone(),
+                target: asrt.target.clone(),
+                tolerance: asrt.tolerance.clone(),
+                unit: asrt.unit.clone(),
+                value,
+                error_or_margin,
+                passed: ok,
+            });
+        }
+        let total = outcomes.len();
+        let failed = total - passed;
+        return Ok((
+            VerificationReport {
+                total,
+                passed,
+                failed,
+                all_passed: failed == 0,
+                outcomes,
+            },
+            None,
+        ));
     }
     let mut needed_metrics = Vec::new();
     for asrt in asserts {

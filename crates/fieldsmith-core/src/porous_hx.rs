@@ -85,7 +85,7 @@ pub fn tpms_cell_law(family: Family) -> TpmsCellLaw {
 }
 
 impl TpmsCellLaw {
-    fn lerp(self, other: Self, t: f64) -> Self {
+    pub fn lerp(self, other: Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
         let s = 1.0 - t;
         Self {

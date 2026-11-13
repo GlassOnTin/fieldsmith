@@ -1125,3 +1125,92 @@ assert \"Pressure drop bound\" metric=\"hx_pressure_drop_kpa\" target=\"<= 5.0\"
     assert_eq!(ver["status"], "ok", "{ver}");
     assert_eq!(ver["verification"]["all_passed"], true);
 }
+
+#[test]
+fn sdf_section_coupled_system_reacts_to_3d_shape_and_fill_edits_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let doc = "\
+fieldsmith 1
+name \"MCP SDF Section-Coupled Coolant Duct\"
+material alsi10mg
+let r_bore = 5.0
+cylinder jacket r=10 h=60 at=(0, 0, 30)
+cylinder bore r=r_bore h=64 at=(0, 0, 30) subtract
+region mount_end = jacket.bottom
+region wet_bore = bore.side
+region hot_od = jacket.side
+support clamp mount_end fixed=xyz
+convection cool wet_bore h=0.012 tinf=25 case=\"Thermal\"
+heatflux heat hot_od q=0.25 case=\"Thermal\"
+system sdf_duct title=\"3D SDF Section-Coupled Duct\" sector=\"Thermal-Fluids\" nodes=13 span=(0, 60) axis=z {
+  section A_flow prop=area mode=void h=0.20
+  section P_wet prop=perimeter mode=void h=0.20
+  section D_h prop=dh mode=void h=0.20
+  design r_bore nominal=5.0 min=3.0 max=7.5 unit=\"mm\" symbol=\"r_b\" category=geometry
+  design mdot nominal=0.015 min=0.005 max=0.08 unit=\"kg/s\" symbol=\"m_dot\"
+  state p_f init=\"100\" scale=100 unit=\"kPa\" symbol=\"p_f\"
+  state T_f init=\"25\" scale=100 unit=\"C\" symbol=\"T_f\"
+  aux u_f expr=\"(mdot / 0.998) / (A_flow * 1e-6)\"
+  aux dp_ds expr=\"-32 * 0.001 * u_f / (D_h * D_h)\"
+  aux h_conv expr=\"3.66 * 0.0006 / D_h\"
+  aux q_lin expr=\"0.25 * 2 * pi * 10\"
+  residual p_f eq=\"d_ds(p_f) - dp_ds\" bc_left=\"p_f - 100\"
+  residual T_f eq=\"4180 * mdot * d_ds(T_f) - q_lin\" bc_left=\"T_f - 25\"
+  objective dp_total expr=\"100 - p_f\" reduce=exit kind=upper limit=5.0 unit=\"kPa\" symbol=\"dp\"
+  objective t_out expr=\"T_f\" reduce=exit kind=upper limit=60.0 unit=\"C\" symbol=\"T_out\"
+  bind cool attr=h expr=\"h_conv\"
+  bind cool attr=tinf expr=\"T_f\"
+}
+assert \"Flow area matches bore\" metric=\"section.A_flow.mean\" target=113.097 tol=\"3%\" unit=\"mm^2\"
+assert \"Pressure drop positive\" metric=\"sys.dp_total\" target=\">= 0.001\" unit=\"kPa\"
+solve size=6 tref=20
+";
+    c.tool_ok(60, "open", json!({ "doc": doc }));
+
+    // 1. Solve at r_bore = 5.0 mm: A_flow ≈ pi * 25 = 78.54 mm^2
+    let s1 = c.tool_ok(61, "solve_coupled_system", json!({}));
+    let a1 = s1["declarative_visual"]["sections"][0]["mean"]
+        .as_f64()
+        .unwrap();
+    let dp1 = s1["analysis"]["objectives"][0].as_f64().unwrap();
+    assert!(
+        (a1 - std::f64::consts::PI * 25.0).abs() / (std::f64::consts::PI * 25.0) < 0.02,
+        "expected A_flow ~ 78.54 mm^2, got {a1}"
+    );
+    // Two-way geometric adjoint sensitivity d(dp_total)/d(r_bore) must be negative
+    let d_dp_dr = s1["analysis"]["design_sensitivities"][0][0]
+        .as_f64()
+        .unwrap();
+    assert!(
+        d_dp_dr < 0.0,
+        "widening bore must reduce pressure drop: d(dp)/dr_bore = {d_dp_dr}"
+    );
+
+    // 2. Mutate 3D CAD geometry `let r_bore = 6.0` over MCP and re-solve coupled system
+    c.tool_ok(62, "set_let", json!({ "name": "r_bore", "value": 6.0 }));
+    let s2 = c.tool_ok(63, "solve_coupled_system", json!({}));
+    let a2 = s2["declarative_visual"]["sections"][0]["mean"]
+        .as_f64()
+        .unwrap();
+    let dp2 = s2["analysis"]["objectives"][0].as_f64().unwrap();
+    assert!(
+        (a2 - std::f64::consts::PI * 36.0).abs() / (std::f64::consts::PI * 36.0) < 0.02,
+        "expected A_flow ~ 113.10 mm^2 after set_let r_bore=6, got {a2}"
+    );
+    assert!(
+        dp2 < 0.55 * dp1,
+        "expected Hagen-Poiseuille dp ~(5/6)^4 = 0.482x drop: dp1={dp1}, dp2={dp2}"
+    );
+
+    // 3. Full 3D P2 FEA `solve` includes `single.system.sections` & `verify` passes both `section.*` and `sys.*`
+    let fea = c.tool_ok(64, "solve", json!({ "kind": "solve", "dofs": 6000 }));
+    assert_eq!(fea["status"], "ok", "{fea}");
+    let fea_sec = &fea["single"]["system"]["sections"][0];
+    assert_eq!(fea_sec["name"], "A_flow");
+    assert!((fea_sec["mean"].as_f64().unwrap() - a2).abs() < 1e-6);
+
+    let ver = c.tool_ok(65, "verify", json!({ "dofs": 6000 }));
+    assert_eq!(ver["status"], "ok", "{ver}");
+    assert_eq!(ver["verification"]["all_passed"], true, "{ver}");
+}

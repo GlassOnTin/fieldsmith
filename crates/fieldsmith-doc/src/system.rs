@@ -157,6 +157,137 @@ pub struct DeclAuxVar {
     pub expr: String,
 }
 
+/// Geometric or graded-TPMS cross-section property extracted along the 1D system axis (`3D → 1D`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclSectionProp {
+    #[default]
+    Area,
+    Perimeter,
+    Dh,
+    Count,
+    FillArea,
+    FillRho,
+    FillPorosity,
+    FillCell,
+    FillDh,
+    FillPerm,
+    FillBeta,
+    FillAwet,
+}
+
+impl DeclSectionProp {
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "area" => Some(Self::Area),
+            "perimeter" | "perim" | "pwet" => Some(Self::Perimeter),
+            "dh" | "hydraulic_diameter" => Some(Self::Dh),
+            "count" => Some(Self::Count),
+            "fill_area" => Some(Self::FillArea),
+            "fill_rho" => Some(Self::FillRho),
+            "fill_porosity" => Some(Self::FillPorosity),
+            "fill_cell" => Some(Self::FillCell),
+            "fill_dh" => Some(Self::FillDh),
+            "fill_perm" => Some(Self::FillPerm),
+            "fill_beta" => Some(Self::FillBeta),
+            "fill_awet" => Some(Self::FillAwet),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Area => "area",
+            Self::Perimeter => "perimeter",
+            Self::Dh => "dh",
+            Self::Count => "count",
+            Self::FillArea => "fill_area",
+            Self::FillRho => "fill_rho",
+            Self::FillPorosity => "fill_porosity",
+            Self::FillCell => "fill_cell",
+            Self::FillDh => "fill_dh",
+            Self::FillPerm => "fill_perm",
+            Self::FillBeta => "fill_beta",
+            Self::FillAwet => "fill_awet",
+        }
+    }
+
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Area | Self::FillArea | Self::FillPerm => "mm^2",
+            Self::Perimeter | Self::Dh | Self::FillCell | Self::FillDh => "mm",
+            Self::Count | Self::FillRho | Self::FillPorosity => "-",
+            Self::FillBeta | Self::FillAwet => "1/mm",
+        }
+    }
+
+    pub fn requires_fill(self) -> bool {
+        matches!(
+            self,
+            Self::FillArea
+                | Self::FillPorosity
+                | Self::FillCell
+                | Self::FillDh
+                | Self::FillPerm
+                | Self::FillBeta
+                | Self::FillAwet
+        )
+    }
+}
+
+/// Which closed contour family is measured on each 2D SDF cross-section slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DeclSectionMode {
+    /// Enclosed interior void holes when `shape` is omitted and holes exist; solid loops otherwise.
+    #[default]
+    Auto,
+    /// Enclosed interior void loops (`signed_area < 0`, e.g. subtracted bores/cooling channels).
+    Void,
+    /// Net solid cross-section (`{ f < 0 }`: outer loops minus enclosed holes).
+    Solid,
+    /// Outer positive envelope loops (`signed_area > 0`, ignoring interior holes).
+    Outer,
+}
+
+impl DeclSectionMode {
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "auto" => Some(Self::Auto),
+            "void" | "interior" | "hole" => Some(Self::Void),
+            "solid" => Some(Self::Solid),
+            "outer" | "envelope" => Some(Self::Outer),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Void => "void",
+            Self::Solid => "solid",
+            Self::Outer => "outer",
+        }
+    }
+}
+
+/// 3D SDF / graded-TPMS cross-section binding (`section <name> prop=...`) sampled at every
+/// station `s_i` (`i = 0..nodes`) of a [`DeclarativeSystem`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeclSection {
+    pub name: String,
+    #[serde(default)]
+    pub prop: DeclSectionProp,
+    #[serde(default)]
+    pub mode: DeclSectionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<DeclAxis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
+}
+
 /// Residual equation `R_f = 0` paired 1:1 with a [`DeclStateField`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeclResidual {
@@ -337,6 +468,8 @@ pub struct DeclarativeSystem {
     pub designs: Vec<DeclDesignParam>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub epistemics: Vec<DeclEpistemicParam>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<DeclSection>,
     pub states: Vec<DeclStateField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aux: Vec<DeclAuxVar>,
@@ -443,6 +576,44 @@ impl DeclarativeSystem {
                 errs.push(format!(
                     "{prefix}: state '{}' scale must be > 0 (got {})",
                     st.name, st.scale
+                ));
+            }
+        }
+        for sec in &self.sections {
+            if !crate::fsm::is_ident(&sec.name) {
+                errs.push(format!(
+                    "{prefix}: section '{}' is not a valid identifier",
+                    sec.name
+                ));
+            }
+            let eff_ax = sec.axis.unwrap_or(self.axis);
+            if eff_ax == DeclAxis::R {
+                errs.push(format!(
+                    "{prefix}: section '{}' requires planar axis x, y, or z (got r)",
+                    sec.name
+                ));
+            }
+            if let Some(ref nid) = sec.shape {
+                if doc.find(nid).is_none() {
+                    errs.push(format!(
+                        "{prefix}: section '{}' references unknown shape '{}'",
+                        sec.name, nid
+                    ));
+                }
+            }
+            if let Some(hv) = sec.h {
+                if !(hv.is_finite() && hv > 0.0) {
+                    errs.push(format!(
+                        "{prefix}: section '{}' h must be finite and > 0 (got {})",
+                        sec.name, hv
+                    ));
+                }
+            }
+            if sec.prop.requires_fill() && doc.fill.is_none() {
+                errs.push(format!(
+                    "{prefix}: section '{}' (prop={}) requires a 'fill' lattice statement",
+                    sec.name,
+                    sec.prop.name()
                 ));
             }
         }
@@ -803,6 +974,7 @@ pub enum SysExpr {
     DocLet(usize),
     Design(usize),
     Epistemic(usize),
+    Section(usize),
     State(usize),
     StatePrev(usize),
     Aux(usize),
@@ -815,6 +987,10 @@ pub enum SysExpr {
     DdsUpwind(usize),
     DdsDownwind(usize),
     D2ds2(usize),
+    DdsExpr(Box<SysExpr>),
+    DdsUpwindExpr(Box<SysExpr>),
+    DdsDownwindExpr(Box<SysExpr>),
+    D2ds2Expr(Box<SysExpr>),
     StationEntry(Box<SysExpr>),
     StationExit(Box<SysExpr>),
     StationMean(Box<SysExpr>),
@@ -822,7 +998,8 @@ pub enum SysExpr {
 }
 
 impl SysExpr {
-    /// Whether this expression references `StationMean` or `StationIntegral` (coupling all stations).
+    /// Whether this expression references `StationMean`, `StationIntegral`, or general
+    /// expression-level spatial stencils (`DdsExpr` etc.) requiring full-grid `aux` evaluation.
     pub fn has_global_station_reduction(&self, aux_exprs: &[SysExpr]) -> bool {
         match self {
             Self::Const(_)
@@ -832,6 +1009,7 @@ impl SysExpr {
             | Self::DocLet(_)
             | Self::Design(_)
             | Self::Epistemic(_)
+            | Self::Section(_)
             | Self::State(_)
             | Self::StatePrev(_)
             | Self::Dds(_)
@@ -853,7 +1031,12 @@ impl SysExpr {
                     || b.has_global_station_reduction(aux_exprs)
                     || c.has_global_station_reduction(aux_exprs)
             }
-            Self::StationMean(_) | Self::StationIntegral(_) => true,
+            Self::DdsExpr(_)
+            | Self::DdsUpwindExpr(_)
+            | Self::DdsDownwindExpr(_)
+            | Self::D2ds2Expr(_)
+            | Self::StationMean(_)
+            | Self::StationIntegral(_) => true,
         }
     }
 }
@@ -889,6 +1072,8 @@ pub struct CompiledSystem {
     pub ds: f64,
     pub stations: Vec<f64>,
     pub doc_let_vals: Vec<f64>,
+    /// Pre-sampled 3D cross-section profiles (`sections.len() * nodes`, indexed `sec_idx * nodes + i`).
+    pub section_grid: Vec<f64>,
     pub n_fields: usize,
     pub init_exprs: Vec<SysExpr>,
     pub aux_exprs: Vec<SysExpr>,
@@ -905,20 +1090,43 @@ struct CompileScope<'a> {
     doc_lets: &'a [(String, f64)],
     designs: &'a [DeclDesignParam],
     epistemics: &'a [DeclEpistemicParam],
+    sections: &'a [DeclSection],
     states: &'a [DeclStateField],
     aux: &'a [DeclAuxVar],
     allow_states: bool,
 }
 
 impl CompiledSystem {
-    /// Compile and type-check all expressions in `sys` against `doc_lets`.
+    /// Compile and type-check all expressions in `sys` against `doc_lets`, initializing any
+    /// `section` station profiles to `1.0` (call [`Self::compile_with_sections`] or
+    /// [`Self::with_section_grid`] to populate live 3D SDF & TPMS cross-section profiles).
     pub fn compile(
         sys: &DeclarativeSystem,
         doc_lets: &[(String, f64)],
     ) -> Result<Self, Vec<String>> {
+        let default_sections = vec![1.0; sys.sections.len() * sys.nodes.max(1)];
+        Self::compile_with_sections(sys, doc_lets, default_sections)
+    }
+
+    /// Compile `sys` with pre-extracted 3D cross-section station grid (`sys.sections.len() * nodes`).
+    pub fn compile_with_sections(
+        sys: &DeclarativeSystem,
+        doc_lets: &[(String, f64)],
+        section_grid: Vec<f64>,
+    ) -> Result<Self, Vec<String>> {
         let mut errs = Vec::new();
         let prefix = format!("System '{}'", sys.id);
         let nodes = sys.nodes.max(1);
+        let expected_sec_len = sys.sections.len() * nodes;
+        if section_grid.len() != expected_sec_len {
+            errs.push(format!(
+                "{prefix}: section_grid length {} != expected {} ({} sections * {} nodes)",
+                section_grid.len(),
+                expected_sec_len,
+                sys.sections.len(),
+                nodes
+            ));
+        }
         let span_len = (sys.span[1] - sys.span[0]).abs();
         let ds = if nodes >= 2 {
             (sys.span[1] - sys.span[0]) / ((nodes - 1) as f64)
@@ -931,13 +1139,16 @@ impl CompiledSystem {
             vec![sys.span[0]]
         };
 
-        // Check duplicate names across design / epistemic / state / aux
+        // Check duplicate names across design / epistemic / section / state / aux
         let mut seen_owned: Vec<(String, &'static str)> = Vec::new();
         for d in &sys.designs {
             check_name_collision(&prefix, &d.name, "design", &mut seen_owned, &mut errs);
         }
         for e in &sys.epistemics {
             check_name_collision(&prefix, &e.name, "epistemic", &mut seen_owned, &mut errs);
+        }
+        for sec in &sys.sections {
+            check_name_collision(&prefix, &sec.name, "section", &mut seen_owned, &mut errs);
         }
         for st in &sys.states {
             check_name_collision(&prefix, &st.name, "state", &mut seen_owned, &mut errs);
@@ -960,12 +1171,13 @@ impl CompiledSystem {
             check_name_collision(&prefix, &ax.name, "aux", &mut seen_owned, &mut errs);
         }
 
-        // Compile state `init_expr` (may reference `s`, `L`, `ds`, `lets`, `designs`, `epistemics`, NOT states/aux)
+        // Compile state `init_expr` (may reference `s`, `L`, `ds`, `lets`, `designs`, `epistemics`, `sections`, NOT states/aux)
         let init_scope = CompileScope {
             nodes,
             doc_lets,
             designs: &sys.designs,
             epistemics: &sys.epistemics,
+            sections: &sys.sections,
             states: &sys.states,
             aux: &[],
             allow_states: false,
@@ -978,7 +1190,7 @@ impl CompiledSystem {
             }
         }
 
-        // Compile `aux` in declaration order (each `aux[k]` may reference `aux[0..k]` + states)
+        // Compile `aux` in declaration order (each `aux[k]` may reference `aux[0..k]` + states + sections)
         let mut aux_exprs = Vec::with_capacity(sys.aux.len());
         for (k, ax) in sys.aux.iter().enumerate() {
             let scope = CompileScope {
@@ -986,6 +1198,7 @@ impl CompiledSystem {
                 doc_lets,
                 designs: &sys.designs,
                 epistemics: &sys.epistemics,
+                sections: &sys.sections,
                 states: &sys.states,
                 aux: &sys.aux[..k],
                 allow_states: true,
@@ -1001,6 +1214,7 @@ impl CompiledSystem {
             doc_lets,
             designs: &sys.designs,
             epistemics: &sys.epistemics,
+            sections: &sys.sections,
             states: &sys.states,
             aux: &sys.aux,
             allow_states: true,
@@ -1186,6 +1400,7 @@ impl CompiledSystem {
             ds,
             stations,
             doc_let_vals: doc_lets.iter().map(|(_, v)| *v).collect(),
+            section_grid,
             n_fields: sys.states.len(),
             init_exprs,
             aux_exprs,
@@ -1379,28 +1594,8 @@ impl CompiledSystem {
 
             let aux_grid = if self.aux_exprs.is_empty() {
                 Vec::new()
-            } else if self.has_global_residual_coupling || self.nodes <= 5 {
-                self.compute_aux_grid(&w_d, &wp_d, &p_d, &th_d)
             } else {
-                let n_aux = self.aux_exprs.len();
-                let mut ag = vec![Dual::default(); self.nodes * n_aux];
-                for a in 0..n_aux {
-                    for &s_idx in &candidate_stations {
-                        let val = {
-                            let ctx = EvalCtx {
-                                sys: self,
-                                w: &w_d,
-                                w_prev: &wp_d,
-                                design_p: &p_d,
-                                epistemic_theta: &th_d,
-                                aux_grid: &ag,
-                            };
-                            ctx.eval(&self.aux_exprs[a], s_idx)
-                        };
-                        ag[s_idx * n_aux + a] = val;
-                    }
-                }
-                ag
+                self.compute_aux_grid(&w_d, &wp_d, &p_d, &th_d)
             };
 
             let ctx = EvalCtx {
@@ -1597,6 +1792,9 @@ impl<'a> EvalCtx<'a> {
             SysExpr::DocLet(idx) => Dual::constant(self.sys.doc_let_vals[*idx]),
             SysExpr::Design(idx) => self.design_p[*idx],
             SysExpr::Epistemic(idx) => self.epistemic_theta[*idx],
+            SysExpr::Section(idx) => {
+                Dual::constant(self.sys.section_grid[*idx * self.sys.nodes + i])
+            }
             SysExpr::State(f) => self.state_at(i, *f),
             SysExpr::StatePrev(f) => self.w_prev[i * self.sys.n_fields + *f],
             SysExpr::Aux(a) => self.aux_grid[i * self.sys.aux_exprs.len() + *a],
@@ -1701,6 +1899,78 @@ impl<'a> EvalCtx<'a> {
                     let u_p = self.state_at(c + 1, *f);
                     let u_0 = self.state_at(c, *f);
                     let u_m = self.state_at(c - 1, *f);
+                    let ds2 = self.sys.ds * self.sys.ds;
+                    u_p.sub(u_0.mul(Dual::constant(2.0)))
+                        .add(u_m)
+                        .div(Dual::constant(ds2))
+                }
+            }
+            SysExpr::DdsExpr(sub) => {
+                let n = self.sys.nodes;
+                if n < 2 {
+                    Dual::constant(0.0)
+                } else if n == 2 {
+                    self.eval(sub, 1)
+                        .sub(self.eval(sub, 0))
+                        .div(Dual::constant(self.sys.ds))
+                } else if i == 0 {
+                    (Dual::constant(-3.0) * self.eval(sub, 0)
+                        + Dual::constant(4.0) * self.eval(sub, 1)
+                        - self.eval(sub, 2))
+                        / Dual::constant(2.0 * self.sys.ds)
+                } else if i + 1 == n {
+                    (Dual::constant(3.0) * self.eval(sub, n - 1)
+                        - Dual::constant(4.0) * self.eval(sub, n - 2)
+                        + self.eval(sub, n - 3))
+                        / Dual::constant(2.0 * self.sys.ds)
+                } else {
+                    (self.eval(sub, i + 1) - self.eval(sub, i - 1))
+                        / Dual::constant(2.0 * self.sys.ds)
+                }
+            }
+            SysExpr::DdsUpwindExpr(sub) => {
+                let n = self.sys.nodes;
+                if n < 2 {
+                    Dual::constant(0.0)
+                } else if i == 0 {
+                    self.eval(sub, 1)
+                        .sub(self.eval(sub, 0))
+                        .div(Dual::constant(self.sys.ds))
+                } else {
+                    self.eval(sub, i)
+                        .sub(self.eval(sub, i - 1))
+                        .div(Dual::constant(self.sys.ds))
+                }
+            }
+            SysExpr::DdsDownwindExpr(sub) => {
+                let n = self.sys.nodes;
+                if n < 2 {
+                    Dual::constant(0.0)
+                } else if i + 1 == n {
+                    self.eval(sub, n - 1)
+                        .sub(self.eval(sub, n - 2))
+                        .div(Dual::constant(self.sys.ds))
+                } else {
+                    self.eval(sub, i + 1)
+                        .sub(self.eval(sub, i))
+                        .div(Dual::constant(self.sys.ds))
+                }
+            }
+            SysExpr::D2ds2Expr(sub) => {
+                let n = self.sys.nodes;
+                if n < 3 {
+                    Dual::constant(0.0)
+                } else {
+                    let c = if i == 0 {
+                        1
+                    } else if i + 1 == n {
+                        n - 2
+                    } else {
+                        i
+                    };
+                    let u_p = self.eval(sub, c + 1);
+                    let u_0 = self.eval(sub, c);
+                    let u_m = self.eval(sub, c - 1);
                     let ds2 = self.sys.ds * self.sys.ds;
                     u_p.sub(u_0.mul(Dual::constant(2.0)))
                         .add(u_m)
@@ -1875,7 +2145,7 @@ impl<'a> ExprParser<'a> {
         }
     }
 
-    fn expect_state_arg(&mut self, fn_name: &str) -> Result<usize, String> {
+    fn parse_spatial_op(&mut self, fn_name: &str) -> Result<SysExpr, String> {
         if !self.scope.allow_states {
             return Err(format!(
                 "spatial operator '{fn_name}' cannot be used in initial condition expressions"
@@ -1887,20 +2157,26 @@ impl<'a> ExprParser<'a> {
             ));
         }
         self.expect_sym('(')?;
-        let state_name = match self.next() {
-            Some(ExprTok::Ident(s)) => s,
-            other => {
-                return Err(format!(
-                    "{fn_name}(...) expects a state field name, found {other:?}"
-                ))
-            }
-        };
+        let inner = self.parse_sum()?;
         self.expect_sym(')')?;
-        self.scope
-            .states
-            .iter()
-            .position(|st| st.name == state_name)
-            .ok_or_else(|| format!("{fn_name}({state_name}): unknown state field '{state_name}'"))
+        if let SysExpr::State(f) = inner {
+            Ok(match fn_name {
+                "d_ds" => SysExpr::Dds(f),
+                "d_ds_upwind" => SysExpr::DdsUpwind(f),
+                "d_ds_downwind" => SysExpr::DdsDownwind(f),
+                "d2_ds2" => SysExpr::D2ds2(f),
+                _ => unreachable!(),
+            })
+        } else {
+            let boxed = Box::new(inner);
+            Ok(match fn_name {
+                "d_ds" => SysExpr::DdsExpr(boxed),
+                "d_ds_upwind" => SysExpr::DdsUpwindExpr(boxed),
+                "d_ds_downwind" => SysExpr::DdsDownwindExpr(boxed),
+                "d2_ds2" => SysExpr::D2ds2Expr(boxed),
+                _ => unreachable!(),
+            })
+        }
     }
 
     fn parse_atom(&mut self) -> Result<SysExpr, String> {
@@ -1913,18 +2189,11 @@ impl<'a> ExprParser<'a> {
             }
             Some(ExprTok::Ident(name)) => {
                 if self.is_sym('(') {
-                    match name.as_str() {
-                        "d_ds" => return Ok(SysExpr::Dds(self.expect_state_arg("d_ds")?)),
-                        "d_ds_upwind" => {
-                            return Ok(SysExpr::DdsUpwind(self.expect_state_arg("d_ds_upwind")?))
-                        }
-                        "d_ds_downwind" => {
-                            return Ok(SysExpr::DdsDownwind(
-                                self.expect_state_arg("d_ds_downwind")?,
-                            ))
-                        }
-                        "d2_ds2" => return Ok(SysExpr::D2ds2(self.expect_state_arg("d2_ds2")?)),
-                        _ => {}
+                    if matches!(
+                        name.as_str(),
+                        "d_ds" | "d_ds_upwind" | "d_ds_downwind" | "d2_ds2"
+                    ) {
+                        return self.parse_spatial_op(&name);
                     }
                     self.expect_sym('(')?;
                     let mut args = Vec::new();
@@ -2024,6 +2293,9 @@ impl<'a> ExprParser<'a> {
         if let Some(l) = self.scope.epistemics.iter().position(|t| t.name == name) {
             return Ok(SysExpr::Epistemic(l));
         }
+        if let Some(sec_i) = self.scope.sections.iter().position(|sec| sec.name == name) {
+            return Ok(SysExpr::Section(sec_i));
+        }
         if let Some(idx) = self.scope.doc_lets.iter().position(|(n, _)| n == name) {
             return Ok(SysExpr::DocLet(idx));
         }
@@ -2072,7 +2344,21 @@ pub fn sync_system_bindings_to_doc(
     design_p: &[f64],
     epistemic_theta: &[f64],
 ) -> Result<(), String> {
-    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, false)
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, false, |_d, sys| {
+        Ok(vec![1.0; sys.sections.len() * sys.nodes.max(1)])
+    })
+}
+
+/// Synchronise `doc.system_block` onto `doc` using a live 3D cross-section extractor `section_eval`
+/// evaluated AFTER propagating `design_p` onto matching `doc.lets`.
+pub fn sync_system_bindings_to_doc_with_sections(
+    doc: &mut Document,
+    state: &[f64],
+    design_p: &[f64],
+    epistemic_theta: &[f64],
+    section_eval: impl FnOnce(&Document, &DeclarativeSystem) -> Result<Vec<f64>, String>,
+) -> Result<(), String> {
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, false, section_eval)
 }
 
 /// Exact IEEE-754 variant of [`sync_system_bindings_to_doc`] for in-memory solver and sensitivity
@@ -2083,7 +2369,21 @@ pub fn sync_system_bindings_to_doc_exact(
     design_p: &[f64],
     epistemic_theta: &[f64],
 ) -> Result<(), String> {
-    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, true)
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, true, |_d, sys| {
+        Ok(vec![1.0; sys.sections.len() * sys.nodes.max(1)])
+    })
+}
+
+/// Exact IEEE-754 variant of [`sync_system_bindings_to_doc_with_sections`] for in-memory solver
+/// and staggered 3D adjoint evaluation.
+pub fn sync_system_bindings_to_doc_exact_with_sections(
+    doc: &mut Document,
+    state: &[f64],
+    design_p: &[f64],
+    epistemic_theta: &[f64],
+    section_eval: impl FnOnce(&Document, &DeclarativeSystem) -> Result<Vec<f64>, String>,
+) -> Result<(), String> {
+    sync_system_bindings_impl(doc, state, design_p, epistemic_theta, true, section_eval)
 }
 
 fn sync_system_bindings_impl(
@@ -2092,6 +2392,7 @@ fn sync_system_bindings_impl(
     design_p: &[f64],
     epistemic_theta: &[f64],
     exact_lerp: bool,
+    section_eval: impl FnOnce(&Document, &DeclarativeSystem) -> Result<Vec<f64>, String>,
 ) -> Result<(), String> {
     let sys_snapshot = doc
         .system_block
@@ -2134,10 +2435,16 @@ fn sync_system_bindings_impl(
         }
     }
 
-    // 2. Re-compile with updated `doc.lets` and evaluate `bindings`
+    // 2. Re-compile with updated `doc.lets` + live 3D cross-sections and evaluate `bindings`
     let sys_now = doc.system_block.clone().unwrap();
     let let_vals: Vec<(String, f64)> = doc.lets.iter().map(|l| (l.name.clone(), l.value)).collect();
-    let compiled = CompiledSystem::compile(&sys_now, &let_vals).map_err(|errs| errs.join("; "))?;
+    let section_grid = if sys_now.sections.is_empty() {
+        Vec::new()
+    } else {
+        section_eval(doc, &sys_now)?
+    };
+    let compiled = CompiledSystem::compile_with_sections(&sys_now, &let_vals, section_grid)
+        .map_err(|errs| errs.join("; "))?;
     if state.len() != compiled.num_dofs() {
         return Err(format!(
             "state length {} != compiled num_dofs {}",
@@ -2330,6 +2637,7 @@ mod tests {
                 symbol: "c_h".into(),
                 mechanism: "Correlation scatter".into(),
             }],
+            sections: vec![],
             states: vec![
                 DeclStateField {
                     name: "T_f".into(),
@@ -2520,6 +2828,79 @@ solve tref=20
         assert!(
             doc.validate().is_empty(),
             "synced doc must validate cleanly"
+        );
+    }
+
+    #[test]
+    fn fsm_section_declarations_round_trip_validate_and_evaluate_with_dds_expr() {
+        let src = "\
+fieldsmith 1
+name \"Venturi Section System\"
+material ss316l
+cylinder outer r=10 h=60 at=(0, 0, 30)
+cylinder bore r=5 h=62 at=(0, 0, 30) subtract
+fill gyroid sheet cell=4 rho=(0.25, 0.25) skin=0.5
+
+system venturi_1d nodes=5 span=(0, 60) {
+  design mdot nominal=0.05 min=0.01 max=0.2 unit=\"kg/s\"
+  section A_flow prop=area mode=void
+  section P_wet prop=perimeter mode=void
+  section D_h prop=dh mode=void
+  section K_core prop=fill_perm shape=outer h=0.25
+  state P_f init=\"0.8\" scale=1 unit=\"MPa\"
+  aux u_f expr=\"mdot / (997 * A_flow * 1e-6)\"
+  aux q_dyn expr=\"0.5 * 997 * u_f^2 * 1e-6\"
+  residual P_f eq=\"d_ds_upwind(P_f + q_dyn) + 1e-4 / (D_h + K_core)\" bc_left=\"P_f - 0.8\"
+  objective throat_area expr=\"A_flow\" reduce=min kind=lower limit=10 unit=\"mm^2\"
+}
+";
+        let doc = crate::fsm::parse(src).expect("parse section system");
+        assert!(doc.validate().is_empty(), "validate: {:?}", doc.validate());
+        let printed_1 = crate::fsm::print(&doc);
+        let reparsed = crate::fsm::parse(&printed_1).expect("reparse printed");
+        let printed_2 = crate::fsm::print(&reparsed);
+        assert_eq!(printed_1, printed_2, "canonical print idempotence");
+        assert_eq!(doc.system_block, reparsed.system_block);
+
+        // Missing fill must fail validation for `fill_perm`:
+        let mut no_fill = doc.clone();
+        no_fill.fill = None;
+        let errs = no_fill.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("requires a 'fill'")),
+            "expected missing fill error, got {errs:?}"
+        );
+
+        // Missing shape must fail validation:
+        let mut bad_shape = doc.clone();
+        bad_shape.system_block.as_mut().unwrap().sections[3].shape = Some("ghost_shape".into());
+        let errs_sh = bad_shape.validate();
+        assert!(
+            errs_sh
+                .iter()
+                .any(|e| e.contains("unknown shape 'ghost_shape'")),
+            "expected unknown shape error, got {errs_sh:?}"
+        );
+
+        // Evaluate `CompiledSystem::compile_with_sections` with a varying Venturi section grid:
+        let sec_grid = vec![
+            80.0, 50.0, 30.0, 50.0, 80.0, // A_flow
+            31.7, 25.1, 19.4, 25.1, 31.7, // P_wet
+            10.1, 8.0, 6.2, 8.0, 10.1, // D_h
+            0.04, 0.04, 0.04, 0.04, 0.04, // K_core
+        ];
+        let compiled = CompiledSystem::compile_with_sections(
+            doc.system_block.as_ref().unwrap(),
+            &[],
+            sec_grid,
+        )
+        .expect("compile_with_sections");
+        let w0 = compiled.eval_initial_state(&[0.05], &[]);
+        let objs = compiled.eval_objectives(&w0, &[0.05], &[]);
+        assert!(
+            (objs[0] - 30.0).abs() < 1e-12,
+            "min(A_flow) == 30.0, got {}",
+            objs[0]
         );
     }
 }

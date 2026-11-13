@@ -15,7 +15,6 @@ use fieldsmith_api::question;
 use fieldsmith_api::question::{clock, parse_budget, DEFAULT_RUNGS};
 use fieldsmith_api::schema::{QuestionSpec, APIV};
 use fieldsmith_api::store;
-use fieldsmith_core::contracts::evaluate_assert as evaluate_literate_assert;
 use fieldsmith_core::import::{import_mesh, ImportOpts};
 use fieldsmith_core::rung::{CostFit, RungRecord, Tolerance};
 use fieldsmith_core::sensitivity::compute_sensitivities;
@@ -500,15 +499,16 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
                 print_load_table(&a.cases);
                 print_contact_table(&a.cases);
+                print_system_summary(&a.system, true);
                 if let Some(hdr) = raw_header.as_ref() {
-                    print_literate_verification(hdr, &a, None, verify)?;
+                    print_literate_verification(&doc, hdr, &a, None, verify)?;
                 } else if !doc.asserts.is_empty() {
                     let synth = fsm::LiterateHeader {
                         id: doc.name.clone(),
                         asserts: doc.asserts.clone(),
                         ..Default::default()
                     };
-                    print_literate_verification(&synth, &a, None, verify)?;
+                    print_literate_verification(&doc, &synth, &a, None, verify)?;
                 } else if verify {
                     return Err(format!("{path}: no `assert` statements or `# === FIELDSMITH LITERATE CASE ===` header found for --verify"));
                 }
@@ -559,6 +559,7 @@ fn run(args: &[String]) -> Result<(), String> {
                         println!("mode {}: {:.2} Hz", mi + 1, f);
                     }
                 }
+                print_system_summary(&a.system, false);
             }
             Ok(())
         }
@@ -974,7 +975,69 @@ fn print_contact_table(cases: &[CaseResult]) {
     }
 }
 
+fn print_system_summary(
+    sys: &Option<fieldsmith_core::declarative_system::DeclarativeSystemVisual>,
+    report: bool,
+) {
+    let Some(vis) = sys else {
+        return;
+    };
+    if report {
+        println!("\n## system ({}-axis, {} stations)\n", vis.axis, vis.nodes);
+        if !vis.sections.is_empty() {
+            println!("| section | prop | mode | shape | unit | entry | exit | mean | min..max |");
+            println!("| :-- | :-- | :-- | :-- | :-- | --: | --: | --: | :-- |");
+            for s in &vis.sections {
+                println!(
+                    "| `{}` | `{}` | `{}` | {} | {} | {:.4} | {:.4} | {:.4} | {:.4}..{:.4} |",
+                    s.name,
+                    s.prop,
+                    s.mode,
+                    s.shape.as_deref().unwrap_or("(all)"),
+                    s.unit,
+                    s.entry,
+                    s.exit,
+                    s.mean,
+                    s.min,
+                    s.max
+                );
+            }
+        }
+        if !vis.objectives.is_empty() {
+            println!("\n| objective | value | unit |");
+            println!("| :-- | --: | :-- |");
+            for o in &vis.objectives {
+                println!("| `{}` | {:.4} | {} |", o.name, o.value, o.unit);
+            }
+        }
+    } else {
+        let obj_str: Vec<String> = vis
+            .objectives
+            .iter()
+            .map(|o| {
+                if o.unit.is_empty() {
+                    format!("{} {:.4}", o.name, o.value)
+                } else {
+                    format!("{} {:.4} {}", o.name, o.value, o.unit)
+                }
+            })
+            .collect();
+        println!(
+            "system ({}-axis, {} stations, {} sections): {}",
+            vis.axis,
+            vis.nodes,
+            vis.sections.len(),
+            if obj_str.is_empty() {
+                "converged".to_string()
+            } else {
+                obj_str.join(", ")
+            }
+        );
+    }
+}
+
 fn print_literate_verification(
+    doc: &Document,
     hdr: &fsm::LiterateHeader,
     a: &fieldsmith_core::Analysis,
     g: Option<&fieldsmith_core::fill::Graded>,
@@ -1002,51 +1065,47 @@ fn print_literate_verification(
         println!("\n## live @assert contracts — {}\n", hdr.id);
         println!("| assertion | metric | target | live FEA | error / margin | tol | status |");
         println!("| :-- | :-- | --: | --: | --: | --: | :-- |");
-        let mut failed = 0usize;
-        for asrt in &hdr.asserts {
-            match evaluate_literate_assert(asrt, a, g) {
-                Ok((val, err_str, ok)) => {
-                    let status = if ok { "PASS" } else { "FAIL" };
-                    if !ok {
-                        failed += 1;
-                    }
-                    let unit_sfx = if asrt.unit.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", asrt.unit)
-                    };
-                    println!(
-                        "| {} | `{}` | {}{} | {:.4}{} | {} | {} | {} |",
-                        asrt.label,
-                        asrt.metric,
-                        asrt.target,
-                        unit_sfx,
-                        val,
-                        unit_sfx,
-                        err_str,
-                        if asrt.tolerance.is_empty() {
-                            "—"
-                        } else {
-                            &asrt.tolerance
-                        },
-                        status
-                    );
-                }
-                Err(e) => {
-                    failed += 1;
-                    println!(
-                        "| {} | `{}` | {} | ERROR | {} | {} | FAIL |",
-                        asrt.label, asrt.metric, asrt.target, e, asrt.tolerance
-                    );
-                }
-            }
+        let sys_doc = if fieldsmith_core::uq::has_quantile_asserts(&hdr.asserts) {
+            fieldsmith_core::declarative_system::resolve_system_doc(doc).map_err(|e| e.0)?
+        } else {
+            std::borrow::Cow::Borrowed(doc)
+        };
+        let (vrep, _) = fieldsmith_core::contracts::evaluate_contracts_with_uq(
+            doc,
+            sys_doc.as_ref(),
+            &hdr.asserts,
+            a,
+            g,
+            clock,
+        )?;
+        for out in &vrep.outcomes {
+            let status = if out.passed { "PASS" } else { "FAIL" };
+            let unit_sfx = if out.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", out.unit)
+            };
+            println!(
+                "| {} | `{}` | {}{} | {:.4}{} | {} | {} | {} |",
+                out.label,
+                out.metric,
+                out.target,
+                unit_sfx,
+                out.value,
+                unit_sfx,
+                out.error_or_margin,
+                if out.tolerance.is_empty() {
+                    "—"
+                } else {
+                    &out.tolerance
+                },
+                status
+            );
         }
-        if verify && failed > 0 {
+        if verify && !vrep.all_passed {
             return Err(format!(
                 "{}: {} of {} live @assert contract(s) failed",
-                hdr.id,
-                failed,
-                hdr.asserts.len()
+                hdr.id, vrep.failed, vrep.total
             ));
         }
     } else if verify && hdr.checks.is_empty() {
@@ -1217,10 +1276,18 @@ fn solve_graded(
                 hx.cold_outlet_temp_c
             );
         }
+        print_system_summary(&a.system, true);
         if let Some(hdr) = raw_header {
-            print_literate_verification(hdr, &a, Some(&g), verify)?;
+            print_literate_verification(doc, hdr, &a, Some(&g), verify)?;
+        } else if !doc.asserts.is_empty() {
+            let synth = fsm::LiterateHeader {
+                id: doc.name.clone(),
+                asserts: doc.asserts.clone(),
+                ..Default::default()
+            };
+            print_literate_verification(doc, &synth, &a, Some(&g), verify)?;
         } else if verify {
-            return Err("no `# === FIELDSMITH LITERATE CASE ===` header found for --verify".into());
+            return Err("no `assert` statements or `# === FIELDSMITH LITERATE CASE ===` header found for --verify".into());
         }
     } else {
         println!(
@@ -1269,6 +1336,7 @@ fn solve_graded(
                 hx.cold_outlet_temp_c
             );
         }
+        print_system_summary(&a.system, false);
         println!(
             "grade {:.0} ms, graded re-solve {:.0} ms",
             g.fill_ms, g.solve_ms
@@ -2015,46 +2083,22 @@ mod tests {
             let doc = fsm::parse(&raw).unwrap();
             let check_at = |dofs: usize| -> Result<bool, String> {
                 let res = Resolution::Dofs(dofs);
-                if doc.fill.is_some() {
-                    let (a, g) = graded(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
-                    Ok(hdr.asserts.iter().all(|asrt| {
-                        evaluate_literate_assert(asrt, &a, Some(&g))
-                            .map(|(_, _, ok)| ok)
-                            .unwrap_or(false)
-                    }))
-                } else {
-                    let a = analyse(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
-                    Ok(hdr.asserts.iter().all(|asrt| {
-                        evaluate_literate_assert(asrt, &a, None)
-                            .map(|(_, _, ok)| ok)
-                            .unwrap_or(false)
-                    }))
-                }
+                let (_, _, rep) =
+                    fieldsmith_core::contracts::verify_document(&doc, Some(&raw), res, clock)
+                        .map_err(|e| format!("{e:?}"))?;
+                Ok(rep.all_passed)
             };
             if !check_at(15_000).unwrap_or(false) {
                 let res = Resolution::Dofs(150_000);
-                if doc.fill.is_some() {
-                    let (a, g) = graded(&doc, res, clock).expect("graded solve");
-                    for asrt in &hdr.asserts {
-                        let (val, err_str, ok) =
-                            evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
-                        assert!(
-                            ok,
-                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                            hdr.id, asrt.label, asrt.metric, asrt.target
-                        );
-                    }
-                } else {
-                    let a = analyse(&doc, res, clock).expect("solid solve");
-                    for asrt in &hdr.asserts {
-                        let (val, err_str, ok) =
-                            evaluate_literate_assert(asrt, &a, None).expect("eval assert");
-                        assert!(
-                            ok,
-                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                            hdr.id, asrt.label, asrt.metric, asrt.target
-                        );
-                    }
+                let (_, _, rep) =
+                    fieldsmith_core::contracts::verify_document(&doc, Some(&raw), res, clock)
+                        .expect("verify_document");
+                for out in &rep.outcomes {
+                    assert!(
+                        out.passed,
+                        "{} failed @assert '{}' ({}): live={}, target={}, err={}",
+                        hdr.id, out.label, out.metric, out.value, out.target, out.error_or_margin
+                    );
                 }
             }
         }
@@ -2104,48 +2148,32 @@ mod tests {
                 "{}: tutorial .fsm must end with a `solve` statement",
                 path.display()
             );
+            if doc.loads.is_empty() && doc.thermal_cases().is_empty() && doc.solve.modes.is_none() {
+                assert!(
+                    !hdr.mcp_steps.is_empty(),
+                    "{}: starter tutorial with incomplete initial setup must declare # @mcp: authoring steps",
+                    path.display()
+                );
+                continue;
+            }
             let check_at = |dofs: usize| -> Result<bool, String> {
                 let res = Resolution::Dofs(dofs);
-                if doc.fill.is_some() {
-                    let (a, g) = graded(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
-                    Ok(hdr.asserts.iter().all(|asrt| {
-                        evaluate_literate_assert(asrt, &a, Some(&g))
-                            .map(|(_, _, ok)| ok)
-                            .unwrap_or(false)
-                    }))
-                } else {
-                    let a = analyse(&doc, res, clock).map_err(|e| format!("{e:?}"))?;
-                    Ok(hdr.asserts.iter().all(|asrt| {
-                        evaluate_literate_assert(asrt, &a, None)
-                            .map(|(_, _, ok)| ok)
-                            .unwrap_or(false)
-                    }))
-                }
+                let (_, _, rep) =
+                    fieldsmith_core::contracts::verify_document(&doc, Some(&raw), res, clock)
+                        .map_err(|e| format!("{e:?}"))?;
+                Ok(rep.all_passed)
             };
             if !check_at(15_000).unwrap_or(false) {
                 let res = Resolution::Dofs(150_000);
-                if doc.fill.is_some() {
-                    let (a, g) = graded(&doc, res, clock).expect("graded solve");
-                    for asrt in &hdr.asserts {
-                        let (val, err_str, ok) =
-                            evaluate_literate_assert(asrt, &a, Some(&g)).expect("eval assert");
-                        assert!(
-                            ok,
-                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                            hdr.id, asrt.label, asrt.metric, asrt.target
-                        );
-                    }
-                } else {
-                    let a = analyse(&doc, res, clock).expect("solid solve");
-                    for asrt in &hdr.asserts {
-                        let (val, err_str, ok) =
-                            evaluate_literate_assert(asrt, &a, None).expect("eval assert");
-                        assert!(
-                            ok,
-                            "{} failed @assert '{}' ({}): live={val}, target={}, err={err_str}",
-                            hdr.id, asrt.label, asrt.metric, asrt.target
-                        );
-                    }
+                let (_, _, rep) =
+                    fieldsmith_core::contracts::verify_document(&doc, Some(&raw), res, clock)
+                        .expect("verify_document");
+                for out in &rep.outcomes {
+                    assert!(
+                        out.passed,
+                        "{} failed @assert '{}' ({}): live={}, target={}, err={}",
+                        hdr.id, out.label, out.metric, out.value, out.target, out.error_or_margin
+                    );
                 }
             }
         }
