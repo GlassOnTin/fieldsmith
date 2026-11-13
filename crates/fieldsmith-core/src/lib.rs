@@ -9,6 +9,7 @@ pub mod fsmz;
 pub mod import;
 pub mod optimise;
 pub mod overhang;
+pub mod porous_hx;
 pub mod probe;
 pub mod regions;
 pub mod rung;

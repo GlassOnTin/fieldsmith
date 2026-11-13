@@ -115,6 +115,9 @@ pub enum DocCommand {
     SetFill {
         fill: Option<Fill>,
     },
+    SetHx {
+        hx: Option<HxSpec>,
+    },
     SetSolve {
         solve: SolveSettings,
     },
@@ -400,6 +403,12 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
                 entity_id = Some(id);
                 entity_kind = Some("heatflux".into());
                 action = Some("deleted".into());
+            } else if id == "hx" && doc.hx.is_some() {
+                doc.hx = None;
+                doc.consumed.retain(|c| c.target != "hx");
+                entity_id = Some(id);
+                entity_kind = Some("hx".into());
+                action = Some("deleted".into());
             } else {
                 return Err(format!("delete_entity: no entity named {id:?}"));
             }
@@ -558,6 +567,12 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
         DocCommand::SetFill { fill } => {
             doc.fill = fill;
             entity_kind = Some("fill".into());
+            action = Some("updated".into());
+        }
+        DocCommand::SetHx { hx } => {
+            doc.consumed.retain(|c| c.target != "hx");
+            doc.hx = hx;
+            entity_kind = Some("hx".into());
             action = Some("updated".into());
         }
         DocCommand::SetSolve { solve } => {
@@ -1343,5 +1358,60 @@ support fix1 top_face fixed=xyz
 
         apply_doc_command(&mut doc, DocCommand::DeleteEntity { id: cid }).expect("delete contact1");
         assert_eq!(doc.contacts.len(), 1);
+    }
+
+    #[test]
+    fn tpms_hx_round_trips_and_reacts_to_let_edits() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"Gyroid Recuperator\"\n\
+             material alsi10mg\n\
+             let m_hot = 0.04\n\
+             let t_in = 90\n\
+             box core size=(60, 20, 20) at=(30, 10, 10)\n\
+             region port_in = core.nx\n\
+             region port_out = core.px\n\
+             support mount port_in fixed=xyz\n\
+             load press port_out pressure=0.5\n\
+             fill gyroid sheet cell=6 skin=0 rho=(0.25, 0.25) curve=1 wall=0.4 margin=1\n\
+             hx inlet=port_in outlet=port_out mdot=m_hot tin=t_in fluid=water arrangement=counterflow cold_mdot=m_hot cold_tin=20 pout=105\n\
+             solve\n",
+        )
+        .expect("parse hx fsm");
+        assert!(doc.validate().is_empty(), "validate: {:?}", doc.validate());
+        let hx = doc.hx.as_ref().expect("hx parsed");
+        assert_eq!(hx.inlet, "port_in");
+        assert_eq!(hx.outlet, "port_out");
+        assert!((hx.mdot - 0.04).abs() < 1e-12);
+        assert!((hx.tin - 90.0).abs() < 1e-12);
+        assert_eq!(hx.fluid, HxFluid::Water);
+        assert_eq!(hx.arrangement, HxArrangement::Counterflow);
+        assert_eq!(hx.cold_mdot, Some(0.04));
+        assert!((hx.cold_tin - 20.0).abs() < 1e-12);
+        assert!((hx.pout_kpa - 105.0).abs() < 1e-12);
+
+        apply_doc_command(
+            &mut doc,
+            DocCommand::SetLet {
+                name: "m_hot".into(),
+                value: 0.065,
+                expr: None,
+            },
+        )
+        .expect("set_let m_hot");
+        assert!((doc.hx.as_ref().unwrap().mdot - 0.065).abs() < 1e-12);
+        assert_eq!(doc.hx.as_ref().unwrap().cold_mdot, Some(0.065));
+
+        let canon = fsm::print(&doc);
+        assert!(
+            canon.contains("hx inlet=port_in outlet=port_out mdot=m_hot tin=t_in fluid=water arrangement=counterflow cold_mdot=m_hot cold_tin=20 pout=105"),
+            "canon: {canon}"
+        );
+        let reparsed = fsm::parse(&canon).expect("reparse hx fsm");
+        assert_eq!(reparsed, doc);
+
+        apply_doc_command(&mut doc, DocCommand::DeleteEntity { id: "hx".into() })
+            .expect("delete hx");
+        assert!(doc.hx.is_none());
     }
 }

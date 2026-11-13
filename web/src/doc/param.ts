@@ -232,8 +232,17 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
     noIndex(addr, attr);
     return;
   }
+  if (id === 'hx' && doc.hx) {
+    if (!['mdot', 'tin', 'cold_mdot', 'cold_tin', 'pout'].includes(attr)) {
+      throw new Error(
+        `param ${addrText(addr)}: hx has no numeric parameter ${JSON.stringify(attr)} — mdot, tin, cold_mdot, cold_tin, pout`,
+      );
+    }
+    noIndex(addr, attr);
+    return;
+  }
   throw new Error(
-    `param ${addrText(addr)}: no node, load, temperature, convection or heat flux named ${JSON.stringify(id)}`,
+    `param ${addrText(addr)}: no node, load, temperature, convection or heat flux named ${JSON.stringify(id)} (or contact/hx)`,
   );
 }
 
@@ -405,6 +414,14 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   if (contact) {
     if (attr === 'k') contact.k = v;
     else if (attr === 'gap') contact.gap = v;
+    return;
+  }
+  if (target === 'hx' && doc.hx) {
+    if (attr === 'mdot') doc.hx.mdot = v;
+    else if (attr === 'tin') doc.hx.tin = v;
+    else if (attr === 'cold_mdot') doc.hx.cold_mdot = v;
+    else if (attr === 'cold_tin') doc.hx.cold_tin = v;
+    else if (attr === 'pout') doc.hx.pout_kpa = v;
   }
 }
 
@@ -701,7 +718,17 @@ export function readParam(doc: Document, addr: ParamAddr): number | null {
   const conv = doc.convections.find((c) => c.id === addr.id);
   if (conv) return addr.attr === 'h' ? conv.h : conv.t_inf;
   const flux = doc.heat_fluxes.find((f) => f.id === addr.id);
-  return flux ? flux.q : null;
+  if (flux) return flux.q;
+  const contact = (doc.contacts ?? []).find((c) => c.id === addr.id);
+  if (contact) return addr.attr === 'k' ? contact.k : contact.gap;
+  if (addr.id === 'hx' && doc.hx) {
+    if (addr.attr === 'mdot') return doc.hx.mdot;
+    if (addr.attr === 'tin') return doc.hx.tin;
+    if (addr.attr === 'cold_mdot') return doc.hx.cold_mdot ?? null;
+    if (addr.attr === 'cold_tin') return doc.hx.cold_tin;
+    if (addr.attr === 'pout') return doc.hx.pout_kpa;
+  }
+  return null;
 }
 
 /** Every addressable parameter of the document, in resolve order — nodes in walk
@@ -745,6 +772,17 @@ export function addressableParams(doc: Document): { addr: string; value: number 
     push(c.id, 'tinf', null, c.t_inf);
   }
   for (const f of doc.heat_fluxes) push(f.id, 'q', null, f.q);
+  for (const c of doc.contacts ?? []) {
+    push(c.id, 'k', null, c.k);
+    push(c.id, 'gap', null, c.gap);
+  }
+  if (doc.hx) {
+    push('hx', 'mdot', null, doc.hx.mdot);
+    push('hx', 'tin', null, doc.hx.tin);
+    if (doc.hx.cold_mdot != null) push('hx', 'cold_mdot', null, doc.hx.cold_mdot);
+    push('hx', 'cold_tin', null, doc.hx.cold_tin);
+    push('hx', 'pout', null, doc.hx.pout_kpa);
+  }
   // Lets last, and only their names — a bare id is refused for any statement name, so
   // the two blocks cannot collide.
   for (const l of doc.lets ?? []) out.push({ addr: l.name, value: l.value });

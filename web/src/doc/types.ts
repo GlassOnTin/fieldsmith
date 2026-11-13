@@ -131,6 +131,22 @@ export interface Fill {
   rotate?: Vec3;
 }
 
+export type HxFluid = 'water' | 'air' | 'glycol50' | 'he_2mpa';
+export type HxArrangement = 'counterflow' | 'parallel' | 'crossflow' | 'isothermal_wall';
+
+export interface HxSpec {
+  inlet: string;
+  outlet: string;
+  mdot: number;
+  tin: number;
+  fluid: HxFluid;
+  arrangement: HxArrangement;
+  cold_mdot?: number | null;
+  cold_tin: number;
+  cold_fluid?: HxFluid | null;
+  pout_kpa: number;
+}
+
 export type MaterialRole = 'structural' | 'fluid';
 export type PlasticityLaw = 'j2';
 
@@ -206,6 +222,7 @@ export interface Document {
   material: string;
   custom_materials: Material[];
   fill: Fill | null;
+  hx?: HxSpec | null;
   solve: {
     size: number | null;
     modes: number | null;
@@ -597,6 +614,7 @@ export type DocCommand =
     }
   | { cmd: 'upsert_heat_flux'; id?: string; region: string; q: number; expr?: string; case?: string }
   | { cmd: 'set_fill'; fill: Fill | null }
+  | { cmd: 'set_hx'; hx: HxSpec | null }
   | { cmd: 'set_solve'; solve: Document['solve'] }
   | { cmd: 'upsert_sketch'; sketch: ParametricSketch }
   | { cmd: 'delete_sketch'; id: string }

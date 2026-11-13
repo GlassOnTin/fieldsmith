@@ -4,8 +4,9 @@
 // undoable like everywhere else; the analysis engine re-runs on every edit.
 import { Fragment } from 'preact';
 import { store } from '../doc/store';
+import { drivenExpr } from '../doc/param';
 import { walk } from '../doc/types';
-import type { Document, Family, FillMode, Fill } from '../doc/types';
+import type { Document, Family, FillMode, Fill, HxArrangement, HxFluid, HxSpec } from '../doc/types';
 import { NumRow, Seg, VecRow, fmt } from './fields';
 import { viewOverlays, statusItems } from './App';
 import { analysis } from './analysis';
@@ -26,6 +27,24 @@ function defaultFill(): Fill {
     margin: 2,
     case: null,
     rotate: [0, 0, 0],
+  };
+}
+
+/** Default two-stream TPMS porous-flow & conjugate HX spec using the first two regions. */
+function defaultHx(d: Document): HxSpec {
+  const inlet = d.regions[0]?.id ?? '';
+  const outlet = d.regions.find((r) => r.id !== inlet)?.id ?? d.regions[1]?.id ?? inlet;
+  return {
+    inlet,
+    outlet,
+    mdot: 0.05,
+    tin: 80,
+    fluid: 'water',
+    arrangement: 'counterflow',
+    cold_mdot: null,
+    cold_tin: 20,
+    cold_fluid: null,
+    pout_kpa: 100,
   };
 }
 
@@ -389,7 +408,198 @@ function FillPanel() {
             </div>
           )}
 
-          <button class="btn ghost" data-testid="remove-fill" onClick={() => store.transact('Remove fill', (d) => (d.fill = null))}>
+          <div
+            data-testid="fill-hx-section"
+            style={{
+              marginTop: '8px',
+              padding: '8px 9px',
+              background: 'rgba(14, 165, 233, 0.07)',
+              border: '1px solid rgba(56, 189, 248, 0.28)',
+              borderRadius: '6px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#7dd3fc' }}>
+                💧 Porous Flow &amp; Conjugate HX
+              </span>
+              {doc.hx && (
+                <button
+                  type="button"
+                  class="mini-btn"
+                  data-testid="remove-hx"
+                  onClick={() =>
+                    store.transact('Remove porous HX', (d) => {
+                      d.hx = null;
+                    })
+                  }
+                >
+                  Remove HX
+                </button>
+              )}
+            </div>
+            {!doc.hx ? (
+              doc.regions.length < 2 ? (
+                <div class="hint" style={{ margin: 0 }}>
+                  Define at least two regions (inlet &amp; outlet) in 2. Setup to enable 3D Darcy–Forchheimer porous flow.
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  class="btn"
+                  data-testid="add-hx"
+                  onClick={() =>
+                    store.transact('Enable porous HX', (d) => {
+                      d.hx = defaultHx(d);
+                    })
+                  }
+                >
+                  Enable TPMS porous flow &amp; HX
+                </button>
+              )
+            ) : (
+              <>
+                <div class="field-grid">
+                  <label class="plain">Inlet</label>
+                  <select
+                    data-testid="hx-inlet"
+                    value={doc.hx.inlet}
+                    onChange={(e) => {
+                      const next = (e.currentTarget as HTMLSelectElement).value;
+                      store.transact('Set HX inlet region', (d) => {
+                        if (!d.hx) return;
+                        d.hx.inlet = next;
+                        if (d.hx.outlet === next) {
+                          const alt = d.regions.find((r) => r.id !== next)?.id;
+                          if (alt) d.hx.outlet = alt;
+                        }
+                      });
+                    }}
+                  >
+                    {doc.regions.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.id}
+                      </option>
+                    ))}
+                  </select>
+                  <label class="plain">Outlet</label>
+                  <select
+                    data-testid="hx-outlet"
+                    value={doc.hx.outlet}
+                    onChange={(e) => {
+                      const next = (e.currentTarget as HTMLSelectElement).value;
+                      store.transact('Set HX outlet region', (d) => {
+                        if (!d.hx) return;
+                        d.hx.outlet = next;
+                        if (d.hx.inlet === next) {
+                          const alt = d.regions.find((r) => r.id !== next)?.id;
+                          if (alt) d.hx.inlet = alt;
+                        }
+                      });
+                    }}
+                  >
+                    {doc.regions.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.id}
+                      </option>
+                    ))}
+                  </select>
+                  <label class="plain">Stream</label>
+                  <Seg<HxArrangement>
+                    value={doc.hx.arrangement}
+                    options={[
+                      { value: 'counterflow', label: 'Counter' },
+                      { value: 'parallel', label: 'Parallel' },
+                      { value: 'crossflow', label: 'Cross' },
+                      { value: 'isothermal_wall', label: 'Wall T' },
+                    ]}
+                    onChange={(v) =>
+                      store.transact('Set HX arrangement', (d) => {
+                        if (d.hx) d.hx.arrangement = v;
+                      })
+                    }
+                    testId="hx-arrangement"
+                  />
+                  <label class="plain">Fluid</label>
+                  <Seg<HxFluid>
+                    value={doc.hx.fluid}
+                    options={[
+                      { value: 'water', label: 'Water' },
+                      { value: 'glycol50', label: 'Glycol' },
+                      { value: 'air', label: 'Air' },
+                      { value: 'he_2mpa', label: 'He 2MPa' },
+                    ]}
+                    onChange={(v) =>
+                      store.transact('Set HX fluid', (d) => {
+                        if (d.hx) d.hx.fluid = v;
+                      })
+                    }
+                    testId="hx-fluid"
+                  />
+                  <NumRow
+                    label="ṁ hot"
+                    unit="kg/s"
+                    min={1e-5}
+                    step={0.01}
+                    get={(d) => d.hx?.mdot ?? 0.05}
+                    set={(d, v) => d.hx && (d.hx.mdot = Math.max(1e-6, v))}
+                    undoLabel="Set HX mass flow"
+                    testId="hx-mdot"
+                    driven={drivenExpr(doc, 'hx', 'mdot')}
+                  />
+                  <NumRow
+                    label="T hot,in"
+                    unit="°C"
+                    step={5}
+                    get={(d) => d.hx?.tin ?? 80}
+                    set={(d, v) => d.hx && (d.hx.tin = v)}
+                    undoLabel="Set HX hot inlet temperature"
+                    testId="hx-tin"
+                    driven={drivenExpr(doc, 'hx', 'tin')}
+                  />
+                  <NumRow
+                    label="T cold,in"
+                    unit="°C"
+                    step={5}
+                    get={(d) => d.hx?.cold_tin ?? 20}
+                    set={(d, v) => d.hx && (d.hx.cold_tin = v)}
+                    undoLabel="Set HX cold inlet temperature"
+                    testId="hx-cold-tin"
+                    driven={drivenExpr(doc, 'hx', 'cold_tin')}
+                  />
+                </div>
+                {fi?.hx && (
+                  <div class="field-grid" data-testid="fill-hx-summary">
+                    <span class="plain">Δp &amp; pump</span>
+                    <span class="num">
+                      {fmt(fi.hx.pressure_drop_kpa, 2)} kPa · {fmt(fi.hx.pumping_power_w, 2)} W (Darcy {fmt(fi.hx.darcy_share_pct, 0)}%)
+                    </span>
+                    <span class="plain">Thermal Q</span>
+                    <span class="num">
+                      {fmt(fi.hx.heat_duty_w / 1000, 2)} kW ({fmt(fi.hx.power_density_kw_per_l, 1)} kW/L) · ε {fmt(fi.hx.effectiveness * 100, 1)}%
+                    </span>
+                    <span class="plain">Outlets</span>
+                    <span class="num">
+                      hot {fmt(fi.hx.hot_outlet_temp_c, 1)} °C · cold {fmt(fi.hx.cold_outlet_temp_c, 1)} °C · UA {fmt(fi.hx.ua_w_k, 1)} W/K
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <button
+            class="btn ghost"
+            data-testid="remove-fill"
+            onClick={() =>
+              store.transact('Remove fill', (d) => {
+                d.fill = null;
+                d.hx = null;
+              })
+            }
+          >
             Remove fill
           </button>
             </>

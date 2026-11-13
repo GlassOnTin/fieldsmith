@@ -244,8 +244,19 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             )),
         };
     }
+    if id == "hx" && doc.hx.is_some() {
+        return match (attr, addr.comp) {
+            ("mdot" | "tin" | "cold_mdot" | "cold_tin" | "pout", None) => Ok(()),
+            ("mdot" | "tin" | "cold_mdot" | "cold_tin" | "pout", Some(_)) => {
+                Err(format!("param {addr}: {attr} takes no component index"))
+            }
+            _ => Err(format!(
+                "param {addr}: hx has no numeric parameter {attr:?} — mdot, tin, cold_mdot, cold_tin, pout"
+            )),
+        };
+    }
     Err(format!(
-        "param {addr}: no node, load, temperature, convection or heat flux named {id:?} (or contact)"
+        "param {addr}: no node, load, temperature, convection or heat flux named {id:?} (or contact/hx)"
     ))
 }
 
@@ -410,6 +421,19 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
             _ => unreachable!("the writer was checked against this statement"),
         }
         return;
+    }
+    if target == "hx" {
+        if let Some(hx) = doc.hx.as_mut() {
+            match (attr, comp) {
+                ("mdot", None) => hx.mdot = v,
+                ("tin", None) => hx.tin = v,
+                ("cold_mdot", None) => hx.cold_mdot = Some(v),
+                ("cold_tin", None) => hx.cold_tin = v,
+                ("pout", None) => hx.pout_kpa = v,
+                _ => unreachable!("the writer was checked against this statement"),
+            }
+            return;
+        }
     }
     unreachable!("the writer was checked against this document");
 }

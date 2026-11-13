@@ -316,6 +316,7 @@ pub fn respond(input: &str) -> Reply {
                                             buckling_exp,
                                             lattice_adjoint_sensitivity_sum: g
                                                 .lattice_adjoint_sensitivity_sum,
+                                            hx: g.hx,
                                             fill_ms: g.fill_ms,
                                             solve_ms: g.solve_ms,
                                         }),

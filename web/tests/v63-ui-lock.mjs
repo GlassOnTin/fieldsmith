@@ -1350,7 +1350,122 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[18/18] Unilateral Signorini Contact Setup (region-add-contact + Undo/Redo) + T25 Flange Liftoff card & 3D p_n colourmap: PASS`,
+    `[18/19] Unilateral Signorini Contact Setup (region-add-contact + Undo/Redo) + T25 Flange Liftoff card & 3D p_n colourmap: PASS`,
+  );
+
+  // 19. TPMS Porous Flow & Conjugate HX authoring in 4. Fill (`add-hx` + Undo/Redo) + T26 Graded Gyroid Recuperator `results-hx-card` & 3D `porous_pressure` colourmap
+  const hxSeedFsm = [
+    'fieldsmith 1',
+    'name "UI TPMS Porous Core"',
+    'material alsi10mg',
+    'box core size=(40, 20, 20) at=(20, 10, 10)',
+    'region in_port = core.nx',
+    'region out_port = core.px',
+    'support fix in_port fixed=xyz',
+    'load pull out_port pressure=-0.5',
+    'fill gyroid sheet cell=5.0 skin=0.8 rho=(0.22, 0.45) wall=0.3',
+    'solve',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('fill');
+  }, hxSeedFsm);
+
+  await page.waitForSelector('[data-testid="add-hx"]', { timeout: 15000 });
+  await page.click('[data-testid="add-hx"]');
+  await page.waitForSelector('[data-testid="hx-inlet"]', { timeout: 10000 });
+
+  const hxMutState = await page.evaluate(() => {
+    const afterAdd = window.fieldsmith.store.doc.hx ? `${window.fieldsmith.store.doc.hx.inlet}->${window.fieldsmith.store.doc.hx.outlet}` : null;
+    window.fieldsmith.store.undo();
+    const afterUndo = window.fieldsmith.store.doc.hx ?? null;
+    window.fieldsmith.store.redo();
+    const afterRedo = window.fieldsmith.store.doc.hx ? `${window.fieldsmith.store.doc.hx.inlet}->${window.fieldsmith.store.doc.hx.outlet}` : null;
+    return { afterAdd, afterUndo, afterRedo };
+  });
+  assert(
+    hxMutState.afterAdd === 'in_port->out_port' &&
+      hxMutState.afterUndo === null &&
+      hxMutState.afterRedo === 'in_port->out_port',
+    `Expected add-hx + Undo/Redo to toggle doc.hx 'in_port->out_port' -> null -> 'in_port->out_port', got ${JSON.stringify(hxMutState)}`,
+  );
+
+  // Load T26 Graded Gyroid Counterflow Recuperator and verify Results HX card + 3D porous_pressure colourmap
+  const t26Path = resolve(repoRoot, 'examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm');
+  const t26Raw = readFileSync(t26Path, 'utf-8');
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, t26Raw);
+
+  await page.waitForSelector('[data-testid="results-hx-card"]', { timeout: 45000 });
+  await page.waitForFunction(
+    async () => {
+      const { analysis } = await import('/src/app/analysis.ts');
+      const c = window.fieldsmith?.results?.colors?.();
+      return analysis.state.status === 'ready' && c && c.length > 0;
+    },
+    null,
+    { timeout: 45000 },
+  );
+
+  const hxCardText = await page.textContent('[data-testid="results-hx-card"]');
+  const hxNumerics = await page.evaluate(async () => {
+    const { analysis } = await import('/src/app/analysis.ts');
+    const lvl = analysis.state.levels[analysis.state.levels.length - 1];
+    return {
+      hx: lvl.meta.fill?.hx ?? null,
+      ppLen: lvl.porousPressure?.length ?? 0,
+      nodesLen: (lvl.nodes?.length ?? 0) / 3,
+    };
+  });
+  assert(
+    hxCardText &&
+      hxCardText.includes('glycol50 / water') &&
+      hxCardText.includes('kW/L') &&
+      hxNumerics.hx &&
+      hxNumerics.hx.heat_duty_w >= 8000 &&
+      hxNumerics.hx.power_density_kw_per_l >= 180 &&
+      hxNumerics.hx.pressure_drop_kpa > 1.0 &&
+      hxNumerics.hx.pressure_drop_kpa <= 60 &&
+      hxNumerics.ppLen === hxNumerics.nodesLen &&
+      hxNumerics.ppLen > 100,
+    `Expected T26 graded Gyroid HX metrics & nodal porousPressure buffer in Results, got card='${hxCardText}', numerics=${JSON.stringify(hxNumerics)}`,
+  );
+
+  const hxStressColorsSum = await page.evaluate(() => {
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return s;
+  });
+
+  await page.click('[data-testid="hx-show-pressure-map"]');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  const ppState = await page.evaluate(async () => {
+    const { ui } = await import('/src/app/ui.ts');
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return { mode: ui.resultsMode, sum: s };
+  });
+  assert(
+    ppState.mode === 'porous_pressure' && Math.abs(ppState.sum - hxStressColorsSum) > 1.0,
+    `Expected hx-show-pressure-map to switch resultsMode to 'porous_pressure' and update 3D facet colours (ppSum=${ppState.sum} vs stressSum=${hxStressColorsSum}), got ${JSON.stringify(ppState)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[19/19] TPMS Porous Flow & Conjugate HX Fill (add-hx + Undo/Redo) + T26 Graded Gyroid Recuperator card (${(hxNumerics.hx.heat_duty_w / 1000).toFixed(2)} kW, ${hxNumerics.hx.pressure_drop_kpa.toFixed(2)} kPa) & 3D porous_pressure colourmap: PASS`,
   );
   await page.close();
 } catch (e) {

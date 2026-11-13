@@ -92,11 +92,35 @@ export function evaluateLiterateAssertOnLevel(
         }[];
       }[];
       max_layer_peel?: number[];
+      yield_utilization?: (number | null)[];
+      buckling_utilization?: (number | null)[];
       mass_g?: number;
       min_peak_peel?: number;
       max_peak_peel?: number;
       solid_cases?: { name: string; max_vm_elem: number; max_displacement: number }[];
-      fill?: { mass_g: number; solid_mass_g: number };
+      fill?: {
+        mass_g: number;
+        solid_mass_g: number;
+        hx?: {
+          effective_permeability_mm2: number;
+          mean_area_density_per_m: number;
+          wetted_area_cm2: number;
+          mean_hydraulic_diam_mm: number;
+          pressure_drop_kpa: number;
+          cold_pressure_drop_kpa: number;
+          darcy_share_pct: number;
+          hot_pumping_power_w: number;
+          pumping_power_w: number;
+          mean_reynolds: number;
+          ua_w_k: number;
+          ntu: number;
+          effectiveness: number;
+          heat_duty_w: number;
+          power_density_kw_per_l: number;
+          hot_outlet_temp_c: number;
+          cold_outlet_temp_c: number;
+        } | null;
+      };
       modes?: { frequencies: number[] };
       transient?: {
         case_name: string;
@@ -149,6 +173,52 @@ export function evaluateLiterateAssertOnLevel(
   } else if (m === 'max_peak_peel') {
     val = lvl.meta.max_peak_peel ?? null;
   } else {
+    const hxKey = m.startsWith('graded.') ? m.slice('graded.'.length) : m;
+    const hx = lvl.meta.fill?.hx ?? null;
+    if (
+      hx &&
+      [
+        'hx_pressure_drop_kpa',
+        'pressure_drop_kpa',
+        'hx_cold_pressure_drop_kpa',
+        'hx_darcy_share_pct',
+        'hx_hot_pumping_power_w',
+        'hx_pumping_power_w',
+        'pumping_power_w',
+        'hx_permeability_mm2',
+        'hx_area_density_per_m',
+        'hx_wetted_area_cm2',
+        'hx_hydraulic_diam_mm',
+        'hx_reynolds',
+        'hx_ua_w_k',
+        'hx_ntu',
+        'hx_effectiveness',
+        'hx_heat_duty_w',
+        'hx_power_density_kw_l',
+        'hot_outlet_temp_c',
+        'hx_hot_outlet_temp_c',
+        'cold_outlet_temp_c',
+        'hx_cold_outlet_temp_c',
+      ].includes(hxKey)
+    ) {
+      if (hxKey === 'hx_pressure_drop_kpa' || hxKey === 'pressure_drop_kpa') val = hx.pressure_drop_kpa;
+      else if (hxKey === 'hx_cold_pressure_drop_kpa') val = hx.cold_pressure_drop_kpa;
+      else if (hxKey === 'hx_darcy_share_pct') val = hx.darcy_share_pct;
+      else if (hxKey === 'hx_hot_pumping_power_w') val = hx.hot_pumping_power_w;
+      else if (hxKey === 'hx_pumping_power_w' || hxKey === 'pumping_power_w') val = hx.pumping_power_w;
+      else if (hxKey === 'hx_permeability_mm2') val = hx.effective_permeability_mm2;
+      else if (hxKey === 'hx_area_density_per_m') val = hx.mean_area_density_per_m;
+      else if (hxKey === 'hx_wetted_area_cm2') val = hx.wetted_area_cm2;
+      else if (hxKey === 'hx_hydraulic_diam_mm') val = hx.mean_hydraulic_diam_mm;
+      else if (hxKey === 'hx_reynolds') val = hx.mean_reynolds;
+      else if (hxKey === 'hx_ua_w_k') val = hx.ua_w_k;
+      else if (hxKey === 'hx_ntu') val = hx.ntu;
+      else if (hxKey === 'hx_effectiveness') val = hx.effectiveness;
+      else if (hxKey === 'hx_heat_duty_w') val = hx.heat_duty_w;
+      else if (hxKey === 'hx_power_density_kw_l') val = hx.power_density_kw_per_l;
+      else if (hxKey === 'hot_outlet_temp_c' || hxKey === 'hx_hot_outlet_temp_c') val = hx.hot_outlet_temp_c;
+      else if (hxKey === 'cold_outlet_temp_c' || hxKey === 'hx_cold_outlet_temp_c') val = hx.cold_outlet_temp_c;
+    } else {
     let useSolidRef = false;
     let rest = m;
     if (rest.startsWith('graded.')) {
@@ -177,6 +247,17 @@ export function evaluateLiterateAssertOnLevel(
         const sc = lvl.meta.solid_cases[ci];
         if (field === 'max_displacement' || field === 'deflection') val = sc.max_displacement;
         else if (field === 'max_vm_elem' || field === 'vm') val = sc.max_vm_elem;
+      }
+    } else if (
+      ['yield_utilization', 'yield_util', 'buckling_utilization', 'buckling_util'].includes(field)
+    ) {
+      const ci = findCaseIdx(lvl.meta.cases);
+      if (ci >= 0) {
+        if (field === 'yield_utilization' || field === 'yield_util') {
+          val = lvl.meta.yield_utilization?.[ci] ?? null;
+        } else {
+          val = lvl.meta.buckling_utilization?.[ci] ?? null;
+        }
       }
     } else if (
       [
@@ -302,6 +383,7 @@ export function evaluateLiterateAssertOnLevel(
         }
       }
     }
+    }
   }
 
   if (val === null || !Number.isFinite(val)) {
@@ -409,6 +491,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T23: 'docs/tutorials/T23-clinching-process-window-and-slock-codesign.md',
   T24: 'docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md',
   T25: 'docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md',
+  T26: 'docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -430,6 +513,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A19: 'docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md',
   A20: 'docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md',
   A21: 'docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md',
+  A22: 'docs/analytic-tests/A22-darcy-forchheimer-tpms-porous-hx.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -458,6 +542,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T23: 'examples/tutorials/T23-clinching-process-window-and-slock-codesign.fsm',
   T24: 'examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm',
   T25: 'examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm',
+  T26: 'examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -479,6 +564,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A19: 'examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm',
   A20: 'examples/analytic/A20-transient-biot-quench-thermal-shock.fsm',
   A21: 'examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm',
+  A22: 'examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -507,6 +593,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T23: ['docs/verification/V53.md', 'docs/verification/V63.md'],
   T24: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   T25: ['docs/verification/V57.md', 'docs/verification/V63.md'],
+  T26: ['docs/verification/V36.md', 'docs/verification/V54.md', 'docs/verification/V63.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -528,6 +615,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
   A20: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   A21: ['docs/verification/V63.md'],
+  A22: ['docs/verification/V36.md', 'docs/verification/V63.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

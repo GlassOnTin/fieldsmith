@@ -1021,6 +1021,8 @@ struct FillInfo {
     buckling_coef: f64,
     buckling_exp: f64,
     lattice_adjoint_sensitivity_sum: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hx: Option<fieldsmith_core::porous_hx::TpmsHxReport>,
     mass_g: f64,
     solid_mass_g: f64,
     fill_ms: f64,
@@ -1149,6 +1151,7 @@ impl GradedOut {
                     buckling_coef,
                     buckling_exp,
                     lattice_adjoint_sensitivity_sum: self.g.lattice_adjoint_sensitivity_sum.clone(),
+                    hx: self.g.hx.clone(),
                     mass_g: self.g.mass_g,
                     solid_mass_g: self.g.solid_mass_g,
                     fill_ms: self.g.fill_ms,
@@ -1372,6 +1375,13 @@ impl GradedOut {
                 .map(|c| c.contact_pressure.as_slice())
                 .unwrap_or(&[]),
         )
+    }
+
+    /// Nodal 3D P2 Darcy–Forchheimer static pressure field (`kPa`, `mesh.nodes.len()` floats)
+    /// when `doc.hx` is declared; empty `Float64Array` otherwise.
+    #[wasm_bindgen(js_name = porousPressure)]
+    pub fn porous_pressure(&self) -> Float64Array {
+        Float64Array::from(self.g.porous_pressure_kpa.as_deref().unwrap_or(&[]))
     }
 
     /// Nodal temperature of one mechanical case (°C) — always empty: the graded `cases` are

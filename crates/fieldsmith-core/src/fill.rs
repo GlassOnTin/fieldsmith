@@ -473,6 +473,12 @@ pub struct Graded {
     pub dc_drho_elem: Vec<f64>,
     /// Per-mechanical-case sum `Σ_e (-∂C_c / ∂ρ_e)` over `CLASS_LATTICE` elements (N·mm).
     pub lattice_adjoint_sensitivity_sum: Vec<f64>,
+    /// Optional 3D P2 Darcy–Forchheimer hydraulic and two-stream conjugate `ε–NTU` performance
+    /// when `doc.hx` is declared (`VISION.md §5.2 Pillar IV.3`).
+    pub hx: Option<crate::porous_hx::TpmsHxReport>,
+    /// Nodal static pressure field `p(x)` (`kPa`, `mesh.nodes.len()` floats) from the 3D P2
+    /// Darcy–Forchheimer porous solve when `doc.hx` is declared.
+    pub porous_pressure_kpa: Option<Vec<f64>>,
     pub fill_ms: f64,
     pub solve_ms: f64,
 }
@@ -1055,6 +1061,14 @@ pub fn graded_of(
         lattice_adjoint_sensitivity_sum.push(case_sum);
     }
 
+    let (hx, porous_pressure_kpa) = if let Some(ref hx_spec) = doc.hx {
+        let (rep, p_kpa) =
+            crate::porous_hx::solve_tpms_porous_hx(doc, base, &spec, &fill, &mat, hx_spec)?;
+        (Some(rep), Some(p_kpa))
+    } else {
+        (None, None)
+    };
+
     Ok(Graded {
         spec,
         fill,
@@ -1078,6 +1092,8 @@ pub fn graded_of(
         solid_mass_g,
         dc_drho_elem,
         lattice_adjoint_sensitivity_sum,
+        hx,
+        porous_pressure_kpa,
         fill_ms: t_fill - t0,
         solve_ms: clock() - t_solved,
     })

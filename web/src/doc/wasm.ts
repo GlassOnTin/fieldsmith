@@ -631,6 +631,47 @@ export interface CaseMax {
   max_displacement: number;
 }
 
+export interface TpmsHxReport {
+  inlet: string;
+  outlet: string;
+  fluid: string;
+  cold_fluid: string;
+  arrangement: string;
+  inlet_area_mm2: number;
+  outlet_area_mm2: number;
+  core_volume_mm3: number;
+  mean_porosity: number;
+  effective_permeability_mm2: number;
+  forchheimer_beta_per_m: number;
+  mean_area_density_per_m: number;
+  wetted_area_cm2: number;
+  mean_hydraulic_diam_mm: number;
+  inlet_pressure_kpa: number;
+  outlet_pressure_kpa: number;
+  pressure_drop_kpa: number;
+  cold_pressure_drop_kpa: number;
+  darcy_share_pct: number;
+  hot_pumping_power_w: number;
+  pumping_power_w: number;
+  mean_superficial_vel_m_s: number;
+  max_superficial_vel_m_s: number;
+  mean_reynolds: number;
+  picard_iters: number;
+  mean_h_hot_w_m2_k: number;
+  mean_h_cold_w_m2_k: number;
+  wall_k_w_m_k: number;
+  ua_w_k: number;
+  ntu: number;
+  capacity_ratio_cr: number;
+  effectiveness: number;
+  heat_duty_w: number;
+  power_density_kw_per_l: number;
+  hot_inlet_temp_c: number;
+  hot_outlet_temp_c: number;
+  cold_inlet_temp_c: number;
+  cold_outlet_temp_c: number;
+}
+
 export interface FillInfo {
   family: string;
   mode: string;
@@ -649,6 +690,8 @@ export interface FillInfo {
   buckling_coef?: number;
   buckling_exp?: number;
   lattice_adjoint_sensitivity_sum?: number[];
+  /** Solved 3D P2 Darcy–Forchheimer hydraulic & two-stream ε–NTU summary when `doc.hx` is set. */
+  hx?: TpmsHxReport | null;
   mass_g: number;
   solid_mass_g: number;
   fill_ms: number;
@@ -684,6 +727,8 @@ export interface GradedHandle extends AnalysisHandle {
   rhoElem(): Float64Array;
   /** Exact 3D P2 self-adjoint compliance sensitivity ∂C/∂ρ_e (N·mm) per element. */
   dcDrhoElem?(): Float64Array;
+  /** Nodal 3D P2 Darcy–Forchheimer porous pressure field (kPa; empty when `doc.hx` is absent). */
+  porousPressure?(): Float64Array;
   /** Graded density parameter grid `[ox, oy, oz, spacing]` (mm). */
   fillParamSpec(): Float64Array;
   /** Graded density parameter grid dims `[nx, ny, nz]`. */
@@ -814,6 +859,8 @@ export interface LevelResult {
   transientFrames?: TransientFramePack[];
   /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */
   class: Uint8Array | null;
+  /** Fill levels with `hx` only: nodal 3D P2 Darcy–Forchheimer porous pressure (kPa). */
+  porousPressure?: Float64Array | null;
   /** Fill levels only: the graded parameter grid for the bound texture. */
   fillParam: FillParamLevel | null;
   /** Host-measured wall time of this level in the worker (mesh + solve + the copies to

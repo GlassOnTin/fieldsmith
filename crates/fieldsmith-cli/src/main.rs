@@ -1181,6 +1181,42 @@ fn solve_graded(
             .cloned()
             .collect();
         print_case_table(&all_graded, "graded");
+        if let Some(ref hx) = g.hx {
+            println!(
+                "\n## porous hx — {} ({} -> {}, {} / {})\n",
+                hx.arrangement, hx.inlet, hx.outlet, hx.fluid, hx.cold_fluid
+            );
+            println!(
+                "core {:.0} mm³ (porosity {:.1}%, K_eff {:.4} mm², β {:.0} 1/m, a_v {:.0} 1/m, D_h {:.2} mm)",
+                hx.core_volume_mm3,
+                100.0 * hx.mean_porosity,
+                hx.effective_permeability_mm2,
+                hx.forchheimer_beta_per_m,
+                hx.mean_area_density_per_m,
+                hx.mean_hydraulic_diam_mm
+            );
+            println!(
+                "hydraulics: Δp_hot {:.3} kPa (Darcy {:.1}%), Δp_cold {:.3} kPa, P_pump {:.3} W ({} Picard iters, Re_h {:.0})",
+                hx.pressure_drop_kpa,
+                hx.darcy_share_pct,
+                hx.cold_pressure_drop_kpa,
+                hx.pumping_power_w,
+                hx.picard_iters,
+                hx.mean_reynolds
+            );
+            println!(
+                "conjugate ε–NTU: UA {:.2} W/K, NTU {:.3}, ε {:.3}, Q {:.1} W ({:.1} kW/L), T_hot {:.1} -> {:.2} °C, T_cold {:.1} -> {:.2} °C",
+                hx.ua_w_k,
+                hx.ntu,
+                hx.effectiveness,
+                hx.heat_duty_w,
+                hx.power_density_kw_per_l,
+                hx.hot_inlet_temp_c,
+                hx.hot_outlet_temp_c,
+                hx.cold_inlet_temp_c,
+                hx.cold_outlet_temp_c
+            );
+        }
         if let Some(hdr) = raw_header {
             print_literate_verification(hdr, &a, Some(&g), verify)?;
         } else if verify {
@@ -1218,6 +1254,21 @@ fn solve_graded(
             .cloned()
             .collect();
         print_case_lines(&all_graded, "graded");
+        if let Some(ref hx) = g.hx {
+            println!(
+                "hx {} ({} -> {}): Δp {:.3} kPa, P_pump {:.3} W, ε {:.3}, Q {:.1} W ({:.1} kW/L), T_hot,out {:.2} °C, T_cold,out {:.2} °C",
+                hx.arrangement,
+                hx.inlet,
+                hx.outlet,
+                hx.pressure_drop_kpa,
+                hx.pumping_power_w,
+                hx.effectiveness,
+                hx.heat_duty_w,
+                hx.power_density_kw_per_l,
+                hx.hot_outlet_temp_c,
+                hx.cold_outlet_temp_c
+            );
+        }
         println!(
             "grade {:.0} ms, graded re-solve {:.0} ms",
             g.fill_ms, g.solve_ms

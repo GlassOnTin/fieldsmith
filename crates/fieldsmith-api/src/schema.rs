@@ -378,6 +378,8 @@ pub struct GradedSummary {
     pub buckling_coef: f64,
     pub buckling_exp: f64,
     pub lattice_adjoint_sensitivity_sum: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hx: Option<fieldsmith_core::porous_hx::TpmsHxReport>,
     pub fill_ms: f64,
     pub solve_ms: f64,
 }

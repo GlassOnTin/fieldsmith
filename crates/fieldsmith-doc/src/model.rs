@@ -44,6 +44,10 @@ pub struct Document {
     pub material: String,
     pub custom_materials: Vec<crate::materials::Material>,
     pub fill: Option<Fill>,
+    /// Optional macroscopic Darcy–Forchheimer porous-media flow & two-stream TPMS conjugate
+    /// heat-exchanger specification (`hx inlet=<region> outlet=<region> mdot=<kg/s> ...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hx: Option<HxSpec>,
     pub solve: SolveSettings,
     /// Optional explicit reduced-order coupled system ID bound to this document
     /// (`coupled <system_id>`). Replaces filename/let heuristics with a typed declaration.
@@ -89,6 +93,7 @@ impl Default for Document {
             material: "petg".into(),
             custom_materials: Vec::new(),
             fill: None,
+            hx: None,
             solve: SolveSettings::default(),
             coupled_system: None,
             asserts: Vec::new(),
@@ -726,6 +731,127 @@ impl Default for Fill {
     }
 }
 
+/// Working fluid library for macroscopic Darcy–Forchheimer porous flow and TPMS conjugate HX.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HxFluid {
+    /// Liquid water at ~300 K (`ρ = 997 kg/m³`, `μ = 8.9e-4 Pa·s`, `c_p = 4182 J/(kg·K)`, `k = 0.607 W/(m·K)`).
+    #[default]
+    Water,
+    /// Dry air at 1 atm, 300 K (`ρ = 1.184 kg/m³`, `μ = 1.85e-5 Pa·s`, `c_p = 1006 J/(kg·K)`, `k = 0.0262 W/(m·K)`).
+    Air,
+    /// 50/50 water–ethylene glycol coolant (`ρ = 1065 kg/m³`, `μ = 2.8e-3 Pa·s`, `c_p = 3350 J/(kg·K)`, `k = 0.415 W/(m·K)`).
+    Glycol50,
+    /// Pressurized helium gas at 2 MPa, ~500 K (`ρ = 1.92 kg/m³`, `μ = 2.80e-5 Pa·s`, `c_p = 5193 J/(kg·K)`, `k = 0.220 W/(m·K)`).
+    He2Mpa,
+}
+
+impl HxFluid {
+    pub fn name(self) -> &'static str {
+        match self {
+            HxFluid::Water => "water",
+            HxFluid::Air => "air",
+            HxFluid::Glycol50 => "glycol50",
+            HxFluid::He2Mpa => "he_2mpa",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "water" | "h2o" => Some(HxFluid::Water),
+            "air" => Some(HxFluid::Air),
+            "glycol50" | "glycol" | "egw50" => Some(HxFluid::Glycol50),
+            "he_2mpa" | "helium" | "he" => Some(HxFluid::He2Mpa),
+            _ => None,
+        }
+    }
+
+    /// Thermophysical properties `(rho_kg_m3, mu_pa_s, cp_j_kg_k, k_w_m_k)`.
+    pub fn properties(self) -> (f64, f64, f64, f64) {
+        match self {
+            HxFluid::Water => (997.0, 8.90e-4, 4182.0, 0.607),
+            HxFluid::Air => (1.184, 1.85e-5, 1006.0, 0.0262),
+            HxFluid::Glycol50 => (1065.0, 2.80e-3, 3350.0, 0.415),
+            HxFluid::He2Mpa => (1.920, 2.80e-5, 5193.0, 0.220),
+        }
+    }
+}
+
+/// Flow arrangement for TPMS porous conjugate heat exchange (`ε–NTU`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HxArrangement {
+    #[default]
+    Counterflow,
+    Parallel,
+    Crossflow,
+    /// Single-stream porous coldplate / regenerator exchanging heat with an isothermal core/wall at `cold_tin` (`C_r = 0`).
+    IsothermalWall,
+}
+
+impl HxArrangement {
+    pub fn name(self) -> &'static str {
+        match self {
+            HxArrangement::Counterflow => "counterflow",
+            HxArrangement::Parallel => "parallel",
+            HxArrangement::Crossflow => "crossflow",
+            HxArrangement::IsothermalWall => "isothermal_wall",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "counterflow" | "counter" => Some(HxArrangement::Counterflow),
+            "parallel" | "coflow" => Some(HxArrangement::Parallel),
+            "crossflow" | "cross" => Some(HxArrangement::Crossflow),
+            "isothermal_wall" | "isothermal" | "coldplate" => Some(HxArrangement::IsothermalWall),
+            _ => None,
+        }
+    }
+}
+
+/// Macroscopic Darcy–Forchheimer porous flow and two-stream TPMS conjugate heat-exchanger spec.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HxSpec {
+    /// Inlet port surface region id (`Γ_in`).
+    pub inlet: String,
+    /// Outlet port surface region id (`Γ_out`).
+    pub outlet: String,
+    /// Primary / hot stream mass flow rate `ṁ_hot` (kg/s).
+    pub mdot: f64,
+    /// Primary / hot stream inlet temperature `T_{hot,in}` (°C).
+    #[serde(default = "default_hx_tin")]
+    pub tin: f64,
+    /// Primary / hot stream working fluid.
+    #[serde(default)]
+    pub fluid: HxFluid,
+    /// Two-stream flow arrangement (`counterflow`, `parallel`, `crossflow`, `isothermal_wall`).
+    #[serde(default)]
+    pub arrangement: HxArrangement,
+    /// Optional secondary / cold stream mass flow rate `ṁ_cold` (kg/s); `None` uses `mdot`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cold_mdot: Option<f64>,
+    /// Secondary / cold stream inlet temperature (or isothermal wall temperature) `T_{cold,in}` (°C).
+    #[serde(default = "default_hx_cold_tin")]
+    pub cold_tin: f64,
+    /// Optional secondary / cold stream working fluid; `None` uses `fluid`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cold_fluid: Option<HxFluid>,
+    /// Reference outlet pressure `p_out` (kPa).
+    #[serde(default = "default_hx_pout_kpa")]
+    pub pout_kpa: f64,
+}
+
+fn default_hx_tin() -> f64 {
+    80.0
+}
+fn default_hx_cold_tin() -> f64 {
+    20.0
+}
+fn default_hx_pout_kpa() -> f64 {
+    100.0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlasticityLaw {
@@ -1008,6 +1134,7 @@ impl Document {
             let named = ids.contains(&c.target)
                 || self.loads.iter().any(|l| l.id == c.target)
                 || self.contacts.iter().any(|ct| ct.id == c.target)
+                || (c.target == "hx" && self.hx.is_some())
                 || self.temperatures.iter().any(|t| t.id == c.target)
                 || self.convections.iter().any(|v| v.id == c.target)
                 || self.heat_fluxes.iter().any(|v| v.id == c.target);
@@ -1397,6 +1524,45 @@ impl Document {
                         a.id, b.id, a.h, b.h, a.region, a.case
                     ));
                 }
+            }
+        }
+        if let Some(hx) = &self.hx {
+            if !region_ids.contains(&hx.inlet.as_str()) {
+                errs.push(format!("hx inlet refers to missing region '{}'", hx.inlet));
+            }
+            if !region_ids.contains(&hx.outlet.as_str()) {
+                errs.push(format!(
+                    "hx outlet refers to missing region '{}'",
+                    hx.outlet
+                ));
+            }
+            if hx.inlet == hx.outlet {
+                errs.push(format!(
+                    "hx inlet and outlet must name distinct surface regions (both are '{}')",
+                    hx.inlet
+                ));
+            }
+            if !(hx.mdot.is_finite() && hx.mdot > 0.0) {
+                errs.push(format!(
+                    "hx mdot= must be a positive finite mass flow rate in kg/s (got {})",
+                    hx.mdot
+                ));
+            }
+            if let Some(cm) = hx.cold_mdot {
+                if !(cm.is_finite() && cm > 0.0) {
+                    errs.push(format!(
+                        "hx cold_mdot= must be a positive finite mass flow rate in kg/s (got {cm})"
+                    ));
+                }
+            }
+            if !hx.tin.is_finite() {
+                errs.push("hx tin= must be a finite temperature in °C".into());
+            }
+            if !hx.cold_tin.is_finite() {
+                errs.push("hx cold_tin= must be a finite temperature in °C".into());
+            }
+            if !hx.pout_kpa.is_finite() {
+                errs.push("hx pout= must be a finite pressure in kPa".into());
             }
         }
         if let Some(t) = self.solve.t_ref {

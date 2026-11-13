@@ -752,6 +752,7 @@ impl Attrs {
                 })
                 .collect(),
             Some(Some(Val::Ident(s))) => Ok(vec![s]),
+            Some(Some(Val::Expr { txt })) if is_ident(&txt) => Ok(vec![txt]),
             Some(_) => self.err(format!("'{key}' must be a list of names")),
         }
     }
@@ -1594,6 +1595,54 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 };
                 a.finish()?;
                 doc.fill = Some(fill);
+            }
+            "hx" => {
+                let mut a = c.attrs("hx", &let_scope(&doc))?;
+                let inlet = a.req_string("inlet")?;
+                let outlet = a.req_string("outlet")?;
+                let mdot = a.req_expr_num("mdot", "mdot")?;
+                let tin = a.expr_num_or("tin", "tin", 80.0)?;
+                let fluid = match a.string("fluid")?.as_deref() {
+                    None => HxFluid::Water,
+                    Some(s) => HxFluid::parse(s).ok_or_else(|| {
+                        err(format!(
+                            "unknown hx fluid '{s}' (expected water, air, glycol50, or he_2mpa)"
+                        ))
+                    })?,
+                };
+                let arrangement = match a.string("arrangement")?.as_deref() {
+                    None => HxArrangement::Counterflow,
+                    Some(s) => HxArrangement::parse(s).ok_or_else(|| {
+                        err(format!(
+                            "unknown hx arrangement '{s}' (expected counterflow, parallel, crossflow, or isothermal_wall)"
+                        ))
+                    })?,
+                };
+                let cold_mdot = a.expr_num("cold_mdot", "cold_mdot")?;
+                let cold_tin = a.expr_num_or("cold_tin", "cold_tin", 20.0)?;
+                let cold_fluid = match a.string("cold_fluid")?.as_deref() {
+                    None => None,
+                    Some(s) => Some(HxFluid::parse(s).ok_or_else(|| {
+                        err(format!(
+                            "unknown hx cold_fluid '{s}' (expected water, air, glycol50, or he_2mpa)"
+                        ))
+                    })?),
+                };
+                let pout_kpa = a.expr_num_or("pout", "pout", 100.0)?;
+                doc.consumed.append(&mut a.consumed);
+                a.finish()?;
+                doc.hx = Some(HxSpec {
+                    inlet,
+                    outlet,
+                    mdot,
+                    tin,
+                    fluid,
+                    arrangement,
+                    cold_mdot,
+                    cold_tin,
+                    cold_fluid,
+                    pout_kpa,
+                });
             }
             "solve" => {
                 let mut a = c.attrs("", &let_scope(&doc))?;
@@ -3422,6 +3471,37 @@ pub fn print(doc: &Document) -> String {
         }
         if let Some(er) = f.erode.filter(|&er| er > 0.0) {
             line += &format!(" erode={}", n(er));
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    if let Some(hx) = &doc.hx {
+        o.push('\n');
+        let mut line = format!(
+            "hx inlet={} outlet={} mdot={} tin={} fluid={} arrangement={}",
+            id_tok(&hx.inlet),
+            id_tok(&hx.outlet),
+            p.num_for("hx", "mdot", None, hx.mdot),
+            p.num_for("hx", "tin", None, hx.tin),
+            hx.fluid.name(),
+            hx.arrangement.name(),
+        );
+        if let Some(cm) = hx.cold_mdot {
+            line += &format!(" cold_mdot={}", p.num_for("hx", "cold_mdot", None, cm));
+        }
+        line += &format!(
+            " cold_tin={}",
+            p.num_for("hx", "cold_tin", None, hx.cold_tin)
+        );
+        if let Some(cf) = hx.cold_fluid {
+            line += &format!(" cold_fluid={}", cf.name());
+        }
+        if (hx.pout_kpa - 100.0).abs() > 1e-12
+            || doc
+                .consumed
+                .iter()
+                .any(|c| c.target == "hx" && c.attr == "pout")
+        {
+            line += &format!(" pout={}", p.num_for("hx", "pout", None, hx.pout_kpa));
         }
         let _ = writeln!(o, "{line}");
     }
@@ -5417,5 +5497,18 @@ convection q quench h=0.012 tinf=20
         let mut bad2 = doc.clone();
         bad2.solve.t_end = Some(-1.0);
         assert!(!bad2.validate().is_empty());
+
+        let single_protect = "\
+fieldsmith 1
+box b size=(10, 10, 10)
+cylinder hole r=2 h=12 subtract
+fill gyroid sheet cell=5 skin=1 rho=(0.2, 0.5) curve=1 wall=0.4 protect=(hole) margin=2
+";
+        let sp_doc = parse(single_protect).expect("parse single-item protect=(hole)");
+        assert_eq!(sp_doc.fill.as_ref().unwrap().protect, vec!["hole"]);
+        assert_eq!(
+            parse(&print(&sp_doc)).expect("reparse single-item protect"),
+            sp_doc
+        );
     }
 }

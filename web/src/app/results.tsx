@@ -773,6 +773,13 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u
     for (let j = 0; j < 6; j++) m += cp[lvl.surfaceFacets[6 * f + j]];
     return { value: m / 6, unit: 'MPa' };
   }
+  if (mode === 'porous_pressure') {
+    const pp = lvl.porousPressure;
+    if (!pp || !pp.length) return { value: NaN, unit: 'kPa' };
+    let m = 0;
+    for (let j = 0; j < 6; j++) m += pp[lvl.surfaceFacets[6 * f + j]];
+    return { value: m / 6, unit: 'kPa' };
+  }
   const vm = vmElemField(lvl, ci)[owner];
   if (mode === 'strain_energy') return { value: strainEnergyOfVm(vm), unit: 'kJ/m³' };
   if (mode === 'plastic_strain') return { value: elemPlasticStrain(lvl, ci, owner, vm, lvl.meta.yield_strength), unit: '%' };
@@ -877,6 +884,13 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     for (const v of cp) if (v > hi) hi = v;
     return hi;
   }
+  if (mode === 'porous_pressure') {
+    const pp = lvl.porousPressure;
+    if (!pp || !pp.length) return 1;
+    let hi = -Infinity;
+    for (const v of pp) if (v > hi) hi = v;
+    return Number.isFinite(hi) ? hi : 1;
+  }
   const peakVm = Math.max(
     1e-9,
     ...(ci >= 0 ? [cases[ci].max_vm_elem] : cases.map((c) => c.max_vm_elem)),
@@ -899,6 +913,13 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
 /** Smallest value of the mode for the legend's lower auto bound: 0 for the stress and
  * deflection ramps, the data minimum for temperature (whose window need not contain 0). */
 function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
+  if (mode === 'porous_pressure') {
+    const pp = lvl.porousPressure;
+    if (!pp || !pp.length) return 0;
+    let lo = Infinity;
+    for (const v of pp) if (v < lo) lo = v;
+    return Number.isFinite(lo) ? lo : 0;
+  }
   if (mode !== 'temperature') return 0;
   const t = tempField(lvl, ci);
   if (!t) return 0;
@@ -980,6 +1001,21 @@ function legendLabels(lvl: LevelResult, mode: ResultMode, ci: number, max: numbe
           caption: 'no unilateral contact active in this run — add a contact statement in Setup',
         };
   }
+  if (mode === 'porous_pressure') {
+    const pp = lvl.porousPressure;
+    const hx = lvl.meta.fill?.hx;
+    return pp && pp.length > 0
+      ? {
+          min: `${fmt(modeMin(lvl, mode, ci), 1)}`,
+          max: `${fmt(max, 1)} kPa`,
+          caption: `3D P2 Darcy–Forchheimer porous pressure p (kPa)${hx ? ` · Δp = ${fmt(hx.pressure_drop_kpa, 2)} kPa (${hx.fluid}, Darcy ${fmt(hx.darcy_share_pct, 0)}%)` : ''}`,
+        }
+      : {
+          min: '',
+          max: '',
+          caption: 'no TPMS porous flow field in this run — enable Porous Flow & HX in 4. Fill',
+        };
+  }
   const disc = activeResultsDiscipline(lvl);
   if (disc === 'thermal' && tempField(lvl, ci)) {
     return { min: '', max: '', caption: '3D Fourier heat-flux vectors q = −k∇T (kW/m²) pointing from hot to cold' };
@@ -1005,19 +1041,21 @@ function rangeFor(
   const unit =
     mode === 'stress' || mode === 'contact_pressure'
       ? 'MPa'
-      : mode === 'peel'
-        ? '×'
-        : mode === 'strain_energy'
-          ? 'kJ/m³'
-          : mode === 'plastic_strain'
-            ? '%'
-            : mode === 'temperature'
-              ? '°C'
-              : mode === 'heat_flux'
-                ? 'kW/m²'
-                : mode === 'flow_field'
-                  ? 'mm/s'
-                  : 'mm';
+      : mode === 'porous_pressure'
+        ? 'kPa'
+        : mode === 'peel'
+          ? '×'
+          : mode === 'strain_energy'
+            ? 'kJ/m³'
+            : mode === 'plastic_strain'
+              ? '%'
+              : mode === 'temperature'
+                ? '°C'
+                : mode === 'heat_flux'
+                  ? 'kW/m²'
+                  : mode === 'flow_field'
+                    ? 'mm/s'
+                    : 'mm';
   const levelKey = `${analysis.state.resultsFor ?? ''}:${lvl.label}`;
   const r = ui.resultsRange;
   if (r && r.mode === mode && r.levelKey === levelKey) {
@@ -1034,6 +1072,7 @@ function isRamped(
   | 'strain_energy'
   | 'plastic_strain'
   | 'contact_pressure'
+  | 'porous_pressure'
   | 'deflection'
   | 'temperature'
   | 'heat_flux'
@@ -1044,6 +1083,7 @@ function isRamped(
     m === 'strain_energy' ||
     m === 'plastic_strain' ||
     m === 'contact_pressure' ||
+    m === 'porous_pressure' ||
     m === 'deflection' ||
     m === 'temperature' ||
     m === 'heat_flux' ||
@@ -1148,6 +1188,15 @@ function elementScalarValue(
       return { value: (m / 4) * loadRamp, unit: 'MPa' };
     }
     return { value: 0, unit: 'MPa' };
+  }
+  if (mode === 'porous_pressure') {
+    const pp = lvl.porousPressure;
+    if (pp && pp.length > 0 && tets && elemIdx * 4 + 3 < tets.length) {
+      let m = 0;
+      for (let k = 0; k < 4; k++) m += pp[tets[4 * elemIdx + k]];
+      return { value: m / 4, unit: 'kPa' };
+    }
+    return { value: NaN, unit: 'kPa' };
   }
   if (mode === 'flow_field') {
     const fl = flowFieldData(lvl, ci);
@@ -1298,12 +1347,14 @@ function rebuild(lvl: LevelResult) {
   const effScale = scale * loadRamp;
   const tField = mode === 'temperature' || mode === 'heat_flux' ? tempField(lvl, ci) : null;
   const cpField = mode === 'contact_pressure' ? contactField(lvl, ci) : null;
+  const ppField = mode === 'porous_pressure' && lvl.porousPressure?.length ? lvl.porousPressure : null;
   const hfData = mode === 'heat_flux' || (mode === 'vectors' && activeResultsDiscipline(lvl) === 'thermal') ? heatFluxField(lvl, ci) : null;
   const flData = mode === 'flow_field' || (mode === 'vectors' && activeResultsDiscipline(lvl) === 'fluid') ? flowFieldData(lvl, ci) : null;
   const hasScalarField =
     mode !== 'vectors' &&
     (mode !== 'temperature' || !!tField) &&
     (mode !== 'contact_pressure' || !!cpField) &&
+    (mode !== 'porous_pressure' || !!ppField) &&
     (mode !== 'heat_flux' || !!hfData);
 
   // Deformed positions for all P2 nodes (corners + mid-edge nodes) directly from solver u / modeShapes
@@ -1392,6 +1443,17 @@ function rebuild(lvl: LevelResult) {
         const v = (m / 6) * loadRamp;
         rawFacetVal[f] = v;
         normVal = (v - rngLo) / denom;
+        rampColor(normVal, col, ramp);
+      } else {
+        col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
+      }
+    } else if (mode === 'porous_pressure') {
+      if (ppField) {
+        let m = 0;
+        for (let j = 0; j < 6; j++) m += ppField[lvl.surfaceFacets[6 * f + j]];
+        const v = m / 6;
+        rawFacetVal[f] = v;
+        normVal = ((v - rngLo) * loadRamp) / denom;
         rampColor(normVal, col, ramp);
       } else {
         col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
@@ -1636,6 +1698,10 @@ function rebuild(lvl: LevelResult) {
     } else if (mode === 'contact_pressure' && cpField) {
       for (let n = 0; n < nNodes; n++) {
         nodeNorm[n] = Math.max(0, Math.min(1, ((cpField[n] * loadRamp) - rngLo) / denom));
+      }
+    } else if (mode === 'porous_pressure' && ppField) {
+      for (let n = 0; n < nNodes; n++) {
+        nodeNorm[n] = Math.max(0, Math.min(1, ((ppField[n] - rngLo) * loadRamp) / denom));
       }
     } else {
       // Element-based fields (stress, peel, safety):
@@ -3442,6 +3508,7 @@ function ResultsPanel() {
                 { value: 'strain_energy', label: '⚡ Strain Energy W_e', title: 'Elastic strain energy density W_e = σ_vM² / (2E) (kJ/m³)' },
                 { value: 'plastic_strain', label: '🧬 Plastic Strain ε_p', title: '3D J₂ / Ramberg–Osgood–Hollomon equivalent plastic strain ε_p (%)' },
                 { value: 'contact_pressure', label: '⊥ Contact Pressure p_n', title: '3D unilateral Signorini–Winkler bearing pressure p_n (MPa, ≥ 0; 0 where lifted off)' },
+                { value: 'porous_pressure', label: '💧 Porous Pressure p', title: '3D P2 Darcy–Forchheimer TPMS porous-media pressure field p (kPa)' },
               ] as { value: ResultMode; label: string; title: string }[]).map((m) => {
                 const isAct = mode === m.value;
                 return (
@@ -3619,7 +3686,7 @@ function ResultsPanel() {
                 <div class="legend-range">
                   <NumberInput
                     value={rng.lo}
-                    min={mode === 'temperature' ? undefined : 0}
+                    min={mode === 'temperature' || mode === 'porous_pressure' ? undefined : 0}
                     max={rng.hi}
                     step={rangeStep}
                     unit={rng.unit}
@@ -3846,6 +3913,72 @@ function ResultsPanel() {
                   </div>
                 )),
               )}
+            </div>
+          )}
+          {lvl.meta.fill?.hx && (
+            <div
+              data-testid="results-hx-card"
+              style={{
+                margin: '6px 0',
+                padding: '7px 9px',
+                background: 'rgba(14, 165, 233, 0.08)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#7dd3fc' }}>
+                  💧 TPMS Porous Flow &amp; Conjugate HX ({lvl.meta.fill.hx.arrangement})
+                </span>
+                <button
+                  type="button"
+                  class="mini-btn"
+                  data-testid="hx-show-pressure-map"
+                  onClick={() => {
+                    if (ui.resultsModeShape >= 0) ui.set('resultsModeShape', -1);
+                    ui.set('resultsMode', mode === 'porous_pressure' ? 'stress' : 'porous_pressure');
+                  }}
+                >
+                  {mode === 'porous_pressure' ? 'Show Stress σ_vM' : 'Show Porous Pressure p'}
+                </button>
+              </div>
+              <div
+                style={{
+                  padding: '4px 6px',
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  borderRadius: '4px',
+                  border: '1px solid rgba(148, 163, 184, 0.18)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                  fontSize: '10.5px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>
+                    <code>{lvl.meta.fill.hx.inlet}</code> → <code>{lvl.meta.fill.hx.outlet}</code> · {lvl.meta.fill.hx.fluid}
+                    {lvl.meta.fill.hx.cold_fluid !== lvl.meta.fill.hx.fluid ? ` / ${lvl.meta.fill.hx.cold_fluid}` : ''}
+                  </span>
+                  <span class="num" style={{ color: '#7dd3fc', fontWeight: 600 }}>
+                    Q = {fmt(lvl.meta.fill.hx.heat_duty_w / 1000, 2)} kW ({fmt(lvl.meta.fill.hx.power_density_kw_per_l, 1)} kW/L) · ε {(lvl.meta.fill.hx.effectiveness * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                  Δp: <strong>{fmt(lvl.meta.fill.hx.pressure_drop_kpa, 2)} kPa</strong> (Darcy {fmt(lvl.meta.fill.hx.darcy_share_pct, 0)}%, {lvl.meta.fill.hx.picard_iters} iters) · Pump:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.pumping_power_w, 2)} W</strong> · K_eff:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.effective_permeability_mm2, 4)} mm²</strong> · a_v:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.mean_area_density_per_m, 0)} m⁻¹</strong>
+                </div>
+                <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                  Hot: <strong>{fmt(lvl.meta.fill.hx.hot_inlet_temp_c, 1)} → {fmt(lvl.meta.fill.hx.hot_outlet_temp_c, 1)} °C</strong> · Cold:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.cold_inlet_temp_c, 1)} → {fmt(lvl.meta.fill.hx.cold_outlet_temp_c, 1)} °C</strong> · UA:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.ua_w_k, 1)} W/K</strong> · NTU: <strong>{fmt(lvl.meta.fill.hx.ntu, 2)}</strong> · Re_h:{' '}
+                  <strong>{fmt(lvl.meta.fill.hx.mean_reynolds, 0)}</strong>
+                </div>
+              </div>
             </div>
           )}
           {(isClinchingDocument(store.doc) || mode === 'plastic_strain') && (

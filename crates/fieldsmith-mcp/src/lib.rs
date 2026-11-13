@@ -33,8 +33,9 @@ use fieldsmith_doc::sketch::{
     SketchFeatureRequest,
 };
 use fieldsmith_doc::{
-    canonical_color, fsm, materials, Document, Family, FillMode, LoadKind, MaterialRole, Node,
-    NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform, UncertaintySpec,
+    canonical_color, fsm, materials, Document, Family, FillMode, HxArrangement, HxFluid, HxSpec,
+    LoadKind, MaterialRole, Node, NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform,
+    UncertaintySpec,
 };
 use fieldsmith_solve::antenna::{
     analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
@@ -311,6 +312,7 @@ impl Server {
             "upsert_custom_material" => self.upsert_custom_material(args),
             "set_let" | "set_param" => self.set_let(args),
             "set_fill" => self.set_fill(args),
+            "set_hx" => self.set_hx(args),
             "set_build" => self.set_build(args),
             "upsert_assert" => self.upsert_assert(args),
             "delete_assert" => self.delete_assert(args),
@@ -363,6 +365,7 @@ impl Server {
                     | "set_let"
                     | "set_param"
                     | "set_fill"
+                    | "set_hx"
                     | "set_build"
                     | "upsert_assert"
                     | "delete_assert"
@@ -455,6 +458,7 @@ impl Server {
             "sketch_features": d.sketch_features,
             "custom_materials": d.custom_materials,
             "fill": fill,
+            "hx": d.hx,
             "solve": d.solve,
             "regions": d.regions,
             "supports": d.supports,
@@ -1080,6 +1084,91 @@ impl Server {
         d.fill = Some(f);
         let problems = d.validate();
         Ok(json!({"fill": d.fill, "problems": problems}))
+    }
+
+    /// Configure, update, or clear (`clear: true`) the document's `hx` TPMS porous-media
+    /// Darcy–Forchheimer & two-stream conjugate heat-exchanger specification via `DocCommand::SetHx`.
+    fn set_hx(&mut self, args: Value) -> Result<Value, String> {
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        if flag(&args, "clear") {
+            let out = apply_doc_command(d, DocCommand::SetHx { hx: None })?;
+            return Ok(json!({"hx": Value::Null, "problems": out.problems}));
+        }
+        let mut h = d.hx.clone().unwrap_or(HxSpec {
+            inlet: String::new(),
+            outlet: String::new(),
+            mdot: 0.05,
+            tin: 80.0,
+            fluid: HxFluid::Water,
+            arrangement: HxArrangement::Counterflow,
+            cold_mdot: None,
+            cold_tin: 20.0,
+            cold_fluid: None,
+            pout_kpa: 100.0,
+        });
+        if let Some(s) = args.get("inlet").and_then(Value::as_str) {
+            h.inlet = s.to_string();
+        }
+        if let Some(s) = args.get("outlet").and_then(Value::as_str) {
+            h.outlet = s.to_string();
+        }
+        if h.inlet.trim().is_empty() || h.outlet.trim().is_empty() {
+            return Err("set_hx: both 'inlet' and 'outlet' region ids are required".into());
+        }
+        if let Some(v) = args.get("mdot").and_then(Value::as_f64) {
+            h.mdot = v;
+        }
+        if let Some(v) = args.get("tin").and_then(Value::as_f64) {
+            h.tin = v;
+        }
+        if let Some(s) = args.get("fluid").and_then(Value::as_str) {
+            h.fluid = HxFluid::parse(s).ok_or_else(|| {
+                format!("set_hx: unknown fluid {s:?} (expected water|air|glycol50|he_2mpa)")
+            })?;
+        }
+        if let Some(s) = args.get("arrangement").and_then(Value::as_str) {
+            h.arrangement = HxArrangement::parse(s).ok_or_else(|| {
+                format!("set_hx: unknown arrangement {s:?} (expected counterflow|parallel|crossflow|isothermal_wall)")
+            })?;
+        }
+        if let Some(cm) = args.get("cold_mdot") {
+            h.cold_mdot = if cm.is_null() {
+                None
+            } else {
+                Some(
+                    cm.as_f64()
+                        .ok_or_else(|| "set_hx: cold_mdot must be a number or null".to_string())?,
+                )
+            };
+        }
+        if let Some(v) = args.get("cold_tin").and_then(Value::as_f64) {
+            h.cold_tin = v;
+        }
+        if let Some(cf) = args.get("cold_fluid") {
+            h.cold_fluid = if cf.is_null() {
+                None
+            } else {
+                let s = cf
+                    .as_str()
+                    .ok_or_else(|| "set_hx: cold_fluid must be a string or null".to_string())?;
+                if s.is_empty() || s == "same" {
+                    None
+                } else {
+                    Some(HxFluid::parse(s).ok_or_else(|| {
+                        format!("set_hx: unknown cold_fluid {s:?} (expected water|air|glycol50|he_2mpa)")
+                    })?)
+                }
+            };
+        }
+        if let Some(v) = args
+            .get("pout_kpa")
+            .or_else(|| args.get("pout"))
+            .and_then(Value::as_f64)
+        {
+            h.pout_kpa = v;
+        }
+        let out = apply_doc_command(d, DocCommand::SetHx { hx: Some(h) })?;
+        Ok(json!({"hx": d.hx, "problems": out.problems}))
     }
 
     /// Set or clear the document's build orientation `solve build=(theta_deg, phi_deg)`
@@ -2792,8 +2881,8 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_contact`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
- {"name":"delete_entity","description":"Delete a shape, sketch, region, support, contact, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_contact`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_hx`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"delete_entity","description":"Delete a shape, sketch, region, support, contact, load, temperature, convection, heatflux, or `hx` by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
  {"name":"add_contact","description":"Add or update a 3D unilateral Signorini–Winkler compression-only contact / foundation boundary condition (`u · n - gap <= 0, p_n >= 0`) on `region` (`normal` defaults to outward facet normal; `k` in MPa/mm, default 10000; `gap` clearance/interference in mm, default 0; optional `case`).","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"normal":{"type":["array","null"],"items":{"type":"number"},"minItems":3,"maxItems":3},"k":{"type":"number"},"gap":{"type":"number"},"case":{"type":"string"}}}},
@@ -2805,6 +2894,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"upsert_custom_material","description":"Define or update a typed `custommaterial` in the open document, including thermal conductivity `k` (`W/(m·K)`), specific heat capacity `cp` (`J/(kg·K)`), Hollomon plasticity (`hardening_n`, `hardening_k`), brittle Weibull modulus (`weibull_m`), and `role` (`\"structural\"` or `\"fluid\"`).","inputSchema":{"type":"object","required":["id","e","nu","density"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"e":{"type":"number"},"nu":{"type":"number"},"yield_strength":{"type":"number"},"yield":{"type":"number"},"density":{"type":"number"},"min_wall":{"type":"number"},"alpha":{"type":"number"},"k":{"type":"number"},"cp":{"type":"number"},"yield_z":{"type":"number"},"shear_z":{"type":"number"},"hardening_n":{"type":"number"},"hardening_k":{"type":"number"},"weibull_m":{"type":"number"},"role":{"type":"string","enum":["structural","fluid"]},"source":{"type":"string"}}}},
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
  {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
+ {"name":"set_hx","description":"Configure, update, or clear (`clear: true`) the document's 3D P2 Darcy–Forchheimer porous-media flow & two-stream graded-TPMS conjugate heat-exchanger (`hx`) specification (`inlet`, `outlet`, `mdot`, `tin`, `fluid`, `arrangement`, `cold_mdot`, `cold_tin`, `cold_fluid`, `pout_kpa`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"inlet":{"type":"string"},"outlet":{"type":"string"},"mdot":{"type":"number"},"tin":{"type":"number"},"fluid":{"type":"string","enum":["water","air","glycol50","he_2mpa"]},"arrangement":{"type":"string","enum":["counterflow","parallel","crossflow","isothermal_wall"]},"cold_mdot":{"type":["number","null"]},"cold_tin":{"type":"number"},"cold_fluid":{"type":["string","null"],"enum":["water","air","glycol50","he_2mpa",null]},"pout_kpa":{"type":"number"},"pout":{"type":"number"}}}},
  {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`, reference temperature `t_ref`, and transient thermo-elastic settings (`t_end`, `steps`, `t_init`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]},"t_ref":{"type":["number","null"]},"t_end":{"type":["number","null"]},"steps":{"type":["integer","null"]},"t_init":{"type":["number","null"]}}}},
  {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `p90.max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `p90.max_temp`, `peak_transient_vm`, `t_at_peak_vm`, `final_max_temp`, `final_min_temp`, `steady_limit_vm_elem`, `min_safety_factor`, `p10.min_safety_factor`, `mass_g`, `max_layer_peel`, `p90.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `mode_1`, `p10.mode_1`, `graded.yield_utilization`, `p90.graded.yield_utilization`, `graded.buckling_utilization`, `graded.max_layer_peel`, `graded_mass_g`, `mass_saved_pct`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
  {"name":"delete_assert","description":"Delete an executable `assert` engineering contract from the open `.fsm` document by `index` or `label`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"}}}},

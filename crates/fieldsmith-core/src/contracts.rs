@@ -77,6 +77,7 @@ pub fn required_modes_for_asserts(
 pub fn is_graded_assert_metric(metric: &str) -> bool {
     let (_, m) = crate::uq::strip_quantile_prefix(metric);
     if m.starts_with("graded.")
+        || m.starts_with("hx_")
         || matches!(
             m,
             "graded_mass_g"
@@ -87,6 +88,10 @@ pub fn is_graded_assert_metric(metric: &str) -> bool {
                 | "yield_util"
                 | "buckling_utilization"
                 | "buckling_util"
+                | "hot_outlet_temp_c"
+                | "cold_outlet_temp_c"
+                | "pressure_drop_kpa"
+                | "pumping_power_w"
         )
     {
         return true;
@@ -161,6 +166,58 @@ pub fn resolve_assert_metric(
         "overhang_area_mm2" | "overhang_area" => return Ok(a.overhang.overhang_area_mm2),
         "max_overhang_deg" | "overhang_deg" => return Ok(a.overhang.max_overhang_deg),
         _ => {}
+    }
+
+    let hx_key = m.strip_prefix("graded.").unwrap_or(m);
+    if matches!(
+        hx_key,
+        "hx_pressure_drop_kpa"
+            | "pressure_drop_kpa"
+            | "hx_cold_pressure_drop_kpa"
+            | "hx_darcy_share_pct"
+            | "hx_hot_pumping_power_w"
+            | "hx_pumping_power_w"
+            | "pumping_power_w"
+            | "hx_permeability_mm2"
+            | "hx_area_density_per_m"
+            | "hx_wetted_area_cm2"
+            | "hx_hydraulic_diam_mm"
+            | "hx_reynolds"
+            | "hx_ua_w_k"
+            | "hx_ntu"
+            | "hx_effectiveness"
+            | "hx_heat_duty_w"
+            | "hx_power_density_kw_l"
+            | "hot_outlet_temp_c"
+            | "hx_hot_outlet_temp_c"
+            | "cold_outlet_temp_c"
+            | "hx_cold_outlet_temp_c"
+    ) {
+        let gr = g.ok_or_else(|| format!("metric '{m}' requires a `fill` statement"))?;
+        let hx = gr
+            .hx
+            .as_ref()
+            .ok_or_else(|| format!("metric '{m}' requires an `hx` statement"))?;
+        return Ok(match hx_key {
+            "hx_pressure_drop_kpa" | "pressure_drop_kpa" => hx.pressure_drop_kpa,
+            "hx_cold_pressure_drop_kpa" => hx.cold_pressure_drop_kpa,
+            "hx_darcy_share_pct" => hx.darcy_share_pct,
+            "hx_hot_pumping_power_w" => hx.hot_pumping_power_w,
+            "hx_pumping_power_w" | "pumping_power_w" => hx.pumping_power_w,
+            "hx_permeability_mm2" => hx.effective_permeability_mm2,
+            "hx_area_density_per_m" => hx.mean_area_density_per_m,
+            "hx_wetted_area_cm2" => hx.wetted_area_cm2,
+            "hx_hydraulic_diam_mm" => hx.mean_hydraulic_diam_mm,
+            "hx_reynolds" => hx.mean_reynolds,
+            "hx_ua_w_k" => hx.ua_w_k,
+            "hx_ntu" => hx.ntu,
+            "hx_effectiveness" => hx.effectiveness,
+            "hx_heat_duty_w" => hx.heat_duty_w,
+            "hx_power_density_kw_l" => hx.power_density_kw_per_l,
+            "hot_outlet_temp_c" | "hx_hot_outlet_temp_c" => hx.hot_outlet_temp_c,
+            "cold_outlet_temp_c" | "hx_cold_outlet_temp_c" => hx.cold_outlet_temp_c,
+            _ => unreachable!(),
+        });
     }
 
     let (use_graded, rest) = if let Some(r) = m.strip_prefix("graded.") {

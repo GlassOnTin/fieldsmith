@@ -24,6 +24,7 @@ const TIMING_DROPS: &[&str] = &[
     "total_ms",
     "mesh_ms",
     "solve_ms",
+    "fill_ms",
     "thermal_ms",
     "elapsed_ms",
     "cost_fit",
@@ -153,9 +154,13 @@ fn v63_architecture_lock() {
         tools.iter().any(|t| t["name"] == "add_contact"),
         "expected add_contact in TOOLS_JSON"
     );
+    assert!(
+        tools.iter().any(|t| t["name"] == "set_hx"),
+        "expected set_hx in TOOLS_JSON"
+    );
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        48.0,
+        49.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -239,6 +244,7 @@ fn v63_architecture_lock() {
                     && reparsed.sketch_features == doc.sketch_features
                     && reparsed.system_block == doc.system_block
                     && reparsed.contacts == doc.contacts
+                    && reparsed.hx == doc.hx
                 {
                     out.roundtripped = true;
                 } else {
@@ -2202,6 +2208,94 @@ solve build=(0, 0)
         "expected T25 bolted-flange gasket liftoff @assert contracts to pass verify: {t25_ver_json}"
     );
 
+    // -------------------------------------------------------------------------
+    // 17. 3D P2 Darcy–Forchheimer TPMS Porous Flow & Conjugate ε–NTU HX (`A22` & `T26`, API <-> MCP parity)
+    // -------------------------------------------------------------------------
+    let a22_path = examples_dir.join("analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm");
+    let a22_raw = std::fs::read_to_string(&a22_path).expect("read A22 .fsm");
+    let a22_api_req = json!({
+        "apiv": 2,
+        "doc": &a22_raw,
+        "question": {
+            "kind": "solve",
+            "dofs": 14000,
+        },
+    });
+    let a22_api_reply = fieldsmith_api::respond(&a22_api_req.to_string());
+    assert!(
+        !a22_api_reply.is_error,
+        "API A22 solve failed: {}",
+        a22_api_reply.body
+    );
+    let a22_api_json: Value = serde_json::from_str(&a22_api_reply.body).expect("API A22 JSON");
+
+    let mut a22_srv = Server::new();
+    let (a22_open_err, a22_open_body) =
+        mcp_tool_call(&mut a22_srv, 1501, "open", json!({ "doc": a22_raw }));
+    assert!(!a22_open_err, "open A22 failed: {a22_open_body}");
+    let (a22_mcp_err, a22_mcp_json) = mcp_tool_call(
+        &mut a22_srv,
+        1502,
+        "solve",
+        json!({ "kind": "solve", "dofs": 14000 }),
+    );
+    assert!(!a22_mcp_err, "MCP A22 solve failed: {a22_mcp_json}");
+    assert_eq!(
+        canon(&a22_api_json),
+        canon(&a22_mcp_json),
+        "API <-> MCP canon mismatch on 3D P2 Darcy–Forchheimer TPMS HX solve"
+    );
+
+    let hx_rep = &a22_mcp_json["single"]["graded"]["hx"];
+    report.check(Check::relative(
+        "3D P2 Gyroid minimal-surface area density a_v (3.0915 / 5 mm)",
+        618.30,
+        hx_rep["mean_area_density_per_m"].as_f64().expect("a_v"),
+        "1/m",
+        0.005,
+    ));
+    report.check(Check::relative(
+        "3D P2 Gyroid Kozeny–Carman permeability K (phi=0.75, k_KC=5.0)",
+        0.055177,
+        hx_rep["effective_permeability_mm2"].as_f64().expect("K"),
+        "mm²",
+        0.005,
+    ));
+    report.check(Check::relative(
+        "3D P2 nonlinear Darcy–Forchheimer pressure drop (Re_h=727)",
+        2.4819,
+        hx_rep["pressure_drop_kpa"].as_f64().expect("dp"),
+        "kPa",
+        0.005,
+    ));
+    report.check(Check::relative(
+        "3D P2 balanced counterflow heat duty Q (NTU / (1 + NTU))",
+        6914.67,
+        hx_rep["heat_duty_w"].as_f64().expect("Q_w"),
+        "W",
+        0.005,
+    ));
+
+    let (a22_ver_err, a22_ver_json) =
+        mcp_tool_call(&mut a22_srv, 1503, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !a22_ver_err && a22_ver_json["status"] == "ok",
+        "expected A22 Darcy–Forchheimer @assert contracts to pass verify: {a22_ver_json}"
+    );
+
+    let t26_path = examples_dir.join("tutorials/T26-graded-gyroid-counterflow-recuperator.fsm");
+    let t26_raw = std::fs::read_to_string(&t26_path).expect("read T26 .fsm");
+    let mut t26_srv = Server::new();
+    let (t26_open_err, t26_open_body) =
+        mcp_tool_call(&mut t26_srv, 1504, "open", json!({ "doc": t26_raw }));
+    assert!(!t26_open_err, "open T26 failed: {t26_open_body}");
+    let (t26_ver_err, t26_ver_json) =
+        mcp_tool_call(&mut t26_srv, 1505, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !t26_ver_err && t26_ver_json["status"] == "ok",
+        "expected T26 graded Gyroid recuperator @assert contracts to pass verify: {t26_ver_json}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -2209,14 +2303,15 @@ solve build=(0, 0)
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` & TPMS porous `hx` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
              first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
              unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion, \
              unified Lee–Kim / Breda / Varis–Mucha / Neuber–Hencky sheet-metal clinching process windows + parametric 3D S-Lock stamping & J2 co-design, \
              3D P2 BDF2 transient conduction + batched multi-RHS Duhamel–Neumann thermal-shock timelines & Fourier–Biot verification, \
-             and 3D P2 Semi-Smooth Newton unilateral Signorini–Winkler contact with positive-weight 9-point Duffy surface quadrature, gap closure & flange heel liftoff), \
+             3D P2 Semi-Smooth Newton unilateral Signorini–Winkler contact with positive-weight 9-point Duffy surface quadrature, gap closure & flange heel liftoff, \
+             and 3D P2 nonlinear Darcy–Forchheimer TPMS porous-media flow + two-stream conjugate `ε–NTU` heat exchange across Gyroid/Diamond/Primitive lattices with skin port collars & solid boss detours), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -2236,7 +2331,7 @@ solve build=(0, 0)
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
          WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
-         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
+         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, WASM TPMS porous `hx` authoring (`add-hx` / `set_hx`) + Results `💧 Porous Pressure p` colourmap, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
@@ -2247,7 +2342,7 @@ solve build=(0, 0)
          independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`); \
          nonlinear `J2` elastoplastic cases evaluate on the fixed-topology `V_k`-deformed mesh \
          (`method: \"boundary_velocity_fixed_mesh\"`), and discrete topology jumps fall back to \
-         locked-`h` re-meshing (`method: \"finite_difference_remesh\"`). Unilateral Signorini contact solves use frictionless normal Winkler penalty stiffness `k_n` (Coulomb stick-slip tangential friction is not yet coupled).\n\
+         locked-`h` re-meshing (`method: \"finite_difference_remesh\"`). Unilateral Signorini contact solves use frictionless normal Winkler penalty stiffness `k_n` (Coulomb stick-slip tangential friction is not yet coupled); TPMS porous `hx` models two-stream effectiveness–NTU over the homogenised 3D Darcy–Forchheimer flow field (pore-resolved Navier–Stokes LES inside individual TPMS unit cells is out of scope).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
          `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );

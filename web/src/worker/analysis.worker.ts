@@ -52,6 +52,7 @@ function pack(
   label: string,
   out: AnalysisHandle & {
     class?: () => Uint8Array;
+    porousPressure?: () => Float64Array;
     fillParamSpec?: () => Float64Array;
     fillParamDims?: () => Uint32Array;
     fillParamData?: () => Float32Array;
@@ -203,6 +204,12 @@ function pack(
     modeShapes,
     ...(transientFrames ? { transientFrames } : {}),
     class: out.class ? out.class().slice() : null,
+    porousPressure: out.porousPressure
+      ? (() => {
+          const pp = out.porousPressure();
+          return pp.length ? pp.slice() : null;
+        })()
+      : null,
     fillParam,
     runMs: performance.now() - t0,
   };
@@ -237,6 +244,8 @@ function transfersOf(r: LevelResult): ArrayBuffer[] {
       ls.push(...tf.temperature, ...tf.vmElem, ...tf.u);
     }
   }
+  if (r.class) ls.push(r.class);
+  if (r.porousPressure) ls.push(r.porousPressure);
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
   return ls.map((a) => a.buffer as ArrayBuffer);
 }

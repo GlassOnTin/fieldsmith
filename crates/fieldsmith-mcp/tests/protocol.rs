@@ -138,6 +138,7 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "upsert_custom_material",
             "set_let",
             "set_fill",
+            "set_hx",
             "set_build",
             "upsert_assert",
             "delete_assert",
@@ -1069,6 +1070,58 @@ assert \"Heel liftoff\" metric=\"max_liftoff_mm:Prying\" target=\">= 0.05\" unit
     assert!(rep["max_liftoff_mm"].as_f64().unwrap() > 0.05);
 
     let ver = c.tool_ok(44, "verify", json!({ "dofs": 10000 }));
+    assert_eq!(ver["status"], "ok", "{ver}");
+    assert_eq!(ver["verification"]["all_passed"], true);
+}
+
+#[test]
+fn tpms_porous_hx_set_solve_and_verify_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let doc = "\
+fieldsmith 1
+name \"MCP Graded Gyroid Counterflow Recuperator\"
+material alsi10mg
+box core size=(50, 20, 20)
+region hot_in = core.nx
+region hot_out = core.px
+support mount hot_in fixed=xyz
+load internal_p hot_out pressure=0.5
+fill gyroid sheet cell=5 skin=0 rho=(0.25, 0.25) wall=0.2
+assert \"Recuperator duty\" metric=\"hx_heat_duty_w\" target=\">= 1500\" unit=\"W\"
+assert \"Effectiveness\" metric=\"hx_effectiveness\" target=\">= 0.15\"
+assert \"Pressure drop bound\" metric=\"hx_pressure_drop_kpa\" target=\"<= 5.0\" unit=\"kPa\"
+";
+    c.tool_ok(50, "open", json!({ "doc": doc }));
+    let configured = c.tool_ok(
+        51,
+        "set_hx",
+        json!({
+            "inlet": "hot_in",
+            "outlet": "hot_out",
+            "mdot": 0.06,
+            "tin": 85.0,
+            "fluid": "water",
+            "arrangement": "counterflow",
+            "cold_mdot": 0.06,
+            "cold_tin": 20.0,
+            "pout_kpa": 100.0
+        }),
+    );
+    assert_eq!(configured["hx"]["inlet"], "hot_in", "{configured}");
+    assert_eq!(configured["problems"].as_array().unwrap().len(), 0);
+
+    let insp = c.tool_ok(52, "inspect", json!({}));
+    assert_eq!(insp["hx"]["arrangement"], "counterflow");
+
+    let solved = c.tool_ok(53, "solve", json!({ "kind": "solve", "dofs": 6000 }));
+    assert_eq!(solved["status"], "ok", "{solved}");
+    let hx = &solved["single"]["graded"]["hx"];
+    assert!(hx["heat_duty_w"].as_f64().unwrap() > 1500.0, "{hx}");
+    assert!(hx["effectiveness"].as_f64().unwrap() > 0.15, "{hx}");
+    assert!(hx["pressure_drop_kpa"].as_f64().unwrap() < 5.0, "{hx}");
+
+    let ver = c.tool_ok(54, "verify", json!({ "dofs": 6000 }));
     assert_eq!(ver["status"], "ok", "{ver}");
     assert_eq!(ver["verification"]["all_passed"], true);
 }

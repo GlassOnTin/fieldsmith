@@ -178,7 +178,23 @@ pub fn default_metric_unit(metric: &str) -> &'static str {
         "compliance" => "N·mm",
         "max_displacement" | "max_disp" | "deflection" => "mm",
         "max_vm_elem" | "vm" | "max_von_mises" => "MPa",
-        "max_temp" | "min_temp" => "°C",
+        "max_temp"
+        | "min_temp"
+        | "hot_outlet_temp_c"
+        | "hx_hot_outlet_temp_c"
+        | "cold_outlet_temp_c"
+        | "hx_cold_outlet_temp_c" => "°C",
+        "hx_pressure_drop_kpa" | "pressure_drop_kpa" | "hx_cold_pressure_drop_kpa" => "kPa",
+        "hx_pumping_power_w" | "pumping_power_w" | "hx_hot_pumping_power_w" | "hx_heat_duty_w" => {
+            "W"
+        }
+        "hx_ua_w_k" => "W/K",
+        "hx_power_density_kw_l" => "kW/L",
+        "hx_permeability_mm2" => "mm²",
+        "hx_area_density_per_m" => "1/m",
+        "hx_wetted_area_cm2" => "cm²",
+        "hx_hydraulic_diam_mm" => "mm",
+        "hx_darcy_share_pct" => "%",
         _ => "",
     }
 }
@@ -208,6 +224,11 @@ pub fn default_uq_metrics(doc: &Document, a: &Analysis, g: Option<&Graded>) -> V
         }
         if !gr.thermal_cases.is_empty() {
             push_unique_metric(&mut list, "graded.max_temp");
+        }
+        if gr.hx.is_some() {
+            push_unique_metric(&mut list, "hx_heat_duty_w");
+            push_unique_metric(&mut list, "hx_pressure_drop_kpa");
+            push_unique_metric(&mut list, "hx_effectiveness");
         }
     } else {
         let has_mech_or_thermo_disp = a
