@@ -1112,7 +1112,125 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[16/16] ClinchingCalculatorCard WASM hat-curve + host S-Lock stamping + Dial X* (1.25 -> ${clinchMutState.xDialed.toFixed(3)} mm) + 45° mixed-peel rotation + J2 toggle + Undo: PASS`,
+    `[16/17] ClinchingCalculatorCard WASM hat-curve + host S-Lock stamping + Dial X* (1.25 -> ${clinchMutState.xDialed.toFixed(3)} mm) + 45° mixed-peel rotation + J2 toggle + Undo: PASS`,
+  );
+
+  // 17. TransientTimelineCard 3D P2 BDF2 Thermal-Shock Timeline + Live 3D Viewport Scrubber (`step=0` vs `Peak Shock t*`) + Steady/Transient `set_solve` Undo
+  const transientUiFsm = [
+    'fieldsmith 1',
+    'name "UI 3D P2 BDF2 Transient Quench Slab"',
+    'custommaterial ss316_quench name="316L Quench" e=180000 nu=0.30 yield=470 density=8.00 wall=0.4 a=0.000016 k=16.0 cp=500',
+    'material ss316_quench',
+    'box slab size=(6, 6, 10) at=(3, 3, 5)',
+    'region x0 = slab.nx',
+    'region y0 = slab.ny',
+    'region z0 = slab.nz',
+    'region quench = slab.pz',
+    'support sx x0 fixed=x',
+    'support sy y0 fixed=y',
+    'support sz z0 fixed=z',
+    'convection spray quench h=0.008 tinf=20 case="SprayQuench"',
+    'solve tref=320 t_end=2.5 steps=10 t_init=320',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, transientUiFsm);
+
+  await page.waitForSelector('[data-testid="transient-timeline-card"]', { timeout: 35000 });
+  const peakText = await page.textContent('[data-testid="transient-peak-vm"]');
+  const steadyText = await page.textContent('[data-testid="transient-steady-vm"]');
+  assert(
+    peakText && peakText.includes('MPa @') && steadyText && steadyText.includes('0.00 MPa'),
+    `Expected transient timeline card with Peak Shock MPa and 0.00 MPa steady limit, got peak='${peakText}', steady='${steadyText}'`,
+  );
+
+  // Wait for ladder to settle (`status === 'ready'`) before comparing 3D facet colour sums across steps
+  await page.waitForFunction(
+    async () => {
+      const { analysis } = await import('/src/app/analysis.ts');
+      const c = window.fieldsmith?.results?.colors?.();
+      return analysis.state.status === 'ready' && c && c.length > 0;
+    },
+    null,
+    { timeout: 30000 },
+  );
+  const peakColorSum = await page.evaluate(() => {
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return s;
+  });
+
+  // Scrub slider to Step 0 (t = 0, uniform T = T_ref => sigma_vM = 0 MPa everywhere)
+  await page.evaluate(() => {
+    const slider = document.querySelector('[data-testid="transient-step-slider"]');
+    slider.value = '0';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="transient-active-frame-readout"]');
+      return el && el.textContent && el.textContent.includes('Step 0/10');
+    },
+    null,
+    { timeout: 10000 },
+  );
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const step0Readout = await page.textContent('[data-testid="transient-active-frame-readout"]');
+  const step0ColorSum = await page.evaluate(() => {
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return s;
+  });
+  assert(
+    step0Readout && step0Readout.includes('σ_vM 0.00 MPa') && Math.abs(step0ColorSum - peakColorSum) > 1.0,
+    `Expected scrubbing to Step 0 to show 0.00 MPa and update 3D viewport facet colours (step0Sum=${step0ColorSum}, peakSum=${peakColorSum}), readout='${step0Readout}'`,
+  );
+
+  // Jump back to Peak (t*), wait one rAF render pass for syncResults(vp) -> rebuild(lvl), and verify 3D facet colours match peakColorSum
+  await page.click('[data-testid="transient-jump-peak"]');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const restoredColorSum = await page.evaluate(() => {
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return s;
+  });
+  assert(
+    Math.abs(restoredColorSum - peakColorSum) < 1e-3,
+    `Expected Peak (t*) button to restore peak 3D facet colours (${restoredColorSum} vs ${peakColorSum})`,
+  );
+
+  // Toggle Steady (t -> inf) via DocCommand::SetSolve and verify Undo restores transient settings
+  await page.click('[data-testid="transient-steady-btn"]');
+  const trUndoState = await page.evaluate(() => {
+    const afterSteady = window.fieldsmith.store.doc.solve.t_end ?? null;
+    window.fieldsmith.store.undo();
+    const afterUndo = {
+      t_end: window.fieldsmith.store.doc.solve.t_end ?? null,
+      steps: window.fieldsmith.store.doc.solve.steps ?? null,
+      t_init: window.fieldsmith.store.doc.solve.t_init ?? null,
+    };
+    return { afterSteady, afterUndo };
+  });
+  assert(
+    trUndoState.afterSteady === null &&
+      trUndoState.afterUndo.t_end === 2.5 &&
+      trUndoState.afterUndo.steps === 10 &&
+      trUndoState.afterUndo.t_init === 320,
+    `Expected Steady button + Undo to toggle solve.t_end null <-> 2.5, got ${JSON.stringify(trUndoState)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[17/17] TransientTimelineCard 3D P2 BDF2 timeline (${peakText?.trim()} vs ${steadyText?.trim()}) + live 3D scrubber + Steady/Transient Undo: PASS`,
   );
   await page.close();
 } catch (e) {

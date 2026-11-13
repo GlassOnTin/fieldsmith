@@ -151,6 +151,7 @@ export interface Material {
   min_wall: number;
   alpha?: number | null;
   k?: number | null;
+  cp?: number | null;
   yield_z?: number | null;
   shear_z?: number | null;
   hardening_n?: number | null;
@@ -199,6 +200,9 @@ export interface Document {
     size: number | null;
     modes: number | null;
     t_ref: number | null;
+    t_end?: number | null;
+    steps?: number | null;
+    t_init?: number | null;
     build?: [number, number] | null;
     plasticity?: PlasticityLaw | null;
     hardening_n?: number | null;

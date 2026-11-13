@@ -377,6 +377,7 @@ fn extended_fixing_material(
         min_wall: 0.6,
         alpha: Some(alpha),
         k: None,
+        cp: None,
         yield_z: Some(yield_z),
         shear_z: Some(shear_z),
         hardening_n: None,

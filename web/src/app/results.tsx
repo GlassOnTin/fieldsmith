@@ -16,7 +16,7 @@ import { sweep, useSweep, computeParetoIndices, metricValueOf } from './sweep';
 import type { ParetoMetric, SweepPointRow } from './sweep';
 import { fmt } from './fields';
 import * as THREE from 'three';
-import type { LoadReport } from '../doc/wasm';
+import type { LoadReport, TransientCaseReport, TransientFramePack } from '../doc/wasm';
 import type { LevelResult } from '../doc/wasm';
 import { findMatchingLiterateSheet, evaluateLiterateAssertOnLevel } from '../doc/literate-fsm';
 import {
@@ -28,6 +28,7 @@ import {
 import { isClinchingDocument } from '../doc/clinching';
 import { openCoordMappingModal, openFreeSurfaceModal } from './modal-launchers';
 import { ResultsSensitivityCard } from './ResultsSensitivityCard';
+import { TransientTimelineCard } from './TransientTimelineCard';
 import { runCommand } from './commands';
 
 function LazyClinchingCalculatorCard(props: { lvl: LevelResult; mode: ResultMode; peakEpsP: number }) {
@@ -326,11 +327,50 @@ interface HeatFluxData {
 }
 const heatFluxCache = new WeakMap<LevelResult, Map<number, HeatFluxData>>();
 
+function activeTransientReport(lvl: LevelResult, ci: number): TransientCaseReport | null {
+  const reports = lvl.meta.transient;
+  if (!reports?.length) return null;
+  if (ci >= 0 && ci < lvl.meta.cases.length) {
+    const cname = lvl.meta.cases[ci].name;
+    return reports.find((r) => r.case_name === cname) ?? null;
+  }
+  return reports[0] ?? null;
+}
+
+function activeTransientOverride(
+  lvl: LevelResult,
+  ci: number,
+): { report: TransientCaseReport; pack: TransientFramePack; step: number } | null {
+  if (ui.resultsTransientStep < 0) return null;
+  const packs = lvl.transientFrames;
+  const reports = lvl.meta.transient;
+  if (!packs?.length || !reports?.length) return null;
+  let ti = 0;
+  if (ci >= 0 && ci < lvl.meta.cases.length) {
+    const cname = lvl.meta.cases[ci].name;
+    const found = packs.findIndex((p) => p.caseName === cname);
+    if (found < 0) return null;
+    ti = found;
+  }
+  const pack = packs[ti];
+  const report = reports[ti];
+  if (!pack || !report || pack.temperature.length === 0) return null;
+  const step = Math.max(0, Math.min(pack.temperature.length - 1, ui.resultsTransientStep));
+  return { report, pack, step };
+}
+
+function vmElemField(lvl: LevelResult, ci: number): Float64Array {
+  const ov = activeTransientOverride(lvl, ci);
+  if (ov) return ov.pack.vmElem[ov.step];
+  return ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+}
+
 function heatFluxField(lvl: LevelResult, ci: number): HeatFluxData | null {
   const t = tempField(lvl, ci);
   if (!t) return null;
+  const ov = activeTransientOverride(lvl, ci);
   const kCond = docThermalConductivityWPerMK();
-  const key = ci * 10000 + Math.round(kCond * 10);
+  const key = (ov ? (ov.step + 1) * 1_000_000 : 0) + ci * 10000 + Math.round(kCond * 10);
   let byCase = heatFluxCache.get(lvl);
   if (!byCase) {
     byCase = new Map();
@@ -350,9 +390,11 @@ function heatFluxField(lvl: LevelResult, ci: number): HeatFluxData | null {
   // (`lvl.gradTNodal`), which captures the true normal heat flux q_n = -k ∂T/∂n on isothermal
   // and axisymmetric heated/cooled boundary walls.
   const gradT3d =
-    ci >= 0
-      ? lvl.gradTNodal?.[ci] ?? null
-      : lvl.gradTNodal?.find((g) => g && g.length === nNodes * 3) ?? null;
+    ov && ov.step !== ov.report.step_at_peak_vm
+      ? null
+      : ci >= 0
+        ? lvl.gradTNodal?.[ci] ?? null
+        : lvl.gradTNodal?.find((g) => g && g.length === nNodes * 3) ?? null;
 
   if (gradT3d && gradT3d.length === nNodes * 3) {
     let maxFlux = 1e-9;
@@ -543,7 +585,7 @@ function flowFieldData(lvl: LevelResult, ci: number): FlowFieldData {
   const nNodes = Math.floor(lvl.nodes.length / 3);
   const nFacets = lvl.surfaceRegion.length;
   const u = lvl.u[ci >= 0 ? ci : 0] ?? new Float64Array(nNodes * 3);
-  const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+  const vmArr = vmElemField(lvl, ci);
   const speedNode = new Float64Array(nNodes);
   const vecNode = new Float64Array(nNodes * 3);
   const speedFacet = new Float64Array(nFacets);
@@ -724,7 +766,7 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u
     const peel = (ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope)?.[owner] ?? 0;
     return { value: peel, unit: '×' };
   }
-  const vm = (ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope)[owner];
+  const vm = vmElemField(lvl, ci)[owner];
   if (mode === 'strain_energy') return { value: strainEnergyOfVm(vm), unit: 'kJ/m³' };
   if (mode === 'plastic_strain') return { value: elemPlasticStrain(lvl, ci, owner, vm, lvl.meta.yield_strength), unit: '%' };
   if (mode === 'safety') return { value: vm > 0 ? lvl.meta.yield_strength / vm : Infinity, unit: 'SF' };
@@ -736,6 +778,8 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u
 // mode colours grey and says so.
 const tempCache = new WeakMap<LevelResult, Float64Array>();
 function tempField(lvl: LevelResult, ci: number): Float64Array | null {
+  const ov = activeTransientOverride(lvl, ci);
+  if (ov) return ov.pack.temperature[ov.step] ?? null;
   const ts = lvl.temperature ?? [];
   if (ci >= 0) return ts[ci] ?? null;
   let env = tempCache.get(lvl);
@@ -761,7 +805,7 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     return Math.max(1e-9, ...(ci >= 0 ? [cases[ci].max_displacement] : cases.map((c) => c.max_displacement)));
   }
   if (mode === 'safety') {
-    const arr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+    const arr = vmElemField(lvl, ci);
     let minVm = Infinity;
     for (const v of arr) if (v < minVm) minVm = v;
     if (!(minVm > 0)) return 5;
@@ -779,6 +823,10 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     if (!t) return 1;
     let hi = -Infinity;
     for (const v of t) if (v > hi) hi = v;
+    const tr = activeTransientReport(lvl, ci);
+    if (tr?.timeline?.length) {
+      for (const s of tr.timeline) if (s.max_temp_c > hi) hi = s.max_temp_c;
+    }
     return hi;
   }
   if (mode === 'heat_flux') {
@@ -816,6 +864,10 @@ function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
   if (!t) return 0;
   let lo = Infinity;
   for (const v of t) if (v < lo) lo = v;
+  const tr = activeTransientReport(lvl, ci);
+  if (tr?.timeline?.length) {
+    for (const s of tr.timeline) if (s.min_temp_c < lo) lo = s.min_temp_c;
+  }
   return lo;
 }
 
@@ -1000,7 +1052,7 @@ function elementScalarValue(
   u: Float64Array,
   loadRamp = 1.0,
 ): { value: number; unit: string } {
-  const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+  const vmArr = vmElemField(lvl, ci);
   const peelArr = ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope;
   const yieldMpa = lvl.meta.yield_strength;
   const tets = lvl.tets;
@@ -1114,7 +1166,15 @@ function animatingShape(lvl: LevelResult): Float64Array | null {
 function shownDisp(lvl: LevelResult): { u: Float64Array; animating: boolean; rampMax: number; caption: string | null } {
   const ci = effCase(lvl);
   const shape = animatingShape(lvl);
-  if (!shape) return { u: lvl.u[ci >= 0 ? ci : 0], animating: false, rampMax: 0, caption: null };
+  if (!shape) {
+    const ov = activeTransientOverride(lvl, ci);
+    return {
+      u: ov ? ov.pack.u[ov.step] : lvl.u[ci >= 0 ? ci : 0],
+      animating: false,
+      rampMax: 0,
+      caption: null,
+    };
+  }
   // Peak-normalised display amplitude: φ / max|φ| · fraction·diagonal (SHAPE_DISPLAY_FRACTION).
   let peak = 1e-12;
   for (let i = 0; i < shape.length; i += 3) {
@@ -1153,7 +1213,7 @@ function rebuild(lvl: LevelResult) {
   const nFacets = lvl.surfaceRegion.length;
   const nNodes = Math.floor(lvl.nodes.length / 3);
   const u = shown.u;
-  const vmArr = ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope;
+  const vmArr = vmElemField(lvl, ci);
   const peelArr = ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope;
   const vmax = shown.animating ? shown.rampMax : modeMax(lvl, mode, ci);
   // Null range (safety / vectors) means "not adjustable"; those modes colour by their own
@@ -2176,6 +2236,13 @@ function syncResults(vp: Viewport) {
     ui.set('resultsModePhase', 0);
     return;
   }
+  if (ui.resultsTransientStep >= 0) {
+    const maxFrames = lvl?.transientFrames?.[0]?.temperature.length ?? 0;
+    if (maxFrames === 0 || ui.resultsTransientStep >= maxFrames) {
+      ui.set('resultsTransientStep', -1);
+      return;
+    }
+  }
   ensureTicker(lvl);
   const planes = vp.clipPlanes();
   const clipPlane0 = planes?.[0] ?? null;
@@ -2183,7 +2250,7 @@ function syncResults(vp: Viewport) {
     ? `${clipPlane0.normal.x.toFixed(3)},${clipPlane0.normal.y.toFixed(3)},${clipPlane0.normal.z.toFixed(3)},${clipPlane0.constant.toFixed(2)}`
     : 'noclip';
   const sig = on
-    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsColormap}|${ui.resultsInterp}|${ui.resultsVolumeOn ? 'vol' : 'surf'}|${ui.resultsCase}|${ui.resultsScale}|${ui.resultsRamp}|${
+    ? `${lvl && lvl.label}|${lvl && lvl.nodes.length}${lvl && lvl.meta.provenance.total_ms}|${ui.resultsMode}|${ui.resultsColormap}|${ui.resultsInterp}|${ui.resultsVolumeOn ? 'vol' : 'surf'}|${ui.resultsCase}|${ui.resultsScale}|${ui.resultsRamp}|tr:${ui.resultsTransientStep}|${
         ui.resultsRange ? `${ui.resultsRange.mode}/${ui.resultsRange.levelKey}/${ui.resultsRange.lo}/${ui.resultsRange.hi}` : '-'
       }|${ui.resultsModeShape}|${ui.resultsModePhase}|${ui.resultsModePlay ? 'p' : 's'}|${ui.resultsRampPlay ? 'rp' : 'rs'}|${clipSig}`
     : 'off';
@@ -3645,6 +3712,7 @@ function ResultsPanel() {
           )}
             </>
           )}
+          <TransientTimelineCard lvl={lvl ?? null} ci={lvl ? effCase(lvl) : -1} />
           {store.doc.root.length > 0 && (
             <ResultsSensitivityCard key={`results-sens-card-${store.loads}`} />
           )}
@@ -3654,7 +3722,7 @@ function ResultsPanel() {
             const litSheet = findMatchingLiterateSheet(store.doc.name);
             const isFluidOrCapillary =
               mode === 'flow_field' ||
-              (litSheet && ['A15', 'A16', 'A17', 'A18', 'A20', 'T18'].includes(litSheet.id)) ||
+              (litSheet && ['A15', 'A16', 'A17', 'A18', 'T18'].includes(litSheet.id)) ||
               /spurious|eddies|droplet|gerris|capillary|free-surface/i.test(store.doc.name || '');
             if (!isFluidOrCapillary) return null;
             return <LazySpuriousEddyExplorerPanel />;
@@ -4098,12 +4166,12 @@ function ProbeTensorReadoutCard({
       : findNearestTet(lvl, pt);
   const effCi = ci >= 0 ? ci : 0;
   const stressArr = lvl.stressElem?.[effCi];
-  const u = lvl.u[effCi] ?? lvl.u[0];
+  const u = shownDisp(lvl).u ?? lvl.u[effCi] ?? lvl.u[0];
   const ux = u ? u[3 * nearNode] ?? 0 : 0;
   const uy = u ? u[3 * nearNode + 1] ?? 0 : 0;
   const uz = u ? u[3 * nearNode + 2] ?? 0 : 0;
   const uMag = Math.hypot(ux, uy, uz);
-  const vm = (ci >= 0 ? lvl.vmElem[ci] : lvl.vmElemEnvelope)[elemIdx] ?? 0;
+  const vm = vmElemField(lvl, ci)[elemIdx] ?? 0;
   const tArr = tempField(lvl, ci);
   const tempC = tArr ? tArr[nearNode] : null;
   const hf = tempC != null ? heatFluxField(lvl, ci) : null;

@@ -144,6 +144,7 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "delete_uncertainty",
             "doc_text",
             "solve",
+            "transient_solve",
             "verify",
             "sensitivity",
             "uq",
@@ -976,4 +977,47 @@ support fix clamp_end fixed=xyz
 
     let solved = c.tool_ok(24, "solve", json!({"kind": "solve", "dofs": 8000}));
     assert_eq!(solved["status"], "ok", "{solved}");
+}
+
+#[test]
+fn transient_solve_tracks_thermal_shock_peak_above_steady_state() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let doc = "\
+fieldsmith 1
+name \"Quenched SS316L Slab\"
+material ss316l
+solve tref=320 t_end=2.0 steps=10 t_init=320
+box slab size=(6, 6, 10) at=(3, 3, 5)
+region sx = slab.nx
+region sy = slab.ny
+region sz = slab.nz
+region quench = slab.pz
+support fx sx fixed=x
+support fy sy fixed=y
+support fz sz fixed=z
+convection q quench h=0.015 tinf=20
+assert \"Peak shock stress exceeds 150 MPa\" metric=\"peak_transient_vm\" target=\">= 150\" unit=\"MPa\"
+assert \"Steady-state limit is stress-free\" metric=\"steady_limit_vm_elem\" target=\"<= 0.1\" unit=\"MPa\"
+";
+    c.tool_ok(30, "open", json!({ "doc": doc }));
+    let tr = c.tool_ok(31, "transient_solve", json!({ "dofs": 8000 }));
+    assert_eq!(tr["status"], "ok", "{tr}");
+    let case0 = &tr["transient"]["cases"][0];
+    assert_eq!(case0["scheme"], "bdf2");
+    assert_eq!(case0["timeline"].as_array().unwrap().len(), 11);
+    let peak_vm = case0["peak_vm_elem"].as_f64().unwrap();
+    let steady_vm = case0["steady_limit_vm_elem"].as_f64().unwrap();
+    assert!(
+        peak_vm > 150.0,
+        "expected peak shock > 150 MPa, got {peak_vm}"
+    );
+    assert!(
+        steady_vm < 0.05,
+        "expected steady limit ~ 0 MPa, got {steady_vm}"
+    );
+
+    let ver = c.tool_ok(32, "verify", json!({ "dofs": 8000 }));
+    assert_eq!(ver["status"], "ok", "{ver}");
+    assert_eq!(ver["verification"]["all_passed"], true);
 }

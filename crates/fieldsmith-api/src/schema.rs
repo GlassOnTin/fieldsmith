@@ -10,6 +10,7 @@ use fieldsmith_core::optimise::{OptObjective, OptimisationReport};
 use fieldsmith_core::overhang::OverhangReport;
 use fieldsmith_core::rung::RungRecord;
 use fieldsmith_core::sensitivity::SensitivityReport;
+use fieldsmith_core::transient::TransientCaseReport;
 use fieldsmith_core::uq::UqReport;
 use fieldsmith_core::{CaseResult, Provenance};
 use fieldsmith_doc::clinching::{ClinchingSpec, ClinchingSweepAnalysis};
@@ -183,6 +184,19 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         spec: Option<ClinchingSpec>,
     },
+    /// 3D P2 transient thermo-elastic conduction (`BDF2`) & thermal-shock stress trajectory (`V63`).
+    Transient {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        t_end: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steps: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        t_init: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -243,8 +257,18 @@ pub struct Response {
     /// Present for the sheet-metal clinching process-window question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clinching: Option<ClinchingSweepAnalysis>,
+    /// Present for the 3D P2 transient thermo-elastic question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transient: Option<TransientBundle>,
     /// Named error for `status: error`.
     pub error: Option<String>,
+}
+
+/// Complete transient thermo-elastic answer returned for [`QuestionSpec::Transient`].
+#[derive(Debug, Serialize)]
+pub struct TransientBundle {
+    pub provenance: Provenance,
+    pub cases: Vec<TransientCaseReport>,
 }
 
 /// Complete fastener & joint mechanics answer returned for [`QuestionSpec::Fixing`].
@@ -311,6 +335,8 @@ pub struct SingleResult {
     pub peel: Option<PeelSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graded: Option<GradedSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transient: Vec<TransientCaseReport>,
 }
 
 /// Solid inter-layer peel and mass summary attached to [`SingleResult`] when `solve build=(...)`

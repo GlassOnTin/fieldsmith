@@ -213,6 +213,60 @@ pub fn resolve_assert_metric(
         };
     }
 
+    if matches!(
+        field,
+        "peak_transient_vm"
+            | "peak_transient_vm_elem"
+            | "peak_transient_von_mises"
+            | "peak_transient_disp"
+            | "peak_transient_displacement"
+            | "t_at_peak_vm"
+            | "t_at_peak_vm_s"
+            | "final_max_temp"
+            | "final_min_temp"
+            | "final_vm_elem"
+            | "steady_limit_vm_elem"
+            | "shock_amplification"
+    ) {
+        if a.transient.is_empty() {
+            return Err(format!(
+                "metric '{m}' requires a transient thermal solve (`solve t_end=...`)"
+            ));
+        }
+        let tr = if case_sel.is_empty() {
+            a.transient.first()
+        } else if let Ok(idx1) = case_sel.parse::<usize>() {
+            (idx1 >= 1 && idx1 <= a.transient.len()).then(|| &a.transient[idx1 - 1])
+        } else {
+            a.transient.iter().find(|r| {
+                r.case_name.eq_ignore_ascii_case(case_sel) || r.case_name.contains(case_sel)
+            })
+        }
+        .ok_or_else(|| format!("metric '{m}': no transient thermal case matching '{case_sel}'"))?;
+        return match field {
+            "peak_transient_vm" | "peak_transient_vm_elem" => Ok(tr.peak_vm_elem),
+            "peak_transient_von_mises" => Ok(tr.peak_von_mises),
+            "peak_transient_disp" | "peak_transient_displacement" => Ok(tr.peak_displacement),
+            "t_at_peak_vm" | "t_at_peak_vm_s" => Ok(tr.t_at_peak_vm_s),
+            "final_max_temp" => Ok(tr.final_max_temp_c),
+            "final_min_temp" => Ok(tr.final_min_temp_c),
+            "final_vm_elem" => Ok(tr.final_vm_elem),
+            "steady_limit_vm_elem" => tr.steady_limit_vm_elem.ok_or_else(|| {
+                format!(
+                    "case '{}' has no anchored steady-state conduction limit",
+                    tr.case_name
+                )
+            }),
+            "shock_amplification" => tr.shock_amplification.ok_or_else(|| {
+                format!(
+                    "case '{}' has zero or unanchored steady-state stress",
+                    tr.case_name
+                )
+            }),
+            _ => unreachable!(),
+        };
+    }
+
     let graded_cases_vec: Vec<CaseResult> = g
         .map(|gr| {
             gr.cases

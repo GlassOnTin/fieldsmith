@@ -1603,6 +1603,27 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     }
                 };
                 doc.solve.hardening_n = a.num("hardening_n")?;
+                doc.solve.t_end = a.num("t_end")?;
+                doc.solve.steps = match a.take("steps") {
+                    None => None,
+                    Some(None) => return Err(err("steps wants a count, e.g. steps=20".into())),
+                    Some(Some(Val::Num(v))) if v.is_finite() && v >= 1.0 => {
+                        Some(v.round() as usize)
+                    }
+                    Some(Some(_)) => {
+                        return Err(err("steps must be a positive integer, e.g. steps=20".into()))
+                    }
+                };
+                doc.solve.t_init = match a.take("t_init") {
+                    None => None,
+                    Some(None) => {
+                        return Err(err("t_init wants a °C value, e.g. t_init=300".into()))
+                    }
+                    Some(Some(Val::Num(v))) => Some(v),
+                    Some(Some(_)) => {
+                        return Err(err("t_init must be a number, e.g. t_init=300".into()))
+                    }
+                };
                 a.finish()?;
             }
             "custommaterial" => {
@@ -1629,6 +1650,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     // and a thermal document refuses a structural material without one.
                     alpha: a.num("a")?,
                     k: a.num("k")?,
+                    cp: a.num("cp")?,
                     yield_z: a.num("yield_z")?,
                     shear_z: a.num("shear_z")?,
                     hardening_n: a.num("hardening_n")?,
@@ -3174,6 +3196,9 @@ pub fn print(doc: &Document) -> String {
         if let Some(k) = m.k {
             line += &format!(" k={}", n(k));
         }
+        if let Some(cp) = m.cp {
+            line += &format!(" cp={}", n(cp));
+        }
         if let Some(yz) = m.yield_z {
             line += &format!(" yield_z={}", n(yz));
         }
@@ -3415,6 +3440,15 @@ pub fn print(doc: &Document) -> String {
     }
     if let Some(hn) = doc.solve.hardening_n {
         solve_line += &format!(" hardening_n={}", n(hn));
+    }
+    if let Some(te) = doc.solve.t_end {
+        solve_line += &format!(" t_end={}", n(te));
+    }
+    if let Some(st) = doc.solve.steps {
+        solve_line += &format!(" steps={st}");
+    }
+    if let Some(ti) = doc.solve.t_init {
+        solve_line += &format!(" t_init={}", n(ti));
     }
     if solve_line.len() > "solve".len() {
         let _ = writeln!(o, "{solve_line}");
@@ -5303,5 +5337,45 @@ assert \"Robust peak stress\" metric=\"p90.max_vm_elem\" target=\"<= 160\" unit=
         let printed = print(&doc);
         let reparsed = parse(&printed).expect("reparse uncertainties");
         assert_eq!(reparsed, doc);
+    }
+
+    #[test]
+    fn transient_solve_and_custom_material_cp_round_trip() {
+        let raw = "\
+fieldsmith 1
+name \"Transient Quench Slab\"
+custommaterial sic_test name=\"SiC Test\" e=410000 nu=0.14 yield=350 density=3.1 wall=1 a=0.000004 k=120 cp=675
+material sic_test
+solve tref=320 t_end=8.5 steps=17 t_init=320
+box slab size=(10, 10, 10) at=(5, 5, 5)
+region sym_x = slab.nx
+region sym_y = slab.ny
+region sym_z = slab.nz
+region quench = slab.pz
+support sx sym_x fixed=x
+support sy sym_y fixed=y
+support sz sym_z fixed=z
+convection q quench h=0.012 tinf=20
+";
+        let doc = parse(raw).expect("parse transient solve");
+        assert_eq!(doc.solve.t_end, Some(8.5));
+        assert_eq!(doc.solve.steps, Some(17));
+        assert_eq!(doc.solve.t_init, Some(320.0));
+        assert_eq!(doc.custom_materials[0].cp, Some(675.0));
+        let alpha_th = doc.custom_materials[0].effective_k_w_mm_k()
+            / doc.custom_materials[0].volumetric_heat_capacity_j_mm3_k();
+        // 0.120 / (3.1e-6 * 675) = 57.347670... mm^2/s
+        assert!((alpha_th - 0.120 / (3.1e-6 * 675.0)).abs() < 1e-10);
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+        let printed = print(&doc);
+        let reparsed = parse(&printed).expect("reparse transient solve");
+        assert_eq!(reparsed, doc);
+
+        let mut bad = doc.clone();
+        bad.solve.steps = Some(0);
+        assert!(!bad.validate().is_empty());
+        let mut bad2 = doc.clone();
+        bad2.solve.t_end = Some(-1.0);
+        assert!(!bad2.validate().is_empty());
     }
 }

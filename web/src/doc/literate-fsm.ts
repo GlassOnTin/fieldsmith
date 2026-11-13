@@ -86,6 +86,19 @@ export function evaluateLiterateAssertOnLevel(
       solid_cases?: { name: string; max_vm_elem: number; max_displacement: number }[];
       fill?: { mass_g: number; solid_mass_g: number };
       modes?: { frequencies: number[] };
+      transient?: {
+        case_name: string;
+        peak_vm_elem: number;
+        peak_von_mises: number;
+        peak_displacement: number;
+        t_at_peak_vm_s: number;
+        steady_limit_vm_elem?: number | null;
+        shock_amplification?: number | null;
+        final_min_temp_c: number;
+        final_max_temp_c: number;
+        final_vm_elem?: number;
+        timeline?: { max_vm_elem: number }[];
+      }[];
     };
     temperature?: (Float64Array | null)[];
   },
@@ -152,6 +165,38 @@ export function evaluateLiterateAssertOnLevel(
         const sc = lvl.meta.solid_cases[ci];
         if (field === 'max_displacement' || field === 'deflection') val = sc.max_displacement;
         else if (field === 'max_vm_elem' || field === 'vm') val = sc.max_vm_elem;
+      }
+    } else if (
+      [
+        'peak_transient_vm',
+        'peak_transient_vm_elem',
+        'peak_transient_von_mises',
+        'peak_transient_disp',
+        'peak_transient_displacement',
+        't_at_peak_vm',
+        't_at_peak_vm_s',
+        'final_max_temp',
+        'final_min_temp',
+        'final_vm_elem',
+        'steady_limit_vm_elem',
+        'shock_amplification',
+      ].includes(field)
+    ) {
+      const trs = lvl.meta.transient ?? [];
+      const ti = findCaseIdx(trs.map((r) => ({ name: r.case_name })));
+      if (ti >= 0) {
+        const tr = trs[ti];
+        if (field === 'peak_transient_vm' || field === 'peak_transient_vm_elem') val = tr.peak_vm_elem;
+        else if (field === 'peak_transient_von_mises') val = tr.peak_von_mises;
+        else if (field === 'peak_transient_disp' || field === 'peak_transient_displacement') val = tr.peak_displacement;
+        else if (field === 't_at_peak_vm' || field === 't_at_peak_vm_s') val = tr.t_at_peak_vm_s;
+        else if (field === 'final_max_temp') val = tr.final_max_temp_c;
+        else if (field === 'final_min_temp') val = tr.final_min_temp_c;
+        else if (field === 'final_vm_elem') {
+          const tl = tr.timeline ?? [];
+          val = tr.final_vm_elem ?? (tl.length > 0 ? tl[tl.length - 1].max_vm_elem : null);
+        } else if (field === 'steady_limit_vm_elem') val = tr.steady_limit_vm_elem ?? null;
+        else if (field === 'shock_amplification') val = tr.shock_amplification ?? null;
       }
     } else {
       const ci = findCaseIdx(lvl.meta.cases);
@@ -287,6 +332,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T21: 'docs/tutorials/T21-epistemic-robust-cantilever.md',
   T22: 'docs/tutorials/T22-preloaded-bolted-flange-joint.md',
   T23: 'docs/tutorials/T23-clinching-process-window-and-slock-codesign.md',
+  T24: 'docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -306,6 +352,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A17: 'docs/analytic-tests/A17-gerris-capillary-suite-spurious-capwave-plateau.md',
   A18: 'docs/analytic-tests/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.md',
   A19: 'docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md',
+  A20: 'docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -332,6 +379,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T21: 'examples/tutorials/T21-epistemic-robust-cantilever.fsm',
   T22: 'examples/tutorials/T22-preloaded-bolted-flange-joint.fsm',
   T23: 'examples/tutorials/T23-clinching-process-window-and-slock-codesign.fsm',
+  T24: 'examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -351,6 +399,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A17: 'examples/analytic/A17-gerris-capillary-suite-spurious-capwave-plateau.fsm',
   A18: 'examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm',
   A19: 'examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm',
+  A20: 'examples/analytic/A20-transient-biot-quench-thermal-shock.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -377,6 +426,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T21: ['docs/verification/V63.md'],
   T22: ['docs/verification/V57.md', 'docs/verification/V63.md'],
   T23: ['docs/verification/V53.md', 'docs/verification/V63.md'],
+  T24: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -396,6 +446,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A17: ['docs/verification/V60.md'],
   A18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
   A19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
+  A20: ['docs/verification/V20.md', 'docs/verification/V63.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

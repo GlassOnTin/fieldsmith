@@ -29,7 +29,7 @@ use crate::pcg::{SolveReport, SolverOptions};
 use crate::V3;
 use faer::prelude::*;
 use faer::Side;
-use fenics_element::{interval_quadrature, FiniteElement, P2Triangle};
+use fenics_element::{interval_quadrature, FiniteElement, P2Tetrahedron, P2Triangle};
 
 // ---------------------------------------------------------------------------
 // Scalar CSR (the conduction system is one DOF per node).
@@ -449,6 +449,29 @@ pub fn assemble_conduction_system_spatial(
     flux: &[HeatFluxBc],
     spatial_flux: &[SpatialHeatFluxBc<'_>],
 ) -> Result<(Csr, Vec<f64>, Vec<bool>), String> {
+    assemble_conduction_operators_spatial(
+        mesh,
+        d,
+        k,
+        robin,
+        spatial_robin,
+        flux,
+        spatial_flux,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assemble_conduction_operators_spatial(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k: &[f64],
+    robin: &[RobinBc],
+    spatial_robin: &[SpatialRobinBc<'_>],
+    flux: &[HeatFluxBc],
+    spatial_flux: &[SpatialHeatFluxBc<'_>],
+    require_steady_anchor: bool,
+) -> Result<(Csr, Vec<f64>, Vec<bool>), String> {
     let n = mesh.nodes.len();
     assert_eq!(d.len(), n, "one temperature statement (or None) per node");
     for (bi, bc) in robin.iter().enumerate() {
@@ -484,7 +507,7 @@ pub fn assemble_conduction_system_spatial(
         }
     }
     let no_fixed_or_uniform_h = !fixed.iter().any(|&f| f) && robin.iter().all(|bc| bc.h <= 0.0);
-    if spatial_robin.is_empty() && no_fixed_or_uniform_h {
+    if require_steady_anchor && spatial_robin.is_empty() && no_fixed_or_uniform_h {
         return Err(if flux.is_empty() && spatial_flux.is_empty() {
             "conduction has no fixed temperature and no convection band with h > 0 — every \
              face would be insulated; place at least one temperature region or a convection"
@@ -549,7 +572,7 @@ pub fn assemble_conduction_system_spatial(
             }
         }
     }
-    if no_fixed_or_uniform_h && !any_positive_spatial_h {
+    if require_steady_anchor && no_fixed_or_uniform_h && !any_positive_spatial_h {
         return Err(if flux.is_empty() && spatial_flux.is_empty() {
             "conduction has no fixed temperature and no convection band with h > 0 — every \
              face would be insulated; place at least one temperature region or a convection"
@@ -670,9 +693,347 @@ pub fn solve_conduction_multi_rhs(
     Ok(out)
 }
 
+/// One time-step snapshot from [`solve_transient_conduction_spatial`].
+#[derive(Clone, Debug)]
+pub struct TransientConductionFrame {
+    pub step: usize,
+    pub time_s: f64,
+    pub temperature: Vec<f64>,
+    pub report: SolveReport,
+}
+
+/// Unconditionally A-stable 3D P2 transient conduction (`ρ c_p ∂T/∂t − ∇·(k ∇T) = 0`)
+/// with uniform Robin/Neumann boundary terms, delegating to
+/// [`solve_transient_conduction_spatial`].
+#[allow(clippy::too_many_arguments)]
+pub fn solve_transient_conduction(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k_phys: &[f64],
+    c_vol: &[f64],
+    t_init: f64,
+    t_end: f64,
+    steps: usize,
+    robin: &[RobinBc],
+    flux: &[HeatFluxBc],
+    opts: SolverOptions,
+) -> Result<Vec<TransientConductionFrame>, String> {
+    solve_transient_conduction_spatial(
+        mesh,
+        d,
+        k_phys,
+        c_vol,
+        t_init,
+        t_end,
+        steps,
+        robin,
+        &[],
+        flux,
+        &[],
+        opts,
+    )
+}
+
+/// Unconditionally A-stable 3D P2 transient conduction (`c_vol ∂T/∂t − ∇·(k_phys ∇T) = 0`)
+/// using BDF1 on step 1 (`t_1 = Δt`) and second-order constant-operator **BDF2** on steps
+/// `2..=steps`, reusing a single `ScalarTwoLevel` Cholesky coarse preconditioner across all
+/// BDF2 time steps.
+///
+/// Units are self-consistent `mm · W · s · K`:
+/// - `k_phys[e]`: element conductivity in `W/(mm·K)` (`> 0`)
+/// - `c_vol[e]`: element volumetric heat capacity `ρ · c_p` in `J/(mm³·K)` (`> 0`)
+/// - `t_init`: initial solid temperature `T(x, 0⁻)` in `°C`
+/// - `t_end`: end time in `s` (`> 0`)
+/// - `steps`: uniform step count (`Δt = t_end / steps`, `>= 1`)
+///
+/// Returns `steps + 1` frames (`step = 0` at `t = 0` through `step = steps` at `t = t_end`).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_transient_conduction_spatial(
+    mesh: &P2Mesh,
+    d: &[Option<f64>],
+    k_phys: &[f64],
+    c_vol: &[f64],
+    t_init: f64,
+    t_end: f64,
+    steps: usize,
+    robin: &[RobinBc],
+    spatial_robin: &[SpatialRobinBc<'_>],
+    flux: &[HeatFluxBc],
+    spatial_flux: &[SpatialHeatFluxBc<'_>],
+    opts: SolverOptions,
+) -> Result<Vec<TransientConductionFrame>, String> {
+    faer::set_global_parallelism(faer::Parallelism::None);
+    if !t_init.is_finite() {
+        return Err(format!("transient t_init must be finite (got {t_init})"));
+    }
+    if !(t_end.is_finite() && t_end > 0.0) {
+        return Err(format!("transient t_end must be > 0 (got {t_end})"));
+    }
+    if steps == 0 {
+        return Err("transient steps must be >= 1".into());
+    }
+    let n = mesh.nodes.len();
+    assert_eq!(
+        c_vol.len(),
+        mesh.tets.len(),
+        "one volumetric heat capacity per element"
+    );
+    for (e, &ce) in c_vol.iter().enumerate() {
+        if !(ce.is_finite() && ce > 0.0) {
+            return Err(format!(
+                "transient volumetric heat capacity: element {e} carries c_vol = {ce} — must be finite and > 0"
+            ));
+        }
+    }
+    let (a, load, fixed) = assemble_conduction_operators_spatial(
+        mesh,
+        d,
+        k_phys,
+        robin,
+        spatial_robin,
+        flux,
+        spatial_flux,
+        false,
+    )?;
+    let m_mat = assemble_thermal_mass(mesh, c_vol);
+    debug_assert_eq!(m_mat.row_ptr, a.row_ptr);
+    debug_assert_eq!(m_mat.cols, a.cols);
+
+    // Method-of-Lines static forcing on free DOFs: `rhs_static_f = load_f - A_fd s_d`
+    // (`d/dt(s_d) = 0` for `t > 0` on time-independent Dirichlet boundaries).
+    let s: Vec<f64> = d.iter().map(|x| x.unwrap_or(0.0)).collect();
+    let mut a_s = vec![0.0; n];
+    a.mul(&s, &mut a_s);
+    let rhs_static: Vec<f64> = (0..n)
+        .map(|i| if fixed[i] { 0.0 } else { load[i] - a_s[i] })
+        .collect();
+    let free_dofs = n - fixed.iter().filter(|&&f| f).count();
+    let dt = t_end / (steps as f64);
+
+    let mut frames = Vec::with_capacity(steps + 1);
+    frames.push(TransientConductionFrame {
+        step: 0,
+        time_s: 0.0,
+        temperature: vec![t_init; n],
+        report: SolveReport {
+            dofs: n,
+            free_dofs,
+            coarse_dofs: mesh.nverts,
+            iterations: 0,
+            rel_residual: 0.0,
+            converged: true,
+            ..Default::default()
+        },
+    });
+
+    // Step 1: BDF1 `( (1/dt) M_ff + A_ff ) T^1_f = rhs_static_f + (1/dt) M_ff T^0_f`.
+    let gamma1 = 1.0 / dt;
+    let mut s1 = Csr {
+        n: a.n,
+        row_ptr: a.row_ptr.clone(),
+        cols: a.cols.clone(),
+        vals: m_mat
+            .vals
+            .iter()
+            .zip(&a.vals)
+            .map(|(&mv, &av)| gamma1 * mv + av)
+            .collect(),
+    };
+    apply_dirichlet(&mut s1, &fixed);
+    let pre1 = ScalarTwoLevel::new(&s1, &fixed, mesh.nverts, &mesh.mid_edge)?;
+
+    let mut h_free: Vec<f64> = (0..n)
+        .map(|j| {
+            if fixed[j] {
+                0.0
+            } else {
+                gamma1 * frames[0].temperature[j]
+            }
+        })
+        .collect();
+    let mut m_h = vec![0.0; n];
+    m_mat.mul(&h_free, &mut m_h);
+    let mut b: Vec<f64> = (0..n)
+        .map(|i| {
+            if fixed[i] {
+                0.0
+            } else {
+                rhs_static[i] + m_h[i]
+            }
+        })
+        .collect();
+    let (mut t1, run1) = pcg_scalar(&s1, &pre1, &b, opts)?;
+    for (xi, (di, &f)) in t1.iter_mut().zip(d.iter().zip(&fixed)) {
+        if f {
+            *xi = di.unwrap();
+        }
+    }
+    frames.push(TransientConductionFrame {
+        step: 1,
+        time_s: if steps == 1 { t_end } else { dt },
+        temperature: t1,
+        report: SolveReport {
+            dofs: n,
+            free_dofs,
+            coarse_dofs: mesh.nverts,
+            iterations: run1.iterations,
+            rel_residual: run1.rel_residual,
+            converged: run1.converged,
+            ..Default::default()
+        },
+    });
+
+    if steps >= 2 {
+        // Steps 2..=steps: BDF2 `( (1.5/dt) M_ff + A_ff ) T^m_f = rhs_static_f + M_ff ( (2/dt) T^{m-1}_f - (0.5/dt) T^{m-2}_f )`.
+        // Factor `ScalarTwoLevel` ONCE and reuse across all remaining steps.
+        let gamma2 = 1.5 / dt;
+        let c_prev1 = 2.0 / dt;
+        let c_prev2 = -0.5 / dt;
+        let mut s2 = Csr {
+            n: a.n,
+            row_ptr: a.row_ptr.clone(),
+            cols: a.cols.clone(),
+            vals: m_mat
+                .vals
+                .iter()
+                .zip(&a.vals)
+                .map(|(&mv, &av)| gamma2 * mv + av)
+                .collect(),
+        };
+        apply_dirichlet(&mut s2, &fixed);
+        let pre2 = ScalarTwoLevel::new(&s2, &fixed, mesh.nverts, &mesh.mid_edge)?;
+
+        for m in 2..=steps {
+            let t_prev1 = &frames[m - 1].temperature;
+            let t_prev2 = &frames[m - 2].temperature;
+            for j in 0..n {
+                h_free[j] = if fixed[j] {
+                    0.0
+                } else {
+                    c_prev1 * t_prev1[j] + c_prev2 * t_prev2[j]
+                };
+            }
+            m_mat.mul(&h_free, &mut m_h);
+            for i in 0..n {
+                b[i] = if fixed[i] {
+                    0.0
+                } else {
+                    rhs_static[i] + m_h[i]
+                };
+            }
+            let (mut tm, runm) = pcg_scalar(&s2, &pre2, &b, opts)?;
+            for (xi, (di, &f)) in tm.iter_mut().zip(d.iter().zip(&fixed)) {
+                if f {
+                    *xi = di.unwrap();
+                }
+            }
+            let time_s = if m == steps { t_end } else { (m as f64) * dt };
+            frames.push(TransientConductionFrame {
+                step: m,
+                time_s,
+                temperature: tm,
+                report: SolveReport {
+                    dofs: n,
+                    free_dofs,
+                    coarse_dofs: mesh.nverts,
+                    iterations: runm.iterations,
+                    rel_residual: runm.rel_residual,
+                    converged: runm.converged,
+                    ..Default::default()
+                },
+            });
+        }
+    }
+
+    Ok(frames)
+}
+
 // ---------------------------------------------------------------------------
 // Element quantities.
 // ---------------------------------------------------------------------------
+
+/// Exact reference-tetrahedron products `∫ φ_a φ_b dV_ref` for the 10-node P2 basis
+/// (`[f64; 100]` indexed `a * 10 + b`), computed once from exact barycentric monomial
+/// moments `m0! m1! m2! m3! / (m0 + m1 + m2 + m3 + 3)!` on [`P2Tetrahedron`].
+fn reference_mass_products_p2() -> &'static [f64; 100] {
+    static PRODUCTS: std::sync::OnceLock<[f64; 100]> = std::sync::OnceLock::new();
+    PRODUCTS.get_or_init(|| {
+        const FACTORIALS: [f64; 12] = [
+            1.0, 1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0, 362880.0, 3628800.0,
+            39916800.0,
+        ];
+        let nodes = P2Tetrahedron.nodal_coordinates();
+        let terms: Vec<Vec<([u8; 4], f64)>> = nodes
+            .iter()
+            .map(|&c| {
+                let lam = [1.0 - c[0] - c[1] - c[2], c[0], c[1], c[2]];
+                let unit: Vec<usize> = (0..4).filter(|&i| (lam[i] - 1.0).abs() < 1e-9).collect();
+                let half: Vec<usize> = (0..4).filter(|&i| (lam[i] - 0.5).abs() < 1e-9).collect();
+                let mono = |i: usize, k: u8| {
+                    let mut m = [0u8; 4];
+                    m[i] = k;
+                    m
+                };
+                match (unit.len(), half.len()) {
+                    (1, 0) => vec![(mono(unit[0], 2), 2.0), (mono(unit[0], 1), -1.0)],
+                    (0, 2) => {
+                        let mut m = [0u8; 4];
+                        m[half[0]] = 1;
+                        m[half[1]] = 1;
+                        vec![(m, 4.0)]
+                    }
+                    _ => panic!("P2Tetrahedron nodes must be corner or edge-midpoint positions"),
+                }
+            })
+            .collect();
+        let mut products = [0.0f64; 100];
+        for (a, ta) in terms.iter().enumerate() {
+            for (b, tb) in terms.iter().enumerate() {
+                let mut acc = 0.0f64;
+                for &(ma, ca) in ta {
+                    for &(mb, cb) in tb {
+                        let m = [ma[0] + mb[0], ma[1] + mb[1], ma[2] + mb[2], ma[3] + mb[3]];
+                        let deg = (m[0] + m[1] + m[2] + m[3]) as usize;
+                        acc += ca
+                            * cb
+                            * FACTORIALS[m[0] as usize]
+                            * FACTORIALS[m[1] as usize]
+                            * FACTORIALS[m[2] as usize]
+                            * FACTORIALS[m[3] as usize]
+                            / FACTORIALS[deg + 3];
+                    }
+                }
+                products[a * 10 + b] = acc;
+            }
+        }
+        products
+    })
+}
+
+/// Assemble the exact degree-4 scalar P2 thermal capacity matrix
+/// `M[a, b] = ∑_e c_vol[e] ∫_{Ω_e} φ_a φ_b dV` (`J/K`), sharing the exact CSR sparsity
+/// pattern of [`assemble_laplace_k`].
+pub fn assemble_thermal_mass(mesh: &P2Mesh, c_vol: &[f64]) -> Csr {
+    assert_eq!(
+        c_vol.len(),
+        mesh.tets.len(),
+        "one volumetric heat capacity per element"
+    );
+    let products = reference_mass_products_p2();
+    let mut m = Csr::from_elements(mesh.nodes.len(), mesh.tets.iter().copied());
+    for (e, &ce) in c_vol.iter().enumerate() {
+        let det = element_map(mesh, e).det_jacobian.abs();
+        let scale = ce * det;
+        let t = &mesh.tets[e];
+        for i in 0..10 {
+            let ni = t[i] as usize;
+            for j in 0..10 {
+                m.add(ni, t[j], scale * products[i * 10 + j]);
+            }
+        }
+    }
+    m
+}
 
 /// Element Laplacian L[a][b] = ∫ ∇φa·∇φb dV, degree-2-exact on affine elements.
 pub fn element_laplace(mesh: &P2Mesh, e: usize, rd: &RefData) -> [[f64; 10]; 10] {
@@ -1170,5 +1531,163 @@ mod tests {
             rel < 1e-14,
             "expected <B_th dt, w> == <dt, B_th^T w> to machine precision, lhs={lhs}, rhs={rhs}, rel={rel:e}"
         );
+    }
+
+    #[test]
+    fn p2_thermal_mass_matches_exact_volume_capacity() {
+        let verts = vec![
+            [0.0, 0.0, 0.0],
+            [8.0, 0.5, 0.0],
+            [1.0, 9.0, 0.2],
+            [0.5, 1.0, 7.0],
+            [9.0, 8.5, 6.5],
+        ];
+        let tets = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        let mesh = P2Mesh::from_linear(&verts, &tets);
+        let c_vol = vec![0.00399, 0.00209];
+        let m = assemble_thermal_mass(&mesh, &c_vol);
+        let ones = vec![1.0; mesh.nodes.len()];
+        let mut m1 = vec![0.0; mesh.nodes.len()];
+        m.mul(&ones, &mut m1);
+        let total: f64 = ones.iter().zip(&m1).map(|(a, b)| a * b).sum();
+        let expected: f64 = c_vol
+            .iter()
+            .enumerate()
+            .map(|(e, &c)| c * mesh.tet_volume(e).abs())
+            .sum();
+        let rel = (total - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-13,
+            "expected exact P2 scalar capacity integral {expected}, got {total} (rel={rel:e})"
+        );
+    }
+
+    /// Exact 1D Fourier–Biot eigenfunction series on `[0, L]` with insulated `z = 0`
+    /// and convective quench `-k ∂T/∂z = h (T - T_inf)` on `z = L`, uniform `T(z, 0) = T_init`.
+    fn exact_fourier_biot_slab(
+        z: f64,
+        t: f64,
+        l_mm: f64,
+        alpha_mm2_s: f64,
+        bi: f64,
+        t_init: f64,
+        t_inf: f64,
+    ) -> f64 {
+        let fo = alpha_mm2_s * t / (l_mm * l_mm);
+        let mut sum = 0.0;
+        for n in 0..40 {
+            let n_pi = (n as f64) * std::f64::consts::PI;
+            let mut lo = n_pi + 1e-12;
+            let mut hi = n_pi + 0.5 * std::f64::consts::PI - 1e-12;
+            for _ in 0..80 {
+                let mid = 0.5 * (lo + hi);
+                if mid * mid.tan() < bi {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let mu = 0.5 * (lo + hi);
+            let c_n = 2.0 * mu.sin() / (mu + mu.sin() * mu.cos());
+            sum += c_n * (mu * z / l_mm).cos() * (-mu * mu * fo).exp();
+        }
+        t_inf + (t_init - t_inf) * sum
+    }
+
+    #[test]
+    fn transient_bdf2_matches_exact_fourier_biot_column_quench() {
+        // Structured Kuhn-triangulated column [0, 2] x [0, 2] x [0, 10] mm (nz = 8 layers = 48 P2 tets).
+        let nz = 8usize;
+        let w = 2.0;
+        let l_mm = 10.0;
+        let mut verts = Vec::new();
+        for iz in 0..=nz {
+            let z = l_mm * (iz as f64) / (nz as f64);
+            for iy in 0..=1 {
+                for ix in 0..=1 {
+                    verts.push([(ix as f64) * w, (iy as f64) * w, z]);
+                }
+            }
+        }
+        let vid = |ix: usize, iy: usize, iz: usize| -> u32 { (iz * 4 + iy * 2 + ix) as u32 };
+        let kuhn = [
+            [0, 1, 3, 7],
+            [0, 1, 7, 5],
+            [0, 2, 3, 7],
+            [0, 2, 7, 6],
+            [0, 4, 5, 7],
+            [0, 4, 7, 6],
+        ];
+        let mut tets = Vec::with_capacity(nz * 6);
+        for iz in 0..nz {
+            let cube = [
+                vid(0, 0, iz),
+                vid(1, 0, iz),
+                vid(0, 1, iz),
+                vid(1, 1, iz),
+                vid(0, 0, iz + 1),
+                vid(1, 0, iz + 1),
+                vid(0, 1, iz + 1),
+                vid(1, 1, iz + 1),
+            ];
+            for k in &kuhn {
+                tets.push([cube[k[0]], cube[k[1]], cube[k[2]], cube[k[3]]]);
+            }
+        }
+        let mesh = P2Mesh::from_linear(&verts, &tets);
+        let mut quench_facets = Vec::new();
+        for t in &mesh.tets {
+            for f in [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]] {
+                if f.iter()
+                    .all(|&li| (mesh.nodes[t[li] as usize][2] - l_mm).abs() < 1e-9)
+                {
+                    quench_facets.push(crate::p2::face_nodes(t, f));
+                }
+            }
+        }
+        assert_eq!(quench_facets.len(), 2);
+
+        let k_val = 0.016; // W/(mm·K)
+        let c_val = 0.004; // J/(mm³·K) -> alpha = 4.0 mm²/s
+        let h_val = 0.012; // W/(mm²·K) -> Bi = h*L/k = 7.5
+        let t_init = 320.0;
+        let t_inf = 20.0;
+        let t_end = 6.0;
+        let steps = 48;
+        let frames = solve_transient_conduction(
+            &mesh,
+            &vec![None; mesh.nodes.len()],
+            &vec![k_val; mesh.tets.len()],
+            &vec![c_val; mesh.tets.len()],
+            t_init,
+            t_end,
+            steps,
+            &[RobinBc {
+                h: h_val,
+                t_inf,
+                facets: quench_facets,
+            }],
+            &[],
+            SolverOptions::default(),
+        )
+        .expect("transient BDF2 solve");
+        assert_eq!(frames.len(), steps + 1);
+
+        let alpha_th = k_val / c_val;
+        let bi = h_val * l_mm / k_val;
+        for &check_step in &[steps / 2, steps] {
+            let fr = &frames[check_step];
+            let t_s = fr.time_s;
+            let exact_back = exact_fourier_biot_slab(0.0, t_s, l_mm, alpha_th, bi, t_init, t_inf);
+            let exact_skin = exact_fourier_biot_slab(l_mm, t_s, l_mm, alpha_th, bi, t_init, t_inf);
+            let fem_back = fr.temperature[vid(0, 0, 0) as usize];
+            let fem_skin = fr.temperature[vid(0, 0, nz) as usize];
+            let err_back = (fem_back - exact_back).abs() / (t_init - t_inf);
+            let err_skin = (fem_skin - exact_skin).abs() / (t_init - t_inf);
+            assert!(
+                err_back < 0.005 && err_skin < 0.005,
+                "step {check_step} (t={t_s:.2}s): back={fem_back:.3} vs {exact_back:.3} (err={err_back:.4}), skin={fem_skin:.3} vs {exact_skin:.3} (err={err_skin:.4})"
+            );
+        }
     }
 }

@@ -7,7 +7,7 @@
 import type { Document, Node } from '../doc/types';
 import { walk } from '../doc/types';
 import { loadWasm, analyse, analyseGraded, exportSolid, exportGraded, sliceFieldAt, exportSliceStack3mf, importMesh, meshGrid, hydrateGrid, meshHydrated } from '../doc/wasm';
-import type { AnalysisHandle, AnalysisMeta, GradedHandleWithExport, HydrateEntry, LevelResult, MeshHandle, WorkerIn, WorkerOut } from '../doc/wasm';
+import type { AnalysisHandle, AnalysisMeta, GradedHandleWithExport, HydrateEntry, LevelResult, MeshHandle, TransientFramePack, WorkerIn, WorkerOut } from '../doc/wasm';
 // This file once carried its own copies of the rung schedule; the sweep's mirror of the
 // native question engine needs the same constants, and one definition is one number.
 import { COARSE_DOFS, FINE_DOFS } from '../doc/wasm';
@@ -138,6 +138,34 @@ function pack(
     }
     modeShapes = all;
   }
+  const transientCount = out.transientCaseCount?.() ?? 0;
+  let transientFrames: TransientFramePack[] | undefined;
+  if (
+    transientCount > 0 &&
+    out.transientStepCount &&
+    out.transientTemperature &&
+    out.transientVmElem &&
+    out.transientU
+  ) {
+    transientFrames = [];
+    for (let ti = 0; ti < transientCount; ti++) {
+      const steps = out.transientStepCount(ti);
+      const tFrames: Float64Array[] = [];
+      const vmFrames: Float64Array[] = [];
+      const uFrames: Float64Array[] = [];
+      for (let m = 0; m < steps; m++) {
+        tFrames.push(out.transientTemperature(ti, m).slice());
+        vmFrames.push(out.transientVmElem(ti, m).slice());
+        uFrames.push(out.transientU(ti, m).slice());
+      }
+      transientFrames.push({
+        caseName: meta.transient?.[ti]?.case_name ?? `Thermal ${ti + 1}`,
+        temperature: tFrames,
+        vmElem: vmFrames,
+        u: uFrames,
+      });
+    }
+  }
   const fillParam =
     out.fillParamData && out.fillParamSpec && out.fillParamDims
       ? {
@@ -166,6 +194,7 @@ function pack(
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     peelElemEnvelope: out.peelElemEnvelope().slice(),
     modeShapes,
+    ...(transientFrames ? { transientFrames } : {}),
     class: out.class ? out.class().slice() : null,
     fillParam,
     runMs: performance.now() - t0,
@@ -195,6 +224,11 @@ function transfersOf(r: LevelResult): ArrayBuffer[] {
   for (const t of r.temperature) if (t) ls.push(t);
   for (const g of r.gradTNodal ?? []) if (g) ls.push(g);
   if (r.modeShapes) ls.push(r.modeShapes);
+  if (r.transientFrames) {
+    for (const tf of r.transientFrames) {
+      ls.push(...tf.temperature, ...tf.vmElem, ...tf.u);
+    }
+  }
   if (r.fillParam) ls.push(r.fillParam.spec, r.fillParam.dims, r.fillParam.data);
   return ls.map((a) => a.buffer as ArrayBuffer);
 }

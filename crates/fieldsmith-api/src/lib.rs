@@ -23,6 +23,7 @@ use fieldsmith_core::optimise::{optimise_document, OptimiseSpec};
 use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
 use fieldsmith_core::rung::Tolerance;
 use fieldsmith_core::sensitivity::compute_sensitivities;
+use fieldsmith_core::transient::analyse_transient;
 use fieldsmith_core::uq::{compute_uq, UqSpec};
 use fieldsmith_core::{analyse_full, analyse_modes, fsmz, Resolution, SetupError};
 use fieldsmith_doc::clinching::{
@@ -235,6 +236,7 @@ pub fn respond(input: &str) -> Reply {
                         uq: None,
                         fixing: None,
                         clinching: None,
+                        transient: None,
                         error: None,
                     })
                 }
@@ -317,6 +319,7 @@ pub fn respond(input: &str) -> Reply {
                                             fill_ms: g.fill_ms,
                                             solve_ms: g.solve_ms,
                                         }),
+                                        transient: a.transient,
                                     }),
                                     sweep: None,
                                     overhang: None,
@@ -326,6 +329,7 @@ pub fn respond(input: &str) -> Reply {
                                     uq: None,
                                     fixing: None,
                                     clinching: None,
+                                    transient: None,
                                     error: None,
                                 })
                             }
@@ -347,7 +351,10 @@ pub fn respond(input: &str) -> Reply {
                             max_layer_peel: a.cases.iter().map(|c| c.max_layer_peel).collect(),
                         });
                         let fieldsmith_core::Analysis {
-                            provenance, cases, ..
+                            provenance,
+                            cases,
+                            transient,
+                            ..
                         } = a;
                         ok_reply(schema::Response {
                             apiv: APIV,
@@ -363,6 +370,7 @@ pub fn respond(input: &str) -> Reply {
                                 modes: None,
                                 peel,
                                 graded: None,
+                                transient,
                             }),
                             sweep: None,
                             overhang: None,
@@ -372,6 +380,7 @@ pub fn respond(input: &str) -> Reply {
                             uq: None,
                             fixing: None,
                             clinching: None,
+                            transient: None,
                             error: None,
                         })
                     }
@@ -428,6 +437,7 @@ pub fn respond(input: &str) -> Reply {
                             }),
                             peel: None,
                             graded: None,
+                            transient: Vec::new(),
                         }),
                         sweep: None,
                         overhang: None,
@@ -437,6 +447,7 @@ pub fn respond(input: &str) -> Reply {
                         uq: None,
                         fixing: None,
                         clinching: None,
+                        transient: None,
                         error: None,
                     })
                 }
@@ -580,6 +591,7 @@ pub fn respond(input: &str) -> Reply {
                 uq: None,
                 fixing: None,
                 clinching: None,
+                transient: None,
                 error: None,
             })
         }
@@ -608,6 +620,7 @@ pub fn respond(input: &str) -> Reply {
                     uq: None,
                     fixing: None,
                     clinching: None,
+                    transient: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -643,6 +656,7 @@ pub fn respond(input: &str) -> Reply {
                         uq: None,
                         fixing: None,
                         clinching: None,
+                        transient: None,
                         error: None,
                     })
                 }
@@ -673,6 +687,7 @@ pub fn respond(input: &str) -> Reply {
                     uq: None,
                     fixing: None,
                     clinching: None,
+                    transient: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -718,6 +733,7 @@ pub fn respond(input: &str) -> Reply {
                         uq: None,
                         fixing: None,
                         clinching: None,
+                        transient: None,
                         error: None,
                     })
                 }
@@ -754,6 +770,7 @@ pub fn respond(input: &str) -> Reply {
                     uq: Some(rep),
                     fixing: None,
                     clinching: None,
+                    transient: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -806,6 +823,7 @@ pub fn respond(input: &str) -> Reply {
                     failure_fit,
                 }),
                 clinching: None,
+                transient: None,
                 error: None,
             })
         }
@@ -829,8 +847,45 @@ pub fn respond(input: &str) -> Reply {
                 uq: None,
                 fixing: None,
                 clinching: Some(sweep),
+                transient: None,
                 error: None,
             })
+        }
+        QuestionSpec::Transient {
+            t_end,
+            steps,
+            t_init,
+            dofs,
+            h,
+        } => {
+            let res = match (dofs, h) {
+                (Some(n), _) => Resolution::Dofs(n),
+                (None, Some(h)) => Resolution::Size(h),
+                (None, None) => Resolution::Dofs(35_000),
+            };
+            match analyse_transient(&doc, res, question::clock, t_end, steps, t_init) {
+                Ok((provenance, cases)) => ok_reply(schema::Response {
+                    apiv: APIV,
+                    engine: store::engine_identity(),
+                    status: Status::Ok,
+                    name: Some(name),
+                    question: Some(echo),
+                    warnings,
+                    outcome: None,
+                    single: None,
+                    sweep: None,
+                    overhang: None,
+                    verification: None,
+                    sensitivity: None,
+                    optimisation: None,
+                    uq: None,
+                    fixing: None,
+                    clinching: None,
+                    transient: Some(schema::TransientBundle { provenance, cases }),
+                    error: None,
+                }),
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
         }
     }
 }
@@ -883,6 +938,7 @@ fn error_reply(
             uq: None,
             fixing: None,
             clinching: None,
+            transient: None,
             error: Some(message.into()),
         },
         true,

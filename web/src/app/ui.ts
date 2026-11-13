@@ -132,6 +132,8 @@ class Ui {
   resultsRamp = 1;
   /** Play the transient load/thermal ramp forward in Results (3). */
   resultsRampPlay = false;
+  /** Active time-step index `0..=steps` in 3D P2 BDF2 transient thermo-elastic results; −1 = Peak Shock frame (`step_at_peak_vm`). */
+  resultsTransientStep = -1;
   // Make lens display state (not undoable).
   /** Export mesh spacing (mm). */
   makeH = 0.25;

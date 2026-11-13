@@ -719,6 +719,15 @@ pub struct SolveSettings {
     /// Optional solver-level J2 Hollomon strain-hardening exponent override `n ∈ (0, 1]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardening_n: Option<f64>,
+    /// Optional transient conduction / thermal-shock horizon `t_end > 0` in seconds (`solve t_end=10`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_end: Option<f64>,
+    /// Optional uniform BDF2 transient step count `steps ∈ [1, 500]` (defaults to `20` when `t_end` is set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<usize>,
+    /// Optional initial body temperature `T(x, 0) = t_init` in `°C` (defaults to `t_ref.unwrap_or(20.0)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_init: Option<f64>,
 }
 
 impl Document {
@@ -1323,6 +1332,21 @@ impl Document {
                 errs.push("solve hardening_n= must satisfy 0 < hardening_n <= 1".into());
             }
         }
+        if let Some(te) = self.solve.t_end {
+            if !(te.is_finite() && te > 0.0) {
+                errs.push("solve t_end= must be a positive finite time in seconds".into());
+            }
+        }
+        if let Some(st) = self.solve.steps {
+            if !(1..=500).contains(&st) {
+                errs.push("solve steps= must satisfy 1 <= steps <= 500".into());
+            }
+        }
+        if let Some(ti) = self.solve.t_init {
+            if !ti.is_finite() {
+                errs.push("solve t_init= must be a finite temperature in °C".into());
+            }
+        }
         if let Some(cs) = &self.coupled_system {
             if !crate::fsm::is_ident(cs) {
                 errs.push(format!("coupled system '{cs}' is not a valid identifier"));
@@ -1396,6 +1420,14 @@ impl Document {
                 if !(k.is_finite() && k > 0.0) {
                     errs.push(format!(
                         "Custom material '{}' k must be a positive finite number",
+                        m.id
+                    ));
+                }
+            }
+            if let Some(cp) = m.cp {
+                if !(cp.is_finite() && cp > 0.0) {
+                    errs.push(format!(
+                        "Custom material '{}' cp must be a positive finite number",
                         m.id
                     ));
                 }

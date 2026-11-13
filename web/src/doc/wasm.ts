@@ -454,9 +454,58 @@ export interface ModalInfo {
   solve_ms: number;
 }
 
+/** One time-step frame summary in a 3D P2 BDF2 transient thermo-elastic run. */
+export interface TransientStepSummary {
+  step: number;
+  time_s: number;
+  min_temp_c: number;
+  max_temp_c: number;
+  mean_temp_c: number;
+  max_vm_elem: number;
+  max_von_mises: number;
+  max_displacement: number;
+  conduction_iterations: number;
+  elastic_iterations: number;
+}
+
+/** Full per-case transient thermo-elastic timeline & thermal-shock report. */
+export interface TransientCaseReport {
+  case_name: string;
+  scheme: string;
+  t_init_c: number;
+  t_ref_c: number;
+  t_end_s: number;
+  dt_s: number;
+  steps_count: number;
+  diffusivity_mm2_s: number;
+  peak_vm_elem: number;
+  peak_von_mises: number;
+  peak_displacement: number;
+  t_at_peak_vm_s: number;
+  step_at_peak_vm: number;
+  min_temp_overall_c: number;
+  max_temp_overall_c: number;
+  final_min_temp_c: number;
+  final_max_temp_c: number;
+  final_vm_elem: number;
+  steady_limit_vm_elem?: number | null;
+  shock_amplification?: number | null;
+  timeline: TransientStepSummary[];
+}
+
+/** Transferred typed-array frames for one transient thermal case across `0..=steps`. */
+export interface TransientFramePack {
+  caseName: string;
+  temperature: Float64Array[];
+  vmElem: Float64Array[];
+  u: Float64Array[];
+}
+
 export interface AnalysisMeta {
   provenance: Provenance;
   cases: CaseSummary[];
+  /** Per-case 3D P2 BDF2 transient thermo-elastic timelines when `solve t_end=<s>` is active. */
+  transient?: TransientCaseReport[];
   /** Per-case peak inter-layer peel utilization (≥ 0; ≥ 1.0 exceeds layer bond). */
   max_layer_peel?: number[];
   /** Solid part mass in grams (from field volume × material density). */
@@ -535,6 +584,18 @@ export interface AnalysisHandle {
   /** One mode shape's nodal displacements, 3 per node — empty when absent or the index is
    * out of range. */
   modeShape?(index: number): Float64Array;
+  /** Number of transient thermal cases solved when `solve t_end=<s>` is active. */
+  transientCaseCount?(): number;
+  /** Number of frames (`steps + 1`, covering `t = 0 .. t_end`) in transient case `ti`. */
+  transientStepCount?(ti: number): number;
+  /** Nodal temperature (°C) at frame `step` of transient case `ti`. */
+  transientTemperature?(ti: number, step: number): Float64Array;
+  /** Element-centroid von Mises thermal-shock stress (MPa) at frame `step` of transient case `ti`. */
+  transientVmElem?(ti: number, step: number): Float64Array;
+  /** Nodal von Mises stress (MPa) at frame `step` of transient case `ti`. */
+  transientVmNodal?(ti: number, step: number): Float64Array;
+  /** Nodal thermal displacement (3 per node, mm) at frame `step` of transient case `ti`. */
+  transientU?(ti: number, step: number): Float64Array;
   free(): void;
 }
 
@@ -729,6 +790,8 @@ export interface LevelResult {
   /** Modal runs only: the mass-normalised mode shapes concatenated, one 3-per-node block
    * per mode (block k spans k·3·nodes .. (k+1)·3·nodes, mesh-node order); null otherwise. */
   modeShapes: Float64Array | null;
+  /** Transient thermo-elastic runs (`solve t_end=<s>`): full frame arrays (`0..=steps`) per transient thermal case. */
+  transientFrames?: TransientFramePack[];
   /** Fill levels only: per-element class of the same mesh (0 solid / 1 lattice / 2 void). */
   class: Uint8Array | null;
   /** Fill levels only: the graded parameter grid for the bound texture. */
@@ -1830,5 +1893,15 @@ export function analyzeClinchingWindowWasm(
 ): Record<string, unknown> {
   return JSON.parse(w.analyzeClinchingWindow(JSON.stringify(spec))) as Record<string, unknown>;
 }
+
+export function solveTransientFsmWasm(
+  fsmText: string,
+  opts: { dofs?: number; h?: number; tEndS?: number; steps?: number; tInitC?: number } = {},
+): TransientCaseReport[] {
+  return JSON.parse(
+    w.solveTransientFsm(fsmText, opts.dofs, opts.h, opts.tEndS, opts.steps, opts.tInitC),
+  ) as TransientCaseReport[];
+}
+
 
 

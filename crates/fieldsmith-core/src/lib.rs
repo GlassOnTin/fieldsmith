@@ -15,6 +15,7 @@ pub mod rung;
 pub mod sensitivity;
 pub mod step;
 pub mod steptess;
+pub mod transient;
 pub mod uq;
 pub mod voxel;
 
@@ -192,6 +193,9 @@ pub struct Analysis {
     /// The mesh is shared, so the frequencies come free of extra meshing; the modal
     /// solve's own time is in `ModalResult.solve_ms`, which `provenance` does not include.
     pub modes: Option<fieldsmith_solve::modal::ModalResult>,
+    /// Transient thermo-elastic trajectory per thermal case when `doc.solve.t_end` is set.
+    /// Empty for steady-state solves.
+    pub transient: Vec<transient::TransientCaseReport>,
 }
 
 /// Problems the user can fix, reported in their words.
@@ -1686,24 +1690,26 @@ pub(crate) fn collect_labelled_volumes(
 /// and modal (`analyse_modes`) paths: field → resolution size → voxel mesh → P2 mesh +
 /// boundary facets → region maps → support mask. `need_loads` selects the static path's
 /// "add a load" rule; the modal path needs supports only.
-struct Prepared {
-    mesh: P2Mesh,
-    facets: Vec<Facet>,
-    surface: Vec<[u32; 6]>,
-    surface_owner: Vec<u32>,
-    surface_region: Vec<u32>,
-    region_facet_sets: Vec<Vec<u32>>,
-    fixed: Vec<u8>,
-    mat: materials::Material,
-    young: Vec<f64>,
-    yield_elem: Vec<f64>,
-    k_elem: Vec<f64>,
-    alpha_elem: Vec<Option<f64>>,
-    rho_avg: f64,
-    mass_g: f64,
-    h: f64,
-    quality: Quality,
-    mesh_ms: f64,
+pub(crate) struct Prepared {
+    pub(crate) mesh: P2Mesh,
+    pub(crate) facets: Vec<Facet>,
+    pub(crate) surface: Vec<[u32; 6]>,
+    pub(crate) surface_owner: Vec<u32>,
+    pub(crate) surface_region: Vec<u32>,
+    pub(crate) region_facet_sets: Vec<Vec<u32>>,
+    pub(crate) fixed: Vec<u8>,
+    pub(crate) mat: materials::Material,
+    pub(crate) young: Vec<f64>,
+    pub(crate) yield_elem: Vec<f64>,
+    pub(crate) k_elem: Vec<f64>,
+    pub(crate) k_phys_elem: Vec<f64>,
+    pub(crate) c_vol_elem: Vec<f64>,
+    pub(crate) alpha_elem: Vec<Option<f64>>,
+    pub(crate) rho_avg: f64,
+    pub(crate) mass_g: f64,
+    pub(crate) h: f64,
+    pub(crate) quality: Quality,
+    pub(crate) mesh_ms: f64,
 }
 
 fn is_display_overlay_id(id: &str) -> bool {
@@ -1807,7 +1813,7 @@ pub fn structural_doc(doc: &Document) -> std::borrow::Cow<'_, Document> {
     std::borrow::Cow::Owned(cloned)
 }
 
-fn prepare(
+pub(crate) fn prepare(
     doc: &Document,
     res: Resolution,
     clock: Clock,
@@ -1892,6 +1898,8 @@ fn prepare(
     let mut young = vec![mat.e; mesh.tets.len()];
     let mut yield_elem = vec![mat.yield_strength; mesh.tets.len()];
     let mut k_elem = vec![1.0; mesh.tets.len()];
+    let mut k_phys_elem = vec![mat.effective_k_w_mm_k(); mesh.tets.len()];
+    let mut c_vol_elem = vec![mat.volumetric_heat_capacity_j_mm3_k(); mesh.tets.len()];
     let mut alpha_elem = vec![mat.alpha; mesh.tets.len()];
     let mut rho_avg = mat.density;
     let mut mass_g = vol_mm3 * mat.density / 1000.0;
@@ -1918,6 +1926,8 @@ fn prepare(
             young[e] = m_e.e;
             yield_elem[e] = m_e.yield_strength;
             k_elem[e] = m_e.k.unwrap_or(base_k) / base_k;
+            k_phys_elem[e] = m_e.effective_k_w_mm_k();
+            c_vol_elem[e] = m_e.volumetric_heat_capacity_j_mm3_k();
             alpha_elem[e] = m_e.alpha;
             let tv = mesh.tet_volume(e).abs();
             weighted_rho += tv * m_e.density;
@@ -1940,6 +1950,8 @@ fn prepare(
         young,
         yield_elem,
         k_elem,
+        k_phys_elem,
+        c_vol_elem,
         alpha_elem,
         rho_avg,
         mass_g,
@@ -2072,6 +2084,8 @@ pub fn analyse_full(
         young,
         yield_elem,
         k_elem,
+        k_phys_elem,
+        c_vol_elem,
         alpha_elem,
         rho_avg,
         mass_g,
@@ -2129,6 +2143,7 @@ pub fn analyse_full(
     // Thermal cases (M14): per case a conduction solve then the expansion solve, on the
     // same mesh and supports. Their results run beside the mechanical ones.
     let mut thermal_ms = 0.0;
+    let mut transient = Vec::new();
     let thermal_cases = doc.thermal_cases();
     if !thermal_cases.is_empty() {
         let has_supports = fixed.iter().any(|&m| m != 0);
@@ -2157,24 +2172,57 @@ pub fn analyse_full(
             alphas.resize(alpha_elem.len(), 0.0);
         }
         let t_thermal = clock();
-        for name in thermal_cases {
-            // Thermal cases prescribe no boundary traction; the expansion pseudo-load is
-            // the body, the supports' reaction tractions are free.
-            let case = run_thermal_case_multi(
-                doc,
-                &mesh,
-                &young,
-                mat.nu,
-                &alphas,
-                &fixed,
-                &facets,
-                name,
-                h,
-                &k_elem,
-                equilibrate,
-            )?;
-            iterations += case.solve.iterations;
-            cases.push(case);
+        if let Some(t_end) = doc.solve.t_end {
+            let steps = doc
+                .solve
+                .steps
+                .unwrap_or(transient::DEFAULT_TRANSIENT_STEPS);
+            let t_init = doc.solve.t_init.or(doc.solve.t_ref).unwrap_or(20.0);
+            let diffusivity_mm2_s =
+                mat.effective_k_w_mm_k() / mat.volumetric_heat_capacity_j_mm3_k().max(1e-18);
+            for name in thermal_cases {
+                let (case, tr_rep) = transient::run_transient_thermal_case_multi_with_regions(
+                    doc,
+                    &mesh,
+                    &young,
+                    mat.nu,
+                    &alphas,
+                    &fixed,
+                    &facets,
+                    name,
+                    h,
+                    &k_phys_elem,
+                    &c_vol_elem,
+                    diffusivity_mm2_s,
+                    t_init,
+                    t_end,
+                    steps,
+                    None,
+                )?;
+                iterations += case.solve.iterations;
+                cases.push(case);
+                transient.push(tr_rep);
+            }
+        } else {
+            for name in thermal_cases {
+                // Thermal cases prescribe no boundary traction; the expansion pseudo-load is
+                // the body, the supports' reaction tractions are free.
+                let case = run_thermal_case_multi(
+                    doc,
+                    &mesh,
+                    &young,
+                    mat.nu,
+                    &alphas,
+                    &fixed,
+                    &facets,
+                    name,
+                    h,
+                    &k_elem,
+                    equilibrate,
+                )?;
+                iterations += case.solve.iterations;
+                cases.push(case);
+            }
         }
         thermal_ms = clock() - t_thermal;
     }
@@ -2302,6 +2350,7 @@ pub fn analyse_full(
         region_facet_sets,
         provenance,
         modes: modal,
+        transient,
     })
 }
 

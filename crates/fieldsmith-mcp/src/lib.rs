@@ -317,6 +317,7 @@ impl Server {
             "delete_uncertainty" => self.delete_uncertainty(args),
             "doc_text" | "export_fsm" => self.doc_text(args),
             "solve" | "solve_study" => self.solve(args),
+            "transient_solve" => self.transient_solve(args),
             "verify" => self.verify(args),
             "sensitivity" => self.sensitivity(args),
             "uq" => self.uq(args),
@@ -721,6 +722,7 @@ impl Server {
                 .or_else(|| args.get("a"))
                 .and_then(Value::as_f64),
             k: args.get("k").and_then(Value::as_f64),
+            cp: args.get("cp").and_then(Value::as_f64),
             yield_z: args.get("yield_z").and_then(Value::as_f64),
             shear_z: args.get("shear_z").and_then(Value::as_f64),
             hardening_n: args.get("hardening_n").and_then(Value::as_f64),
@@ -1094,6 +1096,45 @@ impl Server {
                     })?)
                 };
         }
+        if let Some(tr) = args.get("t_ref").or_else(|| args.get("tref")) {
+            d.solve.t_ref = if tr.is_null() {
+                None
+            } else {
+                Some(
+                    tr.as_f64()
+                        .ok_or_else(|| "set_build: t_ref must be a number or null".to_string())?,
+                )
+            };
+        }
+        if let Some(te) = args.get("t_end") {
+            d.solve.t_end = if te.is_null() {
+                None
+            } else {
+                Some(
+                    te.as_f64()
+                        .ok_or_else(|| "set_build: t_end must be a number or null".to_string())?,
+                )
+            };
+        }
+        if let Some(st) = args.get("steps") {
+            d.solve.steps = if st.is_null() {
+                None
+            } else {
+                Some(st.as_u64().ok_or_else(|| {
+                    "set_build: steps must be a positive integer or null".to_string()
+                })? as usize)
+            };
+        }
+        if let Some(ti) = args.get("t_init") {
+            d.solve.t_init = if ti.is_null() {
+                None
+            } else {
+                Some(
+                    ti.as_f64()
+                        .ok_or_else(|| "set_build: t_init must be a number or null".to_string())?,
+                )
+            };
+        }
         let problems = d.validate();
         Ok(json!({"solve": d.solve, "problems": problems}))
     }
@@ -1156,6 +1197,12 @@ impl Server {
     fn verify(&mut self, args: Value) -> Result<Value, String> {
         let mut q = args;
         q["kind"] = json!("verify");
+        self.solve(q)
+    }
+
+    fn transient_solve(&mut self, args: Value) -> Result<Value, String> {
+        let mut q = args;
+        q["kind"] = json!("transient");
         self.solve(q)
     }
 
@@ -2717,16 +2764,17 @@ const TOOLS_JSON: &str = r#"[
  {"name":"add_convection","description":"Apply a Robin convective boundary condition (`h` in 1/mm = `(h_SI / k_solid) * 1e-3`, `t_inf` in °C, with optional world-space `h_fn` and `tinf_fn` f(x,y,z,r)) on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"h":{"type":"number"},"h_fn":{"type":"string"},"t_inf":{"type":"number"},"tinf":{"type":"number"},"tinf_fn":{"type":"string"},"case":{"type":"string"}}}},
  {"name":"add_heatflux","description":"Apply a Neumann heat-flux boundary condition (`q` in K/mm, or world-space `q_fn` f(x,y,z,r)) on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"q":{"type":"number"},"q_fn":{"type":"string"},"case":{"type":"string"}}}},
  {"name":"set_material","description":"Assign a material label to a specific shape `node`, or omit `node` to set the document's default material.","inputSchema":{"type":"object","required":["material"],"properties":{"node":{"type":"string"},"material":{"type":"string"}}}},
- {"name":"upsert_custom_material","description":"Define or update a typed `custommaterial` in the open document, including Hollomon plasticity (`hardening_n`, `hardening_k`), brittle Weibull modulus (`weibull_m`), and `role` (`\"structural\"` or `\"fluid\"`).","inputSchema":{"type":"object","required":["id","e","nu","density"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"e":{"type":"number"},"nu":{"type":"number"},"yield_strength":{"type":"number"},"yield":{"type":"number"},"density":{"type":"number"},"min_wall":{"type":"number"},"alpha":{"type":"number"},"k":{"type":"number"},"yield_z":{"type":"number"},"shear_z":{"type":"number"},"hardening_n":{"type":"number"},"hardening_k":{"type":"number"},"weibull_m":{"type":"number"},"role":{"type":"string","enum":["structural","fluid"]},"source":{"type":"string"}}}},
+ {"name":"upsert_custom_material","description":"Define or update a typed `custommaterial` in the open document, including thermal conductivity `k` (`W/(m·K)`), specific heat capacity `cp` (`J/(kg·K)`), Hollomon plasticity (`hardening_n`, `hardening_k`), brittle Weibull modulus (`weibull_m`), and `role` (`\"structural\"` or `\"fluid\"`).","inputSchema":{"type":"object","required":["id","e","nu","density"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"e":{"type":"number"},"nu":{"type":"number"},"yield_strength":{"type":"number"},"yield":{"type":"number"},"density":{"type":"number"},"min_wall":{"type":"number"},"alpha":{"type":"number"},"k":{"type":"number"},"cp":{"type":"number"},"yield_z":{"type":"number"},"shear_z":{"type":"number"},"hardening_n":{"type":"number"},"hardening_k":{"type":"number"},"weibull_m":{"type":"number"},"role":{"type":"string","enum":["structural","fluid"]},"source":{"type":"string"}}}},
  {"name":"set_let","description":"Set a named `let` variable (or dotted parameter address) and re-evaluate dependent expressions.","inputSchema":{"type":"object","required":["name","value"],"properties":{"name":{"type":"string"},"value":{"type":"number"}}}},
  {"name":"set_fill","description":"Configure or update the document's TPMS lattice fill (including `morph`, `cell_min`, `skin_max`, `erode`, and `rotate`), or clear it (`clear: true`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"family":{"type":"string","enum":["gyroid","primitive","diamond"]},"morph":{"type":["string","null"],"enum":["gyroid","primitive","diamond",null]},"mode":{"type":"string","enum":["sheet","network"]},"cell":{"type":"number"},"cell_min":{"type":["number","null"]},"skin":{"type":"number"},"skin_max":{"type":["number","null"]},"erode":{"type":["number","null"]},"rho_min":{"type":"number"},"rho_max":{"type":"number"},"curve":{"type":"number"},"min_wall":{"type":"number"},"protect":{"type":"array","items":{"type":"string"}},"margin":{"type":"number"},"case":{"type":["string","null"]},"rotate":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
- {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, and constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`.","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]}}}},
- {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `p90.max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `p90.max_temp`, `min_safety_factor`, `p10.min_safety_factor`, `mass_g`, `max_layer_peel`, `p90.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `mode_1`, `p10.mode_1`, `graded.yield_utilization`, `p90.graded.yield_utilization`, `graded.buckling_utilization`, `graded.max_layer_peel`, `graded_mass_g`, `mass_saved_pct`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
+ {"name":"set_build","description":"Set or clear the additive build orientation `solve build=(theta_deg, phi_deg)`, target element `size`, constitutive `plasticity` (`\"linear\"` or `\"j2\"`) / `hardening_n`, reference temperature `t_ref`, and transient thermo-elastic settings (`t_end`, `steps`, `t_init`).","inputSchema":{"type":"object","properties":{"clear":{"type":"boolean"},"angles":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"theta":{"type":"number"},"phi":{"type":"number"},"size":{"type":["number","null"]},"plasticity":{"type":["string","null"],"enum":["linear","j2",null]},"hardening_n":{"type":["number","null"]},"t_ref":{"type":["number","null"]},"t_end":{"type":["number","null"]},"steps":{"type":["integer","null"]},"t_init":{"type":["number","null"]}}}},
+ {"name":"upsert_assert","description":"Create or update an executable engineering contract (`assert` statement) in the open `.fsm` document (`metric` such as `max_vm_elem`, `p90.max_vm_elem`, `max_displacement`, `compliance`, `max_temp`, `p90.max_temp`, `peak_transient_vm`, `t_at_peak_vm`, `final_max_temp`, `final_min_temp`, `steady_limit_vm_elem`, `min_safety_factor`, `p10.min_safety_factor`, `mass_g`, `max_layer_peel`, `p90.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `mode_1`, `p10.mode_1`, `graded.yield_utilization`, `p90.graded.yield_utilization`, `graded.buckling_utilization`, `graded.max_layer_peel`, `graded_mass_g`, `mass_saved_pct`; `target` such as `\"<= 150\"`, `\">= 1.5\"`, or numeric value with `tolerance`).","inputSchema":{"type":"object","required":["metric","target"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"target":{"type":["string","number"]},"tolerance":{"type":"string"},"tol":{"type":"string"},"unit":{"type":"string"}}}},
  {"name":"delete_assert","description":"Delete an executable `assert` engineering contract from the open `.fsm` document by `index` or `label`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"}}}},
  {"name":"upsert_uncertainty","description":"Create or update an epistemic / manufacturing parameter uncertainty (`uncertainty` statement) in the open `.fsm` document (`param` such as a `let` name, `pull.force.1`, `ss316l.e`, `ss316l.yield`, `fill.rho_min`, `solve.build.0`, or `system` `epistemic`, with `std` and/or relative `cv`).","inputSchema":{"type":"object","required":["param"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"},"std":{"type":"number"},"sigma":{"type":"number"},"cv":{"type":"number"},"unit":{"type":"string"}}}},
  {"name":"delete_uncertainty","description":"Delete an `uncertainty` declaration from the open `.fsm` document by `index`, `label`, or `param`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise/fixing/clinching) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise","fixing","clinching"]},"dofs":{"type":"integer"},"h":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"input":{"type":"object"},"spec":{"type":"object"},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise/fixing/clinching/transient) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise","fixing","clinching","transient"]},"dofs":{"type":"integer"},"h":{"type":"number"},"t_end":{"type":"number"},"steps":{"type":"integer"},"t_init":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"input":{"type":"object"},"spec":{"type":"object"},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"transient_solve","description":"Run 3D P2 transient thermo-elastic conduction (`BDF2`, `ρ c_p ∂T/∂t = ∇·(k ∇T)`) and batched multi-RHS Duhamel–Neumann thermal-shock stress (`QuestionSpec::Transient`) on the open `.fsm` document; returns `apiv: 2` envelope with `transient.cases` (`peak_vm_elem`, `t_at_peak_vm_s`, `steady_limit_vm_elem`, `shock_amplification`, and `timeline`).","inputSchema":{"type":"object","properties":{"t_end":{"type":"number"},"steps":{"type":"integer"},"t_init":{"type":"number"},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts (including `p90.<metric>` and `p10.<metric>` epistemic quantile contracts) on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, `df_n/dp`, additive `d_max_layer_peel`, `d_overhang_fraction`, `d_max_overhang_deg`, plus graded TPMS lattice `dU_yield/dp`, `dU_buckling/dp`, and `d_solid_mass_g`) across `params` (or all non-derived `let`, `system`, `fill.*` grading, and `solve.build.0` / `solve.build.1` build-orientation variables in the open `.fsm` document) using mechanical, staggered thermo-elastic, and two-pass homogenised TPMS discrete adjoints plus `O(0)`-extra-solve Rayleigh-quotient modal and build-orientation differentiation (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"uq","description":"Run `O(1)`-solve 3D continuum epistemic uncertainty quantification (`QuestionSpec::Uq`): propagates `uncertainties` (or all `uncertainty` statements + `system` `epistemic` closures in the open `.fsm` document) across `metrics` via discrete 3D adjoint sensitivities, returning `p10`, `p50`, `p90`, `std_dev`, and ranked `variance_share` contributors.","inputSchema":{"type":"object","properties":{"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},

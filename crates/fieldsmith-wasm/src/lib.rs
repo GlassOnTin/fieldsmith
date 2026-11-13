@@ -698,6 +698,8 @@ struct AnalysisMeta {
     poisson: f64,
     /// First mode frequencies when the caller asked for a modal run alongside the statics.
     modes: Option<fieldsmith_solve::ModalResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    transient: Vec<fieldsmith_core::transient::TransientCaseReport>,
 }
 
 /// One analysis, kept in wasm and queried through typed-array getters.
@@ -751,6 +753,7 @@ impl AnalysisOut {
             max_peak_peel: self.a.max_peak_peel,
             poisson: self.a.poisson,
             modes: self.a.modes.clone(),
+            transient: self.a.transient.clone(),
         })
     }
 
@@ -915,6 +918,67 @@ impl AnalysisOut {
             .unwrap_or(&[]);
         Float64Array::from(shape)
     }
+
+    #[wasm_bindgen(js_name = transientCaseCount)]
+    pub fn transient_case_count(&self) -> usize {
+        self.a.transient.len()
+    }
+
+    #[wasm_bindgen(js_name = transientStepCount)]
+    pub fn transient_step_count(&self, ti: usize) -> usize {
+        self.a
+            .transient
+            .get(ti)
+            .map_or(0, |r| r.frames_temperature.len())
+    }
+
+    #[wasm_bindgen(js_name = transientTemperature)]
+    pub fn transient_temperature(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .a
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_temperature.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientVmElem)]
+    pub fn transient_vm_elem(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .a
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_vm_elem.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientVmNodal)]
+    pub fn transient_vm_nodal(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .a
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_vm_nodal.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientU)]
+    pub fn transient_u(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .a
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_u.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
 }
 
 #[derive(Serialize)]
@@ -980,6 +1044,8 @@ struct GradedMeta {
     worst_build_angles: [f64; 2],
     max_peak_peel: f64,
     poisson: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    transient: Vec<fieldsmith_core::transient::TransientCaseReport>,
 }
 
 /// A graded-fill analysis: the solid mesh plus the graded re-solve and fill result. The solid
@@ -1085,6 +1151,7 @@ impl GradedOut {
             worst_build_angles: self.g.worst_build_angles,
             max_peak_peel: self.g.max_peak_peel,
             poisson: self.base.poisson,
+            transient: self.base.transient.clone(),
         })
     }
 
@@ -1397,6 +1464,67 @@ impl GradedOut {
         let bytes =
             fieldsmith_mesh::slice::write_3mf_slicestack(&self.name, &self.material, &stack);
         Ok(Uint8Array::from(bytes.as_slice()))
+    }
+
+    #[wasm_bindgen(js_name = transientCaseCount)]
+    pub fn transient_case_count(&self) -> usize {
+        self.base.transient.len()
+    }
+
+    #[wasm_bindgen(js_name = transientStepCount)]
+    pub fn transient_step_count(&self, ti: usize) -> usize {
+        self.base
+            .transient
+            .get(ti)
+            .map_or(0, |r| r.frames_temperature.len())
+    }
+
+    #[wasm_bindgen(js_name = transientTemperature)]
+    pub fn transient_temperature(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .base
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_temperature.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientVmElem)]
+    pub fn transient_vm_elem(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .base
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_vm_elem.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientVmNodal)]
+    pub fn transient_vm_nodal(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .base
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_vm_nodal.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
+    }
+
+    #[wasm_bindgen(js_name = transientU)]
+    pub fn transient_u(&self, ti: usize, step: usize) -> Float64Array {
+        let s = self
+            .base
+            .transient
+            .get(ti)
+            .and_then(|r| r.frames_u.get(step))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        Float64Array::from(s)
     }
 }
 
@@ -2657,4 +2785,31 @@ pub fn analyze_clinching_window_wasm(spec_json: &str) -> Result<String, JsValue>
         .map_err(|e| js_err(format!("invalid ClinchingSpec JSON: {e}")))?;
     let win = analyze_clinching_process_window(&spec);
     to_json(&win)
+}
+
+/// Run standalone 3D P2 transient thermo-elasticity (`BDF2`) on `doc_json` (`transient.rs`).
+#[wasm_bindgen(js_name = solveTransientFsm)]
+pub fn solve_transient_fsm_wasm(
+    doc_json: &str,
+    t_end: Option<f64>,
+    steps: Option<usize>,
+    t_init: Option<f64>,
+    dofs: Option<usize>,
+    h: Option<f64>,
+) -> Result<String, JsValue> {
+    let doc = doc_from(doc_json)?;
+    let res = match (dofs, h) {
+        (Some(n), _) => Resolution::Dofs(n),
+        (None, Some(h)) => Resolution::Size(h),
+        (None, None) => Resolution::Dofs(35_000),
+    };
+    let (provenance, cases) =
+        fieldsmith_core::transient::analyse_transient(&doc, res, clock, t_end, steps, t_init)
+            .map_err(js_err)?;
+    #[derive(Serialize)]
+    struct Out {
+        provenance: Provenance,
+        cases: Vec<fieldsmith_core::transient::TransientCaseReport>,
+    }
+    to_json(&Out { provenance, cases })
 }
