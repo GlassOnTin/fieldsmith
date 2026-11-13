@@ -149,9 +149,13 @@ fn v63_architecture_lock() {
         tools.iter().any(|t| t["name"] == "transient_solve"),
         "expected transient_solve in TOOLS_JSON"
     );
+    assert!(
+        tools.iter().any(|t| t["name"] == "add_contact"),
+        "expected add_contact in TOOLS_JSON"
+    );
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        47.0,
+        48.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -234,6 +238,7 @@ fn v63_architecture_lock() {
                     && reparsed.sketches == doc.sketches
                     && reparsed.sketch_features == doc.sketch_features
                     && reparsed.system_block == doc.system_block
+                    && reparsed.contacts == doc.contacts
                 {
                     out.roundtripped = true;
                 } else {
@@ -2078,6 +2083,125 @@ solve build=(0, 0)
         "expected A20 transient @assert contracts to pass verify: {tr_ver_json}"
     );
 
+    // -------------------------------------------------------------------------
+    // 16. 3D P2 Unilateral Signorini Contact (`contact`, `add_contact`,
+    //     `ContactReport`) API <-> MCP parity, exact gap-closure patch test,
+    //     and bolted-flange prying liftoff contracts (A21 & T25)
+    // -------------------------------------------------------------------------
+    let a21_path =
+        examples_dir.join("analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm");
+    let a21_raw = std::fs::read_to_string(&a21_path).expect("read A21 .fsm");
+    let api_ct_req = json!({
+        "apiv": 2,
+        "doc": a21_raw,
+        "question": {
+            "kind": "solve",
+            "dofs": 14000
+        }
+    });
+    let api_ct_reply = fieldsmith_api::respond(&api_ct_req.to_string());
+    assert!(
+        !api_ct_reply.is_error,
+        "API unilateral contact solve failed on A21: {}",
+        api_ct_reply.body
+    );
+    let api_ct_resp: Value =
+        serde_json::from_str(&api_ct_reply.body).expect("parse API A21 contact response");
+
+    let mut ct_srv = Server::new();
+    let (ct_open_err, ct_open_body) =
+        mcp_tool_call(&mut ct_srv, 1401, "open", json!({ "doc": a21_raw }));
+    assert!(!ct_open_err, "open A21 failed: {ct_open_body}");
+    let (ct_mcp_err, mcp_ct_json) = mcp_tool_call(
+        &mut ct_srv,
+        1402,
+        "solve",
+        json!({ "kind": "solve", "dofs": 14000 }),
+    );
+    assert!(
+        !ct_mcp_err,
+        "MCP unilateral contact solve failed on A21: {mcp_ct_json}"
+    );
+
+    let ct_mismatch = if canon(&api_ct_resp) == canon(&mcp_ct_json) {
+        0.0
+    } else {
+        1.0
+    };
+    report.check(Check::absolute(
+        "apiv:2 API <-> MCP canon parity on unilateral Signorini contact solve",
+        0.0,
+        ct_mismatch,
+        "mismatches",
+        0.0,
+    ));
+
+    let comp_rep = &mcp_ct_json["single"]["cases"][0]["contact_reports"][0];
+    let pry_rep = &mcp_ct_json["single"]["cases"][1]["contact_reports"][0];
+    report.check(Check::relative(
+        "3D P2 Signorini Compression contact pressure p_n (P0=25 MPa, g0=0.002 mm)",
+        25.0,
+        comp_rep["max_contact_pressure_mpa"]
+            .as_f64()
+            .expect("comp p_n"),
+        "MPa",
+        0.015,
+    ));
+    report.check(Check::relative(
+        "3D P2 Signorini Compression bearing force F_c (25 MPa * 400 mm^2)",
+        10_000.0,
+        comp_rep["contact_force_n"].as_f64().expect("comp F_c"),
+        "N",
+        0.015,
+    ));
+    report.check(Check::relative(
+        "3D P2 Signorini Compression foundation penetration u_n - g0 (P0 / k)",
+        0.0050,
+        comp_rep["max_penetration_mm"]
+            .as_f64()
+            .expect("comp penetration"),
+        "mm",
+        0.02,
+    ));
+    report.check(Check::relative(
+        "3D P2 Signorini Prying bearing force equilibrium (F_down - F_up)",
+        1_000.0,
+        pry_rep["contact_force_n"].as_f64().expect("pry F_c"),
+        "N",
+        0.02,
+    ));
+    let pry_area_ratio = pry_rep["contact_area_ratio"]
+        .as_f64()
+        .expect("pry area ratio");
+    let pry_liftoff_mm = pry_rep["max_liftoff_mm"].as_f64().expect("pry liftoff");
+    let pry_peak_pn = pry_rep["max_contact_pressure_mpa"]
+        .as_f64()
+        .expect("pry peak p_n");
+    assert!(
+        pry_area_ratio <= 0.45 && pry_liftoff_mm >= 0.05 && pry_peak_pn >= 20.0,
+        "expected unilateral heel liftoff & toe bearing concentration in A21 Prying: ratio={pry_area_ratio}, liftoff={pry_liftoff_mm}, peak_pn={pry_peak_pn}"
+    );
+
+    let (ct_ver_err, ct_ver_json) =
+        mcp_tool_call(&mut ct_srv, 1403, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !ct_ver_err && ct_ver_json["status"] == "ok",
+        "expected A21 unilateral contact @assert contracts to pass verify: {ct_ver_json}"
+    );
+
+    let t25_path = examples_dir.join("tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm");
+    let t25_raw = std::fs::read_to_string(&t25_path).expect("read T25 .fsm");
+    let mut t25_srv = Server::new();
+    let (t25_open_err, t25_open_body) =
+        mcp_tool_call(&mut t25_srv, 1404, "open", json!({ "doc": t25_raw }));
+    assert!(!t25_open_err, "open T25 failed: {t25_open_body}");
+    let (t25_ver_err, t25_ver_json) =
+        mcp_tool_call(&mut t25_srv, 1405, "verify", json!({ "dofs": 14000 }));
+    assert!(
+        !t25_ver_err && t25_ver_json["status"] == "ok",
+        "expected T25 bolted-flange gasket liftoff @assert contracts to pass verify: {t25_ver_json}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -2085,13 +2209,14 @@ solve build=(0, 0)
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
              first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
              unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion, \
              unified Lee–Kim / Breda / Varis–Mucha / Neuber–Hencky sheet-metal clinching process windows + parametric 3D S-Lock stamping & J2 co-design, \
-             and 3D P2 BDF2 transient conduction + batched multi-RHS Duhamel–Neumann thermal-shock timelines & Fourier–Biot verification), \
+             3D P2 BDF2 transient conduction + batched multi-RHS Duhamel–Neumann thermal-shock timelines & Fourier–Biot verification, \
+             and 3D P2 Semi-Smooth Newton unilateral Signorini–Winkler contact with positive-weight 9-point Duffy surface quadrature, gap closure & flange heel liftoff), \
              general SDF cross-section channel hydraulics (`analyze_sdf_channel`), \
              persistent `.fsm` `sketch` + `sketchfeature` round-trip & `DocCommand::SetLet` 3D FEA \
              stiffness scaling, composable 0D/1D `.fsm` `system` blocks with Dual-AD Jacobians & \
@@ -2111,7 +2236,7 @@ solve build=(0, 0)
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
          `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
          WASM declarative `system` authoring (`set_system_block`), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
-         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
+         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
@@ -2122,7 +2247,7 @@ solve build=(0, 0)
          independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`); \
          nonlinear `J2` elastoplastic cases evaluate on the fixed-topology `V_k`-deformed mesh \
          (`method: \"boundary_velocity_fixed_mesh\"`), and discrete topology jumps fall back to \
-         locked-`h` re-meshing (`method: \"finite_difference_remesh\"`).\n\
+         locked-`h` re-meshing (`method: \"finite_difference_remesh\"`). Unilateral Signorini contact solves use frictionless normal Winkler penalty stiffness `k_n` (Coulomb stick-slip tangential friction is not yet coupled).\n\
          3. Multi-dimensional specialized continuum twins (`float_bath` 2D VMS+MHD, `candle_flame`, \
          `antenna` NEC/VNA) remain compiled Rust solvers alongside composable 0D/1D `.fsm` `system` blocks.",
     );

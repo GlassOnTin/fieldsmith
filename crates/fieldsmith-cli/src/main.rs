@@ -499,6 +499,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                 }
                 print_load_table(&a.cases);
+                print_contact_table(&a.cases);
                 if let Some(hdr) = raw_header.as_ref() {
                     print_literate_verification(hdr, &a, None, verify)?;
                 } else if !doc.asserts.is_empty() {
@@ -888,7 +889,9 @@ fn graded_shape(g: &fieldsmith_core::fill::Graded) -> ([usize; 3], (f64, f64)) {
 }
 
 fn print_case_table(cases: &[CaseResult], caption: &str) {
-    println!("| {caption} case | peak von Mises (MPa) | max deflection (mm) | peak layer peel (×) |");
+    println!(
+        "| {caption} case | peak von Mises (MPa) | max deflection (mm) | peak layer peel (×) |"
+    );
     println!("| :-- | --: | --: | --: |");
     for c in cases {
         println!(
@@ -937,6 +940,35 @@ fn print_load_table(cases: &[CaseResult]) {
                 vec(&r.resultant),
                 vec(&r.moment),
                 applied
+            );
+        }
+    }
+}
+
+/// Per-contact provenance for `solve --report`: unilateral Signorini bearing force, peak
+/// normal pressure, active contact area fraction, heel liftoff, and SSN active-set count.
+fn print_contact_table(cases: &[CaseResult]) {
+    if !cases.iter().any(|c| !c.contact_reports.is_empty()) {
+        return;
+    }
+    println!(
+        "\n| case | contact | region | peak p_n (MPa) | bearing force (N) | active area (mm²) | area ratio | max liftoff (mm) | SSN iters |\n\
+         | :-- | :-- | :-- | --: | --: | --: | --: | --: | --: |"
+    );
+    for c in cases {
+        for r in &c.contact_reports {
+            println!(
+                "| {} | {} | {} | {:.2} | {:.1} | {:.2} / {:.2} | {:.1}% | {:.4} | {} |",
+                c.name,
+                r.id,
+                r.region,
+                r.max_contact_pressure_mpa,
+                r.contact_force_n,
+                r.active_area_mm2,
+                r.total_area_mm2,
+                100.0 * r.contact_area_ratio,
+                r.max_liftoff_mm,
+                r.active_set_iters
             );
         }
     }

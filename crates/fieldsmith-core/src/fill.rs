@@ -45,8 +45,8 @@ use fieldsmith_solve::P2Mesh;
 
 use crate::Facet;
 use crate::{
-    case_force_report, case_names, fixed_mask, material_of, run_case, run_thermal_case, Analysis,
-    CaseResult, Clock, Resolution, SetupError,
+    case_force_report, case_names, fixed_mask, material_of, run_thermal_case, Analysis, CaseResult,
+    Clock, Resolution, SetupError,
 };
 
 /// Fit band of the stiffness laws, densities in `[RHO_LO, RHO_HI]`.
@@ -877,12 +877,14 @@ pub fn graded_of(
     for name in case_names(doc) {
         let (force, reports, prescribed_map) =
             case_force_report(doc, &base.mesh, &facets, &name, h)?;
+        let contacts = crate::case_contact_patches(doc, &base.mesh, &facets, &name, h)?;
         let prescribed = crate::prescribed_fn(&node_key, &prescribed_map);
-        let mut case = run_case(
+        let mut case = crate::run_case_with_contacts(
             &base.mesh,
             &graded_material,
             &fixed,
             force,
+            &contacts,
             name,
             equilibrate,
             &prescribed,

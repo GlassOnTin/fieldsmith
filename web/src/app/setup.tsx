@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
-import type { Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
+import type { Contact, Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, loadFnProbe, spatialFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
 import type { LevelResult, LoadFnProbe, PickHit, SpatialFnProbe } from '../doc/wasm';
@@ -69,6 +69,11 @@ function supportIn(d: Document, id: string): Support {
   if (!s) throw new Error(`missing support ${id}`);
   return s;
 }
+function contactIn(d: Document, id: string): Contact {
+  const c = (d.contacts ?? []).find((x) => x.id === id);
+  if (!c) throw new Error(`missing contact ${id}`);
+  return c;
+}
 function loadIn(d: Document, id: string): Load {
   const l = d.loads.find((x) => x.id === id);
   if (!l) throw new Error(`missing load ${id}`);
@@ -98,6 +103,7 @@ function selectedRegion(doc: Document): string | null {
   if (s.kind === 'region') return s.id;
   try {
     if (s.kind === 'support') return supportIn(doc, s.id).region;
+    if (s.kind === 'contact') return contactIn(doc, s.id).region;
     if (s.kind === 'load') return loadIn(doc, s.id).region;
     if (s.kind === 'temperature') return temperatureIn(doc, s.id).region;
     if (s.kind === 'convection') return convectionIn(doc, s.id).region;
@@ -534,10 +540,26 @@ analysis.subscribe(() => ui.emit());
 
 // ---- add / select helpers -------------------------------------------------------------
 
-function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection' | 'heatflux') {
+function addAnalysis(kind: 'support' | 'contact' | 'load' | 'temperature' | 'convection' | 'heatflux') {
   const rid = selectedRegion(store.doc);
   if (!rid) {
     ui.notify('Create a region first: click a surface in the model.', 'error');
+    return;
+  }
+  if (kind === 'contact') {
+    const out = store.dispatch('Add contact', {
+      cmd: 'upsert_contact',
+      region: rid,
+      k: 10000,
+      gap: 0,
+    });
+    if (out.entity_id) {
+      store.select({ kind: 'contact', id: out.entity_id });
+    }
+    if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+      ui.set('treeOpen', false);
+      ui.set('inspOpen', true);
+    }
     return;
   }
   const label = kind === 'support' ? 'Add support' : kind === 'load' ? 'Add load' : kind === 'convection' ? 'Add convection' : kind === 'heatflux' ? 'Add heat flux' : 'Add temperature';
@@ -559,18 +581,20 @@ function addAnalysis(kind: 'support' | 'load' | 'temperature' | 'convection' | '
 }
 
 export function deleteAnalysis(
-  kind: 'region' | 'support' | 'load' | 'temperature' | 'convection' | 'heatflux',
+  kind: 'region' | 'support' | 'contact' | 'load' | 'temperature' | 'convection' | 'heatflux',
   id: string,
 ) {
   store.transact(`Delete ${id}`, (d) => {
     if (kind === 'region') {
       const gone = new Set<string>([id]);
+      for (const ct of d.contacts ?? []) if (ct.region === id) gone.add(ct.id);
       for (const l of d.loads) if (l.region === id) gone.add(l.id);
       for (const t of d.temperatures) if (t.region === id) gone.add(t.id);
       for (const c of d.convections) if (c.region === id) gone.add(c.id);
       for (const f of d.heat_fluxes) if (f.region === id) gone.add(f.id);
       d.regions = d.regions.filter((r) => r.id !== id);
       d.supports = d.supports.filter((r) => r.region !== id);
+      d.contacts = (d.contacts ?? []).filter((r) => r.region !== id);
       d.loads = d.loads.filter((r) => r.region !== id);
       d.temperatures = d.temperatures.filter((r) => r.region !== id);
       d.convections = d.convections.filter((r) => r.region !== id);
@@ -579,6 +603,9 @@ export function deleteAnalysis(
       pruneConsumers(d, gone);
     } else if (kind === 'support') {
       d.supports = d.supports.filter((r) => r.id !== id);
+    } else if (kind === 'contact') {
+      d.contacts = (d.contacts ?? []).filter((r) => r.id !== id);
+      pruneConsumers(d, new Set([id]));
     } else if (kind === 'load') {
       d.loads = d.loads.filter((r) => r.id !== id);
       pruneConsumers(d, new Set([id]));
@@ -600,15 +627,17 @@ export function deleteAnalysis(
         ? store.doc.regions.some((r) => r.id === sel.id)
         : sel.kind === 'support'
           ? store.doc.supports.some((r) => r.id === sel.id)
-          : sel.kind === 'load'
-            ? store.doc.loads.some((r) => r.id === sel.id)
-            : sel.kind === 'temperature'
-              ? store.doc.temperatures.some((r) => r.id === sel.id)
-              : sel.kind === 'convection'
-                ? store.doc.convections.some((r) => r.id === sel.id)
-                : sel.kind === 'heatflux'
-                  ? store.doc.heat_fluxes.some((r) => r.id === sel.id)
-                  : true;
+          : sel.kind === 'contact'
+            ? (store.doc.contacts ?? []).some((r) => r.id === sel.id)
+            : sel.kind === 'load'
+              ? store.doc.loads.some((r) => r.id === sel.id)
+              : sel.kind === 'temperature'
+                ? store.doc.temperatures.some((r) => r.id === sel.id)
+                : sel.kind === 'convection'
+                  ? store.doc.convections.some((r) => r.id === sel.id)
+                  : sel.kind === 'heatflux'
+                    ? store.doc.heat_fluxes.some((r) => r.id === sel.id)
+                    : true;
     if (!stillExists) store.select(null);
   }
 }
@@ -628,7 +657,7 @@ function SectionHead(props: { label: string; add?: () => void; title?: string; t
   );
 }
 
-function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature' | 'convection' | 'heatflux'; id: string; swatch?: string; meta: string }) {
+function AnalysisRow(props: { kind: 'region' | 'support' | 'contact' | 'load' | 'temperature' | 'convection' | 'heatflux'; id: string; swatch?: string; meta: string }) {
   const selected = store.selection?.kind === props.kind && store.selection.id === props.id;
   return (
     <div
@@ -642,7 +671,7 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'load' | 'temperature
       {props.swatch !== undefined ? (
         <span class="swatch" style={{ background: props.swatch }} />
       ) : (
-        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : props.kind === 'heatflux' ? '→' : '↓'}</span>
+        <span class="glyph">{props.kind === 'support' ? '⛨︎' : props.kind === 'contact' ? '⊥' : props.kind === 'temperature' ? '°' : props.kind === 'convection' ? '≋' : props.kind === 'heatflux' ? '→' : '↓'}</span>
       )}
       <span class="row-name">
         {ui.renaming === props.id ? <RenameInput id={props.id} onDone={() => ui.set('renaming', null)} /> : props.id}
@@ -698,6 +727,23 @@ function SetupTree() {
       {doc.supports.length === 0 && <div class="hint">Select a region, then add a support.</div>}
       {doc.supports.map((s) => (
         <AnalysisRow key={s.id} kind="support" id={s.id} meta={s.region} />
+      ))}
+      <SectionHead
+        label="Contacts"
+        add={() => addAnalysis('contact')}
+        title="Add unilateral Signorini–Winkler compression-only contact on the selected region"
+        testId="add-contact"
+      />
+      {(doc.contacts ?? []).length === 0 && (
+        <div class="hint">Select a mating/seat region, then add unilateral contact (allows liftoff).</div>
+      )}
+      {(doc.contacts ?? []).map((ct) => (
+        <AnalysisRow
+          key={ct.id}
+          kind="contact"
+          id={ct.id}
+          meta={`${ct.region} · k ${ct.k} · gap ${ct.gap}`}
+        />
       ))}
       <SectionHead label="Loads" add={() => addAnalysis('load')} title="Add load on the selected region" testId="add-load" />
       {doc.loads.length === 0 && <div class="hint">Select a region, then add a load.</div>}
@@ -1284,12 +1330,14 @@ function removeFace(regionId: string, index: number) {
     r.selectors.splice(index, 1);
     if (r.selectors.length === 0) {
       const gone = new Set<string>([regionId]);
+      for (const ct of d.contacts ?? []) if (ct.region === regionId) gone.add(ct.id);
       for (const l of d.loads) if (l.region === regionId) gone.add(l.id);
       for (const t of d.temperatures) if (t.region === regionId) gone.add(t.id);
       for (const c of d.convections) if (c.region === regionId) gone.add(c.id);
       for (const f of d.heat_fluxes) if (f.region === regionId) gone.add(f.id);
       d.regions = d.regions.filter((x) => x.id !== regionId);
       d.supports = d.supports.filter((s) => s.region !== regionId);
+      d.contacts = (d.contacts ?? []).filter((ct) => ct.region !== regionId);
       d.loads = d.loads.filter((l) => l.region !== regionId);
       d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
       d.convections = d.convections.filter((c) => c.region !== regionId);
@@ -1430,6 +1478,15 @@ function RegionInspector({ id }: { id: string }) {
       >
         <button type="button" class="btn small" onClick={() => addAnalysis('support')} data-testid="region-add-support">
           + Support
+        </button>
+        <button
+          type="button"
+          class="btn small"
+          onClick={() => addAnalysis('contact')}
+          data-testid="region-add-contact"
+          title="Attach 3D unilateral Signorini–Winkler compression-only contact (bears compression, lifts off in tension)"
+        >
+          + Unilateral Contact
         </button>
         <button type="button" class="btn small" onClick={() => addAnalysis('load')} data-testid="region-add-load">
           + Force / Pressure
@@ -1573,6 +1630,97 @@ function SupportInspector({ id }: { id: string }) {
         {region
           ? `${faceCountLabel(store.doc.regions.findIndex((r) => r.id === region.id), region.selectors.length)} constrained where they touch.`
           : 'Region missing.'}
+      </div>
+    </div>
+  );
+}
+
+function ContactInspector({ id }: { id: string }) {
+  useApp();
+  const c = (store.doc.contacts ?? []).find((x) => x.id === id);
+  if (!c) return null;
+  return (
+    <div class="insp" data-inspector="contact">
+      <div class="insp-heading">
+        <span class="kind">Contact</span>
+        <span class="row-name">{c.id}</span>
+        <button
+          class="btn ghost small"
+          style={{ marginLeft: 'auto', color: 'var(--danger)' }}
+          title="Delete this unilateral contact (Del)"
+          data-testid="delete-contact"
+          onClick={() => deleteAnalysis('contact', c.id)}
+        >
+          <Icon.trash /> Delete
+        </button>
+      </div>
+      <NameField id={c.id} />
+      <div class="field-grid">
+        <label class="plain">Region</label>
+        <RegionPicker
+          value={c.region}
+          testId="contact-region"
+          commit={(rid) =>
+            store.transact('Set contact region', (d) => void (contactIn(d, id).region = rid))
+          }
+        />
+        <NumRow
+          label="Stiffness k"
+          unit="MPa/mm"
+          min={1e-3}
+          step={1000}
+          get={(d) => contactIn(d, id).k}
+          set={(d, v) => {
+            contactIn(d, id).k = v;
+          }}
+          undoLabel="Set contact stiffness k"
+          testId="contact-k"
+          title="Unilateral Winkler/penalty contact bed stiffness k in MPa/mm (p_n = k · max(0, u·n − gap))"
+          driven={drivenExpr(store.doc, id, 'k')}
+        />
+        <NumRow
+          label="Initial gap"
+          unit="mm"
+          step={0.01}
+          get={(d) => contactIn(d, id).gap}
+          set={(d, v) => {
+            contactIn(d, id).gap = v;
+          }}
+          undoLabel="Set contact gap"
+          testId="contact-gap"
+          title="Initial clearance gap (> 0) or press interference (< 0) in mm along the contact normal"
+          driven={drivenExpr(store.doc, id, 'gap')}
+        />
+        <VecRow
+          label="Normal n"
+          get={(d) => contactIn(d, id).normal ?? [0, 0, 0]}
+          set={(d, v) => {
+            const item = contactIn(d, id);
+            if (v[0] === 0 && v[1] === 0 && v[2] === 0) item.normal = null;
+            else item.normal = v;
+          }}
+          undoLabel="Set contact normal"
+          testId="contact-normal"
+          step={1}
+        />
+        <TextInputRow
+          label="Case"
+          value={c.case ?? ''}
+          commit={(v) =>
+            store.transact('Set contact case', (d) => {
+              const item = contactIn(d, id);
+              item.case = v.trim() ? v.trim() : null;
+            })
+          }
+          testId="contact-case"
+          title="Optional load/thermal case filter (leave blank to apply to every case)"
+        />
+      </div>
+      <div class="hint" style={{ gridColumn: '1 / -1' }}>
+        Signorini unilateral contact (`u·n − gap ≤ 0, p_n ≥ 0`): bears compressive pressure when
+        pushed into the rigid seat (`u·n &gt; gap`) and separates freely with zero tensile traction
+        during flange heel liftoff (`u·n &lt; gap`). Leave Normal `(0, 0, 0)` to use each P2
+        surface facet&apos;s exact outward normal automatically.
       </div>
     </div>
   );
@@ -2299,6 +2447,7 @@ viewportExtensions.push({
 
 inspectors['region'] = (id) => <RegionInspector id={id} />;
 inspectors['support'] = (id) => <SupportInspector id={id} />;
+inspectors['contact'] = (id) => <ContactInspector id={id} />;
 inspectors['load'] = (id) => <LoadInspector id={id} />;
 inspectors['temperature'] = (id) => <TemperatureInspector id={id} />;
 inspectors['convection'] = (id) => <ConvectionInspector id={id} />;
@@ -2313,6 +2462,13 @@ extraCommands.push(() => {
       label: 'Add support',
       enabled: () => !!selectedRegion(store.doc),
       run: () => addAnalysis('support'),
+    },
+    {
+      id: 'setup.add-contact',
+      group: 'Setup',
+      label: 'Add unilateral contact',
+      enabled: () => !!selectedRegion(store.doc),
+      run: () => addAnalysis('contact'),
     },
     {
       id: 'setup.add-load',

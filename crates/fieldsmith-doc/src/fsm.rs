@@ -1350,6 +1350,29 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                 a.finish()?;
                 doc.supports.push(Support { id, region, fixed });
             }
+            "contact" => {
+                let id = c.ident("a contact name")?;
+                if doc.lets.iter().any(|l| l.name == id) {
+                    return Err(err(format!("Name '{id}' is used more than once")));
+                }
+                let region = c.ident("a region name")?;
+                let scope = let_scope(&doc);
+                let mut a = c.attrs(&id, &scope)?;
+                let normal = a.vec3("normal")?;
+                let k = a.expr_num_or("k", "k", DEFAULT_CONTACT_K_MPA_MM)?;
+                let gap = a.expr_num_or("gap", "gap", 0.0)?;
+                let case = a.string("case")?.unwrap_or_default();
+                doc.consumed.append(&mut a.consumed);
+                a.finish()?;
+                doc.contacts.push(Contact {
+                    id,
+                    region,
+                    normal,
+                    k,
+                    gap,
+                    case,
+                });
+            }
             "load" => {
                 let id = c.ident("a load name")?;
                 if doc.lets.iter().any(|l| l.name == id) {
@@ -3237,6 +3260,7 @@ pub fn print(doc: &Document) -> String {
     }
     if !doc.regions.is_empty()
         || !doc.supports.is_empty()
+        || !doc.contacts.is_empty()
         || !doc.loads.is_empty()
         || !doc.temperatures.is_empty()
         || !doc.convections.is_empty()
@@ -3268,6 +3292,22 @@ pub fn print(doc: &Document) -> String {
                 .map(|(a, _)| *a)
                 .collect();
             line += &format!(" fixed={axes}");
+        }
+        let _ = writeln!(o, "{line}");
+    }
+    for c in &doc.contacts {
+        let mut line = format!("contact {} {}", c.id, c.region);
+        if let Some(norm) = c.normal {
+            line += &format!(" normal={}", v3(norm));
+        }
+        if (c.k - DEFAULT_CONTACT_K_MPA_MM).abs() > 1e-12 || p.driven(&c.id, "k") {
+            line += &format!(" k={}", p.num_for(&c.id, "k", None, c.k));
+        }
+        if c.gap != 0.0 || p.driven(&c.id, "gap") {
+            line += &format!(" gap={}", p.num_for(&c.id, "gap", None, c.gap));
+        }
+        if !c.case.is_empty() {
+            line += &format!(" case={}", q(&c.case));
         }
         let _ = writeln!(o, "{line}");
     }

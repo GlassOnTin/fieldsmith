@@ -222,6 +222,16 @@ export function resolveAddr(doc: Document, addr: ParamAddr): void {
     noIndex(addr, attr);
     return;
   }
+  const contact = (doc.contacts ?? []).find((c) => c.id === id);
+  if (contact) {
+    if (attr !== 'k' && attr !== 'gap') {
+      throw new Error(
+        `param ${addrText(addr)}: contact ${JSON.stringify(id)} has no numeric parameter ${JSON.stringify(attr)} — k, gap`,
+      );
+    }
+    noIndex(addr, attr);
+    return;
+  }
   throw new Error(
     `param ${addrText(addr)}: no node, load, temperature, convection or heat flux named ${JSON.stringify(id)}`,
   );
@@ -391,6 +401,11 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   }
   const flux = doc.heat_fluxes.find((f) => f.id === target);
   if (flux) flux.q = v;
+  const contact = (doc.contacts ?? []).find((c) => c.id === target);
+  if (contact) {
+    if (attr === 'k') contact.k = v;
+    else if (attr === 'gap') contact.gap = v;
+  }
 }
 
 // Expression evaluation, the fsm.rs twin --------------------------------------

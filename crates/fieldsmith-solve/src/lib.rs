@@ -20,6 +20,7 @@ pub mod assemble;
 pub mod bounds;
 pub mod bsr;
 pub mod candle_flame;
+pub mod contact;
 pub mod coupled_system;
 pub mod dual;
 pub mod fixings;
@@ -35,6 +36,10 @@ pub mod thermal;
 pub use assemble::assemble;
 pub use bounds::compliance;
 pub use bsr::Bsr;
+pub use contact::{
+    add_converged_contact_tangent, solve_unilateral_contact, ContactFacet, ContactPatch,
+    ContactReport, ContactSolveOutput,
+};
 pub use dual::{upper_compliance, UpperBound};
 pub use fenics_assembly::elasticity::ElasticMaterial;
 pub use modal::{modal_mass_quadratic_form, solve_modes, ModalResult, ModeOptions};

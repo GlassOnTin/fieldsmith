@@ -61,6 +61,7 @@ function pack(
     thermalStressElem?: (i: number) => Float64Array;
     thermalTemperature?: (i: number) => Float64Array;
     thermalGradTNodal?: (i: number) => Float64Array;
+    thermalContactPressure?: (i: number) => Float64Array;
   },
   keep = false,
   t0 = performance.now(),
@@ -72,6 +73,7 @@ function pack(
   const plasticStrainElem: Float64Array[] = [];
   const peelElem: Float64Array[] = [];
   const temperature: (Float64Array | null)[] = [];
+  const contactPressure: (Float64Array | null)[] = [];
   const gradTNodal: (Float64Array | null)[] = [];
   for (let c = 0; c < meta.cases.length; c++) {
     u.push(out.u(c).slice());
@@ -82,6 +84,8 @@ function pack(
     peelElem.push(out.peelElem(c).slice());
     const t = out.temperature(c);
     temperature.push(t.length ? t.slice() : null);
+    const cp = out.contactPressure ? out.contactPressure(c) : new Float64Array(0);
+    contactPressure.push(cp.length ? cp.slice() : null);
     const gt = out.gradTNodal ? out.gradTNodal(c) : new Float64Array(0);
     gradTNodal.push(gt.length ? gt.slice() : null);
   }
@@ -105,6 +109,8 @@ function pack(
     peelElem.push(out.thermalPeelElem ? out.thermalPeelElem(i).slice() : new Float64Array(vm.length));
     const t = out.thermalTemperature(i);
     temperature.push(t.length ? t.slice() : null);
+    const cp = out.thermalContactPressure ? out.thermalContactPressure(i) : new Float64Array(0);
+    contactPressure.push(cp.length ? cp.slice() : null);
     const gt = out.thermalGradTNodal ? out.thermalGradTNodal(i) : new Float64Array(0);
     gradTNodal.push(gt.length ? gt.slice() : null);
   }
@@ -190,6 +196,7 @@ function pack(
     plasticStrainElem,
     peelElem,
     temperature,
+    contactPressure,
     gradTNodal,
     vmElemEnvelope: out.vmElemEnvelope().slice(),
     peelElemEnvelope: out.peelElemEnvelope().slice(),
@@ -222,6 +229,7 @@ function transfersOf(r: LevelResult): ArrayBuffer[] {
   ];
   if (r.tets) ls.push(r.tets);
   for (const t of r.temperature) if (t) ls.push(t);
+  for (const cp of r.contactPressure ?? []) if (cp) ls.push(cp);
   for (const g of r.gradTNodal ?? []) if (g) ls.push(g);
   if (r.modeShapes) ls.push(r.modeShapes);
   if (r.transientFrames) {
@@ -322,7 +330,7 @@ async function run(doc: Document) {
   // Setup validation before wasm: an incomplete study is not a failure, and the badge
   // renders these as a neutral hint rather than the red 'analysis failed'. Temperature,
   // convection or heat-flux statements run without loads: the thermal cases drive them.
-  const hasSupports = doc.supports.length > 0;
+  const hasSupports = doc.supports.length > 0 || (doc.contacts?.length ?? 0) > 0;
   const hasLoads = doc.loads.length > 0;
   const hasThermal =
     doc.temperatures.length > 0 ||

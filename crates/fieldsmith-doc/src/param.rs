@@ -188,9 +188,7 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             }
             (LoadKind::Pressure { .. }, "mpa")
             | (LoadKind::Preload { .. }, "newtons")
-            | (LoadKind::Distributed { .. }, "total") => {
-                no_index(addr, attr)
-            }
+            | (LoadKind::Distributed { .. }, "total") => no_index(addr, attr),
             _ => {
                 let takes = match &load.kind {
                     LoadKind::Force { .. } => "force[0-2] (force.n)",
@@ -235,8 +233,19 @@ pub fn resolve(doc: &Document, addr: &ParamAddr) -> Result<(), String> {
             )),
         };
     }
+    if doc.contacts.iter().any(|c| c.id == *id) {
+        return match (attr, addr.comp) {
+            ("k" | "gap", None) => Ok(()),
+            ("k" | "gap", Some(_)) => {
+                Err(format!("param {addr}: k and gap take no component index"))
+            }
+            _ => Err(format!(
+                "param {addr}: contact {id:?} has no numeric parameter {attr:?} — k, gap"
+            )),
+        };
+    }
     Err(format!(
-        "param {addr}: no node, load, temperature, convection or heat flux named {id:?}"
+        "param {addr}: no node, load, temperature, convection or heat flux named {id:?} (or contact)"
     ))
 }
 
@@ -266,8 +275,7 @@ pub fn apply(doc: &mut Document, addr: &ParamAddr, value: f64) -> Result<(), Str
     }
     write_plain(doc, &addr.id, &addr.attr, addr.comp, value);
     if !doc.sketch_features.is_empty() {
-        crate::sketch::sync_sketch_features(doc)
-            .map_err(|e| format!("param {addr}: {e}"))?;
+        crate::sketch::sync_sketch_features(doc).map_err(|e| format!("param {addr}: {e}"))?;
     }
     Ok(())
 }
@@ -333,8 +341,7 @@ fn apply_let(doc: &mut Document, name: &str, value: f64) -> Result<(), String> {
         write_plain(doc, &c.target, &c.attr, c.comp, v);
     }
     if !doc.sketch_features.is_empty() {
-        crate::sketch::sync_sketch_features(doc)
-            .map_err(|e| format!("param {name}: {e}"))?;
+        crate::sketch::sync_sketch_features(doc).map_err(|e| format!("param {name}: {e}"))?;
     }
     Ok(())
 }
@@ -394,6 +401,14 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
     }
     if let Some(f) = doc.heat_fluxes.iter_mut().find(|f| f.id == target) {
         f.q = v;
+        return;
+    }
+    if let Some(c) = doc.contacts.iter_mut().find(|c| c.id == target) {
+        match (attr, comp) {
+            ("k", None) => c.k = v,
+            ("gap", None) => c.gap = v,
+            _ => unreachable!("the writer was checked against this statement"),
+        }
         return;
     }
     unreachable!("the writer was checked against this document");

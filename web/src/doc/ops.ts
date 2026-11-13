@@ -173,6 +173,7 @@ export function renameId(doc: Document, from: string, to: string): string | null
   if (region) {
     region.id = to;
     for (const s of doc.supports) if (s.region === from) s.region = to;
+    for (const ct of doc.contacts ?? []) if (ct.region === from) ct.region = to;
     for (const l of doc.loads) if (l.region === from) l.region = to;
     for (const t of doc.temperatures) if (t.region === from) t.region = to;
     for (const c of doc.convections) if (c.region === from) c.region = to;
@@ -182,6 +183,12 @@ export function renameId(doc: Document, from: string, to: string): string | null
   const sup = doc.supports.find((r) => r.id === from);
   if (sup) {
     sup.id = to;
+    return null;
+  }
+  const contact = (doc.contacts ?? []).find((r) => r.id === from);
+  if (contact) {
+    contact.id = to;
+    rewire();
     return null;
   }
   const load = doc.loads.find((r) => r.id === from);

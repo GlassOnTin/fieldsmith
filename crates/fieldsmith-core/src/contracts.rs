@@ -267,6 +267,119 @@ pub fn resolve_assert_metric(
         };
     }
 
+    if matches!(
+        field,
+        "max_contact_pressure"
+            | "contact_pressure"
+            | "contact_force_n"
+            | "contact_force"
+            | "contact_area_ratio"
+            | "active_contact_area_mm2"
+            | "max_penetration_mm"
+            | "max_liftoff_mm"
+            | "liftoff_mm"
+    ) {
+        let graded_cases_vec: Vec<CaseResult> = g
+            .map(|gr| {
+                gr.cases
+                    .iter()
+                    .chain(gr.thermal_cases.iter())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pool: &[CaseResult] = if use_graded {
+            if graded_cases_vec.is_empty() {
+                return Err(format!("metric '{m}' requires a graded fill solve"));
+            }
+            &graded_cases_vec
+        } else {
+            &a.cases
+        };
+        let (case_part, contact_id_opt) = match case_sel.split_once('/') {
+            Some((cp, cid)) => (cp.trim(), Some(cid.trim())),
+            None => (case_sel, None),
+        };
+        // Resolve case + optional contact patch ID (`metric:2`, `metric:Prying`, `metric:seat`, `metric:Prying/seat`).
+        let (case, contact_filter): (&CaseResult, Option<&str>) = if case_part.is_empty() {
+            let c = pool
+                .iter()
+                .find(|c| !c.contact_reports.is_empty())
+                .or_else(|| pool.first())
+                .ok_or_else(|| format!("metric '{m}': no solved cases"))?;
+            (c, contact_id_opt)
+        } else if let Some(c) = find_case(pool, case_part) {
+            (c, contact_id_opt)
+        } else if contact_id_opt.is_none() {
+            let c = pool
+                .iter()
+                .find(|c| {
+                    c.contact_reports
+                        .iter()
+                        .any(|r| r.id.eq_ignore_ascii_case(case_part))
+                })
+                .ok_or_else(|| {
+                    format!("metric '{m}': no case or contact patch matching '{case_part}'")
+                })?;
+            (c, Some(case_part))
+        } else {
+            return Err(format!(
+                "metric '{m}': no solved case matching '{case_part}'"
+            ));
+        };
+        if case.contact_reports.is_empty() {
+            return Err(format!(
+                "metric '{m}': case '{}' has no unilateral contact patches (`contact ...`)",
+                case.name
+            ));
+        }
+        let selected: Vec<&crate::ContactReport> = match contact_filter {
+            Some(cid) => {
+                let v: Vec<_> = case
+                    .contact_reports
+                    .iter()
+                    .filter(|r| r.id.eq_ignore_ascii_case(cid))
+                    .collect();
+                if v.is_empty() {
+                    return Err(format!(
+                        "metric '{m}': case '{}' has no contact patch named '{cid}'",
+                        case.name
+                    ));
+                }
+                v
+            }
+            None => case.contact_reports.iter().collect(),
+        };
+        return match field {
+            "max_contact_pressure" | "contact_pressure" => Ok(selected
+                .iter()
+                .map(|r| r.max_contact_pressure_mpa)
+                .fold(0.0, f64::max)),
+            "contact_force_n" | "contact_force" => {
+                Ok(selected.iter().map(|r| r.contact_force_n).sum())
+            }
+            "active_contact_area_mm2" => Ok(selected.iter().map(|r| r.active_area_mm2).sum()),
+            "contact_area_ratio" => {
+                let active: f64 = selected.iter().map(|r| r.active_area_mm2).sum();
+                let total: f64 = selected.iter().map(|r| r.total_area_mm2).sum();
+                Ok(if total > 0.0 {
+                    (active / total).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                })
+            }
+            "max_penetration_mm" => Ok(selected
+                .iter()
+                .map(|r| r.max_penetration_mm)
+                .fold(0.0, f64::max)),
+            "max_liftoff_mm" | "liftoff_mm" => Ok(selected
+                .iter()
+                .map(|r| r.max_liftoff_mm)
+                .fold(0.0, f64::max)),
+            _ => unreachable!(),
+        };
+    }
+
     let graded_cases_vec: Vec<CaseResult> = g
         .map(|gr| {
             gr.cases
@@ -672,5 +785,36 @@ assert \"Robust p10 safety factor\" metric=\"p10.min_safety_factor\" target=\">=
             rep2.outcomes[0].passed && !rep2.outcomes[1].passed,
             "expected deterministic p50 to pass and epistemic p90 to fail at cap {mid_cap:.2}: {rep2:?}"
         );
+    }
+
+    #[test]
+    fn verify_document_evaluates_unilateral_contact_and_liftoff_contracts() {
+        let src = "\
+fieldsmith 1
+name \"Unilateral Contact Contract Flange\"
+material ti64
+box flange size=(40, 10, 6) at=(20, 5, 3)
+box bolt_pad size=(6, 10, 2) at=(10, 5, 7)
+box tip_pad size=(6, 10, 2) at=(37, 5, 7)
+region bolt_head = bolt_pad.pz
+region bed = flange.nz
+region tip = tip_pad.pz
+support clamp bolt_head fixed=xyz
+contact seat bed k=50000 gap=0
+load pry tip force=(0, 0, 300) case=\"Prying\"
+assert \"Partial contact ratio\" metric=\"contact_area_ratio:Prying\" target=\"<= 0.55\"
+assert \"Positive prying amplification\" metric=\"contact_force_n:Prying\" target=\">= 800\" unit=\"N\"
+assert \"Heel liftoff develops\" metric=\"max_liftoff_mm:Prying\" target=\">= 0.05\" unit=\"mm\"
+assert \"Toe bearing pressure\" metric=\"max_contact_pressure:Prying/seat\" target=\">= 10\" unit=\"MPa\"
+";
+        let doc = fsm::parse(src).expect("parse contact contract doc");
+        let (a, _g, rep) = verify_document(&doc, Some(src), Resolution::Dofs(10_000), zero_clock)
+            .expect("verify contact contracts");
+        assert_eq!(rep.total, 4);
+        assert!(
+            rep.all_passed,
+            "expected all 4 unilateral contact contracts to pass: {rep:?}"
+        );
+        assert_eq!(a.cases[0].contact_reports.len(), 1);
     }
 }

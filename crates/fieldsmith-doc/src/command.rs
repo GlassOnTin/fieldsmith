@@ -58,6 +58,19 @@ pub enum DocCommand {
         region: String,
         fixed: [bool; 3],
     },
+    UpsertContact {
+        #[serde(default)]
+        id: Option<String>,
+        region: String,
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
+        #[serde(default)]
+        k: Option<f64>,
+        #[serde(default)]
+        gap: Option<f64>,
+        #[serde(default)]
+        case: Option<String>,
+    },
     UpsertLoad {
         #[serde(default)]
         id: Option<String>,
@@ -367,6 +380,10 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
                 entity_id = Some(id);
                 entity_kind = Some("support".into());
                 action = Some("deleted".into());
+            } else if retain_removed(&mut doc.contacts, |c| c.id != id) {
+                entity_id = Some(id);
+                entity_kind = Some("contact".into());
+                action = Some("deleted".into());
             } else if retain_removed(&mut doc.loads, |l| l.id != id) {
                 entity_id = Some(id);
                 entity_kind = Some("load".into());
@@ -408,6 +425,32 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             });
             entity_id = Some(sid);
             entity_kind = Some("support".into());
+            action = Some("upserted".into());
+        }
+        DocCommand::UpsertContact {
+            id,
+            region,
+            normal,
+            k,
+            gap,
+            case,
+        } => {
+            let cid = resolve_or_fresh_id(doc, id.as_deref(), "contact");
+            let case = case
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default();
+            doc.contacts.retain(|c| c.id != cid);
+            doc.contacts.push(Contact {
+                id: cid.clone(),
+                region,
+                normal,
+                k: k.unwrap_or(DEFAULT_CONTACT_K_MPA_MM),
+                gap: gap.unwrap_or(0.0),
+                case,
+            });
+            entity_id = Some(cid);
+            entity_kind = Some("contact".into());
             action = Some("upserted".into());
         }
         DocCommand::UpsertLoad {
@@ -1242,5 +1285,63 @@ support fix1 top_face fixed=xyz
         let reparsed = fsm::parse(&canon).expect("reparse clinched sheet");
         assert_eq!(reparsed, doc);
         assert_eq!(fsm::print(&reparsed), canon);
+    }
+
+    #[test]
+    fn upsert_contact_and_let_driven_contact_round_trip_through_fsm() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"Flange Seat\"\n\
+             material ti64\n\
+             let k_bed = 25000\n\
+             let g0 = 0.05\n\
+             box flange size=(60, 40, 8) at=(30, 20, 4)\n\
+             region bed = flange.nz\n\
+             region bore = flange.nx\n\
+             support pin bore fixed=xy\n\
+             contact seat bed normal=(0, 0, -1) k=k_bed gap=g0\n",
+        )
+        .expect("parse contact fsm");
+        assert!(doc.validate().is_empty(), "validate: {:?}", doc.validate());
+        assert_eq!(doc.contacts.len(), 1);
+        assert_eq!(doc.contacts[0].k, 25000.0);
+        assert_eq!(doc.contacts[0].gap, 0.05);
+        assert_eq!(doc.contacts[0].normal, Some([0.0, 0.0, -1.0]));
+
+        // Sweeping let `g0` updates `doc.contacts[0].gap` and preserves canonical `.fsm`.
+        apply_doc_command(
+            &mut doc,
+            DocCommand::SetLet {
+                name: "g0".into(),
+                value: 0.12,
+                expr: None,
+            },
+        )
+        .expect("set_let g0");
+        assert!((doc.contacts[0].gap - 0.12).abs() < 1e-12);
+        let canon = fsm::print(&doc);
+        assert!(canon.contains("contact seat bed normal=(0, 0, -1) k=k_bed gap=g0"));
+        let reparsed = fsm::parse(&canon).expect("reparse contact fsm");
+        assert_eq!(reparsed, doc);
+
+        // Upsert + delete via DocCommand.
+        let out = apply_doc_command(
+            &mut doc,
+            DocCommand::UpsertContact {
+                id: None,
+                region: "bed".into(),
+                normal: None,
+                k: Some(15000.0),
+                gap: Some(0.0),
+                case: Some("Load 1".into()),
+            },
+        )
+        .expect("upsert_contact");
+        let cid = out.entity_id.expect("contact id");
+        assert_eq!(cid, "contact1");
+        assert_eq!(doc.contacts.len(), 2);
+
+        apply_doc_command(&mut doc, DocCommand::DeleteEntity { id: cid }).expect("delete contact1");
+        assert_eq!(doc.contacts.len(), 1);
     }
 }

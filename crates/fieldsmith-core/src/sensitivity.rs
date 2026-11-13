@@ -32,9 +32,8 @@ use crate::regions::{jacobi3, region_facets, region_facets_exact, Facet};
 use crate::{
     analyse_full, case_convections_all_with_regions, case_force_report_with_regions,
     case_heat_fluxes_all_with_regions, case_names, case_temperatures_with_regions,
-    collect_labelled_volumes, material_of, prescribed_fn, run_case_elastoplastic,
-    run_thermal_case_multi_with_regions, structural_doc, Analysis, CaseResult, Clock, RegionLookup,
-    Resolution, SetupError,
+    collect_labelled_volumes, material_of, prescribed_fn, run_thermal_case_multi_with_regions,
+    structural_doc, Analysis, CaseResult, Clock, RegionLookup, Resolution, SetupError,
 };
 use fieldsmith_doc::param::{self, ParamAddr};
 use fieldsmith_doc::system::DeclBindAttr;
@@ -1789,6 +1788,14 @@ fn evaluate_cases_on_fixed_mesh(
             base_h,
             Some(exact_lookup),
         )?;
+        let contacts = crate::case_contact_patches_with_regions(
+            doc,
+            mesh_pert,
+            facets,
+            &name,
+            base_h,
+            Some(exact_lookup),
+        )?;
         let mut node_key: HashMap<[u64; 3], u8> = HashMap::new();
         for (i, p) in mesh_pert.nodes.iter().enumerate() {
             node_key.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()], fixed[i]);
@@ -1797,7 +1804,7 @@ fn evaluate_cases_on_fixed_mesh(
         let mut case = if nl_plastic
             && (props.base_mat.yield_strength > 0.0 || props.yield_elem.iter().any(|&y| y > 0.0))
         {
-            run_case_elastoplastic(
+            crate::run_case_elastoplastic_with_contacts(
                 mesh_pert,
                 &props.young,
                 props.base_mat.nu,
@@ -1806,16 +1813,18 @@ fn evaluate_cases_on_fixed_mesh(
                 hardening_n,
                 fixed,
                 force,
+                &contacts,
                 name,
                 false,
                 &prescribed,
             )?
         } else {
-            crate::run_case(
+            crate::run_case_with_contacts(
                 mesh_pert,
                 &Material::iso(props.young.clone(), props.base_mat.nu),
                 fixed,
                 force,
+                &contacts,
                 name,
                 false,
                 &prescribed,

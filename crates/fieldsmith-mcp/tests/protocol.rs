@@ -129,6 +129,7 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "delete_entity",
             "add_region",
             "add_support",
+            "add_contact",
             "add_load",
             "add_temperature",
             "add_convection",
@@ -1018,6 +1019,56 @@ assert \"Steady-state limit is stress-free\" metric=\"steady_limit_vm_elem\" tar
     );
 
     let ver = c.tool_ok(32, "verify", json!({ "dofs": 8000 }));
+    assert_eq!(ver["status"], "ok", "{ver}");
+    assert_eq!(ver["verification"]["all_passed"], true);
+}
+
+#[test]
+fn unilateral_contact_add_solve_and_verify_over_mcp() {
+    let mut c = Client::spawn();
+    c.initialize();
+    let doc = "\
+fieldsmith 1
+name \"MCP Unilateral Prying Flange\"
+material ti64
+box flange size=(40, 10, 6) at=(20, 5, 3)
+box bolt_pad size=(6, 10, 2) at=(10, 5, 7)
+box tip_pad size=(6, 10, 2) at=(37, 5, 7)
+region bolt_head = bolt_pad.pz
+region bed = flange.nz
+region tip = tip_pad.pz
+support clamp bolt_head fixed=xyz
+load pry tip force=(0, 0, 300) case=\"Prying\"
+assert \"Partial contact ratio\" metric=\"contact_area_ratio:Prying\" target=\"<= 0.55\"
+assert \"Prying amplification\" metric=\"contact_force_n:Prying\" target=\">= 800\" unit=\"N\"
+assert \"Heel liftoff\" metric=\"max_liftoff_mm:Prying\" target=\">= 0.05\" unit=\"mm\"
+";
+    c.tool_ok(40, "open", json!({ "doc": doc }));
+    let added = c.tool_ok(
+        41,
+        "add_contact",
+        json!({
+            "id": "seat",
+            "region": "bed",
+            "k": 50000.0,
+            "gap": 0.0
+        }),
+    );
+    assert_eq!(added["added"], "seat", "{added}");
+    assert_eq!(added["problems"].as_array().unwrap().len(), 0);
+
+    let insp = c.tool_ok(42, "inspect", json!({}));
+    assert_eq!(insp["contacts"].as_array().unwrap().len(), 1);
+
+    let solved = c.tool_ok(43, "solve", json!({ "kind": "solve", "dofs": 10000 }));
+    assert_eq!(solved["status"], "ok", "{solved}");
+    let rep = &solved["single"]["cases"][0]["contact_reports"][0];
+    assert_eq!(rep["id"], "seat");
+    assert!(rep["contact_area_ratio"].as_f64().unwrap() < 0.55);
+    assert!(rep["contact_force_n"].as_f64().unwrap() > 800.0);
+    assert!(rep["max_liftoff_mm"].as_f64().unwrap() > 0.05);
+
+    let ver = c.tool_ok(44, "verify", json!({ "dofs": 10000 }));
     assert_eq!(ver["status"], "ok", "{ver}");
     assert_eq!(ver["verification"]["all_passed"], true);
 }

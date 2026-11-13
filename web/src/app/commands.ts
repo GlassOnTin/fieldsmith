@@ -294,12 +294,14 @@ function deleteSelection() {
       // The region and any statement on it go, so the expression reads on those
       // statements go too.
       const gone = new Set<string>([s.id]);
+      for (const ct of d.contacts ?? []) if (ct.region === s.id) gone.add(ct.id);
       for (const l of d.loads) if (l.region === s.id) gone.add(l.id);
       for (const t of d.temperatures) if (t.region === s.id) gone.add(t.id);
       for (const c of d.convections) if (c.region === s.id) gone.add(c.id);
       for (const f of d.heat_fluxes) if (f.region === s.id) gone.add(f.id);
       d.regions = d.regions.filter((r) => r.id !== s.id);
       d.supports = d.supports.filter((r) => r.region !== s.id);
+      d.contacts = (d.contacts ?? []).filter((r) => r.region !== s.id);
       d.loads = d.loads.filter((r) => r.region !== s.id);
       d.temperatures = d.temperatures.filter((r) => r.region !== s.id);
       d.convections = d.convections.filter((r) => r.region !== s.id);
@@ -310,6 +312,11 @@ function deleteSelection() {
   } else if (s.kind === 'support') {
     store.transact(`Delete ${s.id}`, (d) => {
       d.supports = d.supports.filter((r) => r.id !== s.id);
+    });
+  } else if (s.kind === 'contact') {
+    store.transact(`Delete ${s.id}`, (d) => {
+      d.contacts = (d.contacts ?? []).filter((r) => r.id !== s.id);
+      pruneConsumers(d, new Set([s.id]));
     });
   } else if (s.kind === 'load') {
     store.transact(`Delete ${s.id}`, (d) => {

@@ -1230,7 +1230,127 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[17/17] TransientTimelineCard 3D P2 BDF2 timeline (${peakText?.trim()} vs ${steadyText?.trim()}) + live 3D scrubber + Steady/Transient Undo: PASS`,
+    `[17/18] TransientTimelineCard 3D P2 BDF2 timeline (${peakText?.trim()} vs ${steadyText?.trim()}) + live 3D scrubber + Steady/Transient Undo: PASS`,
+  );
+
+  // 18. Unilateral Signorini Contact Setup (`region-add-contact`, Undo/Redo) + T25 Flange Liftoff & 3D `contact_pressure` Colourmap
+  const contactSeedFsm = [
+    'fieldsmith 1',
+    'name "UI Unilateral Contact Seed"',
+    'material al7075',
+    'box block size=(30, 12, 8) at=(15, 6, 4)',
+    'region x0 = block.nx',
+    'region y0 = block.ny',
+    'region bottom = block.nz',
+    'region top = block.pz',
+    'support sx x0 fixed=x',
+    'support sy y0 fixed=y',
+    'load press top force=(0, 0, -2400)',
+    'solve',
+    '',
+  ].join('\n');
+
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('setup');
+    window.fieldsmith.store.select({ kind: 'region', id: 'bottom' });
+  }, contactSeedFsm);
+
+  await page.waitForSelector('[data-testid="region-add-contact"]', { timeout: 15000 });
+  await page.click('[data-testid="region-add-contact"]');
+  await page.waitForSelector('[data-testid="contact-k"]', { timeout: 10000 });
+
+  const contactMutState = await page.evaluate(() => {
+    const afterAdd = window.fieldsmith.store.doc.contacts?.length ?? 0;
+    const addedRegion = window.fieldsmith.store.doc.contacts?.[0]?.region ?? null;
+    window.fieldsmith.store.undo();
+    const afterUndo = window.fieldsmith.store.doc.contacts?.length ?? 0;
+    window.fieldsmith.store.redo();
+    const afterRedo = window.fieldsmith.store.doc.contacts?.length ?? 0;
+    return { afterAdd, addedRegion, afterUndo, afterRedo };
+  });
+  assert(
+    contactMutState.afterAdd === 1 &&
+      contactMutState.addedRegion === 'bottom' &&
+      contactMutState.afterUndo === 0 &&
+      contactMutState.afterRedo === 1,
+    `Expected region-add-contact + Undo/Redo to toggle doc.contacts 1 -> 0 -> 1 on 'bottom', got ${JSON.stringify(contactMutState)}`,
+  );
+
+  // Load T25 Preloaded Flange Gasket Contact & Liftoff and verify Results card + 3D p_n colourmap
+  const t25Path = resolve(repoRoot, 'examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm');
+  const t25Raw = readFileSync(t25Path, 'utf-8');
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, t25Raw);
+
+  await page.waitForSelector('[data-testid="results-contact-card"]', { timeout: 45000 });
+  await page.waitForFunction(
+    async () => {
+      const { analysis } = await import('/src/app/analysis.ts');
+      const c = window.fieldsmith?.results?.colors?.();
+      return analysis.state.status === 'ready' && c && c.length > 0;
+    },
+    null,
+    { timeout: 45000 },
+  );
+
+  const preloadRowText = await page.textContent('[data-testid="contact-report-PreloadOnly-gasket_seat"]');
+  const pryingRowText = await page.textContent('[data-testid="contact-report-ServicePrying-gasket_seat"]');
+  const contactNumerics = await page.evaluate(async () => {
+    const { analysis } = await import('/src/app/analysis.ts');
+    const lvl = analysis.state.levels[analysis.state.levels.length - 1];
+    const r0 = lvl.meta.cases[0]?.contact_reports?.[0];
+    const r1 = lvl.meta.cases[1]?.contact_reports?.[0];
+    return { r0, r1 };
+  });
+  assert(
+    preloadRowText &&
+      preloadRowText.includes('SSN iters') &&
+      pryingRowText &&
+      pryingRowText.includes('Bearing Force:') &&
+      pryingRowText.includes('Max Liftoff:') &&
+      contactNumerics.r0 &&
+      contactNumerics.r1 &&
+      Math.abs(contactNumerics.r0.contact_force_n - 6000) < 120 &&
+      Math.abs(contactNumerics.r1.contact_force_n - 2400) < 60 &&
+      contactNumerics.r1.contact_area_ratio < contactNumerics.r0.contact_area_ratio &&
+      contactNumerics.r1.max_liftoff_mm >= 0.02,
+    `Expected PreloadOnly & ServicePrying unilateral ContactReport rows in results-contact-card, got preload='${preloadRowText}', prying='${pryingRowText}', numerics=${JSON.stringify(contactNumerics)}`,
+  );
+
+  const stressColorsSum = await page.evaluate(() => {
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return s;
+  });
+
+  await page.click('[data-testid="contact-show-pressure-map"]');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  const pnState = await page.evaluate(async () => {
+    const { ui } = await import('/src/app/ui.ts');
+    const c = window.fieldsmith.results.colors();
+    let s = 0;
+    for (let i = 0; i < c.length; i++) s += c[i];
+    return { mode: ui.resultsMode, sum: s };
+  });
+  assert(
+    pnState.mode === 'contact_pressure' && Math.abs(pnState.sum - stressColorsSum) > 1.0,
+    `Expected contact-show-pressure-map to switch resultsMode to 'contact_pressure' and update 3D facet colours (pnSum=${pnState.sum} vs stressSum=${stressColorsSum}), got ${JSON.stringify(pnState)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[18/18] Unilateral Signorini Contact Setup (region-add-contact + Undo/Redo) + T25 Flange Liftoff card & 3D p_n colourmap: PASS`,
   );
   await page.close();
 } catch (e) {

@@ -16,7 +16,7 @@ import { sweep, useSweep, computeParetoIndices, metricValueOf } from './sweep';
 import type { ParetoMetric, SweepPointRow } from './sweep';
 import { fmt } from './fields';
 import * as THREE from 'three';
-import type { LoadReport, TransientCaseReport, TransientFramePack } from '../doc/wasm';
+import type { ContactReport, LoadReport, TransientCaseReport, TransientFramePack } from '../doc/wasm';
 import type { LevelResult } from '../doc/wasm';
 import { findMatchingLiterateSheet, evaluateLiterateAssertOnLevel } from '../doc/literate-fsm';
 import {
@@ -766,6 +766,13 @@ function facetValue(lvl: LevelResult, mode: ResultMode, ci: number, f: number, u
     const peel = (ci >= 0 ? lvl.peelElem?.[ci] : lvl.peelElemEnvelope)?.[owner] ?? 0;
     return { value: peel, unit: '×' };
   }
+  if (mode === 'contact_pressure') {
+    const cp = contactField(lvl, ci);
+    if (!cp) return { value: 0, unit: 'MPa' };
+    let m = 0;
+    for (let j = 0; j < 6; j++) m += cp[lvl.surfaceFacets[6 * f + j]];
+    return { value: m / 6, unit: 'MPa' };
+  }
   const vm = vmElemField(lvl, ci)[owner];
   if (mode === 'strain_energy') return { value: strainEnergyOfVm(vm), unit: 'kJ/m³' };
   if (mode === 'plastic_strain') return { value: elemPlasticStrain(lvl, ci, owner, vm, lvl.meta.yield_strength), unit: '%' };
@@ -794,6 +801,25 @@ function tempField(lvl: LevelResult, ci: number): Float64Array | null {
     for (let i = 0; i < acc.length; i++) if (t[i] > acc[i]) acc[i] = t[i];
   }
   if (acc) tempCache.set(lvl, acc);
+  return acc;
+}
+
+const contactCache = new WeakMap<LevelResult, Float64Array>();
+function contactField(lvl: LevelResult, ci: number): Float64Array | null {
+  const cps = lvl.contactPressure ?? [];
+  if (ci >= 0) return cps[ci] ?? null;
+  let env = contactCache.get(lvl);
+  if (env) return env;
+  let acc: Float64Array | null = null;
+  for (const cp of cps) {
+    if (!cp) continue;
+    if (!acc) {
+      acc = cp.slice();
+      continue;
+    }
+    for (let i = 0; i < acc.length; i++) if (cp[i] > acc[i]) acc[i] = cp[i];
+  }
+  if (acc) contactCache.set(lvl, acc);
   return acc;
 }
 
@@ -836,6 +862,20 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
   if (mode === 'flow_field') {
     const fl = flowFieldData(lvl, ci);
     return Math.max(1e-6, fl.maxSpeed);
+  }
+  if (mode === 'contact_pressure') {
+    const reps =
+      ci >= 0
+        ? lvl.meta.cases[ci]?.contact_reports ?? []
+        : lvl.meta.cases.flatMap((c) => c.contact_reports ?? []);
+    if (reps.length > 0) {
+      return Math.max(1e-6, ...reps.map((r) => r.max_contact_pressure_mpa));
+    }
+    const cp = contactField(lvl, ci);
+    if (!cp) return 1;
+    let hi = 1e-6;
+    for (const v of cp) if (v > hi) hi = v;
+    return hi;
   }
   const peakVm = Math.max(
     1e-9,
@@ -926,6 +966,20 @@ function legendLabels(lvl: LevelResult, mode: ResultMode, ci: number, max: numbe
       caption: `continuum flow speed |v| (mm/s) · peak shear τ = ${fmt(fl.maxShearPa, 1)} Pa · Re = ${fmt(fl.reynolds, 2)} · Oh = ${fmt(fl.ohnesorge, 3)} (${matSpec.label})`,
     };
   }
+  if (mode === 'contact_pressure') {
+    const cp = contactField(lvl, ci);
+    return cp
+      ? {
+          min: '0',
+          max: `${fmt(max, 2)} MPa`,
+          caption: 'unilateral Signorini–Winkler bearing contact pressure p_n (MPa, ≥ 0; 0 where separated / lifted off)',
+        }
+      : {
+          min: '',
+          max: '',
+          caption: 'no unilateral contact active in this run — add a contact statement in Setup',
+        };
+  }
   const disc = activeResultsDiscipline(lvl);
   if (disc === 'thermal' && tempField(lvl, ci)) {
     return { min: '', max: '', caption: '3D Fourier heat-flux vectors q = −k∇T (kW/m²) pointing from hot to cold' };
@@ -949,7 +1003,7 @@ function rangeFor(
 ): { lo: number; hi: number; auto: boolean; levelKey: string; unit: string } | null {
   if (mode === 'safety' || mode === 'vectors') return null;
   const unit =
-    mode === 'stress'
+    mode === 'stress' || mode === 'contact_pressure'
       ? 'MPa'
       : mode === 'peel'
         ? '×'
@@ -979,6 +1033,7 @@ function isRamped(
   | 'peel'
   | 'strain_energy'
   | 'plastic_strain'
+  | 'contact_pressure'
   | 'deflection'
   | 'temperature'
   | 'heat_flux'
@@ -988,6 +1043,7 @@ function isRamped(
     m === 'peel' ||
     m === 'strain_energy' ||
     m === 'plastic_strain' ||
+    m === 'contact_pressure' ||
     m === 'deflection' ||
     m === 'temperature' ||
     m === 'heat_flux' ||
@@ -1083,6 +1139,15 @@ function elementScalarValue(
   }
   if (mode === 'peel') {
     return { value: (peelArr?.[elemIdx] ?? 0) * loadRamp, unit: '×' };
+  }
+  if (mode === 'contact_pressure') {
+    const cp = contactField(lvl, ci);
+    if (cp && tets && elemIdx * 4 + 3 < tets.length) {
+      let m = 0;
+      for (let k = 0; k < 4; k++) m += cp[tets[4 * elemIdx + k]];
+      return { value: (m / 4) * loadRamp, unit: 'MPa' };
+    }
+    return { value: 0, unit: 'MPa' };
   }
   if (mode === 'flow_field') {
     const fl = flowFieldData(lvl, ci);
@@ -1232,11 +1297,13 @@ function rebuild(lvl: LevelResult) {
   const loadRamp = shown.animating ? 1.0 : Math.max(0, Math.min(1, ui.resultsRamp));
   const effScale = scale * loadRamp;
   const tField = mode === 'temperature' || mode === 'heat_flux' ? tempField(lvl, ci) : null;
+  const cpField = mode === 'contact_pressure' ? contactField(lvl, ci) : null;
   const hfData = mode === 'heat_flux' || (mode === 'vectors' && activeResultsDiscipline(lvl) === 'thermal') ? heatFluxField(lvl, ci) : null;
   const flData = mode === 'flow_field' || (mode === 'vectors' && activeResultsDiscipline(lvl) === 'fluid') ? flowFieldData(lvl, ci) : null;
   const hasScalarField =
     mode !== 'vectors' &&
     (mode !== 'temperature' || !!tField) &&
+    (mode !== 'contact_pressure' || !!cpField) &&
     (mode !== 'heat_flux' || !!hfData);
 
   // Deformed positions for all P2 nodes (corners + mid-edge nodes) directly from solver u / modeShapes
@@ -1312,6 +1379,17 @@ function rebuild(lvl: LevelResult) {
     } else if (mode === 'flow_field') {
       if (flData) {
         const v = flData.speedFacet[f] * loadRamp;
+        rawFacetVal[f] = v;
+        normVal = (v - rngLo) / denom;
+        rampColor(normVal, col, ramp);
+      } else {
+        col[0] = 0.55; col[1] = 0.55; col[2] = 0.55;
+      }
+    } else if (mode === 'contact_pressure') {
+      if (cpField) {
+        let m = 0;
+        for (let j = 0; j < 6; j++) m += cpField[lvl.surfaceFacets[6 * f + j]];
+        const v = (m / 6) * loadRamp;
         rawFacetVal[f] = v;
         normVal = (v - rngLo) / denom;
         rampColor(normVal, col, ramp);
@@ -1554,6 +1632,10 @@ function rebuild(lvl: LevelResult) {
     } else if (mode === 'flow_field' && flData) {
       for (let n = 0; n < nNodes; n++) {
         nodeNorm[n] = Math.max(0, Math.min(1, ((flData.speedNode[n] * loadRamp) - rngLo) / denom));
+      }
+    } else if (mode === 'contact_pressure' && cpField) {
+      for (let n = 0; n < nNodes; n++) {
+        nodeNorm[n] = Math.max(0, Math.min(1, ((cpField[n] * loadRamp) - rngLo) / denom));
       }
     } else {
       // Element-based fields (stress, peel, safety):
@@ -3359,6 +3441,7 @@ function ResultsPanel() {
                 { value: 'flow_field', label: '🌊 Flow Speed |v|', title: 'Rayleigh–Stokes continuum flow velocity |v| (mm/s) & wall shear' },
                 { value: 'strain_energy', label: '⚡ Strain Energy W_e', title: 'Elastic strain energy density W_e = σ_vM² / (2E) (kJ/m³)' },
                 { value: 'plastic_strain', label: '🧬 Plastic Strain ε_p', title: '3D J₂ / Ramberg–Osgood–Hollomon equivalent plastic strain ε_p (%)' },
+                { value: 'contact_pressure', label: '⊥ Contact Pressure p_n', title: '3D unilateral Signorini–Winkler bearing pressure p_n (MPa, ≥ 0; 0 where lifted off)' },
               ] as { value: ResultMode; label: string; title: string }[]).map((m) => {
                 const isAct = mode === m.value;
                 return (
@@ -3700,6 +3783,71 @@ function ResultsPanel() {
               );
             })}
           </div>
+          {lvl.meta.cases.some((c) => (c.contact_reports?.length ?? 0) > 0) && (
+            <div
+              data-testid="results-contact-card"
+              style={{
+                margin: '6px 0',
+                padding: '7px 9px',
+                background: 'rgba(16, 185, 129, 0.08)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#6ee7b7' }}>
+                  ⊥ Unilateral Signorini Contact &amp; Flange Liftoff
+                </span>
+                <button
+                  type="button"
+                  class="mini-btn"
+                  data-testid="contact-show-pressure-map"
+                  onClick={() => {
+                    if (ui.resultsModeShape >= 0) ui.set('resultsModeShape', -1);
+                    ui.set('resultsMode', mode === 'contact_pressure' ? 'stress' : 'contact_pressure');
+                  }}
+                >
+                  {mode === 'contact_pressure' ? 'Show Stress σ_vM' : 'Show Contact Pressure p_n'}
+                </button>
+              </div>
+              {lvl.meta.cases.flatMap((c) =>
+                (c.contact_reports ?? []).map((cr: ContactReport) => (
+                  <div
+                    key={`${c.name}·${cr.id}`}
+                    data-testid={`contact-report-${c.name}-${cr.id}`}
+                    style={{
+                      padding: '4px 6px',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      borderRadius: '4px',
+                      border: '1px solid rgba(148, 163, 184, 0.18)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '2px',
+                      fontSize: '10.5px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: '#e2e8f0' }}>
+                        {c.name} · <code>{cr.id}</code> ({cr.region})
+                      </span>
+                      <span class="num" style={{ color: '#6ee7b7', fontWeight: 600 }}>
+                        Active {(cr.contact_area_ratio * 100).toFixed(1)}% ({fmt(cr.active_area_mm2, 1)} / {fmt(cr.total_area_mm2, 1)} mm²) · {cr.active_set_iters} SSN iters
+                      </span>
+                    </div>
+                    <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                      Peak p_n: <strong>{fmt(cr.max_contact_pressure_mpa, 2)} MPa</strong> · Bearing Force:{' '}
+                      <strong>{fmt(cr.contact_force_n, 1)} N</strong> · Penetration:{' '}
+                      <strong>{fmt(cr.max_penetration_mm, 4)} mm</strong> · Max Liftoff:{' '}
+                      <strong>{fmt(cr.max_liftoff_mm, 4)} mm</strong>
+                    </div>
+                  </div>
+                )),
+              )}
+            </div>
+          )}
           {(isClinchingDocument(store.doc) || mode === 'plastic_strain') && (
             <LazyClinchingCalculatorCard
               lvl={lvl}

@@ -83,6 +83,15 @@ export interface Support {
   fixed: [boolean, boolean, boolean];
 }
 
+export interface Contact {
+  id: string;
+  region: string;
+  normal?: Vec3 | null;
+  k: number;
+  gap: number;
+  case?: string | null;
+}
+
 /** Direction a distributed load pushes in: a global vector, or frame components
  * (x, y, then outward normal n) of the load's region face. */
 export type LoadDir = { form: 'global'; v: Vec3 } | { form: 'local'; v: Vec3 };
@@ -186,6 +195,7 @@ export interface Document {
   root: Node[];
   regions: Region[];
   supports: Support[];
+  contacts?: Contact[];
   loads: Load[];
   temperatures: Temperature[];
   /** Convective (Robin) bands; the Rust side always serializes the key, and stale
@@ -557,6 +567,15 @@ export type DocCommand =
   | { cmd: 'delete_entity'; id: string }
   | { cmd: 'upsert_region'; id?: string; selectors: Selector[] }
   | { cmd: 'upsert_support'; id?: string; region: string; fixed: [boolean, boolean, boolean] }
+  | {
+      cmd: 'upsert_contact';
+      id?: string;
+      region: string;
+      normal?: Vec3 | null;
+      k?: number;
+      gap?: number;
+      case?: string | null;
+    }
   | { cmd: 'upsert_load'; id?: string; region: string; case?: string; kind: LoadKind }
   | {
       cmd: 'upsert_temperature';
@@ -677,6 +696,7 @@ export function emptyDocument(): Document {
     root: [],
     regions: [],
     supports: [],
+    contacts: [],
     loads: [],
     temperatures: [],
     convections: [],
@@ -705,6 +725,7 @@ export function withLetTables<T extends Document>(doc: T): T {
   doc.asserts ??= [];
   doc.convections ??= [];
   doc.heat_fluxes ??= [];
+  doc.contacts ??= [];
   doc.sketches ??= [];
   doc.sketch_features ??= [];
   if (doc.fill) doc.fill.rotate ??= [0, 0, 0];
@@ -764,6 +785,7 @@ export function allIds(doc: Document): Set<string> {
   walk(doc.root, (n) => s.add(n.id));
   for (const r of doc.regions) s.add(r.id);
   for (const r of doc.supports) s.add(r.id);
+  for (const r of doc.contacts ?? []) s.add(r.id);
   for (const r of doc.loads) s.add(r.id);
   // Temperatures missed this list before the let tables landed; an id is one name
   // space over statements and lets (either direction is "used more than once"), so

@@ -302,6 +302,7 @@ impl Server {
             "delete_entity" => self.delete_entity(args),
             "add_region" => self.add_region(args),
             "add_support" => self.add_support(args),
+            "add_contact" => self.add_contact(args),
             "add_load" => self.add_load(args),
             "add_temperature" => self.add_temperature(args),
             "add_convection" => self.add_convection(args),
@@ -352,6 +353,7 @@ impl Server {
                     | "delete_entity"
                     | "add_region"
                     | "add_support"
+                    | "add_contact"
                     | "add_load"
                     | "add_temperature"
                     | "add_convection"
@@ -456,6 +458,7 @@ impl Server {
             "solve": d.solve,
             "regions": d.regions,
             "supports": d.supports,
+            "contacts": d.contacts,
             "loads": d.loads,
             "temperatures": d.temperatures,
             "convections": d.convections,
@@ -479,6 +482,39 @@ impl Server {
         let id = args.get("id").and_then(Value::as_str).map(str::to_string);
         let d = self.doc.as_mut().ok_or(NO_DOC)?;
         let out = apply_doc_command(d, DocCommand::UpsertSupport { id, region, fixed })?;
+        Ok(json!({"added": out.entity_id, "problems": out.problems}))
+    }
+
+    fn add_contact(&mut self, args: Value) -> Result<Value, String> {
+        let region = text_field("region", &args)?;
+        let id = args.get("id").and_then(Value::as_str).map(str::to_string);
+        let normal: Option<[f64; 3]> = match args.get("normal") {
+            Some(v) if !v.is_null() => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| format!("add_contact normal: {e}"))?,
+            ),
+            _ => None,
+        };
+        let k = args.get("k").and_then(Value::as_f64);
+        let gap = args.get("gap").and_then(Value::as_f64);
+        let case = args
+            .get("case")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertContact {
+                id,
+                region,
+                normal,
+                k,
+                gap,
+                case,
+            },
+        )?;
         Ok(json!({"added": out.entity_id, "problems": out.problems}))
     }
 
@@ -2587,6 +2623,7 @@ fn doc_summary(d: &Document) -> Value {
         "shapes": d.node_ids().len(),
         "regions": d.regions.len(),
         "supports": d.supports.len(),
+        "contacts": d.contacts.len(),
         "loads": d.loads.len(),
         "temperatures": d.temperatures.len(),
         "missing_grids": missing_grids(d),
@@ -2755,10 +2792,11 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
- {"name":"delete_entity","description":"Delete a shape, sketch, region, support, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_contact`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"delete_entity","description":"Delete a shape, sketch, region, support, contact, load, temperature, convection, or heatflux by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
+ {"name":"add_contact","description":"Add or update a 3D unilateral Signorini–Winkler compression-only contact / foundation boundary condition (`u · n - gap <= 0, p_n >= 0`) on `region` (`normal` defaults to outward facet normal; `k` in MPa/mm, default 10000; `gap` clearance/interference in mm, default 0; optional `case`).","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"normal":{"type":["array","null"],"items":{"type":"number"},"minItems":3,"maxItems":3},"k":{"type":"number"},"gap":{"type":"number"},"case":{"type":"string"}}}},
  {"name":"add_load","description":"Apply a load (force/pressure/preload/distributed, including spatially varying `pressure_fn` f(x,y,z,r)) on a region for a load case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"case":{"type":"string"},"kind":{"type":"object"},"force":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"pressure":{"type":"number"},"pressure_fn":{"type":"string"},"preload":{"type":"number"},"axis":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}}},
  {"name":"add_temperature","description":"Apply a fixed or spatially varying (`temp_fn` f(x,y,z,r)) boundary temperature on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"celsius":{"type":"number"},"temp_fn":{"type":"string"},"case":{"type":"string"}}}},
  {"name":"add_convection","description":"Apply a Robin convective boundary condition (`h` in 1/mm = `(h_SI / k_solid) * 1e-3`, `t_inf` in °C, with optional world-space `h_fn` and `tinf_fn` f(x,y,z,r)) on a region for a thermal case.","inputSchema":{"type":"object","required":["region"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"h":{"type":"number"},"h_fn":{"type":"string"},"t_inf":{"type":"number"},"tinf":{"type":"number"},"tinf_fn":{"type":"string"},"case":{"type":"string"}}}},

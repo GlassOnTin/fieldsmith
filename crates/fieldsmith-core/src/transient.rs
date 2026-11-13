@@ -211,9 +211,11 @@ pub(crate) fn run_transient_thermal_case_multi_with_regions(
             peel_nodal: Vec::new(),
             peel_elem: vec![0.0; ne],
             max_layer_peel: 0.0,
+            contact_pressure: Vec::new(),
             vm_elem: vec![0.0; ne],
             solve: last.report.clone(),
             load_reports: Vec::new(),
+            contact_reports: Vec::new(),
             temperature: Some(last.temperature.clone()),
             conduction: Some(last.report.clone()),
         };
@@ -378,9 +380,11 @@ pub(crate) fn run_transient_thermal_case_multi_with_regions(
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; ne],
         max_layer_peel: 0.0,
+        contact_pressure: Vec::new(),
         vm_elem: frames_vm_elem[p_idx].clone(),
         solve: solve_rep,
         load_reports: Vec::new(),
+        contact_reports: Vec::new(),
         temperature: Some(peak_fr.temperature.clone()),
         conduction: Some(peak_fr.report.clone()),
     };

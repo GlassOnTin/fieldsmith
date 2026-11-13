@@ -411,6 +411,19 @@ export interface Provenance {
   iterations: number;
 }
 
+export interface ContactReport {
+  id: string;
+  region: string;
+  max_contact_pressure_mpa: number;
+  contact_force_n: number;
+  total_area_mm2: number;
+  active_area_mm2: number;
+  contact_area_ratio: number;
+  max_penetration_mm: number;
+  max_liftoff_mm: number;
+  active_set_iters: number;
+}
+
 export interface CaseSummary {
   name: string;
   max_von_mises: number;
@@ -425,6 +438,8 @@ export interface CaseSummary {
   /** Applied-load provenance when the case has resolved loads (serde field of
    * fieldsmith_core::CaseResult; absent on older bundles). */
   load_reports?: LoadReport[];
+  /** Certified per-patch 3D unilateral Signorini–Winkler contact reports when active. */
+  contact_reports?: ContactReport[];
   /** Thermal case only (M14): the nodal °C field, and the conduction solve's own
    * report (`solve` is the expansion solve's report). */
   temperature?: number[];
@@ -578,6 +593,8 @@ export interface AnalysisHandle {
   peelElemEnvelope(): Float64Array;
   /** Nodal temperature of one case (°C); empty when the case is mechanical. */
   temperature(ci: number): Float64Array;
+  /** Nodal unilateral contact pressure of one case (MPa, ≥ 0; empty when no contact is active). */
+  contactPressure?(ci: number): Float64Array;
   /** Mass-normalised mode shapes the run solved (solid handle only): how many. 0 without
    * a `solve modes=` on the document; the graded handle carries none. */
   modeShapeCount?(): number;
@@ -657,6 +674,7 @@ export interface GradedHandle extends AnalysisHandle {
   thermalPeelElem(ci: number): Float64Array;
   thermalStressElem?(ci: number): Float64Array;
   thermalGradTNodal?(ci: number): Float64Array;
+  thermalContactPressure?(ci: number): Float64Array;
   /** Most-compressive principal stress of one graded mechanical case at the element
    * centroids (MPa, ≤ 0) — the buckling indicator's load measure; direct getter for e2e. */
   sigmaMinElem(ci: number): Float64Array;
@@ -781,6 +799,8 @@ export interface LevelResult {
   peelElem: Float64Array[];
   /** Nodal °C per case; null for mechanical cases (M14). */
   temperature: (Float64Array | null)[];
+  /** Nodal unilateral contact pressure (MPa, ≥ 0) per case; null when no contact is active. */
+  contactPressure?: (Float64Array | null)[];
   /** Nodal 3D temperature gradient [dT/dx, dT/dy, dT/dz] (°C/mm, 3 * n_nodes) per case; null for mechanical cases. */
   gradTNodal?: (Float64Array | null)[];
   /** Max over cases of element-centroid von Mises (MPa). */

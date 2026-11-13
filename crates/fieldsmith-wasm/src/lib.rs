@@ -895,6 +895,19 @@ impl AnalysisOut {
         Float64Array::from(t)
     }
 
+    /// Nodal unilateral contact pressure of one case (MPa, ≥ 0) — empty when no contact is
+    /// active on this case.
+    #[wasm_bindgen(js_name = contactPressure)]
+    pub fn contact_pressure(&self, case: usize) -> Float64Array {
+        Float64Array::from(
+            self.a
+                .cases
+                .get(case)
+                .map(|c| c.contact_pressure.as_slice())
+                .unwrap_or(&[]),
+        )
+    }
+
     /// How many mode shapes this analysis carries (0 without a `solve modes=` on the
     /// document). Shapes are mass-normalised displacements, one per requested mode.
     #[wasm_bindgen(js_name = modeShapeCount)]
@@ -1335,6 +1348,30 @@ impl GradedOut {
     #[wasm_bindgen(js_name = peelElemEnvelope)]
     pub fn peel_elem_envelope(&self) -> Float64Array {
         Float64Array::from(&self.g.peel_envelope_elem[..])
+    }
+
+    /// Graded nodal unilateral contact pressure of one mechanical case (MPa, ≥ 0).
+    #[wasm_bindgen(js_name = contactPressure)]
+    pub fn contact_pressure(&self, case: usize) -> Float64Array {
+        Float64Array::from(
+            self.g
+                .cases
+                .get(case)
+                .map(|c| c.contact_pressure.as_slice())
+                .unwrap_or(&[]),
+        )
+    }
+
+    /// Graded nodal unilateral contact pressure of one thermal case (MPa, ≥ 0).
+    #[wasm_bindgen(js_name = thermalContactPressure)]
+    pub fn thermal_contact_pressure(&self, case: usize) -> Float64Array {
+        Float64Array::from(
+            self.g
+                .thermal_cases
+                .get(case)
+                .map(|c| c.contact_pressure.as_slice())
+                .unwrap_or(&[]),
+        )
     }
 
     /// Nodal temperature of one mechanical case (°C) — always empty: the graded `cases` are

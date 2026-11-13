@@ -27,13 +27,14 @@ use fieldsmith_mesh::{stuff, Quality};
 use fieldsmith_solve::{
     compliance, element_pressure_spatial, element_stress, element_stress_thermal,
     layer_peel_utilization, min_compressive, nodal_stress, nodal_stress_mat, nodal_stress_thermal,
-    nodal_stress_thermal_multi, solve, solve_conduction_spatial, thermal_load, thermal_load_multi,
-    upper_compliance, von_mises, HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions,
-    SpatialHeatFluxBc, SpatialRobinBc, Stress, ThermalRefData, V3,
+    nodal_stress_thermal_multi, solve, solve_conduction_spatial, solve_unilateral_contact,
+    thermal_load, thermal_load_multi, upper_compliance, von_mises, ContactFacet, ContactPatch,
+    HeatFluxBc, P2Mesh, Problem, RobinBc, SolveReport, SolverOptions, SpatialHeatFluxBc,
+    SpatialRobinBc, Stress, ThermalRefData, V3,
 };
 use serde::Serialize;
 
-pub use fieldsmith_solve::Material;
+pub use fieldsmith_solve::{ContactReport, ContactSolveOutput, Material};
 pub use regions::{face_frame, region_facets, region_facets_exact, FaceFrame, Facet};
 
 /// Monotonic clock in milliseconds (wall clock natively, `performance.now()` in the browser).
@@ -103,6 +104,10 @@ pub struct CaseResult {
     /// Peak element-centroid inter-layer peel utilization across this case.
     #[serde(skip)]
     pub max_layer_peel: f64,
+    /// Nodal unilateral contact normal pressure (`MPa`, `0.0` outside active compression),
+    /// populated when one or more `contact` statements apply to this case.
+    #[serde(skip)]
+    pub contact_pressure: Vec<f64>,
     pub max_von_mises: f64,
     pub max_vm_elem: f64,
     pub max_displacement: f64,
@@ -125,6 +130,9 @@ pub struct CaseResult {
     /// verifier's resolved-model runs (which call `run_case` directly), and for
     /// thermal cases (whose driver is the conduction field, not a load).
     pub load_reports: Vec<LoadReport>,
+    /// Certified unilateral Signorini contact summaries (`contact` statements active on this case).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contact_reports: Vec<ContactReport>,
     /// Nodal temperature (°C) for a thermal case — the conduction field, rendered with
     /// a legend in the Results lens. `None` on mechanical cases.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1192,6 +1200,133 @@ pub(crate) fn case_heat_fluxes_all_with_regions(
     Ok((uniform, spatial))
 }
 
+/// Resolve unilateral [`ContactPatch`]es applicable to `case_name` (`c.case.is_empty()` or
+/// `c.case == case_name`) onto the 6-node P2 surface facets.
+pub fn case_contact_patches(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    case_name: &str,
+    h: f64,
+) -> Result<Vec<ContactPatch>, SetupError> {
+    case_contact_patches_with_regions(doc, mesh, facets, case_name, h, None)
+}
+
+pub(crate) fn case_contact_patches_with_regions(
+    doc: &Document,
+    mesh: &P2Mesh,
+    facets: &[Facet],
+    case_name: &str,
+    h: f64,
+    region_lookup: Option<&RegionLookup<'_>>,
+) -> Result<Vec<ContactPatch>, SetupError> {
+    let mut out = Vec::new();
+    for c in doc
+        .contacts
+        .iter()
+        .filter(|c| c.case.is_empty() || c.case == case_name)
+    {
+        let fs = match region_lookup {
+            Some(lookup) => lookup(&c.region)?,
+            None => region_facets(doc, &c.region, mesh, facets, h)?,
+        };
+        if fs.is_empty() {
+            return Err(SetupError(format!(
+                "contact '{}': region '{}' does not touch the part's surface",
+                c.id, c.region
+            )));
+        }
+        let patch_facets: Vec<ContactFacet> = fs
+            .iter()
+            .map(|&fi| ContactFacet {
+                nodes: facets[fi].nodes,
+                normal: c.normal.unwrap_or_else(|| facets[fi].normal(mesh)),
+            })
+            .collect();
+        out.push(ContactPatch {
+            id: c.id.clone(),
+            region: c.region.clone(),
+            k_mpa_mm: c.k,
+            gap_mm: c.gap,
+            facets: patch_facets,
+        });
+    }
+    Ok(out)
+}
+
+/// Solve one mechanical case subject to unilateral [`ContactPatch`]es via 3D P2 Semi-Smooth
+/// Newton active-set iteration (`solve_unilateral_contact`), delegating directly to
+/// [`run_case`] when `contacts` is empty.
+#[allow(clippy::too_many_arguments)]
+pub fn run_case_with_contacts(
+    mesh: &P2Mesh,
+    material: &Material,
+    fixed: &[u8],
+    force: Vec<f64>,
+    contacts: &[ContactPatch],
+    name: String,
+    equilibrate: bool,
+    prescribed: &dyn Fn([V3; 3]) -> Option<V3>,
+) -> Result<CaseResult, SetupError> {
+    if contacts.is_empty() {
+        return run_case(mesh, material, fixed, force, name, equilibrate, prescribed);
+    }
+    let out = solve_unilateral_contact(
+        mesh,
+        material,
+        fixed,
+        &force,
+        contacts,
+        SolverOptions::default(),
+    )
+    .map_err(SetupError)?;
+    let routed = material.cubic.is_some();
+    let (stress, stress_elem) = if routed {
+        (
+            nodal_stress_mat(mesh, &out.u, material),
+            elem_stress_mat(mesh, &out.u, material),
+        )
+    } else {
+        (
+            nodal_stress(mesh, &out.u, &material.young, material.poisson),
+            elem_stress(mesh, &out.u, &material.young, material.poisson),
+        )
+    };
+    let vm_elem: Vec<f64> = stress_elem.iter().map(von_mises).collect();
+    let sigma_min_elem: Vec<f64> = stress_elem.iter().map(min_compressive).collect();
+    let vm: Vec<f64> = stress.iter().map(von_mises).collect();
+    let max_d = (0..mesh.nodes.len())
+        .map(|i| {
+            (out.u[3 * i].powi(2) + out.u[3 * i + 1].powi(2) + out.u[3 * i + 2].powi(2)).sqrt()
+        })
+        .fold(0.0, f64::max);
+    Ok(CaseResult {
+        name,
+        max_von_mises: vm.iter().cloned().fold(0.0, f64::max),
+        max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
+        max_displacement: max_d,
+        compliance: compliance(&force, &out.u),
+        compliance_upper: None,
+        u: out.u,
+        stress,
+        von_mises: vm,
+        sigma_min_elem,
+        stress_elem,
+        plastic_strain_elem: vec![0.0; mesh.tets.len()],
+        grad_t_nodal: None,
+        peel_nodal: Vec::new(),
+        peel_elem: vec![0.0; mesh.tets.len()],
+        max_layer_peel: 0.0,
+        contact_pressure: out.nodal_pressure_mpa,
+        vm_elem,
+        solve: out.solve_report,
+        load_reports: Vec::new(),
+        contact_reports: out.reports,
+        temperature: None,
+        conduction: None,
+    })
+}
+
 /// Solve one case and recover per-node and per-element von Mises with the given per-element
 /// moduli. Shared by the solid and graded-fill solve paths, and by the verifier's resolved-model
 /// runs.
@@ -1259,9 +1394,11 @@ pub fn run_case(
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
+        contact_pressure: Vec::new(),
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
+        contact_reports: Vec::new(),
         temperature: None,
         conduction: None,
     })
@@ -1287,12 +1424,44 @@ pub fn run_case_elastoplastic(
     equilibrate: bool,
     prescribed: &dyn Fn([V3; 3]) -> Option<V3>,
 ) -> Result<CaseResult, SetupError> {
+    run_case_elastoplastic_with_contacts(
+        mesh,
+        young,
+        poisson,
+        yield_strength,
+        yield_elem,
+        hardening_n,
+        fixed,
+        force,
+        &[],
+        name,
+        equilibrate,
+        prescribed,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_case_elastoplastic_with_contacts(
+    mesh: &P2Mesh,
+    young: &[f64],
+    poisson: f64,
+    yield_strength: f64,
+    yield_elem: &[f64],
+    hardening_n: f64,
+    fixed: &[u8],
+    force: Vec<f64>,
+    contacts: &[ContactPatch],
+    name: String,
+    equilibrate: bool,
+    prescribed: &dyn Fn([V3; 3]) -> Option<V3>,
+) -> Result<CaseResult, SetupError> {
     let base_mat = Material::iso(young.to_vec(), poisson);
-    let mut cur_case = run_case(
+    let mut cur_case = run_case_with_contacts(
         mesh,
         &base_mat,
         fixed,
         force.clone(),
+        contacts,
         name.clone(),
         equilibrate,
         prescribed,
@@ -1333,11 +1502,12 @@ pub fn run_case_elastoplastic(
             break;
         }
         let sec_mat = Material::iso(e_sec.clone(), poisson);
-        let next_case = run_case(
+        let next_case = run_case_with_contacts(
             mesh,
             &sec_mat,
             fixed,
             force.clone(),
+            contacts,
             name.clone(),
             equilibrate && pass + 1 == n_passes,
             prescribed,
@@ -1447,7 +1617,37 @@ pub fn run_thermal_case(
         fixed: fixed.to_vec(),
         force,
     };
-    let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+    let contacts = case_contact_patches(doc, mesh, facets, &name, h)?;
+    let (u, rep, contact_pressure, contact_reports, compliance_upper) = if contacts.is_empty() {
+        let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+        let cu = if equilibrate {
+            Some(
+                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
+                    .map_err(SetupError)?
+                    .j,
+            )
+        } else {
+            None
+        };
+        (u, rep, Vec::new(), Vec::new(), cu)
+    } else {
+        let out = solve_unilateral_contact(
+            mesh,
+            &problem.material,
+            fixed,
+            &problem.force,
+            &contacts,
+            SolverOptions::default(),
+        )
+        .map_err(SetupError)?;
+        (
+            out.u,
+            out.solve_report,
+            out.nodal_pressure_mpa,
+            out.reports,
+            None,
+        )
+    };
     let stress = nodal_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
     let stress_elem = elem_stress_thermal(mesh, &u, young, poisson, alpha, &dt);
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
@@ -1462,15 +1662,7 @@ pub fn run_thermal_case(
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
         compliance: compliance(&problem.force, &u),
-        compliance_upper: if equilibrate {
-            Some(
-                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
-                    .map_err(SetupError)?
-                    .j,
-            )
-        } else {
-            None
-        },
+        compliance_upper,
         u,
         stress,
         von_mises: vm,
@@ -1481,9 +1673,11 @@ pub fn run_thermal_case(
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
+        contact_pressure,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
+        contact_reports,
         temperature: Some(t),
         conduction: Some(creport),
     })
@@ -1554,9 +1748,12 @@ pub(crate) fn run_thermal_case_multi_with_regions(
     )
     .map_err(SetupError)?;
     let grad_t = compute_nodal_temperature_gradient(mesh, &t);
-    // Pure thermal conduction (no mechanical supports or zero CTE): return exact nodal
+    let contacts = case_contact_patches_with_regions(doc, mesh, facets, &name, h, region_lookup)?;
+    // Pure thermal conduction (no mechanical supports/contacts or zero CTE): return exact nodal
     // temperature field and conduction report without forcing an elastic stress solve.
-    if fixed.iter().all(|&m| m == 0) || alpha_elem.iter().all(|&a| a.abs() < 1e-18) {
+    if (fixed.iter().all(|&m| m == 0) && contacts.is_empty())
+        || alpha_elem.iter().all(|&a| a.abs() < 1e-18)
+    {
         let nn = mesh.nodes.len();
         let ne = mesh.tets.len();
         return Ok(CaseResult {
@@ -1576,9 +1773,11 @@ pub(crate) fn run_thermal_case_multi_with_regions(
             peel_nodal: Vec::new(),
             peel_elem: vec![0.0; ne],
             max_layer_peel: 0.0,
+            contact_pressure: Vec::new(),
             vm_elem: vec![0.0; ne],
             solve: creport.clone(),
             load_reports: Vec::new(),
+            contact_reports: Vec::new(),
             temperature: Some(t),
             conduction: Some(creport),
         });
@@ -1603,7 +1802,36 @@ pub(crate) fn run_thermal_case_multi_with_regions(
         fixed: fixed.to_vec(),
         force,
     };
-    let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+    let (u, rep, contact_pressure, contact_reports, compliance_upper) = if contacts.is_empty() {
+        let (u, rep) = solve(&problem, SolverOptions::default()).map_err(SetupError)?;
+        let cu = if equilibrate {
+            Some(
+                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
+                    .map_err(SetupError)?
+                    .j,
+            )
+        } else {
+            None
+        };
+        (u, rep, Vec::new(), Vec::new(), cu)
+    } else {
+        let out = solve_unilateral_contact(
+            mesh,
+            &problem.material,
+            fixed,
+            &problem.force,
+            &contacts,
+            SolverOptions::default(),
+        )
+        .map_err(SetupError)?;
+        (
+            out.u,
+            out.solve_report,
+            out.nodal_pressure_mpa,
+            out.reports,
+            None,
+        )
+    };
     let stress = nodal_stress_thermal_multi(mesh, &u, young, poisson, alpha_elem, &dt);
     let stress_elem = elem_stress_thermal_multi(mesh, &u, young, poisson, alpha_elem, &dt);
     let vm: Vec<f64> = stress.iter().map(von_mises).collect();
@@ -1618,15 +1846,7 @@ pub(crate) fn run_thermal_case_multi_with_regions(
         max_vm_elem: vm_elem.iter().cloned().fold(0.0, f64::max),
         max_displacement: max_d,
         compliance: compliance(&problem.force, &u),
-        compliance_upper: if equilibrate {
-            Some(
-                upper_compliance(&problem, &|_| Some([0.0, 0.0, 0.0]))
-                    .map_err(SetupError)?
-                    .j,
-            )
-        } else {
-            None
-        },
+        compliance_upper,
         u,
         stress,
         von_mises: vm,
@@ -1637,9 +1857,11 @@ pub(crate) fn run_thermal_case_multi_with_regions(
         peel_nodal: Vec::new(),
         peel_elem: vec![0.0; mesh.tets.len()],
         max_layer_peel: 0.0,
+        contact_pressure,
         vm_elem,
         solve: rep,
         load_reports: Vec::new(),
+        contact_reports,
         temperature: Some(t),
         conduction: Some(creport),
     })
@@ -1829,7 +2051,8 @@ pub(crate) fn prepare(
     }
     let has_thermal =
         !doc.temperatures.is_empty() || !doc.convections.is_empty() || !doc.heat_fluxes.is_empty();
-    if doc.supports.is_empty() && (!has_thermal || !doc.loads.is_empty()) {
+    if doc.supports.is_empty() && doc.contacts.is_empty() && (!has_thermal || !doc.loads.is_empty())
+    {
         return Err(SetupError(
             "add a support: the part needs something to hold it".into(),
         ));
@@ -2103,6 +2326,7 @@ pub fn analyse_full(
     let hardening_n = doc.solve.hardening_n.or(mat.hardening_n).unwrap_or(0.18);
     for name in case_names(doc) {
         let (force, reports, prescribed_map) = case_force_report(doc, &mesh, &facets, &name, h)?;
+        let contacts = case_contact_patches(doc, &mesh, &facets, &name, h)?;
         let mut node_key: std::collections::HashMap<[u64; 3], u8> =
             std::collections::HashMap::new();
         for (i, p) in mesh.nodes.iter().enumerate() {
@@ -2111,7 +2335,7 @@ pub fn analyse_full(
         let prescribed = prescribed_fn(&node_key, &prescribed_map);
         let mut case =
             if nl_plastic && (mat.yield_strength > 0.0 || yield_elem.iter().any(|&y| y > 0.0)) {
-                run_case_elastoplastic(
+                run_case_elastoplastic_with_contacts(
                     &mesh,
                     &young,
                     mat.nu,
@@ -2120,16 +2344,18 @@ pub fn analyse_full(
                     hardening_n,
                     &fixed,
                     force,
+                    &contacts,
                     name,
                     equilibrate,
                     &prescribed,
                 )?
             } else {
-                run_case(
+                run_case_with_contacts(
                     &mesh,
                     &Material::iso(young.to_vec(), mat.nu),
                     &fixed,
                     force,
+                    &contacts,
                     name,
                     equilibrate,
                     &prescribed,
@@ -2146,7 +2372,7 @@ pub fn analyse_full(
     let mut transient = Vec::new();
     let thermal_cases = doc.thermal_cases();
     if !thermal_cases.is_empty() {
-        let has_supports = fixed.iter().any(|&m| m != 0);
+        let has_supports = fixed.iter().any(|&m| m != 0) || !doc.contacts.is_empty();
         let mut alphas = Vec::with_capacity(alpha_elem.len());
         if has_supports {
             let _ = mat.alpha.ok_or_else(|| {
@@ -2241,6 +2467,7 @@ pub fn analyse_full(
             peel_nodal: Vec::new(),
             peel_elem: vec![0.0; ne],
             max_layer_peel: 0.0,
+            contact_pressure: Vec::new(),
             max_von_mises: 0.0,
             max_vm_elem: 0.0,
             max_displacement: 0.0,
@@ -2256,6 +2483,7 @@ pub fn analyse_full(
                 ..Default::default()
             },
             load_reports: Vec::new(),
+            contact_reports: Vec::new(),
             temperature: None,
             conduction: None,
         });

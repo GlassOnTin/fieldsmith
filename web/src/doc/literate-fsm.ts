@@ -78,6 +78,18 @@ export function evaluateLiterateAssertOnLevel(
         max_von_mises: number;
         compliance: number;
         load_reports?: { resultant: [number, number, number] }[];
+        contact_reports?: {
+          id: string;
+          region: string;
+          max_contact_pressure_mpa: number;
+          contact_force_n: number;
+          total_area_mm2: number;
+          active_area_mm2: number;
+          contact_area_ratio: number;
+          max_penetration_mm: number;
+          max_liftoff_mm: number;
+          active_set_iters: number;
+        }[];
       }[];
       max_layer_peel?: number[];
       mass_g?: number;
@@ -197,6 +209,69 @@ export function evaluateLiterateAssertOnLevel(
           val = tr.final_vm_elem ?? (tl.length > 0 ? tl[tl.length - 1].max_vm_elem : null);
         } else if (field === 'steady_limit_vm_elem') val = tr.steady_limit_vm_elem ?? null;
         else if (field === 'shock_amplification') val = tr.shock_amplification ?? null;
+      }
+    } else if (
+      [
+        'max_contact_pressure',
+        'contact_pressure',
+        'contact_force_n',
+        'contact_force',
+        'contact_area_ratio',
+        'active_contact_area_mm2',
+        'max_penetration_mm',
+        'max_liftoff_mm',
+        'liftoff_mm',
+      ].includes(field)
+    ) {
+      const slashIdx = caseSel.indexOf('/');
+      const casePart = slashIdx >= 0 ? caseSel.slice(0, slashIdx).trim() : caseSel;
+      const contactIdOpt = slashIdx >= 0 ? caseSel.slice(slashIdx + 1).trim() : '';
+      let chosenCase = lvl.meta.cases[0];
+      let contactFilter = contactIdOpt;
+      if (!casePart) {
+        chosenCase =
+          lvl.meta.cases.find((c) => (c.contact_reports?.length ?? 0) > 0) ?? lvl.meta.cases[0];
+      } else {
+        const idx1 = Number.parseInt(casePart, 10);
+        if (String(idx1) === casePart && idx1 >= 1 && idx1 <= lvl.meta.cases.length) {
+          chosenCase = lvl.meta.cases[idx1 - 1];
+        } else {
+          const lower = casePart.toLowerCase();
+          const byName = lvl.meta.cases.find(
+            (c) => c.name.toLowerCase() === lower || c.name.includes(casePart),
+          );
+          if (byName) {
+            chosenCase = byName;
+          } else if (!contactIdOpt) {
+            const byContact = lvl.meta.cases.find((c) =>
+              (c.contact_reports ?? []).some((r) => r.id.toLowerCase() === lower),
+            );
+            if (byContact) {
+              chosenCase = byContact;
+              contactFilter = casePart;
+            }
+          }
+        }
+      }
+      const reps = (chosenCase?.contact_reports ?? []).filter(
+        (r) => !contactFilter || r.id.toLowerCase() === contactFilter.toLowerCase(),
+      );
+      if (reps.length > 0) {
+        if (field === 'max_contact_pressure' || field === 'contact_pressure') {
+          val = Math.max(...reps.map((r) => r.max_contact_pressure_mpa));
+        } else if (field === 'contact_force_n' || field === 'contact_force') {
+          val = reps.reduce((s, r) => s + r.contact_force_n, 0);
+        } else if (field === 'active_contact_area_mm2') {
+          val = reps.reduce((s, r) => s + r.active_area_mm2, 0);
+        } else if (field === 'contact_area_ratio') {
+          const act = reps.reduce((s, r) => s + r.active_area_mm2, 0);
+          const tot = reps.reduce((s, r) => s + r.total_area_mm2, 0);
+          val = tot > 0 ? act / tot : 0;
+        } else if (field === 'max_penetration_mm') {
+          val = Math.max(...reps.map((r) => r.max_penetration_mm));
+        } else if (field === 'max_liftoff_mm' || field === 'liftoff_mm') {
+          val = Math.max(...reps.map((r) => r.max_liftoff_mm));
+        }
       }
     } else {
       const ci = findCaseIdx(lvl.meta.cases);
@@ -333,6 +408,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T22: 'docs/tutorials/T22-preloaded-bolted-flange-joint.md',
   T23: 'docs/tutorials/T23-clinching-process-window-and-slock-codesign.md',
   T24: 'docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md',
+  T25: 'docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -353,6 +429,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A18: 'docs/analytic-tests/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.md',
   A19: 'docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md',
   A20: 'docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md',
+  A21: 'docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -380,6 +457,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T22: 'examples/tutorials/T22-preloaded-bolted-flange-joint.fsm',
   T23: 'examples/tutorials/T23-clinching-process-window-and-slock-codesign.fsm',
   T24: 'examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm',
+  T25: 'examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -400,6 +478,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A18: 'examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm',
   A19: 'examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm',
   A20: 'examples/analytic/A20-transient-biot-quench-thermal-shock.fsm',
+  A21: 'examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -427,6 +506,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T22: ['docs/verification/V57.md', 'docs/verification/V63.md'],
   T23: ['docs/verification/V53.md', 'docs/verification/V63.md'],
   T24: ['docs/verification/V20.md', 'docs/verification/V63.md'],
+  T25: ['docs/verification/V57.md', 'docs/verification/V63.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -447,6 +527,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
   A19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
   A20: ['docs/verification/V20.md', 'docs/verification/V63.md'],
+  A21: ['docs/verification/V63.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

@@ -13,6 +13,10 @@ pub struct Document {
     pub root: Vec<Node>,
     pub regions: Vec<Region>,
     pub supports: Vec<Support>,
+    /// Unilateral Signorini boundary contacts (`contact <id> <region> ...`), evaluated with
+    /// active-set / semi-smooth Newton normal complementarity (`u · n - gap ≤ 0, p_n ≥ 0`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<Contact>,
     pub loads: Vec<Load>,
     /// Fixed boundary temperatures (°C), placed like loads: one region, one value,
     /// one thermal case. See [`Temperature`].
@@ -75,6 +79,7 @@ impl Default for Document {
             root: Vec::new(),
             regions: Vec::new(),
             supports: Vec::new(),
+            contacts: Vec::new(),
             loads: Vec::new(),
             temperatures: Vec::new(),
             convections: Vec::new(),
@@ -469,6 +474,38 @@ pub struct Support {
     pub region: String,
     /// Which displacement components are held at zero. `[true; 3]` = fully fixed.
     pub fixed: [bool; 3],
+}
+
+/// Default normal penalty foundation stiffness `k_n` (`MPa/mm`) when `k=` is omitted on `contact`.
+pub const DEFAULT_CONTACT_K_MPA_MM: f64 = 10_000.0;
+
+fn default_contact_k() -> f64 {
+    DEFAULT_CONTACT_K_MPA_MM
+}
+
+/// Unilateral Signorini boundary contact (`u · n - gap ≤ 0, p_n ≥ 0, p_n (u · n - gap) = 0`)
+/// against a rigid foundation or mating seat (`VISION.md §5.2 Pillar IV.2`).
+///
+/// - `normal`: optional explicit obstacle normal `(nx, ny, nz)` pointing from the part toward
+///   the rigid obstacle (`u · n_hat > gap` = compression/penetration, `u · n_hat < gap` =
+///   liftoff/separation with `p_n = 0`). When `None`, each boundary facet uses its outward
+///   surface normal `n_f`.
+/// - `k`: normal foundation stiffness `k_n > 0` in `MPa/mm` (`p_n = k_n max(0, u · n_hat - gap)`).
+/// - `gap`: initial clearance `g_0 ≥ 0` in `mm` before contact engages (`0.0` = flush mating seat).
+/// - `case`: optional case filter; empty string applies to every elastic/thermo-elastic case
+///   (matching `supports`), while a non-empty string restricts the contact to that named case.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Contact {
+    pub id: String,
+    pub region: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<[f64; 3]>,
+    #[serde(default = "default_contact_k")]
+    pub k: f64,
+    #[serde(default)]
+    pub gap: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub case: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -944,6 +981,7 @@ impl Document {
             if !seen.insert(l.name.clone())
                 || self.loads.iter().any(|x| x.id == l.name)
                 || self.supports.iter().any(|x| x.id == l.name)
+                || self.contacts.iter().any(|x| x.id == l.name)
                 || self.temperatures.iter().any(|x| x.id == l.name)
                 || self.convections.iter().any(|x| x.id == l.name)
                 || self.heat_fluxes.iter().any(|x| x.id == l.name)
@@ -969,6 +1007,7 @@ impl Document {
         for c in &self.consumed {
             let named = ids.contains(&c.target)
                 || self.loads.iter().any(|l| l.id == c.target)
+                || self.contacts.iter().any(|ct| ct.id == c.target)
                 || self.temperatures.iter().any(|t| t.id == c.target)
                 || self.convections.iter().any(|v| v.id == c.target)
                 || self.heat_fluxes.iter().any(|v| v.id == c.target);
@@ -1071,6 +1110,49 @@ impl Document {
             }
             if !s.fixed.iter().any(|&f| f) {
                 errs.push(format!("Support '{}' holds no direction", s.id));
+            }
+        }
+        let mut seen_contacts = std::collections::HashSet::new();
+        for c in &self.contacts {
+            if !crate::fsm::is_ident(&c.id) {
+                errs.push(format!(
+                    "Contact '{}' is not a valid name (letters, digits, _; not starting with a digit)",
+                    c.id
+                ));
+            }
+            if !seen_contacts.insert(c.id.clone()) {
+                errs.push(format!("Contact '{}' is defined more than once", c.id));
+            }
+            if !region_ids.contains(&c.region.as_str()) {
+                errs.push(format!(
+                    "Contact '{}' refers to missing region '{}'",
+                    c.id, c.region
+                ));
+            }
+            if !(c.k.is_finite() && c.k > 0.0) {
+                errs.push(format!(
+                    "Contact '{}' k= must be a positive finite stiffness in MPa/mm (got {})",
+                    c.id, c.k
+                ));
+            }
+            if !(c.gap.is_finite() && c.gap >= 0.0) {
+                errs.push(format!(
+                    "Contact '{}' gap= must be a finite initial clearance ≥ 0 in mm (got {})",
+                    c.id, c.gap
+                ));
+            }
+            if let Some(n) = c.normal {
+                if !n.iter().all(|x| x.is_finite()) {
+                    errs.push(format!(
+                        "Contact '{}' normal= has a non-finite component",
+                        c.id
+                    ));
+                } else if (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) <= 1e-24 {
+                    errs.push(format!(
+                        "Contact '{}' normal= cannot be the zero vector",
+                        c.id
+                    ));
+                }
             }
         }
         for l in &self.loads {
@@ -1884,6 +1966,7 @@ impl Document {
         let mut taken: std::collections::HashSet<String> = self.node_ids().into_iter().collect();
         taken.extend(self.regions.iter().map(|r| r.id.clone()));
         taken.extend(self.supports.iter().map(|r| r.id.clone()));
+        taken.extend(self.contacts.iter().map(|r| r.id.clone()));
         taken.extend(self.loads.iter().map(|r| r.id.clone()));
         taken.extend(self.temperatures.iter().map(|r| r.id.clone()));
         taken.extend(self.lets.iter().map(|l| l.name.clone()));
