@@ -12,6 +12,7 @@ import type {
   Document,
   Face,
   Material,
+  ObserveSpec,
   ParametricSketch,
   SketchMacro,
   SketchPresetMeta,
@@ -1786,6 +1787,93 @@ export function computeFsmUq(docOrFsm: Document | string, spec?: UqSpec): UqRepo
   const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
   const specJson = spec ? JSON.stringify(spec) : undefined;
   return JSON.parse(w.computeFsmUq(payload, specJson)) as UqReport;
+}
+
+export interface CalibrateSpec {
+  params?: string[];
+  observations?: ObserveSpec[];
+  priors?: UncertaintySpec[];
+  bounds?: Record<string, [number, number]>;
+  max_iters?: number;
+  dofs?: number;
+  h?: number;
+}
+
+export interface CalibratedParamSummary {
+  param: string;
+  label: string;
+  unit?: string;
+  prior_mean: number;
+  prior_sigma: number;
+  posterior_mean: number;
+  posterior_sigma: number;
+  posterior_p10: number;
+  posterior_p90: number;
+  sigma_reduction_pct: number;
+  shift_in_prior_sigmas: number;
+  lower_bound: number;
+  upper_bound: number;
+}
+
+export interface ObservationFitSummary {
+  label: string;
+  metric: string;
+  unit?: string;
+  measured: number;
+  obs_sigma: number;
+  prior_prediction: number;
+  posterior_prediction: number;
+  prior_pred_sigma: number;
+  posterior_pred_sigma: number;
+  normalized_residual_z: number;
+}
+
+export interface CalibrationIteration {
+  iter: number;
+  map_cost: number;
+  chi2_obs: number;
+  chi2_prior: number;
+  damping_lambda: number;
+  step_norm_z: number;
+  params: Record<string, number>;
+}
+
+export interface CalibrationReport {
+  method: string;
+  sensitivity_method: string;
+  iterations: number;
+  solves_run: number;
+  converged: boolean;
+  h: number;
+  initial_cost: number;
+  final_cost: number;
+  chi2_obs: number;
+  chi2_prior: number;
+  reduced_chi2: number;
+  parameters: CalibratedParamSummary[];
+  observations: ObservationFitSummary[];
+  posterior_correlation: number[][];
+  history: CalibrationIteration[];
+  initial_verification: VerificationReport;
+  final_verification: VerificationReport;
+  calibrated_fsm: string;
+  elapsed_ms: number;
+}
+
+export interface CalibrateBundle {
+  report: CalibrationReport;
+  doc: Document;
+}
+
+export function calibrateFsmDocument(
+  docOrFsm: Document | string,
+  spec?: CalibrateSpec,
+): CalibrateBundle {
+  const payload = typeof docOrFsm === 'string' ? docOrFsm : JSON.stringify(docOrFsm);
+  const specJson = spec ? JSON.stringify(spec) : undefined;
+  const res: CalibrateBundle = JSON.parse(w.calibrateFsmDocument(payload, specJson));
+  withLetTables(res.doc);
+  return res;
 }
 
 export interface ChannelFlowSpec {

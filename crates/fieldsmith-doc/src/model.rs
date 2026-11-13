@@ -62,6 +62,10 @@ pub struct Document {
     /// (`p90.<metric>`, `p10.<metric>`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncertainties: Vec<UncertaintySpec>,
+    /// Empirical bench / test-rig sensor observations (`observe ...`), fused with priors
+    /// via 3D adjoint Gauss–Newton Bayesian MAP calibration (`QuestionSpec::Calibrate`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observations: Vec<ObserveSpec>,
     /// Parametric 2D sketches (`sketch <id> ... { ... }`), preserved across `.fsm` and JSON
     /// round-trips so interactive edits and `let` sweeps re-solve from constraint truth.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -98,6 +102,7 @@ impl Default for Document {
             coupled_system: None,
             asserts: Vec::new(),
             uncertainties: Vec::new(),
+            observations: Vec::new(),
             sketches: Vec::new(),
             sketch_features: Vec::new(),
             system_block: None,
@@ -153,6 +158,21 @@ impl UncertaintySpec {
             cv * nominal.signum()
         }
     }
+}
+
+/// Empirical bench or test-stand sensor reading (`observe "<label>" metric="<metric>" measured=<y> std=<σ> [unit="..."]`).
+///
+/// Paired with [`UncertaintySpec`] (or `system` `epistemic` priors) in `QuestionSpec::Calibrate`
+/// to infer the Maximum-A-Posteriori (MAP) parameter vector and Laplace posterior covariance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObserveSpec {
+    #[serde(default)]
+    pub label: String,
+    pub metric: String,
+    pub measured: f64,
+    pub std: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
 }
 
 /// A named scalar parameter: `let wall_t = 4` or `let bolt_pitch = 2 * wall_t + 2`.
@@ -1858,6 +1878,26 @@ impl Document {
                 errs.push(format!(
                     "Uncertainty '{}' on '{}': specify std > 0 or cv > 0",
                     u.label, u.param
+                ));
+            }
+        }
+        for obs in &self.observations {
+            if obs.metric.trim().is_empty() {
+                errs.push(format!(
+                    "Observation '{}': metric cannot be empty",
+                    obs.label
+                ));
+            }
+            if !obs.measured.is_finite() {
+                errs.push(format!(
+                    "Observation '{}' on '{}': measured value must be finite",
+                    obs.label, obs.metric
+                ));
+            }
+            if !obs.std.is_finite() || obs.std <= 0.0 {
+                errs.push(format!(
+                    "Observation '{}' on '{}': std must be finite and > 0",
+                    obs.label, obs.metric
                 ));
             }
         }

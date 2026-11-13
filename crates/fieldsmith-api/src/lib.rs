@@ -18,6 +18,7 @@ pub mod schema;
 pub mod store;
 pub mod sweep_csv;
 
+use fieldsmith_core::calibrate::{calibrate_document, CalibrateSpec};
 use fieldsmith_core::contracts::verify_document;
 use fieldsmith_core::optimise::{optimise_document, OptimiseSpec};
 use fieldsmith_core::overhang::{check_overhang, DEFAULT_BUILD_AXIS, DEFAULT_OVERHANG_DEG};
@@ -237,6 +238,7 @@ pub fn respond(input: &str) -> Reply {
                         fixing: None,
                         clinching: None,
                         transient: None,
+                        calibration: None,
                         error: None,
                     })
                 }
@@ -332,6 +334,7 @@ pub fn respond(input: &str) -> Reply {
                                     fixing: None,
                                     clinching: None,
                                     transient: None,
+                                    calibration: None,
                                     error: None,
                                 })
                             }
@@ -385,6 +388,7 @@ pub fn respond(input: &str) -> Reply {
                             fixing: None,
                             clinching: None,
                             transient: None,
+                            calibration: None,
                             error: None,
                         })
                     }
@@ -453,6 +457,7 @@ pub fn respond(input: &str) -> Reply {
                         fixing: None,
                         clinching: None,
                         transient: None,
+                        calibration: None,
                         error: None,
                     })
                 }
@@ -597,6 +602,7 @@ pub fn respond(input: &str) -> Reply {
                 fixing: None,
                 clinching: None,
                 transient: None,
+                calibration: None,
                 error: None,
             })
         }
@@ -626,6 +632,7 @@ pub fn respond(input: &str) -> Reply {
                     fixing: None,
                     clinching: None,
                     transient: None,
+                    calibration: None,
                     error: None,
                 }),
                 Err(e) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -662,6 +669,7 @@ pub fn respond(input: &str) -> Reply {
                         fixing: None,
                         clinching: None,
                         transient: None,
+                        calibration: None,
                         error: None,
                     })
                 }
@@ -693,6 +701,7 @@ pub fn respond(input: &str) -> Reply {
                     fixing: None,
                     clinching: None,
                     transient: None,
+                    calibration: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -739,6 +748,7 @@ pub fn respond(input: &str) -> Reply {
                         fixing: None,
                         clinching: None,
                         transient: None,
+                        calibration: None,
                         error: None,
                     })
                 }
@@ -776,6 +786,7 @@ pub fn respond(input: &str) -> Reply {
                     fixing: None,
                     clinching: None,
                     transient: None,
+                    calibration: None,
                     error: None,
                 }),
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
@@ -829,6 +840,7 @@ pub fn respond(input: &str) -> Reply {
                 }),
                 clinching: None,
                 transient: None,
+                calibration: None,
                 error: None,
             })
         }
@@ -853,6 +865,7 @@ pub fn respond(input: &str) -> Reply {
                 fixing: None,
                 clinching: Some(sweep),
                 transient: None,
+                calibration: None,
                 error: None,
             })
         }
@@ -887,8 +900,59 @@ pub fn respond(input: &str) -> Reply {
                     fixing: None,
                     clinching: None,
                     transient: Some(schema::TransientBundle { provenance, cases }),
+                    calibration: None,
                     error: None,
                 }),
+                Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
+            }
+        }
+        QuestionSpec::Calibrate {
+            params,
+            observations,
+            priors,
+            bounds,
+            max_iters,
+            dofs,
+            h,
+        } => {
+            let spec = CalibrateSpec {
+                params,
+                observations,
+                priors,
+                bounds,
+                max_iters,
+                dofs,
+                h,
+            };
+            match calibrate_document(&doc, &spec, question::clock) {
+                Ok((rep, _post_doc)) => {
+                    let status = if rep.final_verification.all_passed {
+                        Status::Ok
+                    } else {
+                        Status::Refusal
+                    };
+                    ok_reply(schema::Response {
+                        apiv: APIV,
+                        engine: store::engine_identity(),
+                        status,
+                        name: Some(name),
+                        question: Some(echo),
+                        warnings,
+                        outcome: None,
+                        single: None,
+                        sweep: None,
+                        overhang: None,
+                        verification: None,
+                        sensitivity: None,
+                        optimisation: None,
+                        uq: None,
+                        fixing: None,
+                        clinching: None,
+                        transient: None,
+                        calibration: Some(rep),
+                        error: None,
+                    })
+                }
                 Err(SetupError(e)) => error_reply(APIV, Some(&name), Some(&echo), warnings, e),
             }
         }
@@ -944,6 +1008,7 @@ fn error_reply(
             fixing: None,
             clinching: None,
             transient: None,
+            calibration: None,
             error: Some(message.into()),
         },
         true,

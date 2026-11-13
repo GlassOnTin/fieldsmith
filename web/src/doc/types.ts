@@ -166,6 +166,14 @@ export interface UncertaintySpec {
   unit?: string;
 }
 
+export interface ObserveSpec {
+  label?: string;
+  metric: string;
+  measured: number;
+  std: number;
+  unit?: string;
+}
+
 export interface Material {
   id: string;
   name: string;
@@ -238,6 +246,8 @@ export interface Document {
   coupled_system?: string | null;
   /** Epistemic / manufacturing parameter uncertainties (`uncertainty [<label>] param="<addr>" std=<n>|cv=<n>`). */
   uncertainties?: UncertaintySpec[];
+  /** Empirical bench / test-stand sensor observations (`observe [<label>] metric="<metric>" measured=<y> std=<σ>`). */
+  observations?: ObserveSpec[];
   /** Executable verification contracts (`assert ...` or `# @assert:`), preserved across round-trips. */
   asserts?: LiterateAssert[];
   /** Named scalars and the recorded expression reads. Optional because the Rust side
@@ -648,6 +658,8 @@ export type DocCommand =
   | { cmd: 'set_system_block'; system?: DeclarativeSystem | null }
   | { cmd: 'upsert_uncertainty'; index?: number; uncertainty: UncertaintySpec }
   | { cmd: 'delete_uncertainty'; index: number }
+  | { cmd: 'upsert_observe'; index?: number; observation: ObserveSpec }
+  | { cmd: 'delete_observe'; index: number }
   | { cmd: 'upsert_assert'; index?: number; assertion: LiterateAssert }
   | { cmd: 'delete_assert'; index: number }
   | { cmd: 'insert_fixing'; request: Record<string, unknown> }
@@ -752,6 +764,7 @@ export function emptyDocument(): Document {
     lets: [],
     consumed: [],
     uncertainties: [],
+    observations: [],
     asserts: [],
     sketches: [],
     sketch_features: [],
@@ -766,6 +779,7 @@ export function withLetTables<T extends Document>(doc: T): T {
   doc.lets ??= [];
   doc.consumed ??= [];
   doc.uncertainties ??= [];
+  doc.observations ??= [];
   doc.asserts ??= [];
   doc.convections ??= [];
   doc.heat_fluxes ??= [];

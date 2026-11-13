@@ -185,7 +185,7 @@ struct EvalState {
     solves: usize,
 }
 
-fn is_fill_opt_addr(doc: &Document, addr: &ParamAddr) -> bool {
+pub(crate) fn is_fill_opt_addr(doc: &Document, addr: &ParamAddr) -> bool {
     addr.id == "fill"
         && !addr.attr.is_empty()
         && doc.find("fill").is_none()
@@ -196,7 +196,7 @@ fn is_fill_opt_addr(doc: &Document, addr: &ParamAddr) -> bool {
         && doc.heat_fluxes.iter().all(|f| f.id != "fill")
 }
 
-fn default_fill_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
+pub(crate) fn default_fill_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
     match (addr.attr.as_str(), addr.comp) {
         ("rho_min", None) | ("rho", Some(0)) => (0.12_f64.min(initial), 0.85_f64.max(initial)),
         ("rho_max", None) | ("rho", Some(1)) => (0.18_f64.min(initial), 0.95_f64.max(initial)),
@@ -222,7 +222,7 @@ fn default_fill_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
     }
 }
 
-fn default_solve_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
+pub(crate) fn default_solve_param_bounds(addr: &ParamAddr, initial: f64) -> (f64, f64) {
     match (addr.attr.as_str(), addr.comp) {
         ("build", Some(0)) | ("theta" | "build_theta", None) => {
             (0.0_f64.min(initial), 90.0_f64.max(initial))
@@ -924,7 +924,11 @@ fn solve_trust_region_subproblem(
     (s, pred_drop)
 }
 
-fn apply_fill_opt_param(doc: &mut Document, addr: &ParamAddr, val: f64) -> Result<(), SetupError> {
+pub(crate) fn apply_fill_opt_param(
+    doc: &mut Document,
+    addr: &ParamAddr,
+    val: f64,
+) -> Result<(), SetupError> {
     let f = doc
         .fill
         .as_mut()

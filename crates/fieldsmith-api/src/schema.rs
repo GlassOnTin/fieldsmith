@@ -5,6 +5,7 @@
 //! serde limitation, stated here and in the V22 notes, so the gap is contract rather
 //! than accident.
 
+use fieldsmith_core::calibrate::CalibrationReport;
 use fieldsmith_core::contracts::VerificationReport;
 use fieldsmith_core::optimise::{OptObjective, OptimisationReport};
 use fieldsmith_core::overhang::OverhangReport;
@@ -18,7 +19,7 @@ use fieldsmith_doc::fixings::{
     FailureDistributionFit, FailureSampleRow, FixingEnvelopeInput, FixingEnvelopeReport,
     OpenStandardBenchmark, SnapFitMechanicsReport,
 };
-use fieldsmith_doc::UncertaintySpec;
+use fieldsmith_doc::{ObserveSpec, UncertaintySpec};
 
 use crate::question::{Met, Projection, Unmet};
 use serde::{Deserialize, Serialize};
@@ -197,6 +198,27 @@ pub enum QuestionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         h: Option<f64>,
     },
+    /// Adjoint Gauss–Newton / Levenberg–Marquardt Bayesian MAP inverse calibration & Laplace
+    /// posterior synthesis (`V63`, `VISION.md §5.2 V.1`): fuses `observations` (or
+    /// `doc.observations`) with `priors` (or `doc.uncertainties` + `system` `epistemic` closures)
+    /// and returns calibrated parameter means, narrowed posterior standard deviations, and
+    /// `calibrated_fsm`.
+    Calibrate {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        params: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        observations: Vec<ObserveSpec>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        priors: Vec<UncertaintySpec>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        bounds: std::collections::BTreeMap<String, [f64; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_iters: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dofs: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        h: Option<f64>,
+    },
 }
 
 // --------------------------------------------------------------- response ----
@@ -260,6 +282,9 @@ pub struct Response {
     /// Present for the 3D P2 transient thermo-elastic question (`V63`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transient: Option<TransientBundle>,
+    /// Present for the Bayesian MAP calibration question (`V63`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<CalibrationReport>,
     /// Named error for `status: error`.
     pub error: Option<String>,
 }

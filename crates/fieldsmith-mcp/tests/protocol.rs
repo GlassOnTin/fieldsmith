@@ -144,12 +144,15 @@ fn tools_list_is_an_array_of_the_ten_tools() {
             "delete_assert",
             "upsert_uncertainty",
             "delete_uncertainty",
+            "upsert_observe",
+            "delete_observe",
             "doc_text",
             "solve",
             "transient_solve",
             "verify",
             "sensitivity",
             "uq",
+            "calibrate",
             "optimise",
             "analyze_sdf_channel",
             "export",
@@ -1213,4 +1216,69 @@ solve size=6 tref=20
     let ver = c.tool_ok(65, "verify", json!({ "dofs": 6000 }));
     assert_eq!(ver["status"], "ok", "{ver}");
     assert_eq!(ver["verification"]["all_passed"], true, "{ver}");
+}
+
+#[test]
+fn upsert_observe_and_calibrate_updates_posterior_fsm_and_passes_p90() {
+    let mut c = Client::spawn();
+    c.initialize();
+
+    let raw = "\
+fieldsmith 1
+name \"MCP Bench Calibration\"
+material alsi10mg
+let f_tip = 100.0
+box beam size=(60, 12, 6) at=(30, 6, 3)
+region root = beam.nx
+region tip = beam.px
+support fix root fixed=xyz
+load push tip force=(0, 0, -f_tip)
+uncertainty \"Load cell prior\" param=\"f_tip\" std=35.0 unit=\"N\"
+assert \"Posterior p90 deflection\" metric=\"p90.max_displacement\" target=\"<= 0.145\" unit=\"mm\"
+solve size=4.0
+";
+    c.tool_ok(70, "open", json!({ "doc": raw }));
+
+    // Before calibration, wide prior σ = 35 N violates p90.max_displacement <= 0.145 mm
+    let ver0 = c.tool_ok(71, "verify", json!({}));
+    assert_eq!(ver0["status"], "refusal", "{ver0}");
+
+    // Record empirical laser vibrometer bench observation via `upsert_observe`
+    let obs = c.tool_ok(
+        72,
+        "upsert_observe",
+        json!({
+            "label": "Laser vibrometer w_tip",
+            "metric": "max_displacement",
+            "measured": 0.125,
+            "std": 0.005,
+            "unit": "mm",
+        }),
+    );
+    assert_eq!(obs["observations"].as_array().unwrap().len(), 1);
+
+    // Run Bayesian MAP calibration (`apply: true` updates session document to posterior)
+    let cal = c.tool_ok(73, "calibrate", json!({ "apply": true }));
+    assert_eq!(cal["status"], "ok", "{cal}");
+    assert_eq!(cal["calibration"]["converged"], true, "{cal}");
+    let red_pct = cal["calibration"]["parameters"][0]["sigma_reduction_pct"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        red_pct > 75.0,
+        "expected >75% sigma reduction, got {red_pct}"
+    );
+
+    // Subsequent `verify` on the updated session document passes `p90.max_displacement`
+    let ver1 = c.tool_ok(74, "verify", json!({}));
+    assert_eq!(ver1["status"], "ok", "{ver1}");
+    assert_eq!(ver1["verification"]["all_passed"], true, "{ver1}");
+
+    // `delete_observe` removes the bench reading cleanly
+    let del = c.tool_ok(
+        75,
+        "delete_observe",
+        json!({ "label": "Laser vibrometer w_tip" }),
+    );
+    assert_eq!(del["observations"].as_array().unwrap().len(), 0);
 }

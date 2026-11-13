@@ -1,0 +1,81 @@
+fieldsmith 1
+# === FIELDSMITH LITERATE CASE ===
+# @id: T28
+# @code: T28
+# @category: tutorial
+# @level: Advanced
+# @title: Bench Thermocouple & Dial-Gauge Bayesian MAP Calibration (Closing the Hardware-to-Simulation Loop)
+# @subtitle: Fuse bench K-type thermocouple (`max_temp:Thermal 1`) and dial-indicator (`max_displacement:Load 1`) measurements with conservative datasheet priors (`uncertainty`) on an as-cast Al-Mg-Si actuator bracket (`observe`), cutting parameter uncertainty by >75% to pass tight `p90` flight qualification contracts without over-thickening hardware.
+# @verification_badge: Verified by T28 & V63 · 3D Adjoint Bayesian MAP Calibration + Laplace Posterior p90 Qualification
+# @doc_path: docs/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.md
+# @fsm_path: examples/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.fsm
+# @starter_fsm_name: t28-bench-thermocouple-and-deflection-map-calibration.fsm
+# @verification_refs: docs/verification/V20.md, docs/verification/V63.md, crates/fieldsmith-core/src/calibrate.rs
+# ---
+# @assert: Prior 90th-percentile hot-end temperature envelope || p90.max_temp:Thermal 1 || <= 58.0 || <= 58.0 || C
+# @assert: Prior 90th-percentile boss deflection envelope || p90.max_displacement:Load 1 || <= 1.05 || <= 1.05 || mm
+# @assert: Peak bracket von Mises stress bounded || max_vm_elem:Load 1 || <= 225.0 || <= 225.0 || MPa
+# ---
+# @step: 1. Inspect Conservative Datasheet Priors & Bench Readings in Results (3) || results
+#   Switch to **3. Results** and click **Compute UQ (2)**. Under conservative handbook priors (`al6061_cast.e = 63,000 ± 8,000 MPa` for porosity-knockdown casting modulus and `cold_air.h = 0.0085 ± 0.0025 W/(mm²·K)` for forced-air fin film conductance), `p90` hot-end temperature reaches `~55 °C` and `p90` boss deflection reaches `~0.80–0.88 mm` — too wide to clear a `50 °C` / `0.74 mm` flight qualification gate without adding mass.
+# @expected:
+#   Two authored bench sensor statements (`observe`) appear directly in the Results card: a dial-gauge reading (`0.608 ± 0.015 mm`) under the `600 N` actuator test load and a hot-end K-type thermocouple reading (`47.2 ± 0.6 °C`) under the `1.20 W/mm²` module heat load.
+# @step: 2. Fuse Bench Data via Calibrate MAP & Apply Posterior to .fsm || results
+#   Click **Calibrate MAP (2)**. 3D discrete adjoint Gauss–Newton / Marquardt calibration converges in `4` iterations (`reduced χ² ≈ 0.93`), identifying the as-built lot modulus (`~70.1 ± 1.7 GPa`, `−79%` σ) and forced-air conductance (`~0.0110 ± 0.00057 W/(mm²·K)`, `−77%` σ). Click **Apply Posterior to .fsm**, then **Compute UQ (2)** to see the narrowed `p90` flight margins (`Ctrl+Z` restores the uncalibrated datasheet prior).
+# @expected:
+#   Posterior `p90.max_temp:Thermal 1` drops below `48.5 °C` and `p90.max_displacement:Load 1` drops below `0.72 mm`, qualifying the existing bracket geometry from empirical hardware evidence.
+# ---
+# @theory_title: Hardware-Anchored Bayesian MAP Calibration & Laplace Posterior UQ in .fsm
+# @theory_summary:
+#   Engineering datasheets bundle batch-to-batch scatter and boundary-condition ignorance into wide prior uncertainties (`σ_prior`). When prototype bench measurements `y_i ± σ_obs,i` become available, `.fsm` `observe` statements fuse test-stand evidence directly with the 3D P2 continuum model via Maximum-A-Posteriori (MAP) estimation.
+# @theory_section: Dimensionless Prior-Scaled Gauss–Newton / Marquardt Inverse Problem
+# @theory_eq:
+#   z_j = (θ_j − θ_{0,j}) / σ_prior,j,   J_MAP(z) = ½ ‖(M(θ(z)) − y) / σ_obs‖₂² + ½ ‖z‖₂²
+#   (I_n + Aᵀ A + λ diag(I_n + Aᵀ A)) Δz = −(Aᵀ r + z),   A_{i,j} = (σ_prior,j / σ_obs,i) ∂M_i / ∂θ_j
+# @theory_body:
+#   Working in dimensionless prior-sigma coordinates `z_j` renders parameters spanning seven orders of magnitude (`E ~ 7×10⁴ MPa` alongside `h ~ 10⁻² W/(mm²·K)`) unit-conditioned (`O(1)`), while 3D discrete adjoints supply `H_{i,j} = ∂M_i / ∂θ_j` on a locked tetrahedral mesh.
+# @theory_section: Laplace Posterior Covariance & Honest Marginal Storage
+# @theory_eq:
+#   Σ_post = diag(σ_prior) (I_n + A_MAPᵀ A_MAP)⁻¹ diag(σ_prior),   σ_post,j = √(Σ_post[j, j]),   χ²_red = (χ²_obs + χ²_prior) / m
+# @theory_body:
+#   `CalibrationReport` computes and reports the full `n × n` correlated Laplace covariance (`posterior_correlation` and `posterior_pred_sigma`), while writing the calibrated parameter means and narrowed marginal `std = σ_post,j` back into `.fsm` `uncertainty` statements for downstream robust `p90` verification and SQP sizing.
+# ---
+# @mcp: Propagate uncalibrated datasheet priors via O(1) 3D adjoint UQ || uq || {"dofs":6000}
+# @mcp: Verify baseline datasheet envelope contracts || verify || {"dofs":6000}
+# @mcp: Fuse bench thermocouple and dial-gauge readings into posterior .fsm || calibrate || {"dofs":6000,"apply":true}
+# @mcp: Add tight flight-qualification p90 hot-end temperature contract || upsert_assert || {"label":"Flight-qualified p90 hot-end temperature","metric":"p90.max_temp:Thermal 1","target":"<= 50.0","tolerance":"<= 50.0","unit":"C"}
+# @mcp: Add tight flight-qualification p90 boss deflection contract || upsert_assert || {"label":"Flight-qualified p90 boss deflection","metric":"p90.max_displacement:Load 1","target":"<= 0.72","tolerance":"<= 0.72","unit":"mm"}
+# @mcp: Verify tight flight-qualification contracts pass on calibrated posterior .fsm || verify || {"dofs":6000}
+# === END LITERATE HEADER ===
+
+name "T28 — Bench Thermocouple & Dial-Gauge Bayesian MAP Calibration"
+custommaterial al6061_cast name="Cast Al-Mg-Si Housing Alloy (As-Built Batch)" e=63000 nu=0.33 yield=240 density=2.70 wall=1.0 a=2.3e-5
+material al6061_cast
+
+let tip_load = 600.0
+
+box bracket size=(50, 20, 6) at=(25, 0, 0)
+cylinder boss r=6 h=10 at=(40, 0, 5)
+cylinder bolt_hole r=3 h=14 at=(40, 0, 4) subtract
+
+region mount_wall = bracket.nx
+region load_pad = boss.top
+region sink_faces = bracket.pz + bracket.nz
+region hot_end = bracket.px
+
+support wall_clamp mount_wall fixed=xyz
+load actuator_push load_pad force=(0, 0, -tip_load) case="Load 1"
+heatflux module_heat hot_end q=1.20 case="Thermal 1"
+convection cold_air sink_faces h=0.0085 tinf=25.0 case="Thermal 1"
+
+solve size=3.2 tref=25
+
+uncertainty "As-cast modulus prior" param="al6061_cast.e" std=8000.0 unit="MPa"
+uncertainty "Forced-air film prior" param="cold_air.h" std=0.0025 unit="W/(mm^2*K)"
+
+observe "Boss dial-gauge deflection" metric="max_displacement:Load 1" measured=0.608 std=0.015 unit="mm"
+observe "Hot-end K-type thermocouple" metric="max_temp:Thermal 1" measured=47.2 std=0.6 unit="C"
+
+assert "Prior 90th-percentile hot-end temperature envelope" metric="p90.max_temp:Thermal 1" target="<= 58.0" tol="<= 58.0" unit="C"
+assert "Prior 90th-percentile boss deflection envelope" metric="p90.max_displacement:Load 1" target="<= 1.05" tol="<= 1.05" unit="mm"
+assert "Peak bracket von Mises stress bounded" metric="max_vm_elem:Load 1" target="<= 225.0" tol="<= 225.0" unit="MPa"

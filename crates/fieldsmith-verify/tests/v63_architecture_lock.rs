@@ -158,9 +158,21 @@ fn v63_architecture_lock() {
         tools.iter().any(|t| t["name"] == "set_hx"),
         "expected set_hx in TOOLS_JSON"
     );
+    assert!(
+        tools.iter().any(|t| t["name"] == "calibrate"),
+        "expected calibrate in TOOLS_JSON"
+    );
+    assert!(
+        tools.iter().any(|t| t["name"] == "upsert_observe"),
+        "expected upsert_observe in TOOLS_JSON"
+    );
+    assert!(
+        tools.iter().any(|t| t["name"] == "delete_observe"),
+        "expected delete_observe in TOOLS_JSON"
+    );
     report.check(Check::absolute(
         "Advertised MCP tools in TOOLS_JSON",
-        49.0,
+        52.0,
         tool_count as f64,
         "tools",
         0.0,
@@ -233,6 +245,7 @@ fn v63_architecture_lock() {
                     fsm::parse(&printed).unwrap_or_else(|e| panic!("reparse printed {rel}: {e}"));
                 if reparsed.coupled_system == doc.coupled_system
                     && reparsed.uncertainties == doc.uncertainties
+                    && reparsed.observations == doc.observations
                     && reparsed.asserts == doc.asserts
                     && reparsed.solve.plasticity == doc.solve.plasticity
                     && reparsed.solve.hardening_n == doc.solve.hardening_n
@@ -2447,6 +2460,137 @@ solve build=(0, 0)
         "expected T27 SDF+TPMS regenerative cooling jacket @assert contracts to pass verify: {t27_ver_json}"
     );
 
+    // -----------------------------------------------------------------------
+    // 19. Empirical Bench Calibration & Bayesian MAP Posterior UQ (A24 + T28)
+    //     `observe` round-trip, API <-> MCP `canon` parity (`apply: false`),
+    //     closed-form conjugate Gaussian MAP + Laplace `σ_post`, nonlinear Robin
+    //     `1/h` inverse calibration, and posterior `p90` contract qualification.
+    // -----------------------------------------------------------------------
+    let a24_path =
+        examples_dir.join("analytic/A24-bayesian-map-coupon-and-thermal-calibration.fsm");
+    let a24_raw = std::fs::read_to_string(&a24_path).expect("read A24 .fsm");
+    let a24_doc_1 = fieldsmith_doc::fsm::parse(&a24_raw).expect("parse A24 .fsm");
+    let a24_printed = fieldsmith_doc::fsm::print(&a24_doc_1);
+    let a24_doc_2 = fieldsmith_doc::fsm::parse(&a24_printed).expect("reparse printed A24 .fsm");
+    assert_eq!(
+        a24_doc_1.observations, a24_doc_2.observations,
+        "expected A24 .fsm observe declarations to round-trip identically"
+    );
+
+    let a24_api_req = json!({
+        "apiv": 2,
+        "doc": &a24_raw,
+        "question": {
+            "kind": "calibrate",
+            "dofs": 6000,
+        },
+    });
+    let a24_api_reply = fieldsmith_api::respond(&a24_api_req.to_string());
+    assert!(
+        !a24_api_reply.is_error || a24_api_reply.body.contains("\"calibration\""),
+        "API A24 calibrate failed unexpectedly: {}",
+        a24_api_reply.body
+    );
+    let a24_api_json: Value = serde_json::from_str(&a24_api_reply.body).expect("API A24 JSON");
+
+    let mut a24_srv = Server::new();
+    let (a24_open_err, a24_open_body) =
+        mcp_tool_call(&mut a24_srv, 1701, "open", json!({ "doc": a24_raw }));
+    assert!(!a24_open_err, "open A24 failed: {a24_open_body}");
+    let (_a24_mcp_err, a24_mcp_json) = mcp_tool_call(
+        &mut a24_srv,
+        1702,
+        "calibrate",
+        json!({ "dofs": 6000, "apply": false }),
+    );
+    assert_eq!(
+        canon(&a24_api_json),
+        canon(&a24_mcp_json),
+        "API <-> MCP canon mismatch on QuestionSpec::Calibrate (apply: false)"
+    );
+
+    let a24_params = a24_mcp_json["calibration"]["parameters"]
+        .as_array()
+        .expect("A24 calibration.parameters");
+    let f_pull_cal = a24_params
+        .iter()
+        .find(|p| p["param"] == "f_pull")
+        .expect("A24 f_pull calibrated param");
+    let h_mount_cal = a24_params
+        .iter()
+        .find(|p| p["param"] == "cold_mount.h")
+        .expect("A24 cold_mount.h calibrated param");
+
+    report.check(Check::relative(
+        "Conjugate Gaussian MAP posterior mean μ_post(f_pull) = 8400 + 2100·(10/13)",
+        8400.0 + 2100.0 * (10.0 / 13.0),
+        f_pull_cal["posterior_mean"].as_f64().expect("f_pull mean"),
+        "N",
+        1e-4,
+    ));
+    report.check(Check::relative(
+        "Conjugate Gaussian Laplace posterior std σ_post(f_pull) = 2100 / √26",
+        2100.0 / 26.0_f64.sqrt(),
+        f_pull_cal["posterior_sigma"]
+            .as_f64()
+            .expect("f_pull sigma"),
+        "N",
+        1e-4,
+    ));
+    report.check(Check::relative(
+        "Nonlinear 1D Robin MAP mount conductance h_MAP",
+        0.00211386,
+        h_mount_cal["posterior_mean"]
+            .as_f64()
+            .expect("cold_mount.h mean"),
+        "W/(mm²·K)",
+        1e-3,
+    ));
+
+    let t28_path =
+        examples_dir.join("tutorials/T28-bench-thermocouple-and-deflection-map-calibration.fsm");
+    let t28_raw = std::fs::read_to_string(&t28_path).expect("read T28 .fsm");
+    let mut t28_srv = Server::new();
+    let (t28_open_err, t28_open_body) =
+        mcp_tool_call(&mut t28_srv, 1703, "open", json!({ "doc": t28_raw }));
+    assert!(!t28_open_err, "open T28 failed: {t28_open_body}");
+
+    // Tight flight contract `p90.max_temp:Thermal 1 <= 50.0` must refuse under uncalibrated datasheet prior:
+    let (t28_assert_err, t28_assert_body) = mcp_tool_call(
+        &mut t28_srv,
+        1704,
+        "upsert_assert",
+        json!({
+            "label": "Tight flight p90 hot-end gate",
+            "metric": "p90.max_temp:Thermal 1",
+            "target": "<= 50.0",
+            "tolerance": "<= 50.0",
+            "unit": "C",
+        }),
+    );
+    assert!(
+        !t28_assert_err,
+        "T28 upsert_assert failed: {t28_assert_body}"
+    );
+    let (t28_pre_err, t28_pre_ver) =
+        mcp_tool_call(&mut t28_srv, 1705, "verify", json!({ "dofs": 6000 }));
+    assert!(
+        !t28_pre_err && t28_pre_ver["status"] == "refusal",
+        "expected tight flight p90 gate to refuse before bench calibration, got: {t28_pre_ver}"
+    );
+
+    // Calibrate (`apply: true`) fuses bench readings and flips the tight flight p90 gate to `ok`:
+    let (t28_cal_err, t28_cal_json) = mcp_tool_call(
+        &mut t28_srv,
+        1706,
+        "calibrate",
+        json!({ "dofs": 6000, "apply": true }),
+    );
+    assert!(
+        !t28_cal_err && t28_cal_json["status"] == "ok",
+        "expected T28 calibrate (apply: true) to pass tight flight p90 gate: {t28_cal_json}"
+    );
+
     report.section(
         "Scope and measured invariants",
         format!(
@@ -2454,10 +2598,11 @@ solve build=(0, 0)
              directives in sequence through `fieldsmith_mcp::Server::handle` after `open`. \
              Verified 1:1 tool catalogue symmetry (`{}` advertised tools in `TOOLS_JSON`), \
              `apiv: 2` canon-byte parity between `fieldsmith_api::respond` and MCP `verify` / \
-             `sensitivity` / `uq` / `optimise` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` / TPMS porous `hx` / 3D SDF-section-coupled `system` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
+             `sensitivity` / `uq` / `optimise` / `calibrate` / `evaluate_fixing` / `evaluate_clinching` / `transient_solve` / unilateral Signorini `contact` / TPMS porous `hx` / 3D SDF-section-coupled `system` `solve` (`boundary_velocity_adjoint`, `O(1)` linear solves in parameter count `k` \
              across 3D solid, thermo-elastic, two-pass homogenised TPMS `fill.*`, additive `max_layer_peel` / \
              `overhang_fraction`, `O(0)`-extra-solve Rayleigh-quotient modal & `solve.build.*` sensitivities, \
              first-order second-moment `p10`/`p50`/`p90` epistemic uncertainty propagation + robust quantile sizing, \
+             Marquardt-damped Gauss–Newton Bayesian MAP inverse calibration + Laplace posterior `Σ_post` synthesis (`observe` + `calibrate`), \
              unified Motosh / FED-STD-H28 / VDI 2230 / Weibull fastener & preloaded-joint mechanics + host-associative 3D insertion, \
              unified Lee–Kim / Breda / Varis–Mucha / Neuber–Hencky sheet-metal clinching process windows + parametric 3D S-Lock stamping & J2 co-design, \
              3D P2 BDF2 transient conduction + batched multi-RHS Duhamel–Neumann thermal-shock timelines & Fourier–Biot verification, \
@@ -2481,9 +2626,9 @@ solve build=(0, 0)
     report.section(
         "Named gaps",
         "1. Browser `Store` undo-preserving transaction sync (`workspace-sync.ts`), WASM \
-         `SketchWorkbench` -> `DocCommand` dispatch, contract & uncertainty authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty`), \
+         `SketchWorkbench` -> `DocCommand` dispatch, contract / uncertainty / observation authoring (`upsert_assert` / `delete_assert` / `upsert_uncertainty` / `delete_uncertainty` / `upsert_observe` / `delete_observe`), \
          WASM declarative `system` authoring (`set_system_block` + 3D SDF `section` profile extraction), WASM `FixingsModal` / `Inspector` `insert_fixing` & `reconfigure_fixing`, \
-         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, WASM TPMS porous `hx` authoring (`add-hx` / `set_hx`) + Results `💧 Porous Pressure p` colourmap, and Results `Optimise` / `Compute UQ` / modal `∂f₁/∂p` / \
+         WASM `ClinchingCalculatorCard` `apply_clinching` (`dial_optimal_x`, `load_angle_deg`, `j2_plasticity`), WASM `TransientTimelineCard` 3D P2 BDF2 timeline scrubbing (`set_solve` `t_end`/`steps`/`t_init`), WASM unilateral `contact` authoring (`upsert_contact`) + Results `⊥ Contact Pressure p_n` colourmap, WASM TPMS porous `hx` authoring (`add-hx` / `set_hx`) + Results `💧 Porous Pressure p` colourmap, and Results `Optimise` / `Compute UQ` / `Calibrate MAP` (`Apply Posterior to .fsm`) / modal `∂f₁/∂p` / \
          graded TPMS `∂U_y/∂p` / additive `∂U_peel/∂p` co-design are verified separately in `web/tests/v63-ui-lock.mjs`.\n\
          2. Linear-elastic mechanical, coupled steady-conduction thermo-elastic, two-pass homogenised \
          TPMS `fill` (`fill.*` + outer shape `let`s), additive `max_layer_peel` / `overhang_fraction` \
@@ -2491,7 +2636,7 @@ solve build=(0, 0)
          BCs and 3D SDF `section`-coupled `.fsm` `system` blocks) use fixed-topology quadric boundary-velocity discrete \
          adjoints / Rayleigh quotients (`method: \"boundary_velocity_adjoint\"`, `O(1)` linear solves \
          independent of parameter count `k`); epistemic UQ (`uq`) uses first-order second-moment (FOSM) \
-         independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`); \
+         independent Gaussian propagation around nominal (`p10`/`p50`/`p90` via `z = ±1.28155`), and Bayesian MAP calibration (`calibrate`) computes a local quadratic Laplace posterior covariance `Σ_post` around `θ_MAP` (writing marginal `std = √Σ_post[j,j]` back to `.fsm` `uncertainty` statements while retaining full `posterior_correlation` in `CalibrationReport`; non-Gaussian multi-modal posteriors via MCMC are out of scope); \
          nonlinear `J2` elastoplastic cases evaluate on the fixed-topology `V_k`-deformed mesh \
          (`method: \"boundary_velocity_fixed_mesh\"`), and discrete topology jumps fall back to \
          locked-`h` re-meshing (`method: \"finite_difference_remesh\"`). Unilateral Signorini contact solves use frictionless normal Winkler penalty stiffness `k_n` (Coulomb stick-slip tangential friction is not yet coupled); TPMS porous `hx` models two-stream effectiveness–NTU over the homogenised 3D Darcy–Forchheimer flow field (pore-resolved Navier–Stokes LES inside individual TPMS unit cells is out of scope).\n\

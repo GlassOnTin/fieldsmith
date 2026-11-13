@@ -524,6 +524,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T25: 'docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md',
   T26: 'docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md',
   T27: 'docs/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.md',
+  T28: 'docs/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -547,6 +548,7 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A21: 'docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md',
   A22: 'docs/analytic-tests/A22-darcy-forchheimer-tpms-porous-hx.md',
   A23: 'docs/analytic-tests/A23-sdf-venturi-section-and-coupled-1d-flow.md',
+  A24: 'docs/analytic-tests/A24-bayesian-map-coupon-and-thermal-calibration.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -577,6 +579,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   T25: 'examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm',
   T26: 'examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm',
   T27: 'examples/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.fsm',
+  T28: 'examples/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.fsm',
   A1: 'examples/analytic/A1-cantilever-beam-theory.fsm',
   A2: 'examples/analytic/A2-kirsch-plate-with-hole.fsm',
   A3: 'examples/analytic/A3-de-laval-revolve-pappus-volume.fsm',
@@ -600,6 +603,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A21: 'examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm',
   A22: 'examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm',
   A23: 'examples/analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm',
+  A24: 'examples/analytic/A24-bayesian-map-coupon-and-thermal-calibration.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -630,6 +634,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T25: ['docs/verification/V57.md', 'docs/verification/V63.md'],
   T26: ['docs/verification/V36.md', 'docs/verification/V54.md', 'docs/verification/V63.md'],
   T27: ['docs/verification/V20.md', 'docs/verification/V36.md', 'docs/verification/V63.md'],
+  T28: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   A1: ['docs/verification/V1.md', 'docs/verification/V2.md'],
   A2: ['docs/verification/V3.md'],
   A3: ['docs/verification/V4.md', 'docs/verification/V60.md'],
@@ -653,6 +658,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A21: ['docs/verification/V63.md'],
   A22: ['docs/verification/V36.md', 'docs/verification/V63.md'],
   A23: ['docs/verification/V20.md', 'docs/verification/V63.md'],
+  A24: ['docs/verification/V1.md', 'docs/verification/V20.md', 'docs/verification/V63.md'],
 };
 
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {

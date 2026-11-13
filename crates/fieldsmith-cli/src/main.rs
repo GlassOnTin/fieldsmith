@@ -76,7 +76,8 @@ const USAGE: &str =
           shape-only cost rows (platform \"worker\", this machine's own
           identity) — the only directory anything is written to.
           --once serves a single job and exits.
-  solve   mesh and solve               [--h <mm> | --dofs <n>] [--report]
+  solve   mesh and solve               [--h <mm> | --dofs <n>] [--report] [--verify]
+                                        [--sensitivity] [--calibrate]
           [--modes <n>] first n natural frequencies instead of the
           static cases: loads are ignored (supports still apply) and
           the solve is modal-only; fill documents are excluded
@@ -369,11 +370,101 @@ fn run(args: &[String]) -> Result<(), String> {
             let report = args.iter().any(|a| a == "--report");
             let verify = args.iter().any(|a| a == "--verify");
             let sensitivity_flag = args.iter().any(|a| a == "--sensitivity");
+            let calibrate_flag = args.iter().any(|a| a == "--calibrate");
             let raw_header = std::fs::read_to_string(path)
                 .ok()
                 .and_then(|raw| fsm::parse_literate_header(&raw));
             for w in doc.material_warnings() {
                 eprintln!("warning: {w}");
+            }
+            if calibrate_flag {
+                use fieldsmith_core::calibrate::{calibrate_document, CalibrateSpec};
+                let mut cal_spec = CalibrateSpec::default();
+                match res {
+                    Resolution::Dofs(n) => cal_spec.dofs = Some(n),
+                    Resolution::Size(h) => cal_spec.h = Some(h),
+                }
+                let (rep, _post_doc) =
+                    calibrate_document(&doc, &cal_spec, clock).map_err(|e| e.0)?;
+                println!(
+                    "## Bayesian MAP calibration — {} ({}, {} iters, {} solves, h = {:.2} mm, {:.0} ms)\n",
+                    doc.name,
+                    if rep.converged { "converged" } else { "max-iter" },
+                    rep.iterations,
+                    rep.solves_run,
+                    rep.h,
+                    rep.elapsed_ms
+                );
+                println!(
+                    "MAP cost {:.4} → {:.4} (χ²_obs = {:.4}, χ²_prior = {:.4}, reduced χ² = {:.4})\n",
+                    rep.initial_cost, rep.final_cost, rep.chi2_obs, rep.chi2_prior, rep.reduced_chi2
+                );
+                println!(
+                    "| param | prior ± 1σ | posterior MAP ± 1σ | [p10, p90] | σ reduction | shift (σ₀) |"
+                );
+                println!("| :-- | --: | --: | --: | --: | --: |");
+                for p in &rep.parameters {
+                    let u = if p.unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", p.unit)
+                    };
+                    println!(
+                        "| `{}` | {:.5} ± {:.5}{} | {:.5} ± {:.5}{} | [{:.5}, {:.5}] | {:.1}% | {:+.2}σ |",
+                        p.param,
+                        p.prior_mean,
+                        p.prior_sigma,
+                        u,
+                        p.posterior_mean,
+                        p.posterior_sigma,
+                        u,
+                        p.posterior_p10,
+                        p.posterior_p90,
+                        p.sigma_reduction_pct,
+                        p.shift_in_prior_sigmas
+                    );
+                }
+                println!(
+                    "\n| observation | metric | measured ± σ | prior pred | MAP pred | residual (z) |"
+                );
+                println!("| :-- | :-- | --: | --: | --: | --: |");
+                for o in &rep.observations {
+                    println!(
+                        "| {} | `{}` | {:.4} ± {:.4} {} | {:.4} | {:.4} | {:+.2}σ |",
+                        o.label,
+                        o.metric,
+                        o.measured,
+                        o.obs_sigma,
+                        o.unit,
+                        o.prior_prediction,
+                        o.posterior_prediction,
+                        o.normalized_residual_z
+                    );
+                }
+                if !rep.final_verification.outcomes.is_empty() {
+                    println!(
+                        "\n### posterior contracts ({}/{} passed)\n",
+                        rep.final_verification.passed, rep.final_verification.total
+                    );
+                    for out in &rep.final_verification.outcomes {
+                        println!(
+                            "- [{}] {}: `{}` = {:.4} {} (target {})",
+                            if out.passed { "PASS" } else { "FAIL" },
+                            out.label,
+                            out.metric,
+                            out.value,
+                            out.unit,
+                            out.target
+                        );
+                    }
+                    if verify && !rep.final_verification.all_passed {
+                        return Err(format!(
+                            "posterior contract verification failed ({} of {} failed)",
+                            rep.final_verification.failed, rep.final_verification.total
+                        ));
+                    }
+                }
+                return Ok(());
             }
             if sensitivity_flag {
                 let rep = compute_sensitivities(&doc, &[], res, clock).map_err(|e| e.0)?;

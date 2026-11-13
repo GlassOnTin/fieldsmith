@@ -1,6 +1,7 @@
 //! The analysis pipeline: document → field → tetrahedral mesh → boundary conditions → P2 solve →
 //! nodal results. Runs identically natively (CLI, verification tests) and in a Web Worker.
 
+pub mod calibrate;
 pub mod channel;
 pub mod contracts;
 pub mod declarative_system;

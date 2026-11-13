@@ -150,6 +150,14 @@ pub enum DocCommand {
     DeleteUncertainty {
         index: usize,
     },
+    UpsertObserve {
+        #[serde(default)]
+        index: Option<usize>,
+        observation: ObserveSpec,
+    },
+    DeleteObserve {
+        index: usize,
+    },
     InsertFixing {
         request: FixingInsertRequest,
     },
@@ -762,6 +770,63 @@ pub fn apply_doc_command(doc: &mut Document, cmd: DocCommand) -> Result<DocComma
             let removed = doc.uncertainties.remove(index);
             entity_id = Some(removed.label);
             entity_kind = Some("uncertainty".into());
+            action = Some("deleted".into());
+        }
+        DocCommand::UpsertObserve {
+            index,
+            mut observation,
+        } => {
+            observation.label = observation.label.trim().to_string();
+            observation.metric = observation.metric.trim().to_string();
+            observation.unit = observation.unit.trim().to_string();
+            if observation.metric.is_empty() {
+                return Err("upsert_observe: metric cannot be empty".into());
+            }
+            if !observation.measured.is_finite() {
+                return Err("upsert_observe: measured must be finite".into());
+            }
+            if !observation.std.is_finite() || observation.std <= 0.0 {
+                return Err("upsert_observe: std must be finite and > 0".into());
+            }
+            if observation.label.is_empty() {
+                observation.label = observation.metric.clone();
+            }
+            let lbl = observation.label.clone();
+            let act = if let Some(idx) = index {
+                if idx < doc.observations.len() {
+                    doc.observations[idx] = observation;
+                    "updated"
+                } else {
+                    return Err(format!(
+                        "upsert_observe: index {idx} out of bounds (len {})",
+                        doc.observations.len()
+                    ));
+                }
+            } else if let Some(slot) = doc
+                .observations
+                .iter_mut()
+                .find(|o| o.metric == observation.metric && o.label == lbl)
+            {
+                *slot = observation;
+                "updated"
+            } else {
+                doc.observations.push(observation);
+                "created"
+            };
+            entity_id = Some(lbl);
+            entity_kind = Some("observe".into());
+            action = Some(act.into());
+        }
+        DocCommand::DeleteObserve { index } => {
+            if index >= doc.observations.len() {
+                return Err(format!(
+                    "delete_observe: index {index} out of bounds (len {})",
+                    doc.observations.len()
+                ));
+            }
+            let removed = doc.observations.remove(index);
+            entity_id = Some(removed.label);
+            entity_kind = Some("observe".into());
             action = Some("deleted".into());
         }
         DocCommand::InsertFixing { request } => {
@@ -1422,5 +1487,54 @@ support fix1 top_face fixed=xyz
         apply_doc_command(&mut doc, DocCommand::DeleteEntity { id: "hx".into() })
             .expect("delete hx");
         assert!(doc.hx.is_none());
+    }
+
+    #[test]
+    fn upsert_and_delete_observe_commands_round_trip() {
+        let mut doc = fsm::parse(
+            "fieldsmith 1\n\
+             name \"Observe Cmd\"\n\
+             material petg\n\
+             box b size=(20, 10, 5) at=(10, 5, 2.5)\n\
+             solve\n",
+        )
+        .expect("parse");
+        let out = apply_doc_command(
+            &mut doc,
+            DocCommand::UpsertObserve {
+                index: None,
+                observation: ObserveSpec {
+                    label: "Bench tip gauge".into(),
+                    metric: "max_displacement".into(),
+                    measured: 0.85,
+                    std: 0.02,
+                    unit: "mm".into(),
+                },
+            },
+        )
+        .expect("upsert observe");
+        assert_eq!(out.action.as_deref(), Some("created"));
+        assert_eq!(doc.observations.len(), 1);
+
+        let out2 = apply_doc_command(
+            &mut doc,
+            DocCommand::UpsertObserve {
+                index: Some(0),
+                observation: ObserveSpec {
+                    label: "Bench tip gauge".into(),
+                    metric: "max_displacement".into(),
+                    measured: 0.81,
+                    std: 0.015,
+                    unit: "mm".into(),
+                },
+            },
+        )
+        .expect("update observe");
+        assert_eq!(out2.action.as_deref(), Some("updated"));
+        assert!((doc.observations[0].measured - 0.81).abs() < 1e-12);
+
+        apply_doc_command(&mut doc, DocCommand::DeleteObserve { index: 0 })
+            .expect("delete observe");
+        assert!(doc.observations.is_empty());
     }
 }

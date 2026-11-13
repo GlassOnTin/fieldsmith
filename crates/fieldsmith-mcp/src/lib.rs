@@ -34,8 +34,8 @@ use fieldsmith_doc::sketch::{
 };
 use fieldsmith_doc::{
     canonical_color, fsm, materials, Document, Family, FillMode, HxArrangement, HxFluid, HxSpec,
-    LoadKind, MaterialRole, Node, NodeKind, Op, PlasticityLaw, ProfileVertex, Selector, Transform,
-    UncertaintySpec,
+    LoadKind, MaterialRole, Node, NodeKind, ObserveSpec, Op, PlasticityLaw, ProfileVertex,
+    Selector, Transform, UncertaintySpec,
 };
 use fieldsmith_solve::antenna::{
     analyze_drone_antenna, build_deadcat_drone_fsm, optimise_drone_antenna,
@@ -285,6 +285,7 @@ impl Server {
     /// `Err` is the `isError: true` message string.
     fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
         self.load_workspace_if_present();
+        let cal_apply = args.get("apply").and_then(Value::as_bool).unwrap_or(true);
         let res = match name {
             "open" | "load_fsm" => self.open(args),
             "new_document" => self.new_document(args),
@@ -318,12 +319,15 @@ impl Server {
             "delete_assert" => self.delete_assert(args),
             "upsert_uncertainty" => self.upsert_uncertainty(args),
             "delete_uncertainty" => self.delete_uncertainty(args),
+            "upsert_observe" => self.upsert_observe(args),
+            "delete_observe" => self.delete_observe(args),
             "doc_text" | "export_fsm" => self.doc_text(args),
             "solve" | "solve_study" => self.solve(args),
             "transient_solve" => self.transient_solve(args),
             "verify" => self.verify(args),
             "sensitivity" => self.sensitivity(args),
             "uq" => self.uq(args),
+            "calibrate" => self.calibrate(args),
             "optimise" | "optimize" => self.optimise(args),
             "analyze_sdf_channel" => self.analyze_sdf_channel(args),
             "export" => self.export(args),
@@ -371,6 +375,8 @@ impl Server {
                     | "delete_assert"
                     | "upsert_uncertainty"
                     | "delete_uncertainty"
+                    | "upsert_observe"
+                    | "delete_observe"
                     | "solve"
                     | "solve_study"
                     | "optimise"
@@ -382,7 +388,7 @@ impl Server {
                     | "optimise_drone_antenna"
                     | "connect_compute_peer"
                     | "disconnect_compute_peer"
-            );
+            ) || (name == "calibrate" && cal_apply);
             if is_mutating {
                 self.save_workspace_after_tool(name, &format!("Executed MCP tool `{name}`"));
             }
@@ -453,6 +459,7 @@ impl Server {
             "system_block": d.system_block,
             "asserts": d.asserts,
             "uncertainties": d.uncertainties,
+            "observations": d.observations,
             "lets": d.lets,
             "sketches": d.sketches,
             "sketch_features": d.sketch_features,
@@ -948,6 +955,80 @@ impl Server {
         }))
     }
 
+    fn upsert_observe(&mut self, args: Value) -> Result<Value, String> {
+        let index = args
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        let metric = text_field("metric", &args)?;
+        let measured = args
+            .get("measured")
+            .or_else(|| args.get("value"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "upsert_observe: missing numeric 'measured'".to_string())?;
+        let std = args
+            .get("std")
+            .or_else(|| args.get("sigma"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "upsert_observe: missing positive 'std'".to_string())?;
+        let label = args
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let unit = args
+            .get("unit")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let out = apply_doc_command(
+            d,
+            DocCommand::UpsertObserve {
+                index,
+                observation: ObserveSpec {
+                    label,
+                    metric,
+                    measured,
+                    std,
+                    unit,
+                },
+            },
+        )?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "observations": d.observations,
+            "problems": out.problems,
+        }))
+    }
+
+    fn delete_observe(&mut self, args: Value) -> Result<Value, String> {
+        let d = self.doc.as_mut().ok_or(NO_DOC)?;
+        let idx = if let Some(i) = args.get("index").and_then(Value::as_u64) {
+            i as usize
+        } else if let Some(lbl) = args.get("label").and_then(Value::as_str) {
+            d.observations
+                .iter()
+                .position(|o| o.label == lbl)
+                .ok_or_else(|| format!("delete_observe: no observation with label {lbl:?}"))?
+        } else if let Some(met) = args.get("metric").and_then(Value::as_str) {
+            d.observations
+                .iter()
+                .position(|o| o.metric == met)
+                .ok_or_else(|| format!("delete_observe: no observation on metric {met:?}"))?
+        } else {
+            return Err("delete_observe: provide 'index', 'label', or 'metric'".into());
+        };
+        let out = apply_doc_command(d, DocCommand::DeleteObserve { index: idx })?;
+        Ok(json!({
+            "label": out.entity_id,
+            "action": out.action,
+            "observations": d.observations,
+            "problems": out.problems,
+        }))
+    }
+
     /// Configure or update the document's `fill` specification (TPMS family, mode, cell,
     /// skin, `skin_max`, density range, curve, min_wall, protected shapes, margin, case,
     /// or lattice rotation), or clear it when `"clear": true` is passed.
@@ -1341,6 +1422,26 @@ impl Server {
         let mut q = args;
         q["kind"] = json!("uq");
         self.solve(q)
+    }
+
+    fn calibrate(&mut self, args: Value) -> Result<Value, String> {
+        let apply = args.get("apply").and_then(Value::as_bool).unwrap_or(true);
+        let mut q = args;
+        if let Some(obj) = q.as_object_mut() {
+            obj.remove("apply");
+        }
+        q["kind"] = json!("calibrate");
+        let env = self.solve(q)?;
+        if apply {
+            if let Some(fsm_str) = env
+                .pointer("/calibration/calibrated_fsm")
+                .and_then(Value::as_str)
+            {
+                let d = fsm::parse(fsm_str).map_err(|e| e.to_string())?;
+                self.doc = Some(d);
+            }
+        }
+        Ok(env)
     }
 
     fn optimise(&mut self, args: Value) -> Result<Value, String> {
@@ -2899,7 +3000,7 @@ const TOOLS_JSON: &str = r#"[
  {"name":"solve_sketch","description":"Solve a 2D parametric sketch (`points`, `segments`, `circles`, 12 geometric + 6 dimensional `constraints`, or high-level `macros`: `rect`, `center_rect`, `circle`, `slot`, `polygon`, `bolt_circle`, `fillet_corner`) using damped Levenberg-Marquardt + homotopy continuation and column-pivoted QR rank analysis. Returns solved `(x, y, bulge)` outer/hole profiles, exact `dof`, per-point freedom, and redundant/conflicting constraint diagnostics.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"sketch":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}},"lets":{"type":"object"}}}},
  {"name":"upsert_sketch","description":"Create or update a persistent 2D parametric sketch in the open `.fsm` document (`doc.sketches`), solve its constraints against current `let` variables, and re-synchronize any bound `sketchfeature` 3D operations.","inputSchema":{"type":"object","properties":{"sketch":{"type":"object"},"id":{"type":"string"},"plane":{"type":"object"},"points":{"type":"array","items":{"type":"object"}},"segments":{"type":"array","items":{"type":"object"}},"circles":{"type":"array","items":{"type":"object"}},"constraints":{"type":"array","items":{"type":"object"}},"macros":{"type":"array","items":{"type":"object"}}}}},
  {"name":"apply_sketch_feature","description":"Solve a 2D parametric sketch on a world plane (`xy`, `xz`, `yz`) or attached directly to a 3D shape's face (`on: \"<shape_id>.<face>\"`), persist both `sketch` and `sketchfeature` in the `.fsm` document, and compile/update the 3D feature (`boss_extrude`, `pocket_cut`, `revolve_boss`, or `revolve_cut`).","inputSchema":{"type":"object","required":["feature_id","operation"],"properties":{"feature_id":{"type":"string"},"sketch_id":{"type":"string"},"associate_with_host":{"type":"boolean"},"preset":{"type":"string","enum":["flanged_mounting_bracket","turned_aerospace_spool","slotted_adjustment_link","bolt_flange_plate"]},"on":{"type":"string"},"sketch":{"type":"object"},"operation":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["boss_extrude","pocket_cut","revolve_boss","revolve_cut"]},"height":{"type":"number"},"depth":{"type":"number"},"through_all":{"type":"boolean"},"angle_deg":{"type":"number"},"blend":{"type":"number"},"symmetric":{"type":"boolean"}}},"lets":{"type":"object"}}}},
- {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_contact`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_hx`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
+ {"name":"apply_doc_command","description":"Apply a typed `DocCommand` (`set_material`, `upsert_custom_material`, `set_let`, `delete_let`, `upsert_node`, `delete_entity`, `upsert_region`, `upsert_support`, `upsert_contact`, `upsert_load`, `upsert_temperature`, `upsert_convection`, `upsert_heat_flux`, `set_fill`, `set_hx`, `set_solve`, `upsert_sketch`, `delete_sketch`, `apply_sketch_feature`, `set_system_block`, `upsert_assert`, `delete_assert`, `upsert_uncertainty`, `delete_uncertainty`, `upsert_observe`, `delete_observe`, `insert_fixing`, `reconfigure_fixing`, `apply_clinching`) via the shared authoritative reducer.","inputSchema":{"type":"object","required":["cmd"],"properties":{"cmd":{"type":"string"}}}},
  {"name":"delete_entity","description":"Delete a shape, sketch, region, support, contact, load, temperature, convection, heatflux, or `hx` by `id`.","inputSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}},
  {"name":"add_region","description":"Add a named region (union of shape-face selectors).","inputSchema":{"type":"object","required":["selectors"],"properties":{"id":{"type":"string"},"selectors":{"type":"array","items":{"type":"object","required":["shape","face"],"properties":{"shape":{"type":"string"},"face":{"type":"string"},"patch":{"type":"integer"}}}}}}},
  {"name":"add_support","description":"Fix displacement components on a region.","inputSchema":{"type":"object","required":["region","fixed"],"properties":{"id":{"type":"string"},"region":{"type":"string"},"fixed":{"type":"array","items":{"type":"boolean"},"minItems":3,"maxItems":3}}}},
@@ -2918,12 +3019,15 @@ const TOOLS_JSON: &str = r#"[
  {"name":"delete_assert","description":"Delete an executable `assert` engineering contract from the open `.fsm` document by `index` or `label`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"}}}},
  {"name":"upsert_uncertainty","description":"Create or update an epistemic / manufacturing parameter uncertainty (`uncertainty` statement) in the open `.fsm` document (`param` such as a `let` name, `pull.force.1`, `ss316l.e`, `ss316l.yield`, `fill.rho_min`, `solve.build.0`, or `system` `epistemic`, with `std` and/or relative `cv`).","inputSchema":{"type":"object","required":["param"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"},"std":{"type":"number"},"sigma":{"type":"number"},"cv":{"type":"number"},"unit":{"type":"string"}}}},
  {"name":"delete_uncertainty","description":"Delete an `uncertainty` declaration from the open `.fsm` document by `index`, `label`, or `param`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"},"param":{"type":"string"}}}},
+ {"name":"upsert_observe","description":"Create or update an empirical bench / test-stand sensor observation (`observe` statement) in the open `.fsm` document (`metric` such as `max_temp`, `max_displacement`, `max_vm_elem`, `mode_1`, `graded.deflection`, or `sys.<obj>`, with `measured` reading and 1-sigma sensor noise `std`).","inputSchema":{"type":"object","required":["metric","measured","std"],"properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"},"measured":{"type":"number"},"value":{"type":"number"},"std":{"type":"number"},"sigma":{"type":"number"},"unit":{"type":"string"}}}},
+ {"name":"delete_observe","description":"Delete an `observe` bench reading from the open `.fsm` document by `index`, `label`, or `metric`.","inputSchema":{"type":"object","properties":{"index":{"type":"integer"},"label":{"type":"string"},"metric":{"type":"string"}}}},
  {"name":"doc_text","description":"The open document as .fsm text (a print of the current model, edits included).","inputSchema":{"type":"object","additionalProperties":false}},
- {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/optimise/fixing/clinching/transient) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","optimise","fixing","clinching","transient"]},"dofs":{"type":"integer"},"h":{"type":"number"},"t_end":{"type":"number"},"steps":{"type":"integer"},"t_init":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"input":{"type":"object"},"spec":{"type":"object"},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
+ {"name":"solve","description":"Run the API question (solve/ladder/modes/sweep/overhang/verify/sensitivity/uq/calibrate/optimise/fixing/clinching/transient) on the session's document; returns the same JSON envelope the `fieldsmith api` verb writes.","inputSchema":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["solve","ladder","modes","sweep","overhang","verify","sensitivity","uq","calibrate","optimise","fixing","clinching","transient"]},"dofs":{"type":"integer"},"h":{"type":"number"},"t_end":{"type":"number"},"steps":{"type":"integer"},"t_init":{"type":"number"},"n":{"type":"integer"},"rungs":{"type":"array","items":{"type":"integer"}},"tolerance":{"type":"string"},"budget":{"type":"string"},"param":{"type":"string"},"params":{"type":"array","items":{"type":"string"}},"uncertainties":{"type":"array","items":{"type":"object"}},"observations":{"type":"array","items":{"type":"object"}},"priors":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"input":{"type":"object"},"spec":{"type":"object"},"samples":{"type":"array","items":{"type":"object"}},"target_pf":{"type":"number"},"values":{"type":"array","items":{"type":"number"}},"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"build":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"threshold_deg":{"type":"number"},"equilibrate":{"type":"boolean"}}}},
  {"name":"transient_solve","description":"Run 3D P2 transient thermo-elastic conduction (`BDF2`, `ρ c_p ∂T/∂t = ∇·(k ∇T)`) and batched multi-RHS Duhamel–Neumann thermal-shock stress (`QuestionSpec::Transient`) on the open `.fsm` document; returns `apiv: 2` envelope with `transient.cases` (`peak_vm_elem`, `t_at_peak_vm_s`, `steady_limit_vm_elem`, `shock_amplification`, and `timeline`).","inputSchema":{"type":"object","properties":{"t_end":{"type":"number"},"steps":{"type":"integer"},"t_init":{"type":"number"},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"verify","description":"Evaluate all `assert` / `@assert:` engineering contracts (including `p90.<metric>` and `p10.<metric>` epistemic quantile contracts) on the open `.fsm` document; returns the `apiv: 2` envelope with `status: \"ok\"` when all pass or `status: \"refusal\"` when any contract fails.","inputSchema":{"type":"object","properties":{"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"sensitivity","description":"Compute 3D P2 parameter sensitivities (`dC/dp`, `dm/dp`, `du_max/dp`, `dsigma_vM/dp`, `dT_max/dp`, `df_n/dp`, additive `d_max_layer_peel`, `d_overhang_fraction`, `d_max_overhang_deg`, plus graded TPMS lattice `dU_yield/dp`, `dU_buckling/dp`, and `d_solid_mass_g`) across `params` (or all non-derived `let`, `system`, `fill.*` grading, and `solve.build.0` / `solve.build.1` build-orientation variables in the open `.fsm` document) using mechanical, staggered thermo-elastic, and two-pass homogenised TPMS discrete adjoints plus `O(0)`-extra-solve Rayleigh-quotient modal and build-orientation differentiation (`O(1)` solves in parameter count `k`).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
  {"name":"uq","description":"Run `O(1)`-solve 3D continuum epistemic uncertainty quantification (`QuestionSpec::Uq`): propagates `uncertainties` (or all `uncertainty` statements + `system` `epistemic` closures in the open `.fsm` document) across `metrics` via discrete 3D adjoint sensitivities, returning `p10`, `p50`, `p90`, `std_dev`, and ranked `variance_share` contributors.","inputSchema":{"type":"object","properties":{"uncertainties":{"type":"array","items":{"type":"object"}},"metrics":{"type":"array","items":{"type":"string"}},"dofs":{"type":"integer"},"h":{"type":"number"}}}},
+ {"name":"calibrate","description":"Run adjoint Gauss–Newton / Levenberg–Marquardt Bayesian Maximum-A-Posteriori (MAP) inverse calibration (`QuestionSpec::Calibrate`): fuses empirical bench readings (`observations` or `doc.observations`) with Gaussian parameter priors (`priors` or `doc.uncertainties` + `system` `epistemic` closures) in `O(1)` 3D discrete adjoint solves per iteration, computes the Laplace posterior covariance (`posterior_sigma`, `posterior_correlation`, `sigma_reduction_pct`, `reduced_chi2`), and updates the open `.fsm` session document with calibrated parameter means and narrowed posterior standard deviations when `apply` is true (default).","inputSchema":{"type":"object","properties":{"params":{"type":"array","items":{"type":"string"}},"observations":{"type":"array","items":{"type":"object"}},"priors":{"type":"array","items":{"type":"object"}},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"dofs":{"type":"integer"},"h":{"type":"number"},"apply":{"type":"boolean"}}}},
  {"name":"optimise","description":"Contract-constrained 3D continuum, additive build-orientation (`solve.build.0`, `solve.build.1`), graded TPMS lattice (`fill.*`), & coupled 0D/1D+3D parameter optimiser: minimises `objective` (`mass_g` default, `compliance`, `max_vm_elem`, `max_displacement`, `max_temp`, `max_layer_peel`, `overhang_fraction`) or maximises fundamental natural frequency (`max_mode_1_hz`) across `params` (or all non-load `let`, `system` design, `solve.build.*`, and `fill.*` grading variables) subject to every `.fsm` `assert` contract (including epistemic quantile contracts `p90.<metric>` / `p10.<metric>`, `max_layer_peel`, `graded.max_layer_peel`, `overhang_fraction`, `overhang_pct`, `max_overhang_deg`, `graded.yield_utilization`, `graded.buckling_utilization`, `mass_saved_pct`, `mode_k`, and `mode_split_12_pct`) using `O(1)` discrete adjoints (`trust_region_sqp_adjoint`). Updates the open session document when `apply` is true (default).","inputSchema":{"type":"object","properties":{"objective":{"type":"string","enum":["mass_g","compliance","max_vm_elem","max_displacement","max_temp","max_mode_1_hz","max_layer_peel","overhang_fraction"]},"params":{"type":"array","items":{"type":"string"}},"bounds":{"type":"object","additionalProperties":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}},"max_iters":{"type":"integer"},"dofs":{"type":"integer"},"h":{"type":"number"},"apply":{"type":"boolean"}}}},
  {"name":"analyze_sdf_channel","description":"Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`) directly from the open `.fsm` SDF along `axis` (`x|y|z`), march 1D Darcy-Weisbach + Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto `bind_region`.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["x","y","z"]},"passage_mode":{"type":"string","enum":["auto","interior_void","solid_core"]},"node_id":{"type":"string"},"stations":{"type":"integer"},"span_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"slice_h_mm":{"type":"number"},"mass_flow_kg_s":{"type":"number"},"density_kg_m3":{"type":"number"},"viscosity_pa_s":{"type":"number"},"conductivity_w_m_k":{"type":"number"},"cp_j_kg_k":{"type":"number"},"roughness_mm":{"type":"number"},"inlet_pressure_mpa":{"type":"number"},"inlet_temp_c":{"type":"number"},"wall_temp_c":{"type":"number"},"bind_region":{"type":"string"},"thermal_case":{"type":"string"},"pressure_case":{"type":"string"}}}},
  {"name":"export","description":"Mesh or slice-stack the session document (facts, and artifact bytes base64 when stl/mf are requested; pass `slices: true` for 2D `<s:slicestack>` export).","inputSchema":{"type":"object","properties":{"h":{"type":"number"},"layer_h":{"type":"number"},"slices":{"type":"boolean"},"adaptive":{"type":"boolean"},"solid_only":{"type":"boolean"},"stl":{"type":"boolean"},"mf":{"type":"boolean"}}}},

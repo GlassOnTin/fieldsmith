@@ -6,10 +6,12 @@
 import { useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import {
+  calibrateFsmDocument,
   computeFsmSensitivities,
   computeFsmUq,
   optimiseFsmDocument,
   verifyFsmContracts,
+  type CalibrateBundle,
   type OptObjective,
   type OptimiseBundle,
   type SensitivityReport,
@@ -70,6 +72,8 @@ export function ResultsSensitivityCard() {
     doc.system_block?.epistemics?.filter((e) => e.sigma > 0).length ?? 0;
   const uqCount = uncertainties.length + sysEpistemicCount;
   const hasUq = uqCount > 0;
+  const observations = doc.observations ?? [];
+  const hasObs = observations.length > 0;
   const asserts = doc.asserts ?? [];
   const hasAsserts = asserts.length > 0;
 
@@ -77,8 +81,9 @@ export function ResultsSensitivityCard() {
   const [uqReport, setUqReport] = useState<UqReport | null>(null);
   const [contractReport, setContractReport] = useState<VerificationReport | null>(null);
   const [optBundle, setOptBundle] = useState<OptimiseBundle | null>(null);
+  const [calBundle, setCalBundle] = useState<CalibrateBundle | null>(null);
   const [optObjective, setOptObjective] = useState<OptObjective>('mass_g');
-  const [busy, setBusy] = useState<'sens' | 'uq' | 'verify' | 'opt' | null>(null);
+  const [busy, setBusy] = useState<'sens' | 'uq' | 'verify' | 'opt' | 'cal' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -94,6 +99,13 @@ export function ResultsSensitivityCard() {
   const [uqMode, setUqMode] = useState<'std' | 'cv'>('cv');
   const [uqVal, setUqVal] = useState('0.08');
   const [uqUnit, setUqUnit] = useState('');
+
+  const [addObsOpen, setAddObsOpen] = useState(false);
+  const [obsLabel, setObsLabel] = useState('Bench sensor');
+  const [obsMetric, setObsMetric] = useState('max_displacement');
+  const [obsMeasured, setObsMeasured] = useState('0.25');
+  const [obsStd, setObsStd] = useState('0.01');
+  const [obsUnit, setObsUnit] = useState('mm');
 
   const runSensitivities = () => {
     setBusy('sens');
@@ -174,7 +186,77 @@ export function ResultsSensitivityCard() {
     setSensReport(null);
     setUqReport(null);
     setOptBundle(null);
+    setCalBundle(null);
     ui.notify('Applied optimised .fsm parameters (Ctrl+Z to undo)');
+  };
+
+  const runCalibrate = () => {
+    setBusy('cal');
+    setErr(null);
+    window.setTimeout(() => {
+      try {
+        const spec = store.doc.solve?.size != null ? undefined : { dofs: 4000 };
+        const res = calibrateFsmDocument(store.doc, spec);
+        setCalBundle(res);
+        setContractReport(res.report.final_verification);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setErr(msg);
+        ui.notify(`Calibration error: ${msg}`, 'error');
+      } finally {
+        setBusy(null);
+      }
+    }, 10);
+  };
+
+  const applyCalibratedPosterior = () => {
+    if (!calBundle) return;
+    store.applyExternalDoc(calBundle.doc, 'Apply Bayesian MAP Calibration');
+    setSensReport(null);
+    setUqReport(null);
+    setOptBundle(null);
+    setCalBundle(null);
+    ui.notify('Applied Bayesian MAP posterior means & marginal σ to .fsm (Ctrl+Z to undo)');
+  };
+
+  const onObsMetricInput = (nextMetric: string) => {
+    setObsMetric(nextMetric);
+    const baseMetric = nextMetric.split(':')[0]?.trim() ?? '';
+    const preset = CONTRACT_METRICS.find((m) => m.value === baseMetric);
+    if (preset && preset.defaultUnit) {
+      setObsUnit(preset.defaultUnit);
+    }
+  };
+
+  const saveObserve = () => {
+    const trimmedMetric = obsMetric.trim();
+    const measuredVal = Number(obsMeasured.trim());
+    const stdVal = Number(obsStd.trim());
+    if (!trimmedMetric || !Number.isFinite(measuredVal) || !Number.isFinite(stdVal) || stdVal <= 0) {
+      setErr('Observation metric, finite measured value, and positive std are required.');
+      return;
+    }
+    setErr(null);
+    store.dispatch('add bench observation', {
+      cmd: 'upsert_observe',
+      observation: {
+        label: obsLabel.trim() || trimmedMetric,
+        metric: trimmedMetric,
+        measured: measuredVal,
+        std: stdVal,
+        unit: obsUnit.trim(),
+      },
+    });
+    setCalBundle(null);
+    setAddObsOpen(false);
+  };
+
+  const removeObserve = (index: number) => {
+    store.dispatch('delete bench observation', {
+      cmd: 'delete_observe',
+      index,
+    });
+    setCalBundle(null);
   };
 
   const saveUncertainty = () => {
@@ -350,6 +432,28 @@ export function ResultsSensitivityCard() {
               {busy === 'uq' ? 'Computing UQ…' : `Compute UQ (${uqCount})`}
             </button>
           )}
+          {hasObs && (
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="results-run-calibrate-btn"
+              disabled={busy !== null}
+              onClick={runCalibrate}
+              style={{ borderColor: 'rgba(56, 189, 248, 0.55)', color: '#7dd3fc', fontWeight: 700 }}
+              title="Fuse empirical bench readings (observe ...) with parameter priors via 3D adjoint Gauss–Newton Bayesian MAP calibration"
+            >
+              {busy === 'cal' ? 'Calibrating…' : `Calibrate MAP (${observations.length})`}
+            </button>
+          )}
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="results-toggle-add-observe-btn"
+            onClick={() => setAddObsOpen((v) => !v)}
+            title="Author an empirical bench / test-stand sensor reading (observe ...)"
+          >
+            {addObsOpen ? 'Cancel Obs' : '+ Add Bench Reading'}
+          </button>
           <button
             type="button"
             class="mini-btn"
@@ -370,6 +474,130 @@ export function ResultsSensitivityCard() {
           </button>
         </div>
       </div>
+
+      {addObsOpen && (
+        <div
+          data-testid="results-add-observe-form"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+            gap: '4px',
+            padding: '6px',
+            borderRadius: '4px',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            alignItems: 'end',
+          }}
+        >
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Sensor Label
+            <input
+              type="text"
+              class="input"
+              data-testid="observe-label-input"
+              value={obsLabel}
+              onInput={(e) => setObsLabel((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Metric Selector
+            <input
+              type="text"
+              class="input"
+              list="observe-metric-datalist"
+              data-testid="observe-metric-input"
+              placeholder="max_temp or max_displacement:Load 1"
+              value={obsMetric}
+              onInput={(e) => onObsMetricInput((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+            />
+            <datalist id="observe-metric-datalist">
+              {CONTRACT_METRICS.filter((m) => !m.value.startsWith('p10.') && !m.value.startsWith('p90.')).map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </datalist>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Measured (y)
+            <input
+              type="text"
+              class="input"
+              data-testid="observe-measured-input"
+              value={obsMeasured}
+              onInput={(e) => setObsMeasured((e.target as HTMLInputElement).value)}
+              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+            Noise 1-σ / Unit
+            <div style={{ display: 'flex', gap: '3px' }}>
+              <input
+                type="text"
+                class="input"
+                data-testid="observe-std-input"
+                placeholder="σ"
+                value={obsStd}
+                onInput={(e) => setObsStd((e.target as HTMLInputElement).value)}
+                style={{ width: '52%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              />
+              <input
+                type="text"
+                class="input"
+                data-testid="observe-unit-input"
+                placeholder="unit"
+                value={obsUnit}
+                onInput={(e) => setObsUnit((e.target as HTMLInputElement).value)}
+                style={{ width: '48%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              />
+            </div>
+          </label>
+          <button
+            type="button"
+            class="mini-btn"
+            data-testid="observe-save-btn"
+            onClick={saveObserve}
+            style={{ height: '22px', fontWeight: 700, color: '#7dd3fc' }}
+          >
+            Save Obs
+          </button>
+        </div>
+      )}
+
+      {observations.length > 0 && (
+        <div data-testid="results-authored-observations-list" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {observations.map((o, i) => (
+            <div
+              key={`${o.metric}-${i}`}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '6px',
+                fontFamily: 'var(--mono)',
+                fontSize: '9.5px',
+                color: '#bae6fd',
+              }}
+            >
+              <span>
+                ⊙ {o.label || o.metric}: {o.metric} = {o.measured} ± {o.std} {o.unit ?? ''}
+              </span>
+              <button
+                type="button"
+                class="mini-btn"
+                data-testid={`delete-observe-${i}`}
+                onClick={() => removeObserve(i)}
+                title="Remove bench observation from .fsm document"
+                style={{ padding: '0 4px', lineHeight: 1.2 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {addUqOpen && (
         <div
@@ -700,6 +928,90 @@ export function ResultsSensitivityCard() {
               <span key={p.param}>
                 {p.param}: {p.initial.toPrecision(4)} → <strong>{p.final_value.toPrecision(4)}</strong>
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {calBundle && (
+        <div
+          data-testid="results-calibration-output"
+          style={{
+            padding: '6px 8px',
+            borderRadius: '5px',
+            background: 'rgba(14, 165, 233, 0.10)',
+            border: '1px solid rgba(56, 189, 248, 0.45)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            fontFamily: 'var(--mono)',
+            fontSize: '9.5px',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, color: calBundle.report.final_verification.all_passed ? '#7dd3fc' : '#fbbf24' }}>
+              {calBundle.report.final_verification.all_passed ? '✓' : '⚠'} Bayesian MAP · J_MAP:{' '}
+              {calBundle.report.initial_cost.toPrecision(4)} → {calBundle.report.final_cost.toPrecision(4)} · χ²/m={' '}
+              {calBundle.report.reduced_chi2.toFixed(3)} · {calBundle.report.iterations} iters ({calBundle.report.solves_run} solves)
+            </span>
+            <button
+              type="button"
+              class="mini-btn"
+              data-testid="results-apply-posterior-btn"
+              onClick={applyCalibratedPosterior}
+              style={{ fontWeight: 700, color: '#7dd3fc', borderColor: 'rgba(56, 189, 248, 0.55)' }}
+            >
+              Apply Posterior to .fsm
+            </button>
+          </div>
+          <div style={{ fontSize: '9px', color: 'var(--text-3)' }}>
+            Laplace posterior Σ_post around θ_MAP (h={calBundle.report.h.toFixed(2)} mm); marginal posterior σ written to .fsm uncertainty
+          </div>
+          <table
+            data-testid="results-calibration-params-table"
+            style={{ width: '100%', borderCollapse: 'collapse', fontSize: '9.5px' }}
+          >
+            <thead>
+              <tr style={{ color: 'var(--text-3)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
+                <th style={{ textAlign: 'left', padding: '2px 4px' }}>param</th>
+                <th style={{ padding: '2px 4px' }}>prior μ ± σ</th>
+                <th style={{ padding: '2px 4px' }}>posterior μ ± σ</th>
+                <th style={{ padding: '2px 4px' }}>σ reduction</th>
+                <th style={{ padding: '2px 4px' }}>p10 .. p90</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calBundle.report.parameters.map((p) => (
+                <tr key={p.param} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
+                  <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
+                    {p.param} {p.unit ? `(${p.unit})` : ''}
+                  </td>
+                  <td style={{ padding: '2px 4px' }}>
+                    {p.prior_mean.toPrecision(4)} ± {p.prior_sigma.toPrecision(3)}
+                  </td>
+                  <td style={{ padding: '2px 4px', color: '#7dd3fc', fontWeight: 600 }}>
+                    {p.posterior_mean.toPrecision(4)} ± {p.posterior_sigma.toPrecision(3)}
+                  </td>
+                  <td style={{ padding: '2px 4px', color: '#4ade80' }}>
+                    −{p.sigma_reduction_pct.toFixed(1)}%
+                  </td>
+                  <td style={{ padding: '2px 4px', color: 'var(--text-2)' }}>
+                    {p.posterior_p10.toPrecision(4)} .. {p.posterior_p90.toPrecision(4)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div data-testid="results-calibration-obs-list" style={{ display: 'flex', flexDirection: 'column', gap: '2px', color: 'var(--text-2)' }}>
+            {calBundle.report.observations.map((o, idx) => (
+              <div key={`${o.metric}-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+                <span>
+                  ⊙ {o.label || o.metric} ({o.metric}): measured {o.measured.toPrecision(4)} ± {o.obs_sigma.toPrecision(3)} {o.unit ?? ''}
+                </span>
+                <span>
+                  pred {o.prior_prediction.toPrecision(4)} → <strong>{o.posterior_prediction.toPrecision(4)}</strong> (±{o.posterior_pred_sigma.toPrecision(3)}, z={o.normalized_residual_z >= 0 ? '+' : ''}{o.normalized_residual_z.toFixed(2)})
+                </span>
+              </div>
             ))}
           </div>
         </div>

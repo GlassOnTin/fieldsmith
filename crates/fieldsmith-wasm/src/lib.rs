@@ -2588,6 +2588,31 @@ pub fn compute_fsm_uq_wasm(doc_or_fsm: &str, spec_json: Option<String>) -> Resul
     to_json(&report)
 }
 
+/// Adjoint Gauss–Newton / Levenberg–Marquardt Bayesian MAP calibration (`calibrate`):
+/// fuses `doc.observations` (or `spec.observations`) with `doc.uncertainties` + `system` `epistemic`
+/// priors and returns `{"report": CalibrationReport, "doc": posterior_doc}`.
+#[wasm_bindgen(js_name = calibrateFsmDocument)]
+pub fn calibrate_fsm_document_wasm(
+    doc_or_fsm: &str,
+    spec_json: Option<String>,
+) -> Result<String, JsValue> {
+    use fieldsmith_core::calibrate::{calibrate_document, CalibrateSpec};
+    let doc = doc_from_json_or_fsm(doc_or_fsm)?;
+    let mut spec: CalibrateSpec = match spec_json.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => serde_json::from_str(s)
+            .map_err(|e| js_err(format!("invalid CalibrateSpec JSON: {e}")))?,
+        _ => CalibrateSpec::default(),
+    };
+    if spec.dofs.is_none() && spec.h.is_none() && doc.solve.size.is_none() {
+        spec.dofs = Some(8_000);
+    }
+    let (report, posterior_doc) = calibrate_document(&doc, &spec, clock).map_err(js_err)?;
+    to_json(&serde_json::json!({
+        "report": report,
+        "doc": posterior_doc,
+    }))
+}
+
 /// Extract 2D flow cross-sections (`A(s)`, wetted perimeter `P_w(s)`, hydraulic diameter `D_h(s)`)
 /// directly from a `.fsm` or JSON `Document` SDF along `axis`, march 1D Darcy–Weisbach +
 /// Gnielinski convective heat transfer, and optionally bind `Convection` / `Pressure` BCs onto

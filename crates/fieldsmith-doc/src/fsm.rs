@@ -1070,6 +1070,64 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
                     });
                 }
             }
+            "observe" => {
+                if !stack.is_empty() {
+                    return Err(err("observe is only allowed at the top level".into()));
+                }
+                let pos_label = match (c.toks.get(c.pos), c.toks.get(c.pos + 1)) {
+                    (Some(Tok::Str(_)), _) => match c.next() {
+                        Some(Tok::Str(s)) => Some(s),
+                        _ => unreachable!(),
+                    },
+                    (Some(Tok::Ident(_)), Some(Tok::Sym('='))) => None,
+                    (Some(Tok::Ident(_)), _) => match c.next() {
+                        Some(Tok::Ident(s)) => Some(s),
+                        _ => unreachable!(),
+                    },
+                    _ => None,
+                };
+                let mut a = c.attrs("", &let_scope(&doc))?;
+                let opt_label = a.string("label")?;
+                let metric = a
+                    .string("metric")?
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| err("observe needs metric=\"...\"".into()))?;
+                let measured = a
+                    .signed_num("measured")?
+                    .or(a.signed_num("value")?)
+                    .ok_or_else(|| err("observe needs measured=<number>".into()))?;
+                let std = a
+                    .num("std")?
+                    .or(a.num("sigma")?)
+                    .ok_or_else(|| err("observe needs std=<positive>".into()))?;
+                if !std.is_finite() || std <= 0.0 {
+                    return Err(err("observe 'std' must be finite and > 0".into()));
+                }
+                let unit = a.string("unit")?.unwrap_or_default();
+                a.finish()?;
+                let label = pos_label
+                    .or(opt_label)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| metric.clone());
+                if let Some(slot) = doc
+                    .observations
+                    .iter_mut()
+                    .find(|x| x.metric == metric && x.label == label)
+                {
+                    slot.measured = measured;
+                    slot.std = std;
+                    slot.unit = unit;
+                } else {
+                    doc.observations.push(ObserveSpec {
+                        label,
+                        metric,
+                        measured,
+                        std,
+                        unit,
+                    });
+                }
+            }
             "color" => {
                 // `#` outside a quoted string starts a comment, so the hex travels quoted
                 // in the text form; the document stores it canonical `#RRGGBB[AA]`.
@@ -3623,6 +3681,24 @@ pub fn print(doc: &Document) -> String {
         }
         let _ = writeln!(o, "{line}");
     }
+    for obs in &doc.observations {
+        let lbl = if obs.label.is_empty() {
+            &obs.metric
+        } else {
+            &obs.label
+        };
+        let mut line = format!(
+            "observe {} metric={} measured={} std={}",
+            q(lbl),
+            q(&obs.metric),
+            n(obs.measured),
+            n(obs.std)
+        );
+        if !obs.unit.is_empty() {
+            line += &format!(" unit={}", q(&obs.unit));
+        }
+        let _ = writeln!(o, "{line}");
+    }
     for a in &doc.asserts {
         let mut line = format!(
             "assert {} metric={} target={}",
@@ -5627,5 +5703,46 @@ fill gyroid sheet cell=5 skin=1 rho=(0.2, 0.5) curve=1 wall=0.4 protect=(hole) m
             parse(&print(&sp_doc)).expect("reparse single-item protect"),
             sp_doc
         );
+    }
+
+    #[test]
+    fn observe_statements_round_trip_and_validate() {
+        let raw = "\
+fieldsmith 1
+name \"Bench Coupon\"
+material petg
+let t = 4.0
+box beam size=(60, 12, t) at=(30, 6, t / 2)
+region root = beam.nx
+region tip = beam.px
+support fix root fixed=xyz
+load push tip force=(0, 0, -25)
+uncertainty \"Coupon thickness\" param=\"t\" std=0.25 unit=\"mm\"
+observe \"Dial gauge tip deflection\" metric=\"max_displacement\" measured=1.42 std=0.03 unit=\"mm\"
+observe \"Thermocouple T1\" metric=\"max_temp\" measured=-12.5 sigma=0.4 unit=\"°C\"
+solve
+";
+        let doc = parse(raw).expect("parse observe statements");
+        assert_eq!(doc.observations.len(), 2);
+        assert_eq!(doc.observations[0].label, "Dial gauge tip deflection");
+        assert_eq!(doc.observations[0].metric, "max_displacement");
+        assert!((doc.observations[0].measured - 1.42).abs() < 1e-12);
+        assert!((doc.observations[0].std - 0.03).abs() < 1e-12);
+        assert_eq!(doc.observations[0].unit, "mm");
+        assert!((doc.observations[1].measured - -12.5).abs() < 1e-12);
+        assert!((doc.observations[1].std - 0.4).abs() < 1e-12);
+        assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+
+        let printed = print(&doc);
+        assert!(
+            printed.contains("observe \"Dial gauge tip deflection\" metric=\"max_displacement\" measured=1.42 std=0.03 unit=\"mm\""),
+            "printed: {printed}"
+        );
+        let reparsed = parse(&printed).expect("reparse observe statements");
+        assert_eq!(reparsed, doc);
+
+        let mut bad = doc.clone();
+        bad.observations[0].std = 0.0;
+        assert!(!bad.validate().is_empty());
     }
 }

@@ -1592,7 +1592,109 @@ try {
 
   assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
   console.log(
-    `[20/20] 3D SDF & Graded-TPMS Cross-Section Coupled Declarative Systems (sys-tpl-sdf-1d + T27 A_core/K_perm/a_wet + Results meta.system): PASS`,
+    `[20/21] 3D SDF & Graded-TPMS Cross-Section Coupled Declarative Systems (sys-tpl-sdf-1d + T27 A_core/K_perm/a_wet + Results meta.system): PASS`,
+  );
+
+  // -------------------------------------------------------------------------
+  // 21. Empirical Bench Calibration & Bayesian MAP Posterior UQ (`T28` + `observe` + `Calibrate MAP` + Undo)
+  // -------------------------------------------------------------------------
+  const t28Path = resolve(
+    repoRoot,
+    'examples/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.fsm',
+  );
+  const t28Raw = readFileSync(t28Path, 'utf-8');
+  await page.evaluate(async (fsm) => {
+    const wasm = await import('/src/doc/wasm.ts');
+    const parsed = wasm.parseFsm(fsm);
+    if ('error' in parsed) throw new Error(parsed.error.message);
+    window.fieldsmith.store.load(parsed.ok);
+    window.fieldsmith.store.setLens('results');
+  }, t28Raw);
+
+  await page.waitForFunction(
+    () => {
+      const a = window.fieldsmith?.analysis;
+      const s = window.fieldsmith?.store;
+      return a && s && a.state.status === 'ready' && a.state.resultsFor === s.docVersion;
+    },
+    null,
+    { timeout: 35000 },
+  );
+
+  await page.waitForSelector('[data-testid="results-authored-observations-list"]', { timeout: 10000 });
+  const t28ObsText = await page.textContent('[data-testid="results-authored-observations-list"]');
+  assert(
+    t28ObsText &&
+      t28ObsText.includes('max_displacement:Load 1') &&
+      t28ObsText.includes('0.608') &&
+      t28ObsText.includes('max_temp:Thermal 1') &&
+      t28ObsText.includes('47.2'),
+    `Expected T28 Results card to list authored bench observations, got '${t28ObsText}'`,
+  );
+
+  // Author and remove a temporary 3rd bench observation via `+ Add Bench Reading`
+  await page.click('[data-testid="results-toggle-add-observe-btn"]');
+  await page.waitForSelector('[data-testid="results-add-observe-form"]', { timeout: 5000 });
+  await page.fill('[data-testid="observe-label-input"]', 'Precision scale check');
+  await page.fill('[data-testid="observe-metric-input"]', 'mass_g');
+  await page.fill('[data-testid="observe-measured-input"]', '18.2');
+  await page.fill('[data-testid="observe-std-input"]', '0.2');
+  await page.click('[data-testid="observe-save-btn"]');
+  await page.waitForSelector('[data-testid="delete-observe-2"]', { timeout: 5000 });
+  await page.click('[data-testid="delete-observe-2"]');
+
+  // Run Bayesian MAP calibration on T28's 2 bench sensors
+  await page.waitForSelector('[data-testid="results-run-calibrate-btn"]', { timeout: 5000 });
+  await page.click('[data-testid="results-run-calibrate-btn"]');
+  await page.waitForSelector('[data-testid="results-calibration-output"]', { timeout: 35000 });
+  const calOutText = await page.textContent('[data-testid="results-calibration-output"]');
+  assert(
+    calOutText &&
+      calOutText.includes('Bayesian MAP') &&
+      calOutText.includes('al6061_cast.e') &&
+      calOutText.includes('cold_air.h') &&
+      calOutText.includes('−7'),
+    `Expected T28 calibration output to report Bayesian MAP posterior & >70% σ reduction, got '${calOutText}'`,
+  );
+
+  // Apply posterior to .fsm and verify narrowed marginal uncertainties + clean Undo
+  await page.click('[data-testid="results-apply-posterior-btn"]');
+  const postState = await page.evaluate(() => {
+    const doc = window.fieldsmith.store.doc;
+    const mat = doc.custom_materials.find((m) => m.id === 'al6061_cast');
+    const conv = doc.convections.find((c) => c.id === 'cold_air');
+    const uqE = doc.uncertainties.find((u) => u.param === 'al6061_cast.e');
+    const uqH = doc.uncertainties.find((u) => u.param === 'cold_air.h');
+    return {
+      e: mat?.e ?? 0,
+      h: conv?.h ?? 0,
+      stdE: uqE?.std ?? 99999,
+      stdH: uqH?.std ?? 999,
+    };
+  });
+  assert(
+    postState.e > 68000 &&
+      postState.h > 0.010 &&
+      postState.stdE < 2200 &&
+      postState.stdH < 0.0008,
+    `Expected Apply Posterior to .fsm to update al6061_cast.e/cold_air.h & narrow marginal stds, got ${JSON.stringify(postState)}`,
+  );
+
+  const priorRestored = await page.evaluate(() => {
+    window.fieldsmith.store.undo();
+    const doc = window.fieldsmith.store.doc;
+    const mat = doc.custom_materials.find((m) => m.id === 'al6061_cast');
+    const uqE = doc.uncertainties.find((u) => u.param === 'al6061_cast.e');
+    return { e: mat?.e ?? 0, stdE: uqE?.std ?? 0 };
+  });
+  assert(
+    priorRestored.e === 63000 && priorRestored.stdE === 8000,
+    `Expected Undo after Apply Posterior to restore prior (e=63000, std=8000), got ${JSON.stringify(priorRestored)}`,
+  );
+
+  assert(consoleErrors.length === 0, `Uncaught page errors: ${consoleErrors.join('; ')}`);
+  console.log(
+    `[21/21] Empirical Bench Calibration & Bayesian MAP Posterior UQ (T28 + observe authoring + Calibrate MAP + Apply Posterior + Undo): PASS`,
   );
   await page.close();
 } catch (e) {
