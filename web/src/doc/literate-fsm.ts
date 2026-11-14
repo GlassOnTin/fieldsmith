@@ -648,7 +648,7 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
 export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'>): TutorialCategory {
   if (sheet.category) return sheet.category;
   if (sheet.id.startsWith('A')) return 'analytic';
-  if (['T8', 'T9', 'T10', 'T11', 'T12', 'T13', 'T16', 'T17'].includes(sheet.id)) {
+  if (['T8', 'T9', 'T10', 'T11', 'T12', 'T13', 'T16', 'T17', 'T18'].includes(sheet.id)) {
     return 'case-study';
   }
   return 'tutorial';
