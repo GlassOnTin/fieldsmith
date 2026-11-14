@@ -178,6 +178,15 @@ export function renameId(doc: Document, from: string, to: string): string | null
     for (const t of doc.temperatures) if (t.region === from) t.region = to;
     for (const c of doc.convections) if (c.region === from) c.region = to;
     for (const f of doc.heat_fluxes) if (f.region === from) f.region = to;
+    // A region id is also named by an extend node's region and the hx inlet/outlet;
+    // leave either dangling and the validator rejects the renamed document.
+    walk(doc.root, (n) => {
+      if (n.kind.type === 'extend' && n.kind.region === from) n.kind.region = to;
+    });
+    if (doc.hx) {
+      if (doc.hx.inlet === from) doc.hx.inlet = to;
+      if (doc.hx.outlet === from) doc.hx.outlet = to;
+    }
     return null;
   }
   const sup = doc.supports.find((r) => r.id === from);
