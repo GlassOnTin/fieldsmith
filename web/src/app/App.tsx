@@ -714,26 +714,64 @@ function Toast() {
   );
 }
 
+// The document-name field in the toolbar head. Keeps a local draft so typing neither
+// mutates the document nor re-renders the app; commits once on blur or Enter, and Escape
+// cancels via a synchronous flag the trailing blur honours (the cancel-ref idiom used by
+// NumberInput and the setup fields). Re-syncs from the store when not dirty so undo, redo
+// and external loads update the visible name.
+function DocNameField() {
+  const [v, setV] = useState(store.doc.name);
+  const [dirty, setDirty] = useState(false);
+  const cancelRef = useRef(false);
+  useEffect(() => {
+    if (!dirty) setV(store.doc.name);
+  }, [store.doc.name, dirty]);
+  const commit = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setDirty(false);
+      return;
+    }
+    const t = v.trim() || 'Untitled';
+    if (dirty && t !== store.doc.name) store.transact('Rename document', (d) => (d.name = t));
+    setDirty(false);
+  };
+  return (
+    <input
+      class="doc-name"
+      data-testid="doc-name"
+      value={v}
+      aria-label="Document name"
+      spellcheck={false}
+      onFocus={() => {
+        cancelRef.current = false;
+      }}
+      onInput={(e) => {
+        setV((e.target as HTMLInputElement).value);
+        setDirty(true);
+      }}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+          cancelRef.current = true;
+          setV(store.doc.name);
+          setDirty(false);
+          (e.target as HTMLInputElement).blur();
+        }
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
 export function App() {
   useApp();
   return (
     <div class={`app${ui.treeCollapsed ? ' tree-collapsed' : ''}${ui.inspCollapsed ? ' insp-collapsed' : ''}`}>
       <aside class={`panel tree-panel${ui.treeOpen ? ' open' : ''}`}>
         <div class="panel-head">
-          <input
-            class="doc-name"
-            value={store.doc.name}
-            aria-label="Document name"
-            spellcheck={false}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-            }}
-            onChange={(e) => {
-              const v = (e.target as HTMLInputElement).value.trim() || 'Untitled';
-              store.transact('Rename document', (d) => (d.name = v));
-            }}
-          />
+          <DocNameField />
           <button class="btn ghost icon" title={`Undo ${store.undoLabel()} (Ctrl Z)`} disabled={!store.canUndo()} onClick={() => store.undo()} data-testid="undo">
             <Icon.undo />
           </button>
