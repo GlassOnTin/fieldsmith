@@ -33,7 +33,17 @@
      Replaces six ad-hoc scoped declarations; controls outside those scopes used to fall back
      to the browser's `auto` blue, which matched neither theme. */
   accent-color: var(--accent);
+  /* One inherited scrollbar colour for every scroll region, in both themes: scrollbar-color
+     inherits, and var(--line-strong) resolves lazily against the dark block below. The 14
+     overflow regions used to fall back to the browser's `auto` scrollbar, a UA grey that spoke
+     neither the light nor the dark panel/line vocabulary. The transparent track lets each panel
+     show through. (scrollbar-width is set on * below — it does not inherit in Chromium.) */
+  scrollbar-color: var(--line-strong) transparent;
 }
+/* scrollbar-width does NOT inherit in Chromium (observed on 142: :root computes `thin` while
+   body and children compute `auto`), unlike scrollbar-color. Apply it to every element directly
+   so all scroll regions get the thin gutter that suits the dense tool and reclaims width. */
+* { scrollbar-width: thin; }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #18191b;
