@@ -3,7 +3,7 @@
 // clicks join its selector list); supports, loads and temperatures attach to regions and
 // supports/loads draw as glyphs where the analysed mesh actually supports them.
 import { Fragment } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
@@ -1327,10 +1327,16 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
 function TextInputRow(props: { label: string; value: string; commit: (v: string) => void; testId?: string; title?: string }) {
   const [v, setV] = useState(props.value);
   const [dirty, setDirty] = useState(false);
+  const cancelRef = useRef(false);
   useEffect(() => {
     if (!dirty) setV(props.value);
   }, [props.value, dirty]);
   const commitText = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setDirty(false);
+      return;
+    }
     const t = v.trim();
     if (dirty && t !== props.value) props.commit(t);
     setDirty(false);
@@ -1345,12 +1351,21 @@ function TextInputRow(props: { label: string; value: string; commit: (v: string)
           data-testid={props.testId}
           title={props.title}
           spellcheck={false}
+          onFocus={() => {
+            cancelRef.current = false;
+          }}
           onInput={(e) => {
             setV((e.target as HTMLInputElement).value);
             setDirty(true);
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
+            if (e.key === 'Escape') {
+              cancelRef.current = true;
+              setV(props.value);
+              setDirty(false);
+              (e.target as HTMLInputElement).blur();
+            }
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
           }}
           onBlur={commitText}
@@ -1892,11 +1907,17 @@ function FnCurve(p: LoadFnProbe) {
 function FnField({ id, expr }: { id: string; expr: string }) {
   const [v, setV] = useState(expr);
   const [dirty, setDirty] = useState(false);
+  const cancelRef = useRef(false);
   useEffect(() => {
     if (!dirty) setV(expr);
   }, [expr, dirty]);
   const probe = loadFnProbe(v, -20, 20);
   const commit = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setDirty(false);
+      return;
+    }
     const t = v.trim();
     if (dirty && t !== expr) {
       store.transact('Set load fn', (d) => {
@@ -1915,12 +1936,21 @@ function FnField({ id, expr }: { id: string; expr: string }) {
           data-testid="load-fn"
           spellcheck={false}
           title={'Bands `lo < x < hi -> value` separated by ; at the face frame: x from the centroid, y across, n outward'}
+          onFocus={() => {
+            cancelRef.current = false;
+          }}
           onInput={(e) => {
             setV((e.target as HTMLInputElement).value);
             setDirty(true);
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
+            if (e.key === 'Escape') {
+              cancelRef.current = true;
+              setV(expr);
+              setDirty(false);
+              (e.target as HTMLInputElement).blur();
+            }
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
           }}
           onBlur={commit}
@@ -1982,12 +2012,18 @@ function SpatialFnField(props: {
   const cur = props.value ?? '';
   const [v, setV] = useState(cur);
   const [dirty, setDirty] = useState(false);
+  const cancelRef = useRef(false);
   useEffect(() => {
     if (!dirty) setV(cur);
   }, [cur, dirty]);
   const trimmed = v.trim();
   const probe = trimmed.length > 0 ? spatialFnProbe(trimmed, store.doc, 0, 50, Boolean(props.nonNegative)) : null;
   const commitVal = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setDirty(false);
+      return;
+    }
     const t = v.trim();
     const next = t.length > 0 ? t : undefined;
     if (dirty && (next ?? '') !== cur) {
@@ -2006,12 +2042,21 @@ function SpatialFnField(props: {
           data-testid={props.testId}
           spellcheck={false}
           title="Optional world-space field f(x, y, z, r) in mm with let variables, math functions, bands `lo < z < hi -> expr`, or `lerp(z, s0, v0, ...)`"
+          onFocus={() => {
+            cancelRef.current = false;
+          }}
           onInput={(e) => {
             setV((e.target as HTMLInputElement).value);
             setDirty(true);
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
+            if (e.key === 'Escape') {
+              cancelRef.current = true;
+              setV(cur);
+              setDirty(false);
+              (e.target as HTMLInputElement).blur();
+            }
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
           }}
           onBlur={commitVal}
