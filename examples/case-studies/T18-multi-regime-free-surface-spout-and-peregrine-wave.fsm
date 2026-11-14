@@ -6,10 +6,11 @@ fieldsmith 1
 # @level: Flagship Multi-Physics
 # @title: 3D FSI Slosh Baffle & Graded TPMS Wick FEA + 1D/2D Reduced-Order Free-Surface Spout-Lip & Peregrine Wave Workbench
 # @subtitle: Solve 3D P2 hydro-structural and thermocapillary stress on a stress-graded TPMS Gyroid slosh baffle (.fsm), paired with a companion 1D/2D reduced-order multi-regime free-surface workbench (1100 °C spout-lip lubrication profile, Peregrine wave shoaling/breaking kinematics, and Jurin capillary wicking).
-# @verification_badge: Verified by V61/V62 · Multi-Regime Free-Surface [Potential ↔ DFSPH ↔ MLS-CSF ↔ Implicit Stokes] · PASS
+# @verification_badge: Case study · Multi-Regime Free-Surface [Potential ↔ DFSPH ↔ MLS-CSF ↔ Implicit Stokes] · V61/V62 verification pending
+# @verification_status: pending
 # @fsm_path: examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm
 # @starter_fsm_name: t18-multi-regime-free-surface-fsi.fsm
-# @verification_refs: docs/verification/V61.md, docs/verification/V62.md
+# @verification_refs: examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm
 # ---
 # @check: Regime IV: 1100 °C Float-Bath Spout-Lip Pour & Heel Back-Flow (Oh = 30.2, Re = 0.019) || −∇·[2μ(T)D(u)] + ∇p = ρg + γκ n̂ δ_s,  h_eq = √(2(−S)ρ_Sn / (ρ_g(ρ_Sn−ρ_g)g)) || h_eq = 6.84 mm,  Δt_imp/Δt_exp > 10⁵× || h_eq = 6.84 mm,  16.4% Heel Back-Flow → 94.6% Bad-Glass Flushed to Knurl || < 0.1% || Unconditionally Stable
 # @check: Regime I→II→III: Howell Peregrine (1983 / 2001) Breaking-Wave Air Entrainment Cascade || u_jet = 1.35√(g H_b),  Γ = 0.52 u_jet H_b,  a_Hinze = 0.725(γ/ρ)^{3/5}ε^{−2/5} || 3-Zone Auto-Partition (Potential → DFSPH → Hinze CSF) || u_jet = 1.79 m/s,  R_tube = 28.5 mm,  a_Hinze = 1.48 mm,  α_air = 23.4% || Exact || 3 Regimes Active

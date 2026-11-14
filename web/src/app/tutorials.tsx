@@ -90,6 +90,7 @@ import {
   getDocPathForSheet,
   getFsmPathForSheet,
   getVerificationRefsForSheet,
+  getVerificationStatusForSheet,
   getCategoryLabel,
   evaluateLiterateAssertOnLevel,
   findMatchingLiterateSheet,
@@ -109,6 +110,7 @@ export {
   getDocPathForSheet,
   getFsmPathForSheet,
   getVerificationRefsForSheet,
+  getVerificationStatusForSheet,
   getCategoryLabel,
   type TutorialStep,
   type TheorySection,
@@ -128,7 +130,7 @@ export function renderSheetMarkdown(sheet: TutorialSheet): string {
   lines.push(`# ${sheet.code} — ${sheet.title}`);
   lines.push('');
   lines.push(`> **Category**: ${getCategoryLabel(cat)} · **Level**: ${sheet.level} · **Verification**: ${sheet.verificationBadge}`);
-  lines.push(`> **Literate .fsm Source**: \`${fsmPath}\`${docPath ? ` · **Repository Markdown**: \`${docPath}\`` : ''}${vRefs.length > 0 ? ` · **Verification Reports**: ${vRefs.map((r) => `\`${r}\``).join(', ')}` : ''}`);
+  lines.push(`> **Literate .fsm Source**: \`${fsmPath}\`${docPath ? ` · **Repository Markdown**: \`${docPath}\`` : ''}${vRefs.length > 0 ? ` · **Verification Artifacts**: ${vRefs.map((r) => `\`${r}\``).join(', ')}` : ''}`);
   lines.push('');
   lines.push(sheet.subtitle);
   lines.push('');
@@ -1416,6 +1418,7 @@ function TutorialsContentsPage({
                   const isExpanded = expandedRows.has(s.id);
                   const docPath = getDocPathForSheet(s);
                   const vRefs = getVerificationRefsForSheet(s);
+                  const vPending = getVerificationStatusForSheet(s) === 'pending';
                   return (
                     <div
                       key={s.id}
@@ -1500,7 +1503,23 @@ function TutorialsContentsPage({
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                          {vRefs.length > 0 && (
+                          {vPending ? (
+                            <span
+                              style={{
+                                fontSize: '9.5px',
+                                fontWeight: 700,
+                                fontFamily: 'var(--mono)',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                background: 'color-mix(in srgb, var(--warn) 14%, var(--panel))',
+                                color: 'var(--warn)',
+                                border: '1px solid color-mix(in srgb, var(--warn) 38%, var(--line))',
+                              }}
+                              title="Verification pending — no report shipped yet; benchmark source linked"
+                            >
+                              verification pending
+                            </span>
+                          ) : vRefs.length > 0 ? (
                             <span
                               style={{
                                 fontSize: '9.5px',
@@ -1517,7 +1536,7 @@ function TutorialsContentsPage({
                               ✓ {vRefs[0].replace('docs/verification/', '').replace('.md', '')}
                               {vRefs.length > 1 ? `+${vRefs.length - 1}` : ''}
                             </span>
-                          )}
+                          ) : null}
                           <button
                             type="button"
                             class="btn small primary"
@@ -1636,6 +1655,7 @@ function TutorialsContentsPage({
                   const cat = getCategoryForSheet(s);
                   const docPath = getDocPathForSheet(s);
                   const vRefs = getVerificationRefsForSheet(s);
+                  const vPending = getVerificationStatusForSheet(s) === 'pending';
                   return (
                     <div
                       key={s.id}
@@ -1684,24 +1704,42 @@ function TutorialsContentsPage({
                             >
                               {getCategoryLabel(cat)}
                             </span>
-                            {vRefs.map((vr) => (
+                            {vPending ? (
                               <span
-                                key={vr}
                                 style={{
                                   fontSize: '9.5px',
                                   fontWeight: 700,
                                   fontFamily: 'var(--mono)',
                                   padding: '1px 5px',
                                   borderRadius: '4px',
-                                  background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
-                                  color: 'var(--ok)',
-                                  border: '1px solid color-mix(in srgb, var(--ok) 38%, var(--line))',
+                                  background: 'color-mix(in srgb, var(--warn) 14%, var(--panel))',
+                                  color: 'var(--warn)',
+                                  border: '1px solid color-mix(in srgb, var(--warn) 38%, var(--line))',
                                 }}
-                                title={`Automated Verification Report: ${vr}`}
+                                title="Verification pending — no report shipped yet; benchmark source linked"
                               >
-                                ✓ {vr.replace('docs/verification/', '').replace('.md', '')}
+                                verification pending
                               </span>
-                            ))}
+                            ) : (
+                              vRefs.map((vr) => (
+                                <span
+                                  key={vr}
+                                  style={{
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    fontFamily: 'var(--mono)',
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    background: 'color-mix(in srgb, var(--ok) 14%, var(--panel))',
+                                    color: 'var(--ok)',
+                                    border: '1px solid color-mix(in srgb, var(--ok) 38%, var(--line))',
+                                  }}
+                                  title={`Automated Verification Report: ${vr}`}
+                                >
+                                  ✓ {vr.replace('docs/verification/', '').replace('.md', '')}
+                                </span>
+                              ))
+                            )}
                           </div>
                           {docPath && (
                             <code style={{ fontSize: '10px', color: 'var(--text-3)' }} title={`Repo Markdown: ${docPath}`}>
@@ -2734,9 +2772,11 @@ function TutorialsDrawer() {
                 color: 'var(--text-2)',
               }}
             >
-              {getVerificationRefsForSheet(sheet)
-                .map((r) => r.replace('docs/verification/', '').replace('.md', ''))
-                .join(' · ') || 'REFERENCE TABLE'}
+              {getVerificationStatusForSheet(sheet) === 'pending'
+                ? 'verification pending'
+                : getVerificationRefsForSheet(sheet)
+                    .map((r) => r.replace('docs/verification/', '').replace('.md', ''))
+                    .join(' · ') || 'REFERENCE TABLE'}
             </span>
           </div>
           <div style={{ overflowX: 'auto' }}>
@@ -2997,7 +3037,7 @@ function TutorialsDrawer() {
               </strong>
               {vRefs.length > 0 && (
                 <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
-                  Linked verification reports: {vRefs.map((r) => <code key={r} style={{ marginRight: '6px' }}>{r}</code>)}
+                  Linked verification artifacts: {vRefs.map((r) => <code key={r} style={{ marginRight: '6px' }}>{r}</code>)}
                 </div>
               )}
             </div>

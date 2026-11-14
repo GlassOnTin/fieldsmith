@@ -12,10 +12,12 @@
 // orphan (a key with no shipped example). It is a Node-only filesystem check — docs/ and examples/
 // sit outside the Vite web root, so a browser probe could not read them.
 //
-// Dangling verification_refs (a `# @verification_refs:` or DEFAULT_VERIFICATION_REFS entry naming a
-// docs/verification/V#.md that does not exist) are reported as a documented ADVISORY, not a hard
-// failure: generating the missing reports is a separate verification task, and this gate must not
-// fabricate them or silently understate verification. The advisory names the gap so it stays visible.
+// Verification honesty is a HARD invariant: a sheet may only advertise a verification that is
+// shipped. Every `# @verification_refs:` and DEFAULT_VERIFICATION_REFS entry must resolve on disk,
+// and a badge that asserts verification ("Verified by …" / "PASS") must have at least one resolvable
+// reference and must not be marked `@verification_status: pending`. A benchmark whose report has not
+// been generated declares `pending` and an honest badge (no PASS claim); this gate neither fabricates
+// the missing reports nor lets a green "Verified" affordance stand for an unshipped verification.
 //
 // Run with: node web/tests/registry.mjs   (wired into scripts/ci.sh).
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
@@ -36,7 +38,7 @@ function parseHeader(raw) {
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   const start = lines.findIndex((l) => l.trim() === '# === FIELDSMITH LITERATE CASE ===');
   const end = lines.findIndex((l) => l.trim() === '# === END LITERATE HEADER ===');
-  const out = { id: null, docPath: null, fsmPath: null, verificationRefs: [] };
+  const out = { id: null, docPath: null, fsmPath: null, verificationRefs: [], verificationBadge: null, verificationStatus: null };
   if (start < 0 || end <= start) return out;
   for (let i = start + 1; i < end; i++) {
     const m = lines[i].match(/^#\s*@([a-z_]+):(.*)$/);
@@ -47,6 +49,8 @@ function parseHeader(raw) {
     else if (tag === 'doc_path') out.docPath = val;
     else if (tag === 'fsm_path') out.fsmPath = val;
     else if (tag === 'verification_refs') out.verificationRefs = val.split(',').map((s) => s.trim()).filter(Boolean);
+    else if (tag === 'verification_badge') out.verificationBadge = val;
+    else if (tag === 'verification_status') out.verificationStatus = val;
   }
   return out;
 }
@@ -140,16 +144,39 @@ try {
     orphans.length === 0,
     `${orphans.length} orphan${orphans.length ? ': ' + orphans.join(', ') : ''}`);
 
-  // Advisory (non-failing): dangling verification_refs in headers and the fallback map.
+  // Hard invariant 7: every header @verification_refs entry resolves on disk.
   const deadRefsHeader = [];
   for (const e of examples) {
     for (const r of e.verificationRefs) if (!resolves(r)) deadRefsHeader.push(`${e.id}→${r}`);
   }
+  check('every example header @verification_refs resolves',
+    deadRefsHeader.length === 0,
+    `${examples.reduce((n, e) => n + e.verificationRefs.length, 0)} declared, ${deadRefsHeader.length} dead${deadRefsHeader.length ? ': ' + deadRefsHeader.join(', ') : ''}`);
+
+  // Hard invariant 8: every DEFAULT_VERIFICATION_REFS value resolves on disk.
   const deadRefsMap = [];
   for (const [k, refs] of Object.entries(refsMap)) {
     for (const r of refs) if (!resolves(r)) deadRefsMap.push(`${k}→${r}`);
   }
-  const advisory = [...deadRefsHeader, ...deadRefsMap];
+  check('every DEFAULT_VERIFICATION_REFS value resolves',
+    deadRefsMap.length === 0,
+    `${Object.values(refsMap).reduce((n, r) => n + r.length, 0)} entries, ${deadRefsMap.length} dead${deadRefsMap.length ? ': ' + deadRefsMap.join(', ') : ''}`);
+
+  // Hard invariant 9: a badge may only assert verification ("Verified by …" / "PASS") when the sheet
+  // is not pending AND has at least one resolvable reference. A pending sheet must not claim PASS.
+  const claimsVerification = (b) => typeof b === 'string' && /Verified by|\bPASS\b/i.test(b);
+  const dishonest = [];
+  for (const e of examples) {
+    if (!claimsVerification(e.verificationBadge)) continue;
+    const status = e.verificationStatus ?? 'verified';
+    const hasRef = e.verificationRefs.some((r) => resolves(r));
+    if (status === 'pending') dishonest.push(`${e.id}: pending but badge claims verification`);
+    else if (!hasRef) dishonest.push(`${e.id}: badge claims verification with no resolvable reference`);
+  }
+  const pendingCount = examples.filter((e) => e.verificationStatus === 'pending').length;
+  check('verification badges are honest (no PASS claim without a shipped reference; pending never claims PASS)',
+    dishonest.length === 0,
+    `${examples.filter((e) => claimsVerification(e.verificationBadge)).length} claim verification, ${pendingCount} pending, ${dishonest.length} dishonest${dishonest.length ? ': ' + dishonest.join('; ') : ''}`);
 
   check('registry scan completed', true, `${examples.length} examples, ${Object.keys(docMap).length} doc-map / ${Object.keys(fsmMap).length} fsm-map entries`);
 
@@ -177,24 +204,20 @@ try {
     '',
     table,
     '',
-    '## Advisory — dangling verification references (not a hard failure)',
+    '## Verification honesty',
     '',
-    advisory.length === 0
-      ? 'None: every `@verification_refs` and DEFAULT_VERIFICATION_REFS entry resolves.'
-      : [
-          `${advisory.length} reference(s) name a docs/verification/V#.md that does not exist:`,
-          '',
-          ...advisory.map((a) => `- ${a}`),
-          '',
-          'These are false "Verified by V# · PASS" badge claims. Generating the missing reports is a',
-          'separate verification task; this gate neither fabricates them nor silently drops the claim.',
-          'Tracked here so the gap stays visible until the reports exist or the badges are corrected.',
-        ].join('\n'),
+    'A sheet may only advertise a verification that is shipped. Every `@verification_refs` and',
+    'DEFAULT_VERIFICATION_REFS entry must resolve on disk, and a badge asserting verification',
+    '("Verified by …" / "PASS") must have at least one resolvable reference and must not be marked',
+    '`@verification_status: pending`. A benchmark whose report has not been generated declares',
+    '`pending` and an honest badge (no PASS claim); the UI renders pending without a green ✓. This',
+    'gate neither fabricates the missing reports nor lets a "Verified" affordance stand for an',
+    'unshipped verification.',
     '',
     '## Limits',
     '',
     '- Asserts path resolution on disk, not that a doc\'s prose matches its sheet (content drift is out of scope).',
-    '- Verification-reference resolution is advisory this revision; the hard invariants are doc_path / fsm_path resolution, .fsm coverage, and map-key hygiene.',
+    '- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; only existence and badge honesty are checked.',
     '- Map literals are extracted from literate-fsm.ts by regex (flat Record literals); a reformatted map would need the extractor updated.',
     '',
     '---',
@@ -204,11 +227,9 @@ try {
   if (!ok) {
     const bad = checks.filter((c) => !c.pass);
     console.error(['registry: FAIL — failed checks:', ...bad.map((c) => `  ✗ ${c.name}: ${c.detail}`)].join('\n'));
-    if (advisory.length) console.error(`registry: advisory — ${advisory.length} dangling verification ref(s): ${advisory.join(', ')}`);
   } else {
     writeFileSync(resolve(docsDir, 'registry-e2e.md'), lines);
-    console.log(`registry: PASS — ${examples.length} examples, ${Object.keys(docMap).length} doc-map / ${Object.keys(fsmMap).length} fsm-map entries resolve`);
-    if (advisory.length) console.log(`registry: advisory — ${advisory.length} dangling verification ref(s) (see registry-e2e.md): ${advisory.join(', ')}`);
+    console.log(`registry: PASS — ${examples.length} examples, ${Object.keys(docMap).length} doc-map / ${Object.keys(fsmMap).length} fsm-map entries resolve; ${pendingCount} pending verification badge(s)`);
   }
   process.exit(ok ? 0 : 1);
 } catch (e) {

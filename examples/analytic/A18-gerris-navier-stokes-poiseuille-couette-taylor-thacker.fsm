@@ -6,10 +6,11 @@ fieldsmith 1
 # @level: Analytic Verification
 # @title: Analytic Benchmark A18: 3D Concentric Taylor–Couette Stator Structural FEA + 1D/2D Analytic Gerris Flow Reference Suite (G5–G8, V64)
 # @subtitle: Solve 3D P2 structural stress in a concentric Ti-6Al-4V stator vessel under annular pressure, paired with the companion 1D/2D analytic Gerris fluid reference suite (Popinet 2003: G5 Nusselt/Poiseuille film profile, G6 Taylor–Couette radial shear, G7 Taylor–Green energy decay, and G8 Thacker parabolic basin slosh).
-# @verification_badge: Verified by V64 · Gerris Navier–Stokes & Shallow-Water Suite G5–G8 (Popinet 2003) · 4/4 PASS (< 0.05%)
+# @verification_badge: Analytic benchmark · Gerris Navier–Stokes & Shallow-Water Suite G5–G8 (Popinet 2003) · V64 verification pending
+# @verification_status: pending
 # @fsm_path: examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm
 # @starter_fsm_name: a18-gerris-navier-stokes-suite.fsm
-# @verification_refs: docs/verification/V64.md
+# @verification_refs: examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm
 # ---
 # @check: G5 (poiseuille / nusselt): Viscous Free-Surface Film Velocity & Flux Q* || −μ d²u/dz² = ρ g sin α,   u*(z*) = ½ z*(2 − z*),   Q* = ∫₀¹ u*(z*) dz* = 1/3 || 0.33333 (u*(1) = 0.50000) || 0.33344 (u*(1) = 0.50000) || 0.0312% || ≤ 0.50%
 # @check: G6 (couette): Concentric Taylor–Couette Cylindrical Shear on Analytic SDF || d/dr[(1/r) d(r u_θ)/dr] = 0   ⟹   u_θ(r) = Ω₁ R₁ (R₂/r − r/R₂)/(R₂/R₁ − R₁/R₂) || 0.38889 Ω₁R₁ (at r = 1.5 R₁) || 0.38891 Ω₁R₁ || 0.0043% || ≤ 0.50%

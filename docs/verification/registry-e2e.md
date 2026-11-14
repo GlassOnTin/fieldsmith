@@ -21,29 +21,25 @@ this is a filesystem check rather than a browser probe.
 | every DEFAULT_DOC_PATHS value resolves | pass | 31 entries, 0 dead
 | every shipped example has resolvable .fsm coverage (header or map) | pass | 53 examples, 0 without coverage
 | no orphan fallback-map keys (every key is a shipped example) | pass | 0 orphan
+| every example header @verification_refs resolves | pass | 99 declared, 0 dead
+| every DEFAULT_VERIFICATION_REFS value resolves | pass | 90 entries, 0 dead
+| verification badges are honest (no PASS claim without a shipped reference; pending never claims PASS) | pass | 35 claim verification, 5 pending, 0 dishonest
 | registry scan completed | pass | 53 examples, 31 doc-map / 53 fsm-map entries
 
-## Advisory — dangling verification references (not a hard failure)
+## Verification honesty
 
-8 reference(s) name a docs/verification/V#.md that does not exist:
-
-- A15→docs/verification/V61.md
-- A16→docs/verification/V62.md
-- A18→docs/verification/V64.md
-- A25→docs/verification/V65.md
-- T18→docs/verification/V61.md
-- T18→docs/verification/V62.md
-- T22→docs/verification/V57.md
-- T25→docs/verification/V57.md
-
-These are false "Verified by V# · PASS" badge claims. Generating the missing reports is a
-separate verification task; this gate neither fabricates them nor silently drops the claim.
-Tracked here so the gap stays visible until the reports exist or the badges are corrected.
+A sheet may only advertise a verification that is shipped. Every `@verification_refs` and
+DEFAULT_VERIFICATION_REFS entry must resolve on disk, and a badge asserting verification
+("Verified by …" / "PASS") must have at least one resolvable reference and must not be marked
+`@verification_status: pending`. A benchmark whose report has not been generated declares
+`pending` and an honest badge (no PASS claim); the UI renders pending without a green ✓. This
+gate neither fabricates the missing reports nor lets a "Verified" affordance stand for an
+unshipped verification.
 
 ## Limits
 
 - Asserts path resolution on disk, not that a doc's prose matches its sheet (content drift is out of scope).
-- Verification-reference resolution is advisory this revision; the hard invariants are doc_path / fsm_path resolution, .fsm coverage, and map-key hygiene.
+- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; only existence and badge honesty are checked.
 - Map literals are extracted from literate-fsm.ts by regex (flat Record literals); a reformatted map would need the extractor updated.
 
 ---

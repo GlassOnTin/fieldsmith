@@ -6,10 +6,11 @@ fieldsmith 1
 # @level: Analytic Verification
 # @title: Analytic Benchmark A15: 3D Young–Laplace Capillary Droplet & Rayleigh–Lamb (n = 2) Quadrupole Oscillation (V61)
 # @subtitle: Live 3D Rayleigh–Lamb (n = 2) prolate ↔ oblate quadrupole capillary oscillation and P2 Young–Laplace surface tension containment, paired with 3D MLS Monge–Pratt curvature κ = 2/R₀ and Δp = 2γ/R₀ verification (V61).
-# @verification_badge: Verified by V61 · 3D MLS-CSF + Akinci Pairwise Cohesion · PASS (< 0.1%)
+# @verification_badge: Analytic benchmark · 3D MLS-CSF + Akinci Pairwise Cohesion · V61 verification pending
+# @verification_status: pending
 # @fsm_path: examples/analytic/A15-young-laplace-droplet-and-rayleigh-lamb.fsm
 # @starter_fsm_name: a15-young-laplace-droplet.fsm
-# @verification_refs: docs/verification/V61.md
+# @verification_refs: examples/analytic/A15-young-laplace-droplet-and-rayleigh-lamb.fsm
 # ---
 # @check: 3D MLS Monge–Pratt Mean Curvature κ = κ₁ + κ₂ (R₀ = 2.0 mm) || κ_exact = 2 / R₀ = 1.000 mm⁻¹ || 1.0000 mm⁻¹ || 1.0000 mm⁻¹ (Spherical-Exact Quadric Basis) || < 0.01% || ≤ 1.0%
 # @check: Young–Laplace Interior Capillary Pressure Jump Δp = 2γ / R₀ (γ = 0.0728 N/m) || Δp = 2 γ / R₀ || 72.80 Pa || 72.80 Pa || < 0.05% || ≤ 1.5%

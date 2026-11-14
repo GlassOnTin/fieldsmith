@@ -6,10 +6,11 @@ fieldsmith 1
 # @level: Analytic Verification
 # @title: Analytic Benchmark A25: 3D Droplet Containment Vessel Structural FEA + 2D Analytic Biharmonic Spurious Capillary Eddy Workbench (V65)
 # @subtitle: Solve 3D P2 membrane stress on a spherical containment shell, paired with the 2D analytic biharmonic streamfunction workbench quantifying 8-vortex quadrupolar parasitic capillary currents (Ca_max) across five discrete surface-curvature approximations (Voxel CSF, Kernel CSF, Parabolic Monge MLS, Height-Function, and Pratt Quadric MLS).
-# @verification_badge: Verified by V65 · 5-Scheme Curvature Error & 8-Eddy Parasitic Current Hierarchy · Ca_Pratt = 6.35×10⁻¹⁰ (> 2×10⁵× Suppression)
+# @verification_badge: Analytic benchmark · 5-Scheme Curvature Error & 8-Eddy Parasitic Current Hierarchy · V65 verification pending
+# @verification_status: pending
 # @fsm_path: examples/analytic/A25-spurious-capillary-eddies-geometry-error.fsm
 # @starter_fsm_name: a25-spurious-capillary-eddies-geometry-error.fsm
-# @verification_refs: docs/verification/V65.md
+# @verification_refs: examples/analytic/A25-spurious-capillary-eddies-geometry-error.fsm
 # ---
 # @check: 1. Unsmoothed Voxel / Staircase CSF (Brackbill et al. 1992) || κ_h = −∇_Δx · (∇c / ‖∇c‖),   σ*_κ ~ O(1) non-convergent || Ca_exact = 0 (u ≡ 0) || Ca_max = 1.687×10⁻¹ (U_max = 2.50 m/s) || Order p = 0.06 || Fails (O(1) Eddies)
 # @check: 2. Kernel-Smoothed Color-Gradient CSF (Morris 2000) || κ_i = −∑ V_j (ñ_j − ñ_i)·∇W_ij,   σ*_κ ~ O(Δx/D) || Ca_exact = 0 (u ≡ 0) || Ca_max = 1.839×10⁻² (U_max = 0.272 m/s) || Order p = 1.00 || 1st-Order Eddies

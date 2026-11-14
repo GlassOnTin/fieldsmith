@@ -484,6 +484,10 @@ export interface TutorialSheet {
   title: string;
   subtitle: string;
   verificationBadge: string;
+  /** Whether a shipped verification report backs the badge. Absent ⇒ 'verified' (legacy default).
+   *  'pending' means the benchmark is defined but its V# report has not been generated; the badge
+   *  must not claim PASS and the UI must not render a green ✓. Enforced by web/tests/registry.mjs. */
+  verificationStatus?: 'verified' | 'pending';
   starterFsmName: string;
   starterFsm: string;
   opensSystemsWorkbench?: boolean;
@@ -604,14 +608,14 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   T15: ['docs/verification/V4.md'],
   T16: ['docs/verification/V42.md'],
   T17: ['docs/verification/V60.md', 'docs/verification/V20.md'],
-  T18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
+  T18: ['examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm'],
   T19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
   T20: ['docs/verification/V63.md'],
   T21: ['docs/verification/V63.md'],
-  T22: ['docs/verification/V57.md', 'docs/verification/V63.md'],
+  T22: ['crates/fieldsmith-verify/tests/v57_fixings_torque_weibull.rs', 'crates/fieldsmith-verify/tests/v63_architecture_lock.rs'],
   T23: ['docs/verification/V53.md', 'docs/verification/V63.md'],
   T24: ['docs/verification/V20.md', 'docs/verification/V63.md'],
-  T25: ['docs/verification/V57.md', 'docs/verification/V63.md'],
+  T25: ['docs/verification/V63.md', 'examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm'],
   T26: ['docs/verification/V36.md', 'docs/verification/V54.md', 'docs/verification/V63.md'],
   T27: ['docs/verification/V20.md', 'docs/verification/V36.md', 'docs/verification/V63.md'],
   T28: ['docs/verification/V20.md', 'docs/verification/V63.md'],
@@ -629,10 +633,10 @@ export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
   A12: ['docs/verification/V45.md', 'docs/verification/V46.md'],
   A13: ['docs/verification/V53.md'],
   A14: ['docs/verification/V42.md'],
-  A15: ['docs/verification/V60.md'],
-  A16: ['docs/verification/V36.md', 'docs/verification/V54.md'],
+  A15: ['examples/analytic/A15-young-laplace-droplet-and-rayleigh-lamb.fsm'],
+  A16: ['examples/analytic/A16-jurin-capillary-rise-and-tpms-gyroid-wick.fsm'],
   A17: ['docs/verification/V60.md'],
-  A18: ['docs/verification/V52.md', 'docs/verification/V60.md'],
+  A18: ['examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm'],
   A19: ['docs/verification/V53.md', 'docs/verification/V60.md'],
   A20: ['docs/verification/V20.md', 'docs/verification/V63.md'],
   A21: ['docs/verification/V63.md'],
@@ -678,6 +682,10 @@ export function getFsmPathForSheet(sheet: Pick<TutorialSheet, 'id' | 'fsmPath' |
 
 export function getVerificationRefsForSheet(sheet: Pick<TutorialSheet, 'id' | 'verificationRefs'>): string[] {
   return sheet.verificationRefs ?? DEFAULT_VERIFICATION_REFS[sheet.id] ?? [];
+}
+
+export function getVerificationStatusForSheet(sheet: Pick<TutorialSheet, 'verificationStatus'>): 'verified' | 'pending' {
+  return sheet.verificationStatus ?? 'verified';
 }
 
 export function getCategoryLabel(cat: TutorialCategory): string {
@@ -739,6 +747,7 @@ export function formatLiterateFsm(sheet: TutorialSheet): string {
   out.push(`# @title: ${sheet.title}`);
   out.push(`# @subtitle: ${sheet.subtitle}`);
   out.push(`# @verification_badge: ${sheet.verificationBadge}`);
+  if (sheet.verificationStatus) out.push(`# @verification_status: ${sheet.verificationStatus}`);
   if (docPath) out.push(`# @doc_path: ${docPath}`);
   out.push(`# @fsm_path: ${fsmPath}`);
   out.push(`# @starter_fsm_name: ${sheet.starterFsmName}`);
@@ -847,6 +856,7 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
   let title = 'Untitled Fieldsmith Case';
   let subtitle = '';
   let verificationBadge = 'Fieldsmith Case';
+  let verificationStatus: 'verified' | 'pending' | undefined;
   let starterFsmName = 'model.fsm';
   let opensSystemsWorkbench: boolean | undefined;
 
@@ -928,6 +938,10 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
             break;
           case 'verification_badge':
             verificationBadge = val;
+            mode = 'none';
+            break;
+          case 'verification_status':
+            verificationStatus = val === 'pending' ? 'pending' : val === 'verified' ? 'verified' : undefined;
             mode = 'none';
             break;
           case 'doc_path':
@@ -1108,6 +1122,7 @@ export function parseLiterateFsm(rawFsm: string, fallbackFsmPath?: string): Tuto
     title,
     subtitle,
     verificationBadge,
+    ...(verificationStatus ? { verificationStatus } : {}),
     starterFsmName,
     starterFsm,
     ...(opensSystemsWorkbench ? { opensSystemsWorkbench: true } : {}),
