@@ -7,7 +7,7 @@ Its rules were scoped `.results-panel .mini-btn`, so outside that one panel the 
 inert: a button fell back to the UA bevel (bg rgb(239,239,239) light / rgb(107,107,107) dark,
 border 2px outset, height 24.19px, font 13px, cursor default) and an anchor to UA blue
 (rgb(0,0,238) light / rgb(158,158,255) dark, no border, height auto). Dropping the
-`.results-panel ` prefix makes the control self-contained: colour --text-3, transparent fill,
+`.results-panel ` prefix makes the control self-contained: colour --text-2, transparent fill,
 1px solid --line border, 22px tall, 11px type, pointer cursor — in every component. The probe
 reads the computed box on a real button and anchor placed inside and outside a `.results-panel`
 and passes only if it equals the resolved tokens, in light and dark.
@@ -17,13 +17,13 @@ and passes only if it equals the resolved tokens, in light and dark.
 | Check | Result | Measured |
 | :-- | :-- | :-- |
 | e2e completed | pass | 
-| light: button.mini-btn outside the panel is themed | pass | color rgb(139, 139, 133); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (want text-3 rgb(139, 139, 133), line rgb(226, 226, 222))
-| light: a.mini-btn outside the panel is themed | pass | color rgb(139, 139, 133); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (want text-3 rgb(139, 139, 133), line rgb(226, 226, 222))
-| light: button.mini-btn inside the panel stays themed | pass | color rgb(139, 139, 133); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (regression guard)
-| dark: button.mini-btn outside the panel is themed | pass | color rgb(117, 118, 111); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (want text-3 rgb(117, 118, 111), line rgb(46, 48, 52))
-| dark: a.mini-btn outside the panel is themed | pass | color rgb(117, 118, 111); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (want text-3 rgb(117, 118, 111), line rgb(46, 48, 52))
-| dark: button.mini-btn inside the panel stays themed | pass | color rgb(117, 118, 111); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (regression guard)
-| live: rendered mini-btn controls are themed | pass | 1 visible (1 in-panel, 0 outside); unthemed: none (text-3 rgb(139, 139, 133))
+| light: button.mini-btn outside the panel is themed | pass | color rgb(93, 93, 88); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (want text-2 rgb(93, 93, 88), line rgb(226, 226, 222))
+| light: a.mini-btn outside the panel is themed | pass | color rgb(93, 93, 88); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (want text-2 rgb(93, 93, 88), line rgb(226, 226, 222))
+| light: button.mini-btn inside the panel stays themed | pass | color rgb(93, 93, 88); bg rgba(0, 0, 0, 0); border 1px solid rgb(226, 226, 222); h 22px; font 11px; cursor pointer (regression guard)
+| dark: button.mini-btn outside the panel is themed | pass | color rgb(165, 166, 162); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (want text-2 rgb(165, 166, 162), line rgb(46, 48, 52))
+| dark: a.mini-btn outside the panel is themed | pass | color rgb(165, 166, 162); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (want text-2 rgb(165, 166, 162), line rgb(46, 48, 52))
+| dark: button.mini-btn inside the panel stays themed | pass | color rgb(165, 166, 162); bg rgba(0, 0, 0, 0); border 1px solid rgb(46, 48, 52); h 22px; font 11px; cursor pointer (regression guard)
+| live: rendered mini-btn controls are themed | pass | 1 visible (1 in-panel, 0 outside); unthemed: none (text-2 rgb(93, 93, 88))
 | no console errors | pass | 0
 
 ## Limits

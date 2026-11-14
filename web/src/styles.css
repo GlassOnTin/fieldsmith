@@ -403,10 +403,12 @@ input[type="radio"]:focus-visible {
 .results-panel .scale-row { display: flex; align-items: center; gap: 4px; }
 .results-panel .scale-row .numbox { flex: 1; }
 /* Self-contained compact control: used across many panels (results, fill, make, systems, antenna),
-   so it carries its own themed box rather than borrowing one from a single ancestor. */
+   so it carries its own themed box rather than borrowing one from a single ancestor. The resting
+   label is --text-2 (not the muted --text-3) so the 11px text meets WCAG AA on every panel fill in
+   both themes; hover rises to --text. */
 .mini-btn {
   height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px;
-  background: none; color: var(--text-3); font-size: 11px; cursor: pointer; flex: none;
+  background: none; color: var(--text-2); font-size: 11px; cursor: pointer; flex: none;
 }
 .mini-btn:hover { color: var(--text); background: var(--panel-2); border-color: var(--line-strong); }
 .legend-gradient { height: 8px; border-radius: 4px; flex: 1; }
