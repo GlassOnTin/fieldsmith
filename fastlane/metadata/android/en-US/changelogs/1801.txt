@@ -1,0 +1,6 @@
+v0.18.0:
+- 3D P2 solvers for unilateral contact (flange liftoff), BDF2 transient thermal shock, and Darcy-Forchheimer TPMS porous flow with conjugate heat exchange.
+- Contract-constrained adjoint optimisation over shape, lattice, modal and additive build-angle problems, with O(1) epistemic uncertainty and p90/p10 contract sizing.
+- Declarative 0D/1D system blocks coupled to 3D, world-space boundary-condition fields f(x,y,z,r), and parametric sketches saved in the .fsm document.
+- Fastener and sheet-metal clinching mechanics, and Bayesian calibration from bench observations.
+- Keyboard-first editing: Escape cancels every field edit, region rename and delete keep their references intact, and a themed, reduced-motion-aware UI with accurate verification badges.
