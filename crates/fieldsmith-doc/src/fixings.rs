@@ -843,6 +843,9 @@ pub struct FixingInsertRequest {
     /// Supported payload mass per joint (kg) for vibration/knock slip calculation.
     #[serde(default = "default_payload_mass_kg", alias = "payloadMassKg")]
     pub payload_mass_kg: f64,
+    /// Optional load case name for the generated bolt preload (`"default"` when omitted).
+    #[serde(default, alias = "loadCase")]
+    pub load_case: Option<String>,
 }
 
 impl Default for FixingInsertRequest {
@@ -876,6 +879,7 @@ impl Default for FixingInsertRequest {
             substrate_material: None,
             vibration_g: default_vibration_g(),
             payload_mass_kg: default_payload_mass_kg(),
+            load_case: None,
         }
     }
 }
@@ -1001,42 +1005,121 @@ impl HostSurfaceFrame {
     }
 }
 
-fn node_half_extents(kind: &NodeKind) -> [f64; 3] {
-    match kind {
-        NodeKind::Box { size, .. } => [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5],
-        NodeKind::Cylinder { radius, height, .. } => [*radius, *radius, height * 0.5],
-        NodeKind::Sphere { radius } => [*radius, *radius, *radius],
-        NodeKind::Capsule { radius, length } => [*radius, *radius, length * 0.5 + radius],
-        NodeKind::Torus { major, minor } => [major + minor, major + minor, *minor],
-        NodeKind::Extrude { profile, height } => {
-            let mut max_x = 5.0_f64;
-            let mut max_y = 5.0_f64;
-            for p in profile {
-                max_x = max_x.max(p.x.abs());
-                max_y = max_y.max(p.y.abs());
+fn transform_world_point(local: [f64; 3], tr: &Transform) -> [f64; 3] {
+    let [rx, ry, rz] = [
+        tr.rotate[0].to_radians(),
+        tr.rotate[1].to_radians(),
+        tr.rotate[2].to_radians(),
+    ];
+    let (sx, cx) = rx.sin_cos();
+    let (sy, cy) = ry.sin_cos();
+    let (sz, cz) = rz.sin_cos();
+    // R = Rz * Ry * Rx
+    let [x, y, z] = local;
+    let [x1, y1, z1] = [x, y * cx - z * sx, y * sx + z * cx];
+    let [x2, y2, z2] = [x1 * cy + z1 * sy, y1, -x1 * sy + z1 * cy];
+    let [x3, y3, z3] = [x2 * cz - y2 * sz, x2 * sz + y2 * cz, z2];
+    [
+        x3 + tr.translate[0],
+        y3 + tr.translate[1],
+        z3 + tr.translate[2],
+    ]
+}
+
+fn aabb_corners(lo: [f64; 3], hi: [f64; 3], tr: &Transform) -> Vec<[f64; 3]> {
+    let mut out = Vec::with_capacity(8);
+    for &x in &[lo[0], hi[0]] {
+        for &y in &[lo[1], hi[1]] {
+            for &z in &[lo[2], hi[2]] {
+                out.push(transform_world_point([x, y, z], tr));
             }
-            [max_x, max_y, height * 0.5]
+        }
+    }
+    out
+}
+
+fn node_world_sample_points(node: &Node) -> Vec<[f64; 3]> {
+    match &node.kind {
+        NodeKind::Box { size, .. } => {
+            let [hx, hy, hz] = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+            aabb_corners([-hx, -hy, -hz], [hx, hy, hz], &node.transform)
+        }
+        NodeKind::Cylinder { radius, height, .. } => aabb_corners(
+            [-*radius, -*radius, -height * 0.5],
+            [*radius, *radius, height * 0.5],
+            &node.transform,
+        ),
+        NodeKind::Sphere { radius } => aabb_corners(
+            [-*radius, -*radius, -*radius],
+            [*radius, *radius, *radius],
+            &node.transform,
+        ),
+        NodeKind::Capsule { radius, length } => {
+            let hz = length * 0.5 + radius;
+            aabb_corners(
+                [-*radius, -*radius, -hz],
+                [*radius, *radius, hz],
+                &node.transform,
+            )
+        }
+        NodeKind::Torus { major, minor } => {
+            let r = major + minor;
+            aabb_corners([-r, -r, -*minor], [r, r, *minor], &node.transform)
+        }
+        NodeKind::Extrude { profile, height } => {
+            let hz = height * 0.5;
+            if profile.is_empty() {
+                aabb_corners([-5.0, -5.0, -hz], [5.0, 5.0, hz], &node.transform)
+            } else {
+                let mut pts = Vec::with_capacity(profile.len() * 2);
+                for p in profile {
+                    pts.push(transform_world_point([p.x, p.y, -hz], &node.transform));
+                    pts.push(transform_world_point([p.x, p.y, hz], &node.transform));
+                }
+                pts
+            }
         }
         NodeKind::Revolve { profile, .. } => {
-            let mut max_r = 5.0_f64;
-            let mut max_h = 5.0_f64;
-            for p in profile {
-                max_r = max_r.max(p.x.abs());
-                max_h = max_h.max(p.y.abs());
-            }
-            [max_r, max_r, max_h]
-        }
-        NodeKind::Group { children, .. } => {
-            if let Some(primary) = children
-                .iter()
-                .find(|c| c.op == Op::Add && !matches!(c.kind, NodeKind::Group { .. }))
-            {
-                node_half_extents(&primary.kind)
+            if profile.is_empty() {
+                aabb_corners([-5.0, -5.0, -5.0], [5.0, 5.0, 5.0], &node.transform)
             } else {
-                [20.0, 20.0, 10.0]
+                let mut r_max = 0.0_f64;
+                let mut z_min = f64::INFINITY;
+                let mut z_max = f64::NEG_INFINITY;
+                for p in profile {
+                    r_max = r_max.max(p.x.abs());
+                    z_min = z_min.min(p.y);
+                    z_max = z_max.max(p.y);
+                }
+                r_max = r_max.max(1.0);
+                if (z_max - z_min) < 1e-6 {
+                    z_min -= 2.5;
+                    z_max += 2.5;
+                }
+                aabb_corners([-r_max, -r_max, z_min], [r_max, r_max, z_max], &node.transform)
             }
         }
-        _ => [20.0, 20.0, 10.0],
+        NodeKind::Mesh { bbox, .. } => aabb_corners(
+            [bbox[0], bbox[1], bbox[2]],
+            [bbox[3], bbox[4], bbox[5]],
+            &node.transform,
+        ),
+        NodeKind::Group { children, .. } => {
+            let mut pts = Vec::new();
+            for c in children {
+                if !c.suppressed && c.op == Op::Add {
+                    for p in node_world_sample_points(c) {
+                        pts.push(transform_world_point(p, &node.transform));
+                    }
+                }
+            }
+            if pts.is_empty() {
+                aabb_corners([-20.0, -20.0, -10.0], [20.0, 20.0, 10.0], &node.transform)
+            } else {
+                pts
+            }
+        }
+        _ => aabb_corners([-20.0, -20.0, -10.0], [20.0, 20.0, 10.0], &node.transform),
     }
 }
 
@@ -1050,7 +1133,7 @@ fn resolve_host_surface_frame(
         .or_else(|| doc.root.iter().find(|n| n.op == Op::Add));
     let effective = match host {
         Some(h)
-            if matches!(h.kind, NodeKind::Group { .. }) && h.transform.translate == [0.0; 3] =>
+            if matches!(h.kind, NodeKind::Group { .. }) && h.transform.is_identity() =>
         {
             if let NodeKind::Group { children, .. } = &h.kind {
                 children
@@ -1077,8 +1160,15 @@ fn resolve_host_surface_frame(
         }
     };
 
-    let at = effective.transform.translate;
-    let [hx, hy, hz] = node_half_extents(&effective.kind);
+    let pts = node_world_sample_points(effective);
+    let mut min_w = [f64::INFINITY; 3];
+    let mut max_w = [f64::NEG_INFINITY; 3];
+    for p in &pts {
+        for k in 0..3 {
+            min_w[k] = min_w[k].min(p[k]);
+            max_w[k] = max_w[k].max(p[k]);
+        }
+    }
 
     let (
         outward_normal,
@@ -1086,9 +1176,8 @@ fn resolve_host_surface_frame(
         v_axis,
         u_axis_index,
         v_axis_index,
-        face_width,
-        face_height,
-        dist,
+        n_axis_index,
+        n_sign,
         rotate_deg,
     ) = match face {
         Face::Top | Face::Pz | Face::All => (
@@ -1097,9 +1186,8 @@ fn resolve_host_surface_frame(
             [0.0, 1.0, 0.0],
             0,
             1,
-            2.0 * hx,
-            2.0 * hy,
-            hz,
+            2,
+            1.0_f64,
             [0.0, 0.0, 0.0],
         ),
         Face::Bottom | Face::Nz => (
@@ -1108,9 +1196,8 @@ fn resolve_host_surface_frame(
             [0.0, 1.0, 0.0],
             0,
             1,
-            2.0 * hx,
-            2.0 * hy,
-            hz,
+            2,
+            -1.0_f64,
             [180.0, 0.0, 0.0],
         ),
         Face::Px | Face::Side => (
@@ -1119,9 +1206,8 @@ fn resolve_host_surface_frame(
             [0.0, 0.0, 1.0],
             1,
             2,
-            2.0 * hy,
-            2.0 * hz,
-            hx,
+            0,
+            1.0_f64,
             [0.0, 90.0, 0.0],
         ),
         Face::Nx => (
@@ -1130,9 +1216,8 @@ fn resolve_host_surface_frame(
             [0.0, 0.0, 1.0],
             1,
             2,
-            2.0 * hy,
-            2.0 * hz,
-            hx,
+            0,
+            -1.0_f64,
             [0.0, -90.0, 0.0],
         ),
         Face::Py => (
@@ -1141,9 +1226,8 @@ fn resolve_host_surface_frame(
             [0.0, 0.0, 1.0],
             0,
             2,
-            2.0 * hx,
-            2.0 * hz,
-            hy,
+            1,
+            1.0_f64,
             [-90.0, 0.0, 0.0],
         ),
         Face::Ny => (
@@ -1152,18 +1236,46 @@ fn resolve_host_surface_frame(
             [0.0, 0.0, 1.0],
             0,
             2,
-            2.0 * hx,
-            2.0 * hz,
-            hy,
+            1,
+            -1.0_f64,
             [90.0, 0.0, 0.0],
         ),
     };
 
-    let face_center = [
-        at[0] + outward_normal[0] * dist,
-        at[1] + outward_normal[1] * dist,
-        at[2] + outward_normal[2] * dist,
-    ];
+    let n_coord = if n_sign > 0.0 {
+        max_w[n_axis_index]
+    } else {
+        min_w[n_axis_index]
+    };
+    let mut f_u_min = f64::INFINITY;
+    let mut f_u_max = f64::NEG_INFINITY;
+    let mut f_v_min = f64::INFINITY;
+    let mut f_v_max = f64::NEG_INFINITY;
+    for p in &pts {
+        if (p[n_axis_index] - n_coord).abs() <= 1e-3 {
+            f_u_min = f_u_min.min(p[u_axis_index]);
+            f_u_max = f_u_max.max(p[u_axis_index]);
+            f_v_min = f_v_min.min(p[v_axis_index]);
+            f_v_max = f_v_max.max(p[v_axis_index]);
+        }
+    }
+    let (u_lo, u_hi) = if f_u_max > f_u_min + 1e-3 {
+        (f_u_min, f_u_max)
+    } else {
+        (min_w[u_axis_index], max_w[u_axis_index])
+    };
+    let (v_lo, v_hi) = if f_v_max > f_v_min + 1e-3 {
+        (f_v_min, f_v_max)
+    } else {
+        (min_w[v_axis_index], max_w[v_axis_index])
+    };
+
+    let face_width = (u_hi - u_lo).max(1.0);
+    let face_height = (v_hi - v_lo).max(1.0);
+    let mut face_center = [0.0; 3];
+    face_center[n_axis_index] = n_coord;
+    face_center[u_axis_index] = 0.5 * (u_lo + u_hi);
+    face_center[v_axis_index] = 0.5 * (v_lo + v_hi);
 
     HostSurfaceFrame {
         face_center,
@@ -1656,6 +1768,12 @@ pub fn insert_fixing_into_document(
         }
     }
 
+    let preload_case = req
+        .load_case
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default");
     let use_group = req.group_in_tree.unwrap_or(true);
     let bind_lets = req.bind_surface_lets.unwrap_or(req.at.is_none()) && placements.len() == 1;
     let rot = if req.at.is_some() && req.host_face.is_none() {
@@ -1826,6 +1944,7 @@ pub fn insert_fixing_into_document(
                     &head_id,
                     preload_round,
                     &let_preload,
+                    preload_case,
                     &mut regions_added,
                     &mut loads_added,
                 );
@@ -1928,6 +2047,7 @@ pub fn insert_fixing_into_document(
                     &hex_head_id,
                     preload_round,
                     &let_preload,
+                    preload_case,
                     &mut regions_added,
                     &mut loads_added,
                 );
@@ -1935,11 +2055,9 @@ pub fn insert_fixing_into_document(
 
             FixingKind::HexCapBolt => {
                 let cbore_id = format!("{inst_prefix}_counterbore");
-                let cbore_depth = if has_washer {
-                    0.4
-                } else {
-                    (size_spec.head_h * 0.45).max(1.2)
-                };
+                // Keep a shallow 0.4 mm spotface seat whether or not an underhead washer is used
+                // so the cylindrical socket cap head sits cleanly proud above the host surface.
+                let cbore_depth = 0.4;
                 bore_kids.push(Node {
                     id: cbore_id.clone(),
                     op: bore_child_op,
@@ -2066,6 +2184,7 @@ pub fn insert_fixing_into_document(
                     &cap_head_id,
                     preload_round,
                     &let_preload,
+                    preload_case,
                     &mut regions_added,
                     &mut loads_added,
                 );
@@ -2161,6 +2280,7 @@ pub fn insert_fixing_into_document(
                     &washer_disc_id,
                     preload_round,
                     &let_preload,
+                    preload_case,
                     &mut regions_added,
                     &mut loads_added,
                 );
@@ -2280,6 +2400,7 @@ pub fn insert_fixing_into_document(
                     &nut_body_id,
                     preload_round,
                     &let_preload,
+                    preload_case,
                     &mut regions_added,
                     &mut loads_added,
                 );
@@ -2598,6 +2719,7 @@ fn add_clamp_region_and_preload(
     hardware_head_id: &str,
     preload_n: f64,
     let_preload_name: &str,
+    preload_case: &str,
     regions_added: &mut Vec<String>,
     loads_added: &mut Vec<String>,
 ) {
@@ -2628,7 +2750,7 @@ fn add_clamp_region_and_preload(
     doc.loads.push(Load {
         id: load_id.clone(),
         region: seat_reg,
-        case: "default".into(),
+        case: preload_case.into(),
         kind: LoadKind::Preload {
             newtons: preload_n,
             axis: [0.0, 0.0, 0.0],
@@ -2957,11 +3079,7 @@ pub fn reconfigure_existing_bolt_stack(
             if let NodeKind::Group { children, .. } = &mut bore_group.kind {
                 children.retain(|c| c.id != format!("{inst_prefix}_nut_pocket"));
                 if fixing_kind == FixingKind::HexCapBolt {
-                    let cbore_depth = if has_washer {
-                        0.4
-                    } else {
-                        (size_spec.head_h * 0.45).max(1.2)
-                    };
+                    let cbore_depth = 0.4;
                     if let Some(cbore) = children
                         .iter_mut()
                         .find(|c| c.id == format!("{inst_prefix}_counterbore"))
@@ -3045,11 +3163,7 @@ pub fn reconfigure_existing_bolt_stack(
             }
 
             if fixing_kind == FixingKind::HexCapBolt {
-                let cbore_depth = if has_washer {
-                    0.4
-                } else {
-                    (size_spec.head_h * 0.45).max(1.2)
-                };
+                let cbore_depth = 0.4;
                 let head_z = -(cbore_depth - 0.1) + washer_shift_z + size_spec.head_h * 0.5;
                 if let Some(cap_head) = children
                     .iter_mut()
@@ -4290,4 +4404,119 @@ pub fn evaluate_open_standard_benchmarks_with_samples(
                 "Explains why 78% of fastener fatigue and brittle SiC boss fractures initiate at the very first engaged thread root despite adding extra thread length beyond L_eng ≈ 1.5·d.".into(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Document, LoadKind, Node, NodeKind, Op, ProfileVertex, Transform};
+
+    #[test]
+    fn rotated_extrude_surface_frame_and_hex_cap_washerless_and_load_case() {
+        let profile = vec![
+            ProfileVertex { x: 0.0, y: 0.0, bulge: 0.0 },
+            ProfileVertex { x: 80.0, y: 0.0, bulge: 0.0 },
+            ProfileVertex { x: 80.0, y: 8.0, bulge: 0.0 },
+            ProfileVertex { x: 8.0, y: 8.0, bulge: 0.0 },
+            ProfileVertex { x: 8.0, y: 60.0, bulge: 0.0 },
+            ProfileVertex { x: 0.0, y: 60.0, bulge: 0.0 },
+        ];
+        let mut doc = Document {
+            material: "al7075".into(),
+            ..Default::default()
+        };
+        doc.root.push(Node {
+            id: "bracket".into(),
+            op: Op::Add,
+            kind: NodeKind::Extrude {
+                profile,
+                height: 40.0,
+            },
+            transform: Transform {
+                translate: [0.0, 0.0, 0.0],
+                rotate: [90.0, 0.0, 0.0],
+            },
+            blend: 0.0,
+            suppressed: false,
+            material: None,
+            color: None,
+        });
+
+        let bottom = resolve_host_surface_frame(&doc, Some("bracket"), Face::Bottom);
+        assert!((bottom.face_center[0] - 40.0).abs() < 1e-6);
+        assert!(bottom.face_center[1].abs() < 1e-6);
+        assert!(bottom.face_center[2].abs() < 1e-6);
+        assert!((bottom.face_width - 80.0).abs() < 1e-6);
+        assert!((bottom.face_height - 40.0).abs() < 1e-6);
+
+        let top = resolve_host_surface_frame(&doc, Some("bracket"), Face::Top);
+        assert!((top.face_center[0] - 4.0).abs() < 1e-6);
+        assert!(top.face_center[1].abs() < 1e-6);
+        assert!((top.face_center[2] - 60.0).abs() < 1e-6);
+        assert!((top.face_width - 8.0).abs() < 1e-6);
+        assert!((top.face_height - 40.0).abs() < 1e-6);
+
+        let nx = resolve_host_surface_frame(&doc, Some("bracket"), Face::Nx);
+        assert!(nx.face_center[0].abs() < 1e-6);
+        assert!(nx.face_center[1].abs() < 1e-6);
+        assert!((nx.face_center[2] - 30.0).abs() < 1e-6);
+        assert!((nx.face_width - 40.0).abs() < 1e-6);
+        assert!((nx.face_height - 60.0).abs() < 1e-6);
+
+        // Insert M6 HexCapBolt with include_washer = false and load_case = "Load 1".
+        let summary = insert_fixing_into_document(
+            &mut doc,
+            &FixingInsertRequest {
+                kind: FixingKind::HexCapBolt,
+                size: "M6".into(),
+                engagement_mm: 8.0,
+                host_id: Some("bracket".into()),
+                host_face: Some(Face::Bottom),
+                placement_mode: Some(FixingPlacementMode::Center),
+                dx_edge_mm: None,
+                dy_edge_mm: None,
+                u_offset_mm: Some(15.0),
+                v_offset_mm: Some(0.0),
+                flange_inset_x_mm: None,
+                flange_inset_y_mm: None,
+                bolt_circle_radius_mm: None,
+                bolt_circle_count: None,
+                bolt_circle_start_deg: None,
+                custom_points_uv: Vec::new(),
+                at: None,
+                group_in_tree: Some(true),
+                associate_with_host_group: false,
+                bind_surface_lets: Some(true),
+                include_washer: false,
+                associated_nut: AssociatedNutKind::None,
+                preload_cv: None,
+                load_case: Some("Load 1".into()),
+                fastener_material: "steel_10_9".into(),
+                substrate_material: Some("al7075".into()),
+                vibration_g: 5.0,
+                payload_mass_kg: 0.25,
+                id_prefix: Some("m6_bolt".into()),
+            },
+        );
+        assert!(!summary.first_new_id.is_empty());
+
+        let cbore = doc.find("m6_bolt_counterbore").expect("counterbore");
+        if let NodeKind::Cylinder { height, .. } = &cbore.kind {
+            assert!((*height - 0.4).abs() < 1e-6, "cbore should remain 0.4 mm spotface, got {height}");
+        } else {
+            panic!("expected cylinder cbore");
+        }
+        let cap_head = doc.find("m6_bolt_cap_head").expect("cap_head");
+        assert!(
+            cap_head.transform.translate[2] > 2.5,
+            "washerless cap_head should sit proud of surface, got z={}",
+            cap_head.transform.translate[2]
+        );
+        let preload = doc
+            .loads
+            .iter()
+            .find(|l| matches!(l.kind, LoadKind::Preload { .. }))
+            .expect("preload load");
+        assert_eq!(preload.case, "Load 1");
+    }
 }

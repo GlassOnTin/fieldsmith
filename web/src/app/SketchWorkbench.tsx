@@ -1113,7 +1113,7 @@ export function SketchWorkbench({
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
             {(store.doc.sketches?.length ?? 0) > 0 && (
               <>
-                <label style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e' }}>Saved:</label>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ok)' }}>Saved:</label>
                 <select
                   class="select"
                   data-testid="sketch-saved-select"
@@ -1146,13 +1146,36 @@ export function SketchWorkbench({
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              class="btn small"
+              data-testid="sketch-new-blank-btn"
+              title="Clear canvas to an empty parametric sketch on the active plane"
+              onClick={() => {
+                const nextId = `sketch_${(store.doc.sketches?.length ?? 0) + 1}`;
+                setSketch({
+                  id: nextId,
+                  plane: buildCurrentPlane(),
+                  points: [],
+                  segments: [],
+                  circles: [],
+                  constraints: [],
+                });
+                setSelectedSegId(null);
+                setSelectedPointIds([]);
+                setSelectedCircleId(null);
+              }}
+              style={{ fontSize: '10.5px', padding: '3px 7px', fontWeight: 600 }}
+            >
+              + Blank Sketch
+            </button>
           </div>
 
           <div
             data-testid="sketch-geometry-icon-bar"
             style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}
           >
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' }}>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' }}>
               Geometry:
             </span>
             {(
@@ -1347,7 +1370,7 @@ export function SketchWorkbench({
                 borderLeft: '1px solid var(--line-strong)',
               }}
             >
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-2)', textTransform: 'uppercase' }}>
                 Modify:
               </span>
               <button
@@ -1416,7 +1439,7 @@ export function SketchWorkbench({
             borderTop: '1px solid var(--line)',
           }}
         >
-          <span style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' }}>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' }}>
             Constraints:
           </span>
           {(

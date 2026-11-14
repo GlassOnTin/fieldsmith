@@ -33,6 +33,24 @@ import {
   unoptimisedTuckedDroneAntennaSpec,
 } from '../doc/antenna-vna';
 
+// Lightweight inline Markdown for tutorial prose: **bold** and `code` spans.
+// Plain text is returned as text nodes (Preact auto-escapes); never innerHTML.
+// Empty or unmatched markers are left literal. `code` nested inside **bold** is
+// rendered recursively; markdown inside `code` is not interpreted.
+function renderInlineMarkdown(text: string): (string | JSX.Element)[] {
+  if (!text) return [text];
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{renderInlineMarkdown(part.slice(2, -2))}</strong>;
+    }
+    if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+      return <code key={i}>{part.slice(1, -1)}</code>;
+    }
+    return part;
+  });
+}
+
 function LazyFixingWorkbench() {
   const [Comp, setComp] = useState<(() => JSX.Element | null) | null>(null);
   useEffect(() => {
@@ -2846,7 +2864,7 @@ function TutorialsDrawer() {
       {(sheet.id === 'T14' || sheet.id === 'A13') && <LazyFixingWorkbench />}
       {sheet.id === 'T15' && <LazySketchWorkbenchEmbedded />}
       {(sheet.id === 'T16' || sheet.id === 'A14') && <DroneAntennaTutorialCard />}
-      {(sheet.id === 'T18' || sheet.id === 'A15' || sheet.id === 'A16' || sheet.id === 'A17' || sheet.id === 'A18' || sheet.id === 'A20') && (
+      {(sheet.id === 'T18' || sheet.id === 'A15' || sheet.id === 'A16' || sheet.id === 'A17' || sheet.id === 'A18' || sheet.id === 'A25') && (
         <div class="tut-step-card" style={{ borderColor: '#38bdf8' }}>
           <LazyFreeSurfaceWorkbenchEmbedded
             initialScenario={
@@ -2860,7 +2878,7 @@ function TutorialsDrawer() {
             }
             initialGerrisMode={sheet.id === 'A17' || sheet.id === 'A18'}
             initialGerrisCaseId={sheet.id === 'A18' ? 'G5' : 'G1'}
-            initialSpuriousEddyMode={sheet.id === 'A20'}
+            initialSpuriousEddyMode={sheet.id === 'A25'}
           />
         </div>
       )}
@@ -2899,9 +2917,9 @@ function TutorialsDrawer() {
               </button>
             )}
           </div>
-          <p class="tut-step-text">{st.instruction}</p>
+          <p class="tut-step-text">{renderInlineMarkdown(st.instruction)}</p>
           <div class="tut-expected">
-            <span>Expected Check:</span> {st.expected}
+            <span>Expected Check:</span> {renderInlineMarkdown(st.expected)}
           </div>
         </div>
       ))}
@@ -2913,12 +2931,12 @@ function TutorialsDrawer() {
       <div class="tut-col-head">2. Theoretical Manual Chapter</div>
       <div class="tut-theory-card">
         <h4>{sheet.theoryChapter.chapterTitle}</h4>
-        <p class="tut-step-text">{sheet.theoryChapter.summary}</p>
+        <p class="tut-step-text">{renderInlineMarkdown(sheet.theoryChapter.summary)}</p>
         {sheet.theoryChapter.sections.map((sec, i) => (
           <div key={i} class="tut-theory-sec">
             <div class="tut-theory-sec-title">{sec.heading}</div>
             <pre class="tut-eq num">{sec.equations}</pre>
-            <p class="tut-step-text">{sec.body}</p>
+            <p class="tut-step-text">{renderInlineMarkdown(sec.body)}</p>
           </div>
         ))}
       </div>
@@ -2945,7 +2963,7 @@ function TutorialsDrawer() {
                 {runningKey === key ? 'Running…' : `▶ Run ${ms.tool}`}
               </button>
             </div>
-            <p class="tut-step-text">{ms.description}</p>
+            <p class="tut-step-text">{renderInlineMarkdown(ms.description)}</p>
             <pre class="tut-code num">
               {`POST /api/mcp\n` + JSON.stringify({ tool: ms.tool, arguments: ms.arguments }, null, 2)}
             </pre>
@@ -3298,7 +3316,7 @@ function TutorialsDrawer() {
             type="button"
             data-testid="tutorial-sheet-analytic-index"
             class={`tut-sheet-pill${isContentsOpen && ui.tutorialCategoryFilter === 'analytic' ? ' active' : ''}`}
-            title="Filter Contents to Closed-Form Analytic Verification Tests (A1–A20)"
+            title="Filter Contents to Closed-Form Analytic Verification Tests (A1–A25)"
             onClick={() => {
               ui.set('tutorialCategoryFilter', 'analytic');
               ui.set('tutorialContentsOpen', true);
@@ -3360,7 +3378,7 @@ function TutorialsDrawer() {
             }}
           >
             <option value="">Jump to sheet ({TUTORIAL_SHEETS.length} available)…</option>
-            <optgroup label="Analytic Verification Benchmarks (A1–A20)">
+            <optgroup label="Analytic Verification Benchmarks (A1–A25)">
               {TUTORIAL_SHEETS.filter((s) => getCategoryForSheet(s) === 'analytic').map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.code}: {s.title}

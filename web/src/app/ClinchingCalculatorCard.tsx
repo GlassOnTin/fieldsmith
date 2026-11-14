@@ -67,7 +67,7 @@ export function ClinchingCalculatorCard({
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 700, color: '#ddd6fe', fontSize: '11px' }}>
+          <span style={{ fontWeight: 700, color: 'var(--text)', fontSize: '11px' }}>
             🔩 Sheet-Metal Clinching Explorer
           </span>
           <span
@@ -116,8 +116,8 @@ export function ClinchingCalculatorCard({
 
       <div
         style={{
-          background: 'rgba(15, 23, 42, 0.72)',
-          border: '1px solid rgba(148, 163, 184, 0.2)',
+          background: '#0f172a',
+          border: '1px solid rgba(148, 163, 184, 0.25)',
           borderRadius: '5px',
           padding: '4px',
         }}
@@ -167,7 +167,7 @@ export function ClinchingCalculatorCard({
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-        <span style={{ color: '#cbd5e1', fontSize: '10px' }}>
+        <span style={{ color: 'var(--text-2)', fontSize: '10px' }}>
           Bottom Coin <strong>X = {fmt(cur.xMm, 2)} mm</strong>:
         </span>
         <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
@@ -189,7 +189,7 @@ export function ClinchingCalculatorCard({
               }
               style={
                 Math.abs(cur.xMm - pr.x) < 0.04
-                  ? { background: 'rgba(16, 185, 129, 0.22)', borderColor: '#34d399', color: '#ecfdf5', fontWeight: 700, fontSize: '9.5px' }
+                  ? { background: '#047857', borderColor: '#059669', color: '#fff', fontWeight: 700, fontSize: '9.5px' }
                   : { fontSize: '9.5px' }
               }
             >
@@ -208,7 +208,7 @@ export function ClinchingCalculatorCard({
             }
             style={
               Math.abs(cur.xMm - sweepRes.optimalXMm) < 0.02
-                ? { background: 'rgba(16, 185, 129, 0.3)', borderColor: '#10b981', color: '#ecfdf5', fontWeight: 700, fontSize: '9.5px' }
+                ? { background: '#047857', borderColor: '#059669', color: '#fff', fontWeight: 700, fontSize: '9.5px' }
                 : { fontSize: '9.5px' }
             }
             title={`Solve hat-curve process window and set X = X* (${fmt(sweepRes.optimalXMm, 2)} mm)`}
@@ -219,7 +219,7 @@ export function ClinchingCalculatorCard({
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-        <span style={{ color: '#cbd5e1', fontSize: '10px' }}>
+        <span style={{ color: 'var(--text-2)', fontSize: '10px' }}>
           Beyond-1D Loading Mode (<strong>θ = {fmt(spec.loadAngleDeg, 0)}°</strong>):
         </span>
         <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
@@ -241,7 +241,7 @@ export function ClinchingCalculatorCard({
               }
               style={
                 Math.abs(spec.loadAngleDeg - ld.deg) < 2
-                  ? { background: 'rgba(139, 92, 246, 0.28)', borderColor: '#a78bfa', color: '#f5f3ff', fontWeight: 700, fontSize: '9.5px' }
+                  ? { background: '#7c3aed', borderColor: '#a78bfa', color: '#fff', fontWeight: 700, fontSize: '9.5px' }
                   : { fontSize: '9.5px' }
               }
             >
@@ -257,25 +257,26 @@ export function ClinchingCalculatorCard({
           gridTemplateColumns: '1fr 1fr',
           gap: '3px 8px',
           padding: '5px 7px',
-          background: 'rgba(15, 23, 42, 0.55)',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
           borderRadius: '4px',
           fontSize: '10px',
         }}
       >
-        <span style={{ color: '#94a3b8' }}>Forming force F_punch(X)</span>
-        <span class="num" style={{ textAlign: 'right', color: '#e2e8f0' }}>
+        <span style={{ color: 'var(--text-2)' }}>Forming force F_punch(X)</span>
+        <span class="num" style={{ textAlign: 'right', color: 'var(--text)' }}>
           {fmt(cur.formingForceKn, 2)} kN (ε̄_coin = {fmt(cur.coinStrain, 2)})
         </span>
-        <span style={{ color: '#94a3b8' }}>Neck t_n(X) &amp; Undercut t_u^eff</span>
-        <span class="num" style={{ textAlign: 'right', color: '#e2e8f0' }}>
+        <span style={{ color: 'var(--text-2)' }}>Neck t_n(X) &amp; Undercut t_u^eff</span>
+        <span class="num" style={{ textAlign: 'right', color: 'var(--text)' }}>
           t_n = {fmt(cur.neckThicknessMm, 3)} mm · t_u = {fmt(cur.undercutEffMm, 3)} mm (−{fmt(cur.springbackLossMm, 3)} springback)
         </span>
-        <span style={{ color: '#94a3b8' }}>Notch K_t (Lin) → K_σ (J₂ NL)</span>
-        <span class="num" style={{ textAlign: 'right', color: '#c4b5fd' }}>
+        <span style={{ color: 'var(--text-2)' }}>Notch K_t (Lin) → K_σ (J₂ NL)</span>
+        <span class="num" style={{ textAlign: 'right', color: 'var(--accent)' }}>
           K_t = {fmt(cur.elasticKt, 2)} → K_σ = {fmt(cur.plasticKsigma, 2)} (n = {fmt(spec.hardeningExponentN, 2)})
         </span>
-        <span style={{ color: '#94a3b8' }}>3D Peak σ_vM &amp; Plastic ε_p</span>
-        <span class="num" style={{ textAlign: 'right', color: '#6ee7b7' }}>
+        <span style={{ color: 'var(--text-2)' }}>3D Peak σ_vM &amp; Plastic ε_p</span>
+        <span class="num" style={{ textAlign: 'right', color: 'var(--ok)' }}>
           {fmt(peakVm, 1)} MPa · ε_p = {fmt(peakEpsP, 2)}% ({lvl.meta.provenance.iterations} PCG iters)
         </span>
       </div>

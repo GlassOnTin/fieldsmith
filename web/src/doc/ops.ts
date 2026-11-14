@@ -396,6 +396,200 @@ export interface HostSurfaceFrame {
   };
 }
 
+function transformWorldPoint(pt: Vec3, tr: { translate: Vec3; rotate: Vec3 }): Vec3 {
+  const [rx, ry, rz] = tr.rotate.map((deg) => (deg * Math.PI) / 180) as Vec3;
+  const [sx, cx] = [Math.sin(rx), Math.cos(rx)];
+  const [sy, cy] = [Math.sin(ry), Math.cos(ry)];
+  const [sz, cz] = [Math.sin(rz), Math.cos(rz)];
+  const [x, y, z] = pt;
+  const x1 = x;
+  const y1 = cx * y - sx * z;
+  const z1 = sx * y + cx * z;
+  const x2 = cy * x1 + sy * z1;
+  const y2 = y1;
+  const z2 = -sy * x1 + cy * z1;
+  const x3 = cz * x2 - sz * y2;
+  const y3 = sz * x2 + cz * y2;
+  const z3 = z2;
+  return [x3 + tr.translate[0], y3 + tr.translate[1], z3 + tr.translate[2]];
+}
+
+function nodeWorldSamplePoints(node: Node): Vec3[] {
+  const kind = node.kind;
+  const local: Vec3[] = [];
+  switch (kind.type) {
+    case 'box': {
+      const [hx, hy, hz] = [0.5 * kind.size[0], 0.5 * kind.size[1], 0.5 * kind.size[2]];
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * hx, sy * hy, sz * hz]);
+          }
+        }
+      }
+      break;
+    }
+    case 'cylinder': {
+      const r = kind.radius;
+      const hz = 0.5 * kind.height;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * r, sy * r, sz * hz]);
+          }
+        }
+      }
+      break;
+    }
+    case 'sphere': {
+      const r = kind.radius;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * r, sy * r, sz * r]);
+          }
+        }
+      }
+      break;
+    }
+    case 'capsule': {
+      const r = kind.radius;
+      const hz = 0.5 * kind.length + r;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * r, sy * r, sz * hz]);
+          }
+        }
+      }
+      break;
+    }
+    case 'torus': {
+      const rxy = kind.major + kind.minor;
+      const hz = kind.minor;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * rxy, sy * rxy, sz * hz]);
+          }
+        }
+      }
+      break;
+    }
+    case 'extrude': {
+      const hz = 0.5 * kind.height;
+      if (kind.profile.length === 0) {
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              local.push([sx * 8, sy * 8, sz * hz]);
+            }
+          }
+        }
+      } else {
+        const n = kind.profile.length;
+        for (let i = 0; i < n; i++) {
+          const v0 = kind.profile[i];
+          const v1 = kind.profile[(i + 1) % n];
+          for (const sz of [-1, 1]) {
+            local.push([v0.x, v0.y, sz * hz]);
+          }
+          if (Math.abs(v0.bulge) > 1e-6) {
+            const mx = 0.5 * (v0.x + v1.x);
+            const my = 0.5 * (v0.y + v1.y);
+            const dx = v1.x - v0.x;
+            const dy = v1.y - v0.y;
+            const len = Math.hypot(dx, dy);
+            if (len > 1e-9) {
+              const sag = 0.5 * len * v0.bulge;
+              const ax = mx + (dy / len) * sag;
+              const ay = my - (dx / len) * sag;
+              for (const sz of [-1, 1]) {
+                local.push([ax, ay, sz * hz]);
+              }
+            }
+          }
+        }
+      }
+      break;
+    }
+    case 'revolve': {
+      if (kind.profile.length === 0) {
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              local.push([sx * 8, sy * 8, sz * 8]);
+            }
+          }
+        }
+      } else {
+        let rMax = 0;
+        let zMin = Infinity;
+        let zMax = -Infinity;
+        for (const v of kind.profile) {
+          rMax = Math.max(rMax, Math.abs(v.x));
+          zMin = Math.min(zMin, v.y);
+          zMax = Math.max(zMax, v.y);
+        }
+        rMax = Math.max(1, rMax);
+        if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) {
+          zMin = -8;
+          zMax = 8;
+        }
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            for (const z of [zMin, zMax]) {
+              local.push([sx * rMax, sy * rMax, z]);
+            }
+          }
+        }
+      }
+      break;
+    }
+    case 'mesh': {
+      const [x0, y0, z0, x1, y1, z1] = kind.bbox;
+      for (const x of [x0, x1]) {
+        for (const y of [y0, y1]) {
+          for (const z of [z0, z1]) {
+            local.push([x, y, z]);
+          }
+        }
+      }
+      break;
+    }
+    case 'group': {
+      const addKids = kind.children.filter((c) => c.op === 'add' && !c.suppressed);
+      const list = addKids.length > 0 ? addKids : kind.children;
+      if (list.length === 0) {
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              local.push([sx * 10, sy * 10, sz * 5]);
+            }
+          }
+        }
+      } else {
+        for (const c of list) {
+          for (const p of nodeWorldSamplePoints(c)) {
+            local.push(p);
+          }
+        }
+      }
+      break;
+    }
+    default: {
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            local.push([sx * 15, sy * 15, sz * 8]);
+          }
+        }
+      }
+    }
+  }
+  return local.map((pt) => transformWorldPoint(pt, node.transform));
+}
+
 export function resolveHostSurfaceFrame(
   doc: Document,
   hostId: string,
@@ -405,12 +599,46 @@ export function resolveHostSurfaceFrame(
   let effectiveTarget: Node | null = host;
   if (host && host.kind.type === 'group') {
     const primaryChild = host.kind.children.find((c) => c.op === 'add' && c.kind.type !== 'group');
-    if (primaryChild && host.transform.translate.every((x) => x === 0)) {
+    if (
+      primaryChild &&
+      host.transform.translate.every((x) => x === 0) &&
+      host.transform.rotate.every((x) => x === 0)
+    ) {
       effectiveTarget = primaryChild;
     }
   }
-  const at: Vec3 = effectiveTarget ? [...effectiveTarget.transform.translate] : [0, 0, 0];
-  const [hx, hy, hz] = effectiveTarget ? nodeHalfExtents(effectiveTarget.kind) : [20, 20, 10];
+
+  let samplePts: Vec3[] = [];
+  if (effectiveTarget) {
+    samplePts = nodeWorldSamplePoints(effectiveTarget);
+  }
+  if (samplePts.length === 0) {
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          samplePts.push([sx * 20, sy * 20, sz * 10]);
+        }
+      }
+    }
+  }
+  let minPt: Vec3 = [Infinity, Infinity, Infinity];
+  let maxPt: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const p of samplePts) {
+    for (let k = 0; k < 3; k++) {
+      if (p[k] < minPt[k]) minPt[k] = p[k];
+      if (p[k] > maxPt[k]) maxPt[k] = p[k];
+    }
+  }
+  const at: Vec3 = [
+    0.5 * (minPt[0] + maxPt[0]),
+    0.5 * (minPt[1] + maxPt[1]),
+    0.5 * (minPt[2] + maxPt[2]),
+  ];
+  const [hx, hy, hz]: Vec3 = [
+    Math.max(1e-3, 0.5 * (maxPt[0] - minPt[0])),
+    Math.max(1e-3, 0.5 * (maxPt[1] - minPt[1])),
+    Math.max(1e-3, 0.5 * (maxPt[2] - minPt[2])),
+  ];
 
   let outwardNormal: Vec3 = [0, 0, 1];
   let uAxis: Vec3 = [1, 0, 0];
@@ -421,10 +649,9 @@ export function resolveHostSurfaceFrame(
   let uLabel: 'X' | 'Y' | 'Z' = 'X';
   let vLabel: 'X' | 'Y' | 'Z' = 'Y';
   let nLabel = '+Z (Top)';
-  let faceWidth = 2 * hx;
-  let faceHeight = 2 * hy;
   let hostThickness = 2 * hz;
-  let dist = hz;
+  let planeCoord = maxPt[2];
+  let takeMax = true;
   let rotateDeg: Vec3 = [0, 0, 0];
 
   switch (face) {
@@ -440,10 +667,9 @@ export function resolveHostSurfaceFrame(
       uLabel = 'X';
       vLabel = 'Y';
       nLabel = '+Z (Top)';
-      faceWidth = 2 * hx;
-      faceHeight = 2 * hy;
       hostThickness = 2 * hz;
-      dist = hz;
+      planeCoord = maxPt[2];
+      takeMax = true;
       rotateDeg = [0, 0, 0];
       break;
     case 'bottom':
@@ -457,10 +683,9 @@ export function resolveHostSurfaceFrame(
       uLabel = 'X';
       vLabel = 'Y';
       nLabel = '−Z (Bottom)';
-      faceWidth = 2 * hx;
-      faceHeight = 2 * hy;
       hostThickness = 2 * hz;
-      dist = hz;
+      planeCoord = minPt[2];
+      takeMax = false;
       rotateDeg = [180, 0, 0];
       break;
     case 'px':
@@ -474,10 +699,9 @@ export function resolveHostSurfaceFrame(
       uLabel = 'Y';
       vLabel = 'Z';
       nLabel = '+X (Right)';
-      faceWidth = 2 * hy;
-      faceHeight = 2 * hz;
       hostThickness = 2 * hx;
-      dist = hx;
+      planeCoord = maxPt[0];
+      takeMax = true;
       rotateDeg = [0, 90, 0];
       break;
     case 'nx':
@@ -490,10 +714,9 @@ export function resolveHostSurfaceFrame(
       uLabel = 'Y';
       vLabel = 'Z';
       nLabel = '−X (Left)';
-      faceWidth = 2 * hy;
-      faceHeight = 2 * hz;
       hostThickness = 2 * hx;
-      dist = hx;
+      planeCoord = minPt[0];
+      takeMax = false;
       rotateDeg = [0, -90, 0];
       break;
     case 'py':
@@ -506,10 +729,9 @@ export function resolveHostSurfaceFrame(
       uLabel = 'X';
       vLabel = 'Z';
       nLabel = '+Y (Back)';
-      faceWidth = 2 * hx;
-      faceHeight = 2 * hz;
       hostThickness = 2 * hy;
-      dist = hy;
+      planeCoord = maxPt[1];
+      takeMax = true;
       rotateDeg = [-90, 0, 0];
       break;
     case 'ny':
@@ -522,19 +744,43 @@ export function resolveHostSurfaceFrame(
       uLabel = 'X';
       vLabel = 'Z';
       nLabel = '−Y (Front)';
-      faceWidth = 2 * hx;
-      faceHeight = 2 * hz;
       hostThickness = 2 * hy;
-      dist = hy;
+      planeCoord = minPt[1];
+      takeMax = false;
       rotateDeg = [90, 0, 0];
       break;
   }
 
-  const faceCenter: Vec3 = [
-    at[0] + outwardNormal[0] * dist,
-    at[1] + outwardNormal[1] * dist,
-    at[2] + outwardNormal[2] * dist,
-  ];
+  const faceTol = Math.max(1e-2, 1e-3 * hostThickness);
+  let uLo = Infinity;
+  let uHi = -Infinity;
+  let vLo = Infinity;
+  let vHi = -Infinity;
+  for (const p of samplePts) {
+    const onPlane = takeMax
+      ? p[nAxisIndex] >= planeCoord - faceTol
+      : p[nAxisIndex] <= planeCoord + faceTol;
+    if (onPlane) {
+      uLo = Math.min(uLo, p[uAxisIndex]);
+      uHi = Math.max(uHi, p[uAxisIndex]);
+      vLo = Math.min(vLo, p[vAxisIndex]);
+      vHi = Math.max(vHi, p[vAxisIndex]);
+    }
+  }
+  if (!Number.isFinite(uLo) || uHi - uLo < 1e-3) {
+    uLo = minPt[uAxisIndex];
+    uHi = maxPt[uAxisIndex];
+  }
+  if (!Number.isFinite(vLo) || vHi - vLo < 1e-3) {
+    vLo = minPt[vAxisIndex];
+    vHi = maxPt[vAxisIndex];
+  }
+  const faceWidth = Math.max(1e-3, uHi - uLo);
+  const faceHeight = Math.max(1e-3, vHi - vLo);
+  const faceCenter: Vec3 = [0, 0, 0];
+  faceCenter[nAxisIndex] = planeCoord;
+  faceCenter[uAxisIndex] = 0.5 * (uLo + uHi);
+  faceCenter[vAxisIndex] = 0.5 * (vLo + vHi);
 
   const round3 = (v: number) => Math.round(v * 1000) / 1000;
 

@@ -20,7 +20,7 @@ import {
   resolveHostSurfaceFrame,
   ungroupNode,
 } from '../doc/ops';
-import { applyAddr, drivenExpr, parseAddr } from '../doc/param';
+import { applyAddr, deleteLet, drivenExpr, parseAddr, recomputeAllLets, renameLet } from '../doc/param';
 import { PART_COLORS } from '../doc/types';
 import {
   CONTINUUM_PHASE_META,
@@ -245,54 +245,90 @@ function kindIn<T extends NodeKind['type']>(d: Document, id: string, _t: T): Ext
   return nodeIn(d, id).kind as Extract<NodeKind, { type: T }>;
 }
 
+function syncSketchChildHoles(d: Document, parentId: string, opts: { height?: number; translate?: [number, number, number]; rotate?: [number, number, number] }) {
+  const prefix = `${parentId}_hole`;
+  if (opts.height !== undefined) {
+    for (const sf of d.sketch_features ?? []) {
+      if (sf.feature_id === parentId && sf.operation.kind === 'boss_extrude') {
+        sf.operation.height = opts.height;
+      }
+    }
+  }
+  walk(d.root, (n) => {
+    if (!n.id.startsWith(prefix) || !/^\d+$/.test(n.id.slice(prefix.length)) || n.op !== 'subtract') return;
+    if (opts.height !== undefined && n.kind.type === 'extrude') {
+      n.kind.height = opts.height + 1.0;
+    }
+    if (opts.translate !== undefined) {
+      n.transform.translate = [...opts.translate];
+    }
+    if (opts.rotate !== undefined) {
+      n.transform.rotate = [...opts.rotate];
+    }
+  });
+}
+
 function Dimensions({ node }: { node: Node }) {
   const id = node.id;
   const u = `Edit ${id}`;
   // The refusal hint when a .fsm let's expression writes the attribute: the field is
-  // display-only until the let is swept.
+  // display-only until the let is swept (or rebound to a new let expression / unlinked via fx).
   const drv = (attr: string, comp: number | null = null) => drivenExpr(store.doc, id, attr, comp);
   switch (node.kind.type) {
     case 'box':
       return (
         <>
-          <VecRow label="Size" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'box').size} set={(d, v) => (kindIn(d, id, 'box').size = v)} undoLabel={u} testId="size" driven={(i) => drv('size', i)} />
-          <NumRow label="Corner radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'box').round} set={(d, v) => (kindIn(d, id, 'box').round = v)} undoLabel={u} testId="round" driven={drv('round')} />
+          <VecRow label="Size" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'box').size} set={(d, v) => (kindIn(d, id, 'box').size = v)} undoLabel={u} testId="size" driven={(i) => drv('size', i)} exprTarget={{ target: id, attr: 'size' }} />
+          <NumRow label="Corner radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'box').round} set={(d, v) => (kindIn(d, id, 'box').round = v)} undoLabel={u} testId="round" driven={drv('round')} exprTarget={{ target: id, attr: 'round' }} />
         </>
       );
     case 'cylinder':
       return (
         <>
-          <NumRow label="Diameter" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'cylinder').radius * 2} set={(d, v) => (kindIn(d, id, 'cylinder').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} />
-          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'cylinder').height} set={(d, v) => (kindIn(d, id, 'cylinder').height = v)} undoLabel={u} testId="height" driven={drv('height')} />
-          <NumRow label="Edge radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'cylinder').round} set={(d, v) => (kindIn(d, id, 'cylinder').round = v)} undoLabel={u} driven={drv('round')} />
+          <NumRow label="Diameter" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'cylinder').radius * 2} set={(d, v) => (kindIn(d, id, 'cylinder').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} exprTarget={{ target: id, attr: 'radius', scale: 0.5 }} />
+          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'cylinder').height} set={(d, v) => (kindIn(d, id, 'cylinder').height = v)} undoLabel={u} testId="height" driven={drv('height')} exprTarget={{ target: id, attr: 'height' }} />
+          <NumRow label="Edge radius" unit="mm" min={0} step={0.5} get={(d) => kindIn(d, id, 'cylinder').round} set={(d, v) => (kindIn(d, id, 'cylinder').round = v)} undoLabel={u} driven={drv('round')} exprTarget={{ target: id, attr: 'round' }} />
         </>
       );
     case 'sphere':
-      return <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'sphere').radius * 2} set={(d, v) => (kindIn(d, id, 'sphere').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} />;
+      return <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'sphere').radius * 2} set={(d, v) => (kindIn(d, id, 'sphere').radius = v / 2)} undoLabel={u} testId="diameter" driven={drv('radius')} exprTarget={{ target: id, attr: 'radius', scale: 0.5 }} />;
     case 'capsule':
       return (
         <>
-          <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'capsule').radius * 2} set={(d, v) => (kindIn(d, id, 'capsule').radius = v / 2)} undoLabel={u} driven={drv('radius')} />
-          <NumRow label="Length" unit="mm" min={0} title="Straight length between the hemispherical ends" get={(d) => kindIn(d, id, 'capsule').length} set={(d, v) => (kindIn(d, id, 'capsule').length = v)} undoLabel={u} driven={drv('length')} />
+          <NumRow label="Diameter" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'capsule').radius * 2} set={(d, v) => (kindIn(d, id, 'capsule').radius = v / 2)} undoLabel={u} driven={drv('radius')} exprTarget={{ target: id, attr: 'radius', scale: 0.5 }} />
+          <NumRow label="Length" unit="mm" min={0} title="Straight length between the hemispherical ends" get={(d) => kindIn(d, id, 'capsule').length} set={(d, v) => (kindIn(d, id, 'capsule').length = v)} undoLabel={u} driven={drv('length')} exprTarget={{ target: id, attr: 'length' }} />
         </>
       );
     case 'torus':
       return (
         <>
-          <NumRow label="Ring radius" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'torus').major} set={(d, v) => (kindIn(d, id, 'torus').major = v)} undoLabel={u} driven={drv('major')} />
-          <NumRow label="Tube radius" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'torus').minor} set={(d, v) => (kindIn(d, id, 'torus').minor = v)} undoLabel={u} driven={drv('minor')} />
+          <NumRow label="Ring radius" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'torus').major} set={(d, v) => (kindIn(d, id, 'torus').major = v)} undoLabel={u} driven={drv('major')} exprTarget={{ target: id, attr: 'major' }} />
+          <NumRow label="Tube radius" unit="mm" min={0.01} step={0.5} get={(d) => kindIn(d, id, 'torus').minor} set={(d, v) => (kindIn(d, id, 'torus').minor = v)} undoLabel={u} driven={drv('minor')} exprTarget={{ target: id, attr: 'minor' }} />
         </>
       );
     case 'extrude':
       return (
         <>
-          <NumRow label="Height" unit="mm" min={0.01} get={(d) => kindIn(d, id, 'extrude').height} set={(d, v) => (kindIn(d, id, 'extrude').height = v)} undoLabel={u} driven={drv('height')} />
+          <NumRow
+            label="Height"
+            unit="mm"
+            min={0.01}
+            get={(d) => kindIn(d, id, 'extrude').height}
+            set={(d, v) => {
+              kindIn(d, id, 'extrude').height = v;
+              syncSketchChildHoles(d, id, { height: v });
+            }}
+            undoLabel={u}
+            testId="height"
+            driven={drv('height')}
+            exprTarget={{ target: id, attr: 'height' }}
+          />
         </>
       );
     case 'revolve':
       return (
         <>
-          <NumRow label="Sweep angle" unit="°" min={1} max={360} step={15} get={(d) => kindIn(d, id, 'revolve').angle} set={(d, v) => (kindIn(d, id, 'revolve').angle = v)} undoLabel={u} driven={drv('angle')} />
+          <NumRow label="Sweep angle" unit="°" min={1} max={360} step={15} get={(d) => kindIn(d, id, 'revolve').angle} set={(d, v) => (kindIn(d, id, 'revolve').angle = v)} undoLabel={u} driven={drv('angle')} exprTarget={{ target: id, attr: 'angle' }} />
         </>
       );
     case 'mesh':
@@ -1370,10 +1406,12 @@ function NodeInspector({ node }: { node: Node }) {
             nodeIn(d, id).transform.translate = v;
             const comp = findCompanionFixingNode(d, id);
             if (comp) comp.transform.translate = [...v];
+            syncSketchChildHoles(d, id, { translate: v });
           }}
           undoLabel={`Move ${id}`}
           testId="position"
           driven={(i) => drivenExpr(store.doc, id, 'at', i)}
+          exprTarget={{ target: id, attr: 'at' }}
         />
         <VecRow
           label="Rotation"
@@ -1384,10 +1422,12 @@ function NodeInspector({ node }: { node: Node }) {
             nodeIn(d, id).transform.rotate = v;
             const comp = findCompanionFixingNode(d, id);
             if (comp) comp.transform.rotate = [...v];
+            syncSketchChildHoles(d, id, { rotate: v });
           }}
           undoLabel={`Rotate ${id}`}
           testId="rotation"
           driven={(i) => drivenExpr(store.doc, id, 'rotate', i)}
+          exprTarget={{ target: id, attr: 'rotate' }}
         />
       </div>
       <BoltHardwareAndForcesPanel node={node} />
@@ -1535,9 +1575,9 @@ function DroneAntennaInspectorCard({ doc }: { doc: Document }) {
       style={{
         marginTop: '10px',
         padding: '9px 10px',
-        border: `1px solid ${rep.all_targets_met ? '#10B981' : '#F43F5E'}`,
-        background: '#0F172A',
-        color: '#E2E8F0',
+        border: `1px solid ${rep.all_targets_met ? 'var(--ok)' : 'var(--danger)'}`,
+        background: 'var(--panel-2)',
+        color: 'var(--text)',
         borderRadius: '6px',
         display: 'flex',
         flexDirection: 'column',
@@ -1545,7 +1585,7 @@ function DroneAntennaInspectorCard({ doc }: { doc: Document }) {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: '#38BDF8' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
           📡 Gemini Dual-Band VNA &amp; 3D Lobe
         </span>
         <span
@@ -1555,8 +1595,10 @@ function DroneAntennaInspectorCard({ doc }: { doc: Document }) {
             fontFamily: 'var(--mono)',
             padding: '1px 6px',
             borderRadius: '999px',
-            background: rep.all_targets_met ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)',
-            color: rep.all_targets_met ? '#34D399' : '#FDA4AF',
+            background: rep.all_targets_met
+              ? 'color-mix(in srgb, var(--ok) 16%, var(--panel))'
+              : 'color-mix(in srgb, var(--danger) 16%, var(--panel))',
+            color: rep.all_targets_met ? 'var(--ok)' : 'var(--danger)',
           }}
         >
           {rep.all_targets_met ? '50 Ω MATCHED' : 'DETUNED'}
@@ -1649,17 +1691,21 @@ function DocumentInspector() {
   const hardeningN = resolveDocHardeningN(doc, 0.2);
   const activeEqs = evaluateDocumentFieldEquations(doc).filter((e) => e.active);
 
+  const [renamingLet, setRenamingLet] = useState<string | null>(null);
+  const [letRenameDraft, setLetRenameDraft] = useState('');
+
   const editOrCreateCustomMaterial = (label: string, mutate: (target: Material) => void) => {
     store.transact(label, (d) => {
       const customList = d.custom_materials ?? (d.custom_materials = []);
       let target = customList.find((m) => m.id === d.material);
       if (!target) {
-        const baseSpec = getContinuumMaterialSpec(d, d.material);
-        const { k: _k, ...baseClean } = structuredClone(baseSpec.fsmMaterial);
-        let newId = `${d.material}_custom`;
+        const oldMatId = d.material;
+        const baseSpec = getContinuumMaterialSpec(d, oldMatId);
+        const baseClean = structuredClone(baseSpec.fsmMaterial);
+        let newId = `${oldMatId}_custom`;
         let suffix = 2;
         while (customList.some((m) => m.id === newId)) {
-          newId = `${d.material}_custom${suffix++}`;
+          newId = `${oldMatId}_custom${suffix++}`;
         }
         target = {
           ...baseClean,
@@ -1670,9 +1716,30 @@ function DocumentInspector() {
         };
         customList.push(target);
         d.material = newId;
+        for (const u of d.uncertainties ?? []) {
+          if (u.param.startsWith(`${oldMatId}.`)) {
+            u.param = `${newId}.${u.param.slice(oldMatId.length + 1)}`;
+          }
+        }
       }
       mutate(target);
     });
+  };
+
+  const commitLetRename = (from: string) => {
+    const to = letRenameDraft.trim();
+    setRenamingLet(null);
+    if (!to || to === from) return;
+    let err: string | null = null;
+    store.transact(`Rename let ${from} to ${to}`, (d) => {
+      err = renameLet(d, from, to);
+    });
+    if (err) {
+      ui.notify(err, 'error');
+      return;
+    }
+    if (ui.sweepParam === from) ui.set('sweepParam', to);
+    if (ui.sweepParam2 === from) ui.set('sweepParam2', to);
   };
 
   const addNewLet = () => {
@@ -1732,10 +1799,11 @@ function DocumentInspector() {
         <>
           <div class="field-grid" style={{ fontSize: '12px', marginTop: '6px' }}>
             <label class="plain" title="Young's elastic modulus E (MPa) — editing creates/updates custommaterial">
-              Young’s modulus (MPa)
+              Modulus E
             </label>
             <NumberInput
               value={mat.e}
+              unit="MPa"
               min={1}
               step={100}
               testId="mat-e"
@@ -1746,7 +1814,7 @@ function DocumentInspector() {
               }
             />
             <label class="plain" title="Poisson's ratio ν (-1 < ν < 0.5)">
-              Poisson’s ratio ν
+              Poisson ν
             </label>
             <NumberInput
               value={mat.nu}
@@ -1761,10 +1829,11 @@ function DocumentInspector() {
               }
             />
             <label class="plain" title="0.2% proof / yield strength σ_y (MPa)">
-              Yield strength (MPa)
+              Yield σ_y
             </label>
             <NumberInput
               value={mat.yield_strength}
+              unit="MPa"
               min={0.1}
               step={5}
               testId="mat-yield"
@@ -1775,10 +1844,11 @@ function DocumentInspector() {
               }
             />
             <label class="plain" title="Mass density ρ (g/cm³)">
-              Density (g/cm³)
+              Density ρ
             </label>
             <NumberInput
               value={mat.density}
+              unit="g/cm³"
               min={0.01}
               step={0.05}
               testId="mat-density"
@@ -1789,10 +1859,11 @@ function DocumentInspector() {
               }
             />
             <label class="plain" title="Linear thermal expansion coefficient α (1/°C, e.g. 2.3e-5)">
-              CTE α (1/°C)
+              CTE α
             </label>
             <NumberInput
               value={mat.alpha ?? 15.0e-6}
+              unit="1/°C"
               step={1e-6}
               testId="mat-alpha"
               onChange={(v) =>
@@ -1801,11 +1872,42 @@ function DocumentInspector() {
                 })
               }
             />
+            <label class="plain" title="Thermal conductivity k in W/(m·K) (solver converts to W/(mm·K) automatically)">
+              Thermal k
+            </label>
+            <NumberInput
+              value={mat.k ?? 150}
+              unit="W/(m·K)"
+              min={0.001}
+              step={5}
+              testId="mat-k"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set thermal conductivity k', (m) => {
+                  m.k = Math.max(1e-4, v);
+                })
+              }
+            />
+            <label class="plain" title="Specific heat capacity c_p in J/(kg·K) for transient BDF2 thermal analysis">
+              Spec. heat cp
+            </label>
+            <NumberInput
+              value={mat.cp ?? 900}
+              unit="J/(kg·K)"
+              min={1}
+              step={25}
+              testId="mat-cp"
+              onChange={(v) =>
+                editOrCreateCustomMaterial('Set specific heat cp', (m) => {
+                  m.cp = Math.max(1, v);
+                })
+              }
+            />
             <label class="plain" title="Minimum printable wall / feature thickness (mm)">
-              Minimum wall (mm)
+              Min wall
             </label>
             <NumberInput
               value={mat.min_wall}
+              unit="mm"
               min={0.1}
               step={0.1}
               testId="mat-min-wall"
@@ -1957,70 +2059,163 @@ function DocumentInspector() {
           </>
         )}
       </div>
-      <div class="section-label" style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div class="section-label" style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
         <span>Parameters (let)</span>
-        <button
-          type="button"
-          class="btn ghost small"
-          data-testid="add-let-btn"
-          title="Add a named scalar parameter (let)"
-          onClick={addNewLet}
-        >
-          + let
-        </button>
+        <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="open-fsm-drawer-from-params"
+            title="Open live .fsm source editor (Ctrl E)"
+            onClick={() => ui.set('fsmDrawerOpen', !ui.fsmDrawerOpen)}
+            style={{ padding: '0 6px', fontFamily: 'var(--mono)', fontSize: '11px' }}
+          >
+            {'{}'} .fsm
+          </button>
+          <button
+            type="button"
+            class="btn ghost small"
+            data-testid="add-let-btn"
+            title="Add a named scalar parameter (let)"
+            onClick={addNewLet}
+          >
+            + let
+          </button>
+        </div>
       </div>
       {(doc.lets?.length ?? 0) > 0 ? (
         <div class="field-grid" data-testid="params-panel">
           {doc.lets?.map((l) => {
-            const isLiteral = /^-?\d+(\.\d+)?$/.test(l.expr.trim());
+            const isLiteral = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(l.expr.trim());
+            const isRenaming = renamingLet === l.name;
             return (
               <Fragment key={l.name}>
-                <label class="plain">{l.name}</label>
-                {isLiteral ? (
-                  <NumberInput
-                    value={l.value}
-                    step={0.5}
-                    testId={`let-input-${l.name}`}
-                    onChange={(v) =>
-                      store.transact(`Set let ${l.name}`, (d) => {
-                        applyAddr(d, parseAddr(l.name), v);
-                        const slot = d.lets?.find((x) => x.name === l.name);
-                        if (slot) slot.expr = String(v);
-                        if (
-                          ['droplet_r_mm', 'resolution_d_dx', 'laplace_la', 'stencil_anisotropy'].includes(l.name) &&
-                          (d.loads ?? []).some((ld) => ld.id === 'laplace_jump' && ld.kind.type === 'pressure')
-                        ) {
-                          const getVal = (k: string, fb: number) =>
-                            d.lets?.find((x) => x.name === k)?.value ?? fb;
-                          const r0 = Math.max(0.2, getVal('droplet_r_mm', 2.0));
-                          const resN = Math.max(6, getVal('resolution_d_dx', 24));
-                          const la = getVal('laplace_la', 12000);
-                          const anis = getVal('stencil_anisotropy', 0.15);
-                          const effP =
-                            (0.22 / r0) *
-                            (1 +
-                              (0.2 + anis) *
-                                Math.pow(24 / resN, 1.2) *
-                                (0.5 + 0.5 * (la / 12000)));
-                          applyAddr(d, parseAddr('laplace_jump.mpa'), Number(effP.toFixed(4)));
-                        }
-                      })
-                    }
+                {isRenaming ? (
+                  <input
+                    class="text-input num"
+                    value={letRenameDraft}
+                    data-testid={`let-rename-input-${l.name}`}
+                    autoFocus
+                    spellcheck={false}
+                    onFocus={(e) => (e.target as HTMLInputElement).select()}
+                    onInput={(e) => setLetRenameDraft((e.target as HTMLInputElement).value)}
+                    onBlur={() => commitLetRename(l.name)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') commitLetRename(l.name);
+                      else if (e.key === 'Escape') setRenamingLet(null);
+                    }}
                   />
                 ) : (
-                  <span class="num" title={`let ${l.name} = ${l.expr}`}>
-                    {l.expr} = <strong>{fmt(l.value)}</strong>
-                  </span>
+                  <label
+                    class="plain"
+                    title={`let ${l.name} = ${l.expr} (double-click or click ✎ to rename)`}
+                    style={{ cursor: 'pointer' }}
+                    onDblClick={() => {
+                      setLetRenameDraft(l.name);
+                      setRenamingLet(l.name);
+                    }}
+                  >
+                    {l.name}
+                  </label>
                 )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '3px', minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {isLiteral ? (
+                      <NumberInput
+                        value={l.value}
+                        step={0.5}
+                        testId={`let-input-${l.name}`}
+                        onCommitExpr={(raw) => {
+                          const clean = raw.trim().replace(/^=\s*/, '');
+                          let out: number | null = null;
+                          let errMsg: string | null = null;
+                          try {
+                            store.transact(`Set let ${l.name} expression`, (d) => {
+                              const slot = d.lets?.find((x) => x.name === l.name);
+                              if (!slot) throw new Error(`No let '${l.name}'`);
+                              slot.expr = clean;
+                              recomputeAllLets(d);
+                              out = slot.value;
+                            });
+                          } catch (e) {
+                            errMsg = e instanceof Error ? e.message : String(e);
+                          }
+                          if (errMsg) {
+                            ui.notify(`let ${l.name}: ${errMsg}`, 'error');
+                            return null;
+                          }
+                          return out;
+                        }}
+                        onChange={(v) =>
+                          store.transact(`Set let ${l.name}`, (d) => {
+                            applyAddr(d, parseAddr(l.name), v);
+                            const slot = d.lets?.find((x) => x.name === l.name);
+                            if (slot) slot.expr = String(v);
+                            if (
+                              ['droplet_r_mm', 'resolution_d_dx', 'laplace_la', 'stencil_anisotropy'].includes(l.name) &&
+                              (d.loads ?? []).some((ld) => ld.id === 'laplace_jump' && ld.kind.type === 'pressure')
+                            ) {
+                              const getVal = (k: string, fb: number) =>
+                                d.lets?.find((x) => x.name === k)?.value ?? fb;
+                              const r0 = Math.max(0.2, getVal('droplet_r_mm', 2.0));
+                              const resN = Math.max(6, getVal('resolution_d_dx', 24));
+                              const la = getVal('laplace_la', 12000);
+                              const anis = getVal('stencil_anisotropy', 0.15);
+                              const effP =
+                                (0.22 / r0) *
+                                (1 +
+                                  (0.2 + anis) *
+                                    Math.pow(24 / resN, 1.2) *
+                                    (0.5 + 0.5 * (la / 12000)));
+                              applyAddr(d, parseAddr('laplace_jump.mpa'), Number(effP.toFixed(4)));
+                            }
+                          })
+                        }
+                      />
+                    ) : (
+                      <span class="num" title={`let ${l.name} = ${l.expr}`} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {l.expr} = <strong>{fmt(l.value)}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    class="mini"
+                    data-testid={`rename-let-${l.name}`}
+                    title={`Rename parameter ${l.name}`}
+                    onClick={() => {
+                      setLetRenameDraft(l.name);
+                      setRenamingLet(l.name);
+                    }}
+                  >
+                    <Icon.edit />
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
+                    data-testid={`delete-let-${l.name}`}
+                    title={`Delete parameter ${l.name}`}
+                    onClick={() => {
+                      store.transact(`Delete let ${l.name}`, (d) => {
+                        deleteLet(d, l.name);
+                      });
+                      if (ui.sweepParam === l.name) ui.set('sweepParam', null);
+                      if (ui.sweepParam2 === l.name) ui.set('sweepParam2', null);
+                    }}
+                  >
+                    <Icon.trash />
+                  </button>
+                </div>
               </Fragment>
             );
           })}
           <span class="hint" style={{ gridColumn: '1 / -1' }}>
-            Defined as <code>let</code> in the .fsm source. Editing or sweeping a parameter recomputes every dimension and load that reads it.
+            Type any <code>let</code> name or formula (e.g. <code>{doc.lets?.[0]?.name ?? 'p1'} * 2</code>) into a shape or load input to link it, or click <code>{'{}'} .fsm</code> to edit source directly.
           </span>
         </div>
       ) : (
-        <div class="hint">No parameters defined yet. Click <code>+ let</code> to add a design variable.</div>
+        <div class="hint">No parameters defined yet. Click <code>+ let</code> to add a design variable or <code>{'{}'} .fsm</code> to edit source.</div>
       )}
       <div
         class="card"
@@ -2157,6 +2352,15 @@ function InspectorQuickSwitchAndAddBar() {
               ))}
             </optgroup>
           )}
+          {(doc.contacts?.length ?? 0) > 0 && (
+            <optgroup label={`Contacts (${doc.contacts!.length})`}>
+              {doc.contacts!.map((c) => (
+                <option key={c.id} value={`contact:${c.id}`}>
+                  ⊥ {c.id} on {c.region}
+                </option>
+              ))}
+            </optgroup>
+          )}
           {doc.loads.length > 0 && (
             <optgroup label={`Loads (${doc.loads.length})`}>
               {doc.loads.map((l) => (
@@ -2171,6 +2375,24 @@ function InspectorQuickSwitchAndAddBar() {
               {doc.temperatures.map((t) => (
                 <option key={t.id} value={`temperature:${t.id}`}>
                   ° {t.id} ({t.celsius} °C on {t.region})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {doc.convections.length > 0 && (
+            <optgroup label={`Convections (${doc.convections.length})`}>
+              {doc.convections.map((c) => (
+                <option key={c.id} value={`convection:${c.id}`}>
+                  ≋ {c.id} (h {fmt(c.h)} on {c.region})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {doc.heat_fluxes.length > 0 && (
+            <optgroup label={`Heat Fluxes (${doc.heat_fluxes.length})`}>
+              {doc.heat_fluxes.map((f) => (
+                <option key={f.id} value={`heatflux:${f.id}`}>
+                  → {f.id} (q {fmt(f.q)} on {f.region})
                 </option>
               ))}
             </optgroup>

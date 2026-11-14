@@ -140,8 +140,8 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
       style={{
         margin: '6px 0',
         padding: '8px 9px',
-        background: 'rgba(15, 23, 42, 0.72)',
-        border: '1px solid rgba(251, 191, 36, 0.35)',
+        background: 'var(--panel-2)',
+        border: '1px solid rgba(251, 191, 36, 0.45)',
         borderRadius: '6px',
         display: 'flex',
         flexDirection: 'column',
@@ -149,7 +149,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: '#fde68a' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warn)' }}>
           ⏱ 3D P2 BDF2 Transient Conduction & Thermal Shock
         </span>
         {docTEnd != null && (
@@ -166,7 +166,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', fontSize: '10.5px' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#cbd5e1' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--text-2)' }}>
           <span>t_end (s)</span>
           <input
             type="number"
@@ -175,10 +175,10 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
             data-testid="transient-tend-input"
             value={tEndDraft}
             onInput={(e) => setTEndDraft((e.target as HTMLInputElement).value)}
-            style={{ width: '52px', padding: '2px 4px', fontSize: '10.5px', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', borderRadius: '3px' }}
+            style={{ width: '52px', padding: '2px 4px', fontSize: '10.5px', background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--line-strong)', borderRadius: '3px' }}
           />
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#cbd5e1' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--text-2)' }}>
           <span>steps</span>
           <input
             type="number"
@@ -188,10 +188,10 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
             data-testid="transient-steps-input"
             value={stepsDraft}
             onInput={(e) => setStepsDraft((e.target as HTMLInputElement).value)}
-            style={{ width: '44px', padding: '2px 4px', fontSize: '10.5px', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', borderRadius: '3px' }}
+            style={{ width: '44px', padding: '2px 4px', fontSize: '10.5px', background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--line-strong)', borderRadius: '3px' }}
           />
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#cbd5e1' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--text-2)' }}>
           <span>T₀ (°C)</span>
           <input
             type="number"
@@ -199,7 +199,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
             data-testid="transient-tinit-input"
             value={tInitDraft}
             onInput={(e) => setTInitDraft((e.target as HTMLInputElement).value)}
-            style={{ width: '52px', padding: '2px 4px', fontSize: '10.5px', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', borderRadius: '3px' }}
+            style={{ width: '52px', padding: '2px 4px', fontSize: '10.5px', background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--line-strong)', borderRadius: '3px' }}
           />
         </label>
         <button
@@ -207,7 +207,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
           class="mini-btn"
           data-testid="transient-enable-btn"
           onClick={applyTransientSettings}
-          style={{ marginLeft: 'auto', borderColor: 'rgba(251, 191, 36, 0.5)', color: '#fde68a' }}
+          style={{ marginLeft: 'auto', borderColor: 'var(--warn)', color: 'var(--warn)', fontWeight: 600 }}
         >
           {docTEnd != null ? 'Update BDF2' : 'Run Transient'}
         </button>
@@ -226,15 +226,15 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
               fontSize: '10px',
             }}
           >
-            <div style={{ padding: '4px 5px', background: 'rgba(251, 191, 36, 0.09)', border: '1px solid rgba(251, 191, 36, 0.28)', borderRadius: '4px' }}>
-              <div style={{ color: '#fcd34d', fontWeight: 600 }}>Peak Shock σ_vM(t*)</div>
-              <div class="num" data-testid="transient-peak-vm" style={{ color: '#fef3c7', fontWeight: 700 }}>
+            <div style={{ padding: '4px 5px', background: 'rgba(251, 191, 36, 0.1)', border: '1px solid rgba(251, 191, 36, 0.35)', borderRadius: '4px' }}>
+              <div style={{ color: 'var(--warn)', fontWeight: 600 }}>Peak Shock σ_vM(t*)</div>
+              <div class="num" data-testid="transient-peak-vm" style={{ color: 'var(--text)', fontWeight: 700 }}>
                 {fmt(report.peak_vm_elem, 1)} MPa @ {fmt(report.t_at_peak_vm_s, 2)} s
               </div>
             </div>
-            <div style={{ padding: '4px 5px', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '4px' }}>
-              <div style={{ color: '#7dd3fc', fontWeight: 600 }}>Steady Limit (t → ∞)</div>
-              <div class="num" data-testid="transient-steady-vm" style={{ color: '#e0f2fe', fontWeight: 700 }}>
+            <div style={{ padding: '4px 5px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.35)', borderRadius: '4px' }}>
+              <div style={{ color: 'var(--accent)', fontWeight: 600 }}>Steady Limit (t → ∞)</div>
+              <div class="num" data-testid="transient-steady-vm" style={{ color: 'var(--text)', fontWeight: 700 }}>
                 {report.steady_limit_vm_elem != null
                   ? `${fmt(report.steady_limit_vm_elem, 2)} MPa${
                       report.steady_limit_vm_elem > 0.05 && report.shock_amplification != null
@@ -246,9 +246,9 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
                   : 'Unanchored flux'}
               </div>
             </div>
-            <div style={{ padding: '4px 5px', background: 'rgba(148, 163, 184, 0.08)', border: '1px solid rgba(148, 163, 184, 0.25)', borderRadius: '4px' }}>
-              <div style={{ color: '#cbd5e1', fontWeight: 600 }}>Diffusivity α_th</div>
-              <div class="num" style={{ color: '#f1f5f9', fontWeight: 700 }}>
+            <div style={{ padding: '4px 5px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '4px' }}>
+              <div style={{ color: 'var(--text-2)', fontWeight: 600 }}>Diffusivity α_th</div>
+              <div class="num" style={{ color: 'var(--text)', fontWeight: 700 }}>
                 {fmt(report.diffusivity_mm2_s, 2)} mm²/s · Δt {fmt(report.dt_s, 3)} s
               </div>
             </div>
@@ -256,7 +256,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
 
           <svg
             viewBox={`0 0 ${W} ${H}`}
-            style={{ width: '100%', height: '94px', background: 'rgba(2, 6, 23, 0.65)', borderRadius: '4px', border: '1px solid rgba(51, 65, 85, 0.6)', cursor: 'pointer' }}
+            style={{ width: '100%', height: '94px', background: '#0f172a', borderRadius: '4px', border: '1px solid rgba(51, 65, 85, 0.6)', cursor: 'pointer' }}
             onClick={(e) => {
               const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
               const frac = (e.clientX - rect.left - (padL / W) * rect.width) / ((pw / W) * rect.width);
@@ -336,8 +336,8 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
               onClick={() => ui.set('resultsTransientStep', -1)}
               title="Snap 3D viewport to Peak Thermal-Shock state (t*)"
               style={{
-                borderColor: ui.resultsTransientStep < 0 ? '#fbbf24' : undefined,
-                color: ui.resultsTransientStep < 0 ? '#fde68a' : undefined,
+                borderColor: ui.resultsTransientStep < 0 ? 'var(--warn)' : undefined,
+                color: ui.resultsTransientStep < 0 ? 'var(--warn)' : undefined,
               }}
             >
               ⚡ Peak (t*)
@@ -348,7 +348,7 @@ export function TransientTimelineCard(props: { lvl: LevelResult | null; ci: numb
             <div
               class="num"
               data-testid="transient-active-frame-readout"
-              style={{ fontSize: '10px', color: '#e2e8f0', display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}
+              style={{ fontSize: '10px', color: 'var(--text)', display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}
             >
               <span>
                 Step {activeSummary.step}/{report.steps_count} ({activeSummary.step === 0 ? 'IC' : activeSummary.step === 1 ? 'BDF1' : 'BDF2'}) · t = {fmt(activeSummary.time_s, 3)} s

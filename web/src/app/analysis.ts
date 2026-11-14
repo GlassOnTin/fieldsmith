@@ -5,10 +5,22 @@
 // and the export mesh), replies guard on the same generation counter as the ladder.
 import { sliceFieldAt } from '../doc/wasm';
 import type { ExportMeta, ImportOut, LevelResult, WorkerOut } from '../doc/wasm';
+import type { Document } from '../doc/types';
 import { store } from '../doc/store';
 import { meshcache } from '../doc/meshcache';
 import { ui } from './ui';
 import { download } from './commands';
+
+function physicsKey(doc: Document): string {
+  const {
+    name: _name,
+    asserts: _asserts,
+    uncertainties: _uncertainties,
+    observations: _observations,
+    ...physics
+  } = doc;
+  return JSON.stringify(physics);
+}
 
 export type AnalysisStatus = 'idle' | 'running' | 'ready' | 'error';
 
@@ -138,12 +150,24 @@ export class AnalysisEngine {
       this.set({ export: null, exportError: null, slice: null });
     }
     if (!this.wanted() || this.state.resultsFor === store.docVersion) return;
+    const nextKey = physicsKey(store.doc);
+    if (
+      this.state.status === 'ready' &&
+      this.state.levels.length > 0 &&
+      this.launchedPhysicsKey !== '' &&
+      nextKey === this.launchedPhysicsKey
+    ) {
+      this.launchVersion = store.docVersion;
+      this.set({ resultsFor: store.docVersion });
+      return;
+    }
     this.launch();
   }
   private launch() {
     this.cancel();
     const docVersion = store.docVersion;
     this.launchVersion = docVersion;
+    this.launchedPhysicsKey = physicsKey(store.doc);
     if (ui.probe) ui.set('probe', null);
     this.set({
       status: 'running',
@@ -224,6 +248,8 @@ export class AnalysisEngine {
 
   /** docVersion the last ladder run was started for ('done'/'error' replies land on it). */
   private launchVersion = 0;
+  /** Physics-only serialization key of the last launched document. */
+  private launchedPhysicsKey = '';
 
   /** Import call in flight (one at a time; a replaced worker rejects it — the wasm
    * instance it ran in died with the worker). */

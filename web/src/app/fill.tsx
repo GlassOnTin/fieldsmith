@@ -422,7 +422,7 @@ function FillPanel() {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#7dd3fc' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
                 💧 Porous Flow &amp; Conjugate HX
               </span>
               {doc.hx && (
@@ -548,6 +548,7 @@ function FillPanel() {
                     undoLabel="Set HX mass flow"
                     testId="hx-mdot"
                     driven={drivenExpr(doc, 'hx', 'mdot')}
+                    exprTarget={{ target: 'hx', attr: 'mdot' }}
                   />
                   <NumRow
                     label="T hot,in"
@@ -558,6 +559,37 @@ function FillPanel() {
                     undoLabel="Set HX hot inlet temperature"
                     testId="hx-tin"
                     driven={drivenExpr(doc, 'hx', 'tin')}
+                    exprTarget={{ target: 'hx', attr: 'tin' }}
+                  />
+                  <label class="plain">Cold fluid</label>
+                  <select
+                    data-testid="hx-cold-fluid"
+                    value={doc.hx.cold_fluid ?? ''}
+                    onChange={(e) => {
+                      const raw = (e.currentTarget as HTMLSelectElement).value;
+                      store.transact('Set HX cold fluid', (d) => {
+                        if (!d.hx) return;
+                        d.hx.cold_fluid = raw ? (raw as HxFluid) : null;
+                      });
+                    }}
+                  >
+                    <option value="">Same as hot ({doc.hx.fluid})</option>
+                    <option value="water">Water</option>
+                    <option value="glycol50">Glycol 50/50</option>
+                    <option value="air">Air</option>
+                    <option value="he_2mpa">He 2 MPa</option>
+                  </select>
+                  <NumRow
+                    label="ṁ cold"
+                    unit="kg/s"
+                    min={1e-5}
+                    step={0.01}
+                    get={(d) => d.hx?.cold_mdot ?? d.hx?.mdot ?? 0.05}
+                    set={(d, v) => d.hx && (d.hx.cold_mdot = Math.max(1e-6, v))}
+                    undoLabel="Set HX cold mass flow"
+                    testId="hx-cold-mdot"
+                    driven={drivenExpr(doc, 'hx', 'cold_mdot')}
+                    exprTarget={{ target: 'hx', attr: 'cold_mdot' }}
                   />
                   <NumRow
                     label="T cold,in"
@@ -568,6 +600,19 @@ function FillPanel() {
                     undoLabel="Set HX cold inlet temperature"
                     testId="hx-cold-tin"
                     driven={drivenExpr(doc, 'hx', 'cold_tin')}
+                    exprTarget={{ target: 'hx', attr: 'cold_tin' }}
+                  />
+                  <NumRow
+                    label="p out"
+                    unit="kPa"
+                    min={0}
+                    step={10}
+                    get={(d) => d.hx?.pout_kpa ?? 101.325}
+                    set={(d, v) => d.hx && (d.hx.pout_kpa = Math.max(0, v))}
+                    undoLabel="Set HX outlet pressure"
+                    testId="hx-pout"
+                    driven={drivenExpr(doc, 'hx', 'pout')}
+                    exprTarget={{ target: 'hx', attr: 'pout' }}
                   />
                 </div>
                 {fi?.hx && (

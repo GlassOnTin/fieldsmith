@@ -560,7 +560,7 @@ export const MULTIPHYSICS_CONTINUUM_MATERIALS: ContinuumMaterialSpec[] = [
   },
 ];
 
-/** Exact reference properties for built-in and benchmark custom material IDs across A1–A20 & T1–T19. */
+/** Exact reference properties for built-in and benchmark custom material IDs across A1–A25 & T1–T19. */
 const KNOWN_MATERIAL_CATALOG: Record<
   string,
   Material & { k: number }

@@ -21,16 +21,16 @@ fieldsmith 1
 # @assert: Graded lattice structural yield utilization stays safe || graded.yield_utilization:ChamberPressure || <= 0.75 || <= 0.75 || -
 # @assert: Graded TPMS jacket saves over 35% mass vs solid shell || mass_saved_pct || >= 35.0 || >= 35.0 || %
 # ---
-# @step: 1. Inspect 3D SDF & Graded-TPMS Cross-Section Profiles in Systems (4) || systems
-#   Open **Systems (4)**. `system regen_tpms_1d` slices the 3D AlSi10Mg annular jacket (`cylinder jacket` + mid-span `torus throat_rib` minus `cylinder hot_bore`, filled with `fill gyroid sheet cell=c_cell skin=1.2`) across `25` axial stations (`z ∈ [2, 70] mm`), extracting `A_core` (`fill_area`), `K_perm` (`fill_perm`), `beta_f` (`fill_beta`), `a_wet` (`fill_awet`), and `D_cell` (`fill_dh`).
+# @step: 1. Inspect 3D SDF & Graded-TPMS Cross-Section Profiles in Coupled Systems || systems
+#   Open **Coupled Systems**. `system regen_tpms_1d` slices the 3D AlSi10Mg annular jacket (`cylinder jacket` + mid-span `torus throat_rib` minus `cylinder hot_bore`, filled with `fill gyroid sheet cell=c_cell skin=1.2`) across `25` axial stations (`z ∈ [2, 70] mm`), extracting `A_core` (`fill_area`), `K_perm` (`fill_perm`), `beta_f` (`fill_beta`), `a_wet` (`fill_awet`), and `D_cell` (`fill_dh`).
 # @expected:
 #   The **Extracted 3D SDF & TPMS Cross-Section Profiles** table shows `A_core(z)` expanding smoothly across the mid-span `torus` stiffening rib (`z = 36 mm`), lowering local Darcy–Forchheimer velocity `u_D(z)` while expanding total wetted Gyroid partition conductance `G_wet(z) = A_core(z) a_wet(z) h_int(z)` right where hot-gas throat heat flux peaks.
 # @step: 2. Explore Two-Way `let` Geometry & TPMS Cell Adjoint Levers (`c_cell`, `r_jacket`, `mdot`) || systems
-#   Drag the **`c_cell`**, **`r_jacket`**, or **`mdot`** design sliders (or click **Adjoint Step (−dΦ/dp)**) in **Systems (4)**.
+#   Drag the **`c_cell`**, **`r_jacket`**, or **`mdot`** design sliders (or click **Adjoint Step (−dΦ/dp)**) in **Coupled Systems**.
 # @expected:
 #   In the **Sparse Adjoint Jacobian** table, decreasing `c_cell` (`4.2 → 3.2 mm`) increases `a_wet` (`∝ 1/c_cell`) to cool `t_liner_max` (`d(T_liner)/d(c_cell) > 0`) at the cost of lower permeability `K_perm` (`∝ c_cell²`, `d(dp_jacket)/d(c_cell) < 0`), while widening `r_jacket` simultaneously lowers `dp_jacket` and `t_liner_max`.
 # @step: 3. Sync Projected 1D Profiles & Verify 3D Graded Thermo-Mechanical Margins in Results (3) || results
-#   Click **Sync to 3D Viewport** (or close Systems) and open **3. Results**.
+#   Click **Sync Coupled State to 3D Part** (or close Coupled Systems) and open **3. Results**.
 # @expected:
 #   The 1D regenerative profiles `q_gas(z)`, `h_eff(z)`, and `T_c(z)` project as `lerp(z, ...)` spatial boundary conditions onto `hot_liner` and `outer_case`, while the stress-graded Gyroid AlSi10Mg core satisfies `yield_utilization ≤ 0.75` under `3.5 MPa` chamber pressure and saves `> 35%` mass relative to a solid shell.
 # ---

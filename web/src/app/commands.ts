@@ -14,8 +14,10 @@ import { FIXINGS_CATALOGUE } from '../doc/fixings-catalog';
 import {
   openAntennaWorkbenchModal,
   openChannelProfileModal,
+  openCoordMappingModal,
   openFixingsCatalogueModal,
   openFreeSurfaceModal,
+  openSketchWorkbenchModal,
   toggleTutorialsDrawer,
 } from './modal-launchers';
 import bracketFsm from '../../../examples/bracket.fsm?raw';
@@ -350,6 +352,13 @@ export function commands(): Command[] {
     { id: 'file.importMesh', group: 'File', label: 'Import mesh (.stl / .obj / .glb / .3mf)…', run: importMeshCommand },
     { id: 'file.open', group: 'File', label: 'Open .fsm / .fsmz…', keys: 'Ctrl O', run: openFile },
     { id: 'file.save', group: 'File', label: 'Save as .fsm / .fsmz', keys: 'Ctrl S', run: saveFile },
+    {
+      id: 'file.editFsmSource',
+      group: 'File',
+      label: 'Edit live .fsm source…',
+      keys: 'Ctrl E',
+      run: () => ui.set('fsmDrawerOpen', !ui.fsmDrawerOpen),
+    },
     ...EXAMPLES.map((e) => ({ id: `file.example.${e.id}`, group: 'File', label: `Open example: ${e.label}`, run: () => openText(e.text, `${e.id}.fsm`) })),
     { id: 'edit.undo', group: 'Edit', label: 'Undo', keys: 'Ctrl Z', enabled: () => store.canUndo(), run: () => store.undo() },
     { id: 'edit.redo', group: 'Edit', label: 'Redo', keys: 'Ctrl Shift Z', enabled: () => store.canRedo(), run: () => store.redo() },
@@ -423,10 +432,41 @@ export function commands(): Command[] {
     {
       id: 'edit.deselect',
       group: 'Edit',
-      label: 'Clear selection / Minimise tutorial overlay',
+      label: 'Close modal / Clear selection / Exit Theory',
       keys: 'Esc',
-      enabled: () => !!store.selection || ui.tutorialsOpen,
+      enabled: () =>
+        Boolean(
+          ui.fsmDrawerOpen ||
+            ui.sketchOpen ||
+            ui.fixingsOpen ||
+            ui.antennaOpen ||
+            ui.channelProfileOpen ||
+            ui.freeSurfaceOpen ||
+            ui.coordMappingOpen ||
+            ui.mcpSetupOpen ||
+            ui.systemsOpen ||
+            store.selection ||
+            ui.tutorialsOpen ||
+            store.lens === 'theory',
+        ),
       run: () => {
+        if (ui.fsmDrawerOpen) return ui.set('fsmDrawerOpen', false);
+        if (ui.sketchOpen) return ui.set('sketchOpen', false);
+        if (ui.fixingsOpen) return ui.set('fixingsOpen', false);
+        if (ui.antennaOpen) return ui.set('antennaOpen', false);
+        if (ui.channelProfileOpen) return ui.set('channelProfileOpen', false);
+        if (ui.freeSurfaceOpen) return ui.set('freeSurfaceOpen', false);
+        if (ui.coordMappingOpen) return ui.set('coordMappingOpen', false);
+        if (ui.mcpSetupOpen) return ui.set('mcpSetupOpen', false);
+        if (ui.systemsOpen) return ui.set('systemsOpen', false);
+        if (store.lens === 'theory') {
+          store.setLens(store.previousNonTheoryLens);
+          return;
+        }
+        if (store.selection && (!ui.tutorialsOpen || ui.tutorialMinimised || store.lens === 'setup')) {
+          store.select(null);
+          return;
+        }
         if (ui.tutorialsOpen && !ui.tutorialMinimised) {
           ui.set('tutorialMinimised', true);
           return;
@@ -438,6 +478,12 @@ export function commands(): Command[] {
         }
         store.select(null);
       },
+    },
+    {
+      id: 'sketch.open',
+      group: 'Add',
+      label: 'Open Parametric 2D Sketcher & Surface-Feature Engine…',
+      run: () => openSketchWorkbenchModal(),
     },
     ...SHAPE_TYPES.map((s) => ({ id: `add.${s.type}`, group: 'Add', label: `Add ${s.label.toLowerCase()}`, keys: s.key ? `Shift ${s.key}` : undefined, run: () => void addShape(s.type) })),
     ...(['box', 'cylinder'] as const).map((t) => ({ id: `add.cut.${t}`, group: 'Add', label: `Cut with ${t}`, run: () => void addShape(t, { op: 'subtract' }) })),
@@ -473,9 +519,15 @@ export function commands(): Command[] {
       run: () => openFreeSurfaceModal(),
     },
     {
+      id: 'coord.open',
+      group: 'Physics & Solvers',
+      label: 'Open 1D–4D Coordinate Mappings & Pullback FEM Suite…',
+      run: () => openCoordMappingModal(),
+    },
+    {
       id: 'tutorials.open',
       group: 'Help & Theory',
-      label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T19 · A1–A20)',
+      label: 'Open Interactive Tutorials, Analytic Benchmarks & Case Studies (T1–T28 · A1–A25)',
       run: () => toggleTutorialsDrawer(),
     },
     {
@@ -579,6 +631,7 @@ export function installShortcuts() {
       else if (k === 'o') map.k = 'file.open';
       else if (k === 'd') map.k = 'edit.duplicate';
       else if (k === 'g') map.k = 'edit.group';
+      else if (k === 'e') map.k = 'file.editFsmSource';
     } else if (e.altKey) {
       if (e.key === 'ArrowUp') map.k = 'edit.up';
       if (e.key === 'ArrowDown') map.k = 'edit.down';

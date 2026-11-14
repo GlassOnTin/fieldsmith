@@ -1408,4 +1408,47 @@ solve size=4.5 tref=25
         assert!(rep.parameters.iter().all(|p| p.sigma_reduction_pct > 55.0));
         assert!(post_doc.validate().is_empty());
     }
+
+    #[test]
+    fn library_material_modulus_calibration_propagates_nonzero_uq() {
+        let raw = "\
+fieldsmith 1
+name \"Library Material Modulus Calibration\"
+material al7075
+box beam size=(80, 12, 8) at=(40, 6, 4)
+region root = beam.nx
+region tip = beam.px
+support fix root fixed=xyz
+load pull tip force=(0, 0, -400)
+uncertainty \"Modulus prior\" param=\"al7075.e\" cv=0.10 unit=\"MPa\"
+observe \"Tip dial gauge\" metric=\"max_displacement:Load 1\" measured=0.72 std=0.02 unit=\"mm\"
+solve size=4.5
+";
+        let doc = fsm::parse(raw).expect("parse");
+        let (rep, post_doc) =
+            calibrate_document(&doc, &CalibrateSpec::default(), now_ms).expect("calibrate");
+        assert_eq!(rep.parameters.len(), 1);
+        assert_eq!(rep.parameters[0].param, "al7075.e");
+        assert!(rep.parameters[0].posterior_sigma > 0.0);
+
+        // compute_uq solves internally; empty `uncertainties` falls back to the
+        // document's own specs, whose std was rewritten by the posterior pass.
+        let uq = crate::uq::compute_uq(
+            &post_doc,
+            &crate::uq::UqSpec {
+                uncertainties: Vec::new(),
+                metrics: vec!["max_displacement:Load 1".into()],
+                dofs: None,
+                h: Some(4.5),
+            },
+            now_ms,
+        )
+        .expect("compute_uq");
+        assert_eq!(uq.metrics.len(), 1);
+        assert!(
+            uq.metrics[0].std_dev > 1e-4,
+            "expected non-zero UQ std_dev on calibrated library material al7075.e, got {}",
+            uq.metrics[0].std_dev
+        );
+    }
 }

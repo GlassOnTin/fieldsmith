@@ -25,8 +25,8 @@ fieldsmith 1
 # @assert: Peak 3D thermo-elastic von Mises stress bounded || max_vm_elem || <= 220.0 || <= 220.0 || MPa
 # @assert: Structural safety factor above 1.0 || min_safety_factor || >= 1.0 || >= 1.0 || -
 # ---
-# @step: 1. Inspect the 1D Declarative Coolant System in Systems (4) || systems
-#   Open Systems (4) to inspect `coolant_liner_1d`: an axial 25-station plug-flow energy and pressure-drop balance compiled via forward-mode Dual-Number AD. Drag `mdot` or edit the `.fsm` `system` equations directly to project updated `lerp(z, ...)` Robin and pressure profiles onto the 3D bore wall (`⌀ 12 mm` ID).
+# @step: 1. Inspect the 1D Declarative Coolant System in Coupled Systems || systems
+#   Open Coupled Systems to inspect `coolant_liner_1d`: an axial 25-station plug-flow energy and pressure-drop balance compiled via forward-mode Dual-Number AD. Drag `mdot` or edit the `.fsm` `system` equations directly to project updated `lerp(z, ...)` Robin and pressure profiles onto the 3D bore wall (`⌀ 12 mm` ID).
 # @expected:
 #   Conservation audit closes within tolerance and `bore_conv` / `bore_press` receive station-resolved `lerp(z, ...)` fields.
 # @step: 2. Run 3D Thermo-Elastic Solve, Contract Verification & Adjoint Sensitivities in Results (3) || results

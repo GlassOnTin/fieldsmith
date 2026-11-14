@@ -2155,7 +2155,7 @@ mod tests {
         entries.sort_by_key(|e| e.path());
         assert!(
             entries.len() >= 19,
-            "expected at least 19 analytic .fsm benchmarks (A1-A20), got {}",
+            "expected at least 19 analytic .fsm benchmarks (A1-A25), got {}",
             entries.len()
         );
 
@@ -2195,7 +2195,7 @@ mod tests {
         }
         assert!(
             total_asserts >= 50,
-            "expected at least 50 live @assert contracts across A1-A20, got {total_asserts}"
+            "expected at least 50 live @assert contracts across A1-A25, got {total_asserts}"
         );
     }
 

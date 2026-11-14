@@ -1543,7 +1543,7 @@ try {
       t27AdjText &&
       t27AdjText.includes('a_cell') &&
       t27AdjText.includes('R_out'),
-    `Expected T27 Systems (4) workbench to show extracted Gyroid section profiles (A_core max ≈ 696.2 mm², K_perm, a_wet) & two-way Adjoint Jacobian, got sections='${t27SecText}', adj='${t27AdjText}'`,
+    `Expected T27 Coupled Systems workbench to show extracted Gyroid section profiles (A_core max ≈ 696.2 mm², K_perm, a_wet) & two-way Adjoint Jacobian, got sections='${t27SecText}', adj='${t27AdjText}'`,
   );
 
   await page.evaluate(() => {

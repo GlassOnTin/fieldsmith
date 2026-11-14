@@ -252,6 +252,10 @@ export function FixingsCatalogueModal() {
         includeWasher: isBoltOrScrew && includeWasher,
         associatedNut: isBoltOrScrew ? associatedNut : 'none',
         preloadCv: isBoltOrScrew && preloadUqEnabled ? 0.15 : undefined,
+        loadCase:
+          draft.loads.find((l) => l.kind.type !== 'preload')?.case ||
+          draft.loads[0]?.case ||
+          'Load 1',
         fastenerMaterial: fastenerMat,
         substrateMaterial: substrateMat,
         vibrationG,
@@ -365,7 +369,7 @@ export function FixingsCatalogueModal() {
             marginBottom: '12px',
             padding: '4px',
             borderRadius: '8px',
-            background: 'rgba(15, 23, 42, 0.5)',
+            background: 'var(--panel-2)',
             border: '1px solid var(--line)',
           }}
         >
@@ -394,7 +398,25 @@ export function FixingsCatalogueModal() {
         </div>
 
         {modalTab === 'workbench' ? (
-          <FixingTorqueAndWeibullWorkbench />
+          <FixingTorqueAndWeibullWorkbench
+            shared={{
+              fixingKind: selectedKind,
+              setFixingKind: setSelectedKind,
+              sizeName,
+              setSizeName,
+              engagementMm,
+              setEngagementMm,
+              substrateMat,
+              setSubstrateMat,
+              fastenerMat,
+              setFastenerMat,
+              vibrationG,
+              setVibrationG,
+              payloadMassKg: payloadKg,
+              includeWasher: isBoltOrScrew && includeWasher,
+              associatedNut: isBoltOrScrew ? associatedNut : 'none',
+            }}
+          />
         ) : (
           <>
         {/* 7 Fixing Type Cards (Compact) */}
@@ -467,8 +489,8 @@ export function FixingsCatalogueModal() {
             gap: '12px',
             padding: '12px',
             borderRadius: '8px',
-            background: 'rgba(15, 23, 42, 0.42)',
-            border: '1.5px solid rgba(56, 189, 248, 0.45)',
+            background: 'var(--panel-2)',
+            border: '1.5px solid color-mix(in srgb, var(--accent) 45%, var(--line-strong))',
             marginBottom: '12px',
           }}
         >
@@ -1076,7 +1098,7 @@ export function FixingsCatalogueModal() {
             gap: '10px',
             padding: '10px 12px',
             borderRadius: '8px',
-            background: 'rgba(15, 23, 42, 0.28)',
+            background: 'var(--panel-2)',
             border: '1px solid var(--line)',
             marginBottom: '12px',
           }}
@@ -1284,7 +1306,7 @@ export function FixingsCatalogueModal() {
               </div>
               <div>
                 T_rec (Target):{' '}
-                <strong style={{ color: '#34d399' }}>
+                <strong style={{ color: 'var(--ok)' }}>
                   {envelope.recommendedTorqueNm.toFixed(2)} N·m
                 </strong>
               </div>
@@ -1466,20 +1488,42 @@ export function FixingsCatalogueModal() {
 // Failure Distribution Fitter (Plastic vs Metal vs JWST Spaceflight Qualification)
 // ============================================================================
 
-export function FixingTorqueAndWeibullWorkbench() {
+export interface SharedFixingWorkbenchState {
+  fixingKind: FixingKindId;
+  setFixingKind: (v: FixingKindId) => void;
+  sizeName: string;
+  setSizeName: (v: string) => void;
+  engagementMm: number;
+  setEngagementMm: (v: number) => void;
+  substrateMat: string;
+  setSubstrateMat: (v: string) => void;
+  fastenerMat: string;
+  setFastenerMat: (v: string) => void;
+  vibrationG: number;
+  setVibrationG: (v: number) => void;
+  payloadMassKg?: number;
+  includeWasher?: boolean;
+  associatedNut?: AssociatedNutKind;
+}
+
+export function FixingTorqueAndWeibullWorkbench({
+  shared,
+}: {
+  shared?: SharedFixingWorkbenchState;
+} = {}) {
   useApp();
   const [settingPreset, setSettingPreset] = useState<'plastic' | 'metal' | 'jwst' | 'cfrp'>(
     'plastic',
   );
-  const [fixingKind, setFixingKind] = useState<FixingKindId>('self_tapping_screw');
-  const [sizeName, setSizeName] = useState<string>('M4');
-  const [engagementMm, setEngagementMm] = useState<number>(8.0);
+  const [localFixingKind, setLocalFixingKind] = useState<FixingKindId>('self_tapping_screw');
+  const [localSizeName, setLocalSizeName] = useState<string>('M4');
+  const [localEngagementMm, setLocalEngagementMm] = useState<number>(8.0);
   const [bossOdMm, setBossOdMm] = useState<number>(10.0);
-  const [substrateMat, setSubstrateMat] = useState<string>('petg');
-  const [fastenerMat, setFastenerMat] = useState<string>('ti64');
-  const [vibrationG, setVibrationG] = useState<number>(12.0);
+  const [localSubstrateMat, setLocalSubstrateMat] = useState<string>('petg');
+  const [localFastenerMat, setLocalFastenerMat] = useState<string>('ti64');
+  const [localVibrationG, setLocalVibrationG] = useState<number>(12.0);
   const [shockG, setShockG] = useState<number>(30.0);
-  const [payloadMassKg, setPayloadMassKg] = useState<number>(0.15);
+  const [localPayloadMassKg, setPayloadMassKg] = useState<number>(0.15);
   const [deltaTempC, setDeltaTempC] = useState<number>(-20.0);
   const [serviceHours, setServiceHours] = useState<number>(1000.0);
   const [targetPf, setTargetPf] = useState<number>(1.0e-3);
@@ -1488,11 +1532,25 @@ export function FixingTorqueAndWeibullWorkbench() {
   const [useSpreadsheetFitOverride, setUseSpreadsheetFitOverride] = useState<boolean>(true);
   const [targetPreloadN, setTargetPreloadN] = useState<number | null>(null);
 
+  const fixingKind = shared ? shared.fixingKind : localFixingKind;
+  const setFixingKind = shared ? shared.setFixingKind : setLocalFixingKind;
+  const sizeName = shared ? shared.sizeName : localSizeName;
+  const setSizeName = shared ? shared.setSizeName : setLocalSizeName;
+  const engagementMm = shared ? shared.engagementMm : localEngagementMm;
+  const setEngagementMm = shared ? shared.setEngagementMm : setLocalEngagementMm;
+  const substrateMat = shared ? shared.substrateMat : localSubstrateMat;
+  const setSubstrateMat = shared ? shared.setSubstrateMat : setLocalSubstrateMat;
+  const fastenerMat = shared ? shared.fastenerMat : localFastenerMat;
+  const setFastenerMat = shared ? shared.setFastenerMat : setLocalFastenerMat;
+  const vibrationG = shared ? shared.vibrationG : localVibrationG;
+  const setVibrationG = shared ? shared.setVibrationG : setLocalVibrationG;
+  const payloadMassKg = shared?.payloadMassKg ?? localPayloadMassKg;
+
   const [samples, setSamples] = useState<FailureSampleRow[]>(() =>
     structuredClone(PLASTIC_BOSS_COUPONS),
   );
 
-  // Sync workbench state from store.doc when mounted or when document name / material / lets change
+  // Sync workbench state from store.doc when mounted standalone (not controlled by modal Tab 1)
   const docLetsSig = (store.doc.lets ?? []).map((l) => `${l.name}:${l.value}`).join('|');
   const docPreloadLoadVal = useMemo(() => {
     const ld = (store.doc.loads ?? []).find((l) => l.kind.type === 'preload');
@@ -1500,6 +1558,20 @@ export function FixingTorqueAndWeibullWorkbench() {
   }, [store.doc.loads]);
 
   useEffect(() => {
+    if (shared) {
+      const subLower = shared.substrateMat.toLowerCase();
+      if (subLower.startsWith('al')) {
+        setSettingPreset('metal');
+        setSamples(structuredClone(METAL_HOUSING_COUPONS));
+      } else if (subLower === 'sic_jwst') {
+        setSettingPreset('jwst');
+        setSamples(structuredClone(JWST_CRYO_OPTICS_COUPONS));
+      } else if (subLower === 'cf_woven_3k') {
+        setSettingPreset('cfrp');
+        setSamples(structuredClone(CFRP_PEEL_COUPONS));
+      }
+      return;
+    }
     const docName = (store.doc.name ?? '').trim();
     const docMatRaw = (store.doc.material ?? '').trim().toLowerCase();
     const getLet = (k: string): number | undefined => {
@@ -1671,6 +1743,8 @@ export function FixingTorqueAndWeibullWorkbench() {
         muThread,
         muHead,
         muJoint: 0.25,
+        includeWasher: shared?.includeWasher,
+        associatedNut: shared?.associatedNut,
         weibullMOverride: useSpreadsheetFitOverride ? distFit.weibullModulusM : undefined,
         weibullSigma0OverrideMpa: useSpreadsheetFitOverride
           ? distFit.weibullScaleSigma0Mpa
@@ -1691,6 +1765,8 @@ export function FixingTorqueAndWeibullWorkbench() {
       targetPf,
       muThread,
       muHead,
+      shared?.includeWasher,
+      shared?.associatedNut,
       useSpreadsheetFitOverride,
       distFit,
     ],
@@ -1869,7 +1945,7 @@ export function FixingTorqueAndWeibullWorkbench() {
         padding: '12px',
         borderRadius: '10px',
         border: '1px solid var(--line)',
-        background: 'rgba(15, 23, 42, 0.35)',
+        background: 'var(--panel-2)',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -2096,9 +2172,9 @@ export function FixingTorqueAndWeibullWorkbench() {
           style={{
             padding: '8px 12px',
             borderRadius: '8px',
-            background: 'rgba(239, 68, 68, 0.18)',
-            border: '1px solid rgba(239, 68, 68, 0.65)',
-            color: '#fecaca',
+            background: 'color-mix(in srgb, var(--danger) 14%, var(--panel))',
+            border: '1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong))',
+            color: 'var(--danger)',
             fontSize: '11.5px',
             lineHeight: 1.4,
           }}
@@ -2164,8 +2240,8 @@ export function FixingTorqueAndWeibullWorkbench() {
                 fontFamily: 'var(--mono)',
                 color:
                   snapFitReport.rootFlexuralStrainPct <= snapFitReport.allowableStrainPct
-                    ? '#34d399'
-                    : '#f87171',
+                    ? 'var(--ok)'
+                    : 'var(--danger)',
               }}
             >
               ε_root = {snapFitReport.rootFlexuralStrainPct.toFixed(2)}% (Allow ≤{' '}
@@ -2311,7 +2387,7 @@ export function FixingTorqueAndWeibullWorkbench() {
             border: '1px solid var(--line)',
             borderRadius: '8px',
             padding: '10px',
-            background: 'rgba(15, 23, 42, 0.25)',
+            background: 'var(--panel)',
           }}
         >
           <div
@@ -2371,9 +2447,9 @@ export function FixingTorqueAndWeibullWorkbench() {
               <div
                 style={{
                   fontSize: '10px',
-                  color: '#fbbf24',
-                  background: 'rgba(245, 158, 11, 0.10)',
-                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  color: 'var(--warn)',
+                  background: 'color-mix(in srgb, var(--warn) 12%, var(--panel))',
+                  border: '1px solid color-mix(in srgb, var(--warn) 38%, var(--line-strong))',
                   borderRadius: '4px',
                   padding: '3px 7px',
                   marginBottom: '6px',
@@ -2588,7 +2664,7 @@ export function FixingTorqueAndWeibullWorkbench() {
           border: '1px solid var(--line)',
           borderRadius: '8px',
           padding: '10px',
-          background: 'rgba(15, 23, 42, 0.28)',
+          background: 'var(--panel)',
           display: 'flex',
           flexDirection: 'column',
           gap: '8px',
@@ -2623,19 +2699,19 @@ export function FixingTorqueAndWeibullWorkbench() {
           {openBenchmarks.map((b) => {
             const deltaColor =
               b.discrepancyPct <= 2.5
-                ? '#34d399'
+                ? 'var(--ok)'
                 : b.discrepancyPct <= 12.0
-                  ? '#fbbf24'
-                  : '#f87171';
+                  ? 'var(--warn)'
+                  : 'var(--danger)';
             return (
               <div
                 key={b.id}
                 data-testid={`t14-std-card-${b.id}`}
                 style={{
-                  border: '1px solid rgba(148, 163, 184, 0.22)',
+                  border: '1px solid var(--line)',
                   borderRadius: '6px',
                   padding: '8px 10px',
-                  background: 'rgba(15, 23, 42, 0.35)',
+                  background: 'var(--panel-2)',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '4px',
@@ -2933,7 +3009,7 @@ function SopwithThreadLoadProfilePlot({
         border: '1px solid var(--line)',
         borderRadius: '8px',
         padding: '10px 12px',
-        background: 'rgba(15, 23, 42, 0.30)',
+        background: 'var(--panel)',
         display: 'flex',
         flexDirection: 'column',
         gap: '8px',

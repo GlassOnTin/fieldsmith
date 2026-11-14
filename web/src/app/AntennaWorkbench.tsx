@@ -1156,9 +1156,9 @@ export function AntennaWorkbenchModal() {
         style={{
           width: 'min(1260px, 98vw)',
           maxHeight: '94vh',
-          background: '#0F172A',
-          color: '#F1F5F9',
-          border: '1px solid #334155',
+          background: 'var(--panel)',
+          color: 'var(--text)',
+          border: '1px solid var(--line-strong)',
           borderRadius: '10px',
           display: 'flex',
           flexDirection: 'column',
@@ -1174,13 +1174,13 @@ export function AntennaWorkbenchModal() {
             justifyContent: 'space-between',
             gap: '10px',
             padding: '10px 14px',
-            borderBottom: '1px solid #334155',
-            background: '#1E293B',
+            borderBottom: '1px solid var(--line)',
+            background: 'var(--panel-2)',
             flexWrap: 'wrap',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: '14px', color: '#F8FAFC' }}>
+            <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text)' }}>
               📡 4&quot; DeadCat FPV Drone &amp; Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA / Smith / 3D Lobe Workbench
             </span>
             <span
@@ -1200,8 +1200,8 @@ export function AntennaWorkbenchModal() {
                 background: report.all_targets_met
                   ? 'rgba(16, 185, 129, 0.18)'
                   : 'rgba(244, 63, 94, 0.2)',
-                color: report.all_targets_met ? '#34D399' : '#FDA4AF',
-                border: `1px solid ${report.all_targets_met ? '#10B981' : '#F43F5E'}`,
+                color: report.all_targets_met ? 'var(--ok)' : 'var(--danger)',
+                border: `1px solid ${report.all_targets_met ? 'var(--ok)' : 'var(--danger)'}`,
               }}
             >
               {report.all_targets_met
@@ -1218,7 +1218,7 @@ export function AntennaWorkbenchModal() {
                 syncDeadCatDroneToDocument(spec, report, true);
                 ui.notify('Synced 4" DeadCat Drone + 3D Radiation Lobe to CAD Viewport');
               }}
-              style={{ background: '#0284C7', color: '#F8FAFC', borderColor: '#38BDF8' }}
+              style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
               title="Build/update the 4-inch DeadCat carbon-fibre drone + motors + PCBs + Gemini antenna + 3D lobe in the CAD viewport"
             >
               🚁 Sync 4&quot; DeadCat to 3D CAD
@@ -1227,7 +1227,7 @@ export function AntennaWorkbenchModal() {
               class="btn small"
               data-testid="close-antenna-workbench"
               onClick={handleCloseModal}
-              style={{ background: '#334155', color: '#F8FAFC', borderColor: '#475569' }}
+              style={{ background: 'var(--panel-2)', color: 'var(--text)', borderColor: 'var(--line-strong)' }}
             >
               ✕ Close
             </button>
@@ -1242,8 +1242,8 @@ export function AntennaWorkbenchModal() {
             justifyContent: 'space-between',
             gap: '8px',
             padding: '8px 14px',
-            borderBottom: '1px solid #334155',
-            background: '#0B1120',
+            borderBottom: '1px solid var(--line)',
+            background: 'var(--bg)',
             flexWrap: 'wrap',
           }}
         >
@@ -1252,7 +1252,7 @@ export function AntennaWorkbenchModal() {
               class="btn small"
               data-testid="antenna-preset-unoptimised"
               onClick={handleLoadUnoptimised}
-              style={{ background: 'rgba(244, 63, 94, 0.15)', borderColor: '#F43F5E', color: '#FDA4AF' }}
+              style={{ background: 'rgba(244, 63, 94, 0.15)', borderColor: 'var(--danger)', color: 'var(--danger)' }}
             >
               ⚠️ Load Tucked CFRP Build (6.5 mm Standoff, Detuned)
             </button>
@@ -1260,7 +1260,7 @@ export function AntennaWorkbenchModal() {
               class="btn small"
               data-testid="antenna-preset-optimised"
               onClick={handleLoadOptimised}
-              style={{ background: 'rgba(16, 185, 129, 0.15)', borderColor: '#10B981', color: '#6EE7B7' }}
+              style={{ background: 'rgba(16, 185, 129, 0.15)', borderColor: 'var(--ok)', color: 'var(--ok)' }}
             >
               ✅ Load Optimised V-Tail Build (24 mm Standoff, 86° Skew)
             </button>
@@ -1301,7 +1301,7 @@ export function AntennaWorkbenchModal() {
                 style={{
                   fontSize: '10.5px',
                   fontFamily: 'var(--mono)',
-                  color: '#34D399',
+                  color: 'var(--ok)',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '4px',
@@ -1332,7 +1332,7 @@ export function AntennaWorkbenchModal() {
             />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', fontSize: '11px', color: '#E2E8F0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-2)' }}>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -1377,8 +1377,8 @@ export function AntennaWorkbenchModal() {
             <div
               style={{
                 padding: '8px 10px',
-                background: 'rgba(30, 41, 59, 0.55)',
-                border: `1px solid ${lowSum.s11_at_target_db <= -10 ? '#10B981' : '#F43F5E'}`,
+                background: 'var(--panel-2)',
+                border: `1px solid ${lowSum.s11_at_target_db <= -10 ? 'var(--ok)' : 'var(--danger)'}`,
                 borderRadius: '6px',
               }}
             >
@@ -1387,7 +1387,7 @@ export function AntennaWorkbenchModal() {
               </div>
               <div
                 data-testid="kpi-915-s11"
-                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: '#FDE047' }}
+                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--warn)' }}
               >
                 S₁₁ = {lowSum.s11_at_target_db.toFixed(1)} dB · VSWR {lowSum.vswr_at_target.toFixed(2)}
               </div>
@@ -1399,8 +1399,8 @@ export function AntennaWorkbenchModal() {
             <div
               style={{
                 padding: '8px 10px',
-                background: 'rgba(30, 41, 59, 0.55)',
-                border: `1px solid ${highSum.s11_at_target_db <= -10 ? '#10B981' : '#F43F5E'}`,
+                background: 'var(--panel-2)',
+                border: `1px solid ${highSum.s11_at_target_db <= -10 ? 'var(--ok)' : 'var(--danger)'}`,
                 borderRadius: '6px',
               }}
             >
@@ -1409,7 +1409,7 @@ export function AntennaWorkbenchModal() {
               </div>
               <div
                 data-testid="kpi-2440-s11"
-                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: '#7DD3FC' }}
+                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--accent)' }}
               >
                 S₁₁ = {highSum.s11_at_target_db.toFixed(1)} dB · VSWR {highSum.vswr_at_target.toFixed(2)}
               </div>
@@ -1421,7 +1421,7 @@ export function AntennaWorkbenchModal() {
             <div
               style={{
                 padding: '8px 10px',
-                background: 'rgba(30, 41, 59, 0.55)',
+                background: 'var(--panel-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '6px',
               }}
@@ -1431,7 +1431,7 @@ export function AntennaWorkbenchModal() {
               </div>
               <div
                 data-testid="kpi-efficiency"
-                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: '#34D399' }}
+                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--ok)' }}
               >
                 η₉₁₅ = {lowSum.total_efficiency_pct.toFixed(1)}% · η₂.₄G = {highSum.total_efficiency_pct.toFixed(1)}%
               </div>
@@ -1443,7 +1443,7 @@ export function AntennaWorkbenchModal() {
             <div
               style={{
                 padding: '8px 10px',
-                background: 'rgba(30, 41, 59, 0.55)',
+                background: 'var(--panel-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '6px',
               }}
@@ -1453,7 +1453,7 @@ export function AntennaWorkbenchModal() {
               </div>
               <div
                 data-testid="kpi-diversity-range"
-                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: '#C084FC' }}
+                style={{ fontSize: '14px', fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--accent)' }}
               >
                 S₂₁ = {highSum.s21_isolation_db.toFixed(1)} dB · ECC {highSum.envelope_correlation_ecc.toFixed(3)}
               </div>
@@ -1470,11 +1470,11 @@ export function AntennaWorkbenchModal() {
               style={{
                 padding: '8px 12px',
                 background: 'rgba(16, 185, 129, 0.12)',
-                border: '1px solid #10B981',
+                border: '1px solid var(--ok)',
                 borderRadius: '6px',
                 fontSize: '11.5px',
                 fontFamily: 'var(--mono)',
-                color: '#D1FAE5',
+                color: 'var(--text)',
               }}
             >
               <strong>⚡ Multi-Objective Antenna Optimisation Converged:</strong>{' '}
@@ -1501,7 +1501,7 @@ export function AntennaWorkbenchModal() {
             {/* Column 1: 50 Ω Smith Chart */}
             <div
               style={{
-                background: 'rgba(15, 23, 42, 0.6)',
+                background: 'var(--panel-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '8px',
                 padding: '10px',
@@ -1538,7 +1538,7 @@ export function AntennaWorkbenchModal() {
             {/* Column 2: Dual-Band VNA S11 & S21 Sweep */}
             <div
               style={{
-                background: 'rgba(15, 23, 42, 0.6)',
+                background: 'var(--panel-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '8px',
                 padding: '10px',
@@ -1577,17 +1577,17 @@ export function AntennaWorkbenchModal() {
                   gap: '4px',
                   fontSize: '11px',
                   lineHeight: 1.35,
-                  background: '#090D16',
+                  background: 'var(--panel)',
                   padding: '8px',
                   borderRadius: '6px',
-                  border: '1px solid #1E293B',
+                  border: '1px solid var(--line)',
                 }}
               >
                 {report.engineering_notes.map((note, idx) => (
                   <div
                     key={idx}
                     style={{
-                      color: note.includes('PASS') ? '#6EE7B7' : '#FDE68A',
+                      color: note.includes('PASS') ? 'var(--ok)' : 'var(--warn)',
                     }}
                   >
                     • {note}
@@ -1599,7 +1599,7 @@ export function AntennaWorkbenchModal() {
             {/* Column 3: Polar Radiation Lobe Pattern */}
             <div
               style={{
-                background: 'rgba(15, 23, 42, 0.6)',
+                background: 'var(--panel-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '8px',
                 padding: '10px',
@@ -1634,9 +1634,9 @@ export function AntennaWorkbenchModal() {
                     style={{
                       fontSize: '10.5px',
                       padding: '2px 6px',
-                      background: '#1E293B',
-                      color: '#F8FAFC',
-                      border: '1px solid #475569',
+                      background: 'var(--panel)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--line-strong)',
                       borderRadius: '4px',
                     }}
                   >
@@ -1652,9 +1652,9 @@ export function AntennaWorkbenchModal() {
                     style={{
                       fontSize: '10.5px',
                       padding: '2px 6px',
-                      background: '#1E293B',
-                      color: '#F8FAFC',
-                      border: '1px solid #475569',
+                      background: 'var(--panel)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--line-strong)',
                       borderRadius: '4px',
                     }}
                   >
@@ -1678,7 +1678,7 @@ export function AntennaWorkbenchModal() {
           {/* Parametric Geometry, CFRP Airframe & L-Network Matching Controls */}
           <div
             style={{
-              background: 'rgba(15, 23, 42, 0.7)',
+              background: 'var(--panel-2)',
               border: '1px solid var(--line)',
               borderRadius: '8px',
               padding: '10px 12px',
@@ -1713,9 +1713,9 @@ export function AntennaWorkbenchModal() {
                     style={{
                       fontSize: '11px',
                       padding: '3px 8px',
-                      background: '#1E293B',
-                      color: '#F8FAFC',
-                      border: '1px solid #475569',
+                      background: 'var(--panel)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--line-strong)',
                       borderRadius: '4px',
                     }}
                   >
@@ -1731,9 +1731,9 @@ export function AntennaWorkbenchModal() {
                   data-testid="antenna-apply-suggested-lc"
                   onClick={handleApplySuggestedMatchOnly}
                   style={{
-                    background: '#1E293B',
-                    color: '#38BDF8',
-                    borderColor: '#0284C7',
+                    background: 'var(--panel)',
+                    color: 'var(--accent)',
+                    borderColor: 'var(--accent)',
                   }}
                   title="Synthesise conjugate L-network (L_ser, C_sh) for current geometry"
                 >

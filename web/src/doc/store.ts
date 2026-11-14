@@ -26,6 +26,7 @@ export class Store {
   doc: Document = emptyDocument();
   selection: Selection = null;
   lens: Lens = 'shape';
+  previousNonTheoryLens: Exclude<Lens, 'theory'> = 'shape';
   /** Incremented on every change; components re-render when it moves. */
   version = 0;
   /** Incremented only when the document changes (not selection / lens). */
@@ -201,8 +202,27 @@ export class Store {
     this.emit(false);
   }
 
+  /** Replace `doc` via a local user edit (e.g. `.fsm` source drawer), preserving undo history and syncing workspace. */
+  replaceDoc(doc: Document, label: string): boolean {
+    const base = this.transientBase ?? this.doc;
+    if (JSON.stringify(doc) === JSON.stringify(base)) return false;
+    this.past.push({ doc: base, label });
+    if (this.past.length > HISTORY_LIMIT) this.past.shift();
+    this.future = [];
+    this.transientBase = null;
+    this.doc = doc;
+    this.lastAction = label;
+    this.fixSelection();
+    this.emit(true);
+    this.emitLocalMutation(label);
+    return true;
+  }
+
   setLens(lens: Lens) {
     if (this.lens === lens) return;
+    if (this.lens !== 'theory') {
+      this.previousNonTheoryLens = this.lens;
+    }
     this.lens = lens;
     this.emit(false);
   }

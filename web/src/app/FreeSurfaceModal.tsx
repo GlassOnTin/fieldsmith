@@ -221,7 +221,7 @@ export const freeSurfaceShared: {
   },
 };
 
-export function loadA20DropletVesselToViewport(spec?: SpuriousEddyBenchmarkSpec) {
+export function loadA25DropletVesselToViewport(spec?: SpuriousEddyBenchmarkSpec) {
   const s = spec ?? freeSurfaceShared.spuriousSpec ?? {
     droplet_radius_mm: 2.0,
     resolution_d_over_dx: 24,
@@ -246,7 +246,7 @@ export function loadA20DropletVesselToViewport(spec?: SpuriousEddyBenchmarkSpec)
   );
   const fsmText = [
     'fieldsmith 1',
-    'name "A20 — Spurious Capillary Eddies & Surface-Tension Geometry Approximation Errors (V65)"',
+    'name "A25 — Spurious Capillary Eddies & Surface-Tension Geometry Approximation Errors (V65)"',
     'material ti64',
     '',
     `let droplet_r_mm = ${r0}`,
@@ -442,9 +442,9 @@ export function SpuriousEddyExplorerPanel({
             type="button"
             class="btn small"
             data-testid="spurious-sync-3d-droplet-btn"
-            onClick={() => loadA20DropletVesselToViewport(rep.spec)}
+            onClick={() => loadA25DropletVesselToViewport(rep.spec)}
             style={{ borderColor: '#38bdf8', color: '#7dd3fc', fontSize: '10.5px', padding: '3px 7px' }}
-            title="Load the A20 3D Spherical Droplet Containment Vessel into the 3D viewport (replaces any active cuboid/cylinder tutorial model)"
+            title="Load the A25 3D Spherical Droplet Containment Vessel into the 3D viewport (replaces any active cuboid/cylinder tutorial model)"
           >
             🔵 Sync 3D Droplet Vessel in Viewport
           </button>
@@ -1721,7 +1721,7 @@ export function FreeSurfaceWorkbench({
         fontSize: '12px',
       }}
     >
-      {/* 1. Scenario & Multi-Regime Preset Selector (hidden when embedded in a dedicated A15–A20 / T18 sheet) */}
+      {/* 1. Scenario & Multi-Regime Preset Selector (hidden when embedded in a dedicated A15–A25 / T18 sheet) */}
       {!embedded ? (
         <div
           style={{
@@ -1842,13 +1842,13 @@ export function FreeSurfaceWorkbench({
                     setShowGerris(false);
                   }
                   setShowSpuriousEddies(next);
-                  if (next && !/A20|Spurious/i.test(store.doc.name || '')) {
-                    loadA20DropletVesselToViewport(freeSurfaceShared.spuriousSpec);
+                  if (next && !/A25|Spurious/i.test(store.doc.name || '')) {
+                    loadA25DropletVesselToViewport(freeSurfaceShared.spuriousSpec);
                   }
                 }}
                 style={{ borderColor: '#c084fc' }}
               >
-                🌀 A20: Spurious Eddies &amp; Curvature Error
+                🌀 A25: Spurious Eddies &amp; Curvature Error
               </button>
             </div>
 

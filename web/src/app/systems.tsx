@@ -6079,15 +6079,17 @@ export function SystemsWorkbench() {
                             alignItems: 'flex-start',
                             gap: '3px',
                             height: 'auto',
+                            whiteSpace: 'normal',
+                            minWidth: 0,
                           }}
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', gap: '8px' }}>
-                            <span style={{ fontWeight: 600, fontSize: '11.5px', color: 'var(--text-1)' }}>{s.system_title}</span>
-                            <span class="num" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
+                            <span style={{ fontWeight: 600, fontSize: '11.5px', color: 'var(--text-1)', flex: 1, minWidth: 0, whiteSpace: 'normal' }}>{s.system_title}</span>
+                            <span class="num" style={{ fontSize: '10px', color: 'var(--text-3)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                               {s.num_dofs} DOFs
                             </span>
                           </div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-2)' }}>
+                          <div style={{ fontSize: '10px', color: 'var(--text-2)', whiteSpace: 'normal', width: '100%' }}>
                             [{s.industry_sector}] {s.design_parameters.length} design levers · {s.objectives.length} objectives
                           </div>
                         </button>

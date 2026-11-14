@@ -982,7 +982,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
         <div>
-          <strong style={{ fontSize: '13px', color: '#22d3ee' }}>
+          <strong style={{ fontSize: '13px', color: 'var(--accent)' }}>
             🌐 Coordinate Mappings, Conformal Wing Potential Flow &amp; N-D Pullback FEM (1D–4D)
           </strong>
           <div style={{ fontSize: '10.5px', color: 'var(--text-2)' }}>
@@ -1037,8 +1037,8 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 fontWeight: isSel ? 700 : 500,
                 cursor: 'pointer',
                 background: isSel ? 'rgba(34, 211, 238, 0.22)' : 'var(--bg)',
-                border: isSel ? '1.5px solid #22d3ee' : '1px solid var(--line)',
-                color: isSel ? '#ecfeff' : 'var(--text)',
+                border: isSel ? '1.5px solid var(--accent)' : '1px solid var(--line)',
+                color: 'var(--text)',
               }}
             >
               {label}
@@ -1085,7 +1085,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 fontWeight: isSel ? 700 : 500,
                 cursor: 'pointer',
                 background: isSel ? 'rgba(168, 85, 247, 0.22)' : 'var(--bg)',
-                border: isSel ? '1.5px solid #c084fc' : '1px solid var(--line)',
+                border: isSel ? '1.5px solid var(--accent)' : '1px solid var(--line)',
                 color: 'var(--text)',
               }}
             >
@@ -1125,7 +1125,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 fontWeight: isSel ? 700 : 500,
                 cursor: 'pointer',
                 background: isSel ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg)',
-                border: isSel ? '1.5px solid #34d399' : '1px solid var(--line)',
+                border: isSel ? '1.5px solid var(--ok)' : '1px solid var(--line)',
                 color: 'var(--text)',
               }}
             >
@@ -1150,7 +1150,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-            <strong style={{ fontSize: '11px', color: '#38bdf8' }}>
+            <strong style={{ fontSize: '11px', color: 'var(--accent)' }}>
               ✈️ Conformal Joukowski Wing &amp; Trailing-Edge Kutta Condition (dz/dζ|_{'{ζ=+c}'} = 0 ⟹ Γ = Γ_Kutta)
             </strong>
             <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
@@ -1168,7 +1168,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 class={`btn small ${spec.kuttaCirculationRatio === 0.0 ? 'primary' : ''}`}
                 data-testid="kutta-violate-btn"
                 onClick={() => update({ kuttaCirculationRatio: 0.0 })}
-                style={{ fontSize: '10px', padding: '2px 7px', borderColor: '#f43f5e', color: '#fda4af' }}
+                style={{ fontSize: '10px', padding: '2px 7px', borderColor: 'var(--danger)', color: 'var(--danger)' }}
               >
                 ⚠️ No Circulation (Γ = 0 TE Singularity)
               </button>
@@ -1182,7 +1182,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                       spec.airfoilFieldMode === 'streamfunction_psi' ? 'pressure_cp' : 'streamfunction_psi',
                   })
                 }
-                style={{ fontSize: '10px', padding: '2px 7px', borderColor: '#eab308', color: '#fde047' }}
+                style={{ fontSize: '10px', padding: '2px 7px', borderColor: 'var(--warn)', color: 'var(--warn)' }}
               >
                 Colour: {spec.airfoilFieldMode === 'streamfunction_psi' ? 'Streamfunction Ψ(x,y)' : 'Suction −C_p(x,y)'}
               </button>
@@ -1357,7 +1357,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
       >
         <div style={{ padding: '6px 8px', borderRadius: '5px', background: 'var(--bg)', border: '1px solid var(--line)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-3)' }}>Pullback Jacobian &amp; Metric g_ij</div>
-          <div class="num" style={{ fontSize: '11px', fontWeight: 700, color: '#22d3ee' }}>
+          <div class="num" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
             {sol.jacobianFormula}
           </div>
           <div class="num" style={{ fontSize: '9.5px', color: 'var(--text-3)' }}>
@@ -1369,7 +1369,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
           <>
             <div style={{ padding: '6px 8px', borderRadius: '5px', background: 'var(--bg)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: '10px', color: 'var(--text-3)' }}>Kutta–Joukowski Lift C_L</div>
-              <div class="num" data-testid="coord-kutta-cl" style={{ fontSize: '12.5px', fontWeight: 700, color: '#34d399' }}>
+              <div class="num" data-testid="coord-kutta-cl" style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--ok)' }}>
                 C_L = {sol.aero.liftCoefficientCl.toFixed(3)}
               </div>
               <div class="num" style={{ fontSize: '9.5px', color: 'var(--text-3)' }}>
@@ -1384,7 +1384,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 style={{
                   fontSize: '12px',
                   fontWeight: 700,
-                  color: Math.abs(spec.kuttaCirculationRatio - 1.0) < 0.05 ? '#38bdf8' : '#f43f5e',
+                  color: Math.abs(spec.kuttaCirculationRatio - 1.0) < 0.05 ? 'var(--accent)' : 'var(--danger)',
                 }}
               >
                 −C_p,max = {(-sol.aero.minCpSuction).toFixed(2)} · |u_TE|/U_∞ = {sol.aero.trailingEdgeSpeedRatio.toFixed(2)}
@@ -1410,7 +1410,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
 
         <div style={{ padding: '6px 8px', borderRadius: '5px', background: 'var(--bg)', border: '1px solid var(--line)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-3)' }}>FEM L₂ Error vs Exact Pullback</div>
-          <div class="num" data-testid="coord-l2-error" style={{ fontSize: '12.5px', fontWeight: 700, color: '#34d399' }}>
+          <div class="num" data-testid="coord-l2-error" style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--ok)' }}>
             {sol.l2RelErrorPct.toFixed(4)}%
           </div>
           <div class="num" style={{ fontSize: '9.5px', color: 'var(--text-3)' }}>
@@ -1445,7 +1445,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 ? `Conformal O-Grid Mesh z(ζ) & ${spec.airfoilFieldMode === 'pressure_cp' ? 'Suction −C_p(x,y)' : 'Streamfunction Ψ(x,y)'}`
                 : 'Mapped Curvilinear FEM Mesh x(q₁,q₂) & Field u(q)'}
             </strong>
-            <span class="num" style={{ fontSize: '10px', color: '#22d3ee' }}>
+            <span class="num" style={{ fontSize: '10px', color: 'var(--accent)' }}>
               {sol.quads2D.length} elements
             </span>
           </div>
@@ -1541,7 +1541,7 @@ export function CoordMappingWorkbench({ compact = false }: { compact?: boolean }
                 ? 'Wing Surface Suction −C_p(x/c) & FEM Convergence'
                 : '1D Coordinate Profile u(q₁) & N-Refinement Convergence'}
             </strong>
-            <span class="num" style={{ fontSize: '10px', color: '#34d399' }}>
+            <span class="num" style={{ fontSize: '10px', color: 'var(--ok)' }}>
               Slope p = {sol.measuredOrderP.toFixed(2)}
             </span>
           </div>
@@ -1697,9 +1697,9 @@ export function CoordMappingModal() {
         style={{
           width: 'min(980px, 96vw)',
           maxHeight: '92vh',
-          background: '#0F172A',
-          color: '#F1F5F9',
-          border: '1px solid #334155',
+          background: 'var(--panel)',
+          color: 'var(--text)',
+          border: '1px solid var(--line-strong)',
           borderRadius: '10px',
           display: 'flex',
           flexDirection: 'column',
@@ -1716,12 +1716,12 @@ export function CoordMappingModal() {
             alignItems: 'center',
             gap: '8px',
             padding: '10px 14px',
-            background: '#1E293B',
-            borderBottom: '1px solid #334155',
+            background: 'var(--panel-2)',
+            borderBottom: '1px solid var(--line)',
             flex: 'none',
           }}
         >
-          <strong style={{ fontSize: '13.5px', color: '#F8FAFC' }}>
+          <strong style={{ fontSize: '13.5px', color: 'var(--text)' }}>
             🌐 Coordinate Mappings, Conformal Wing Potential Flow &amp; N-D FEM Suite (1D–4D)
           </strong>
           <button
@@ -1730,9 +1730,9 @@ export function CoordMappingModal() {
             data-testid="coord-mapping-close"
             onClick={() => ui.set('coordMappingOpen', false)}
             style={{
-              background: '#334155',
-              borderColor: '#475569',
-              color: '#F8FAFC',
+              background: 'var(--panel-2)',
+              borderColor: 'var(--line-strong)',
+              color: 'var(--text)',
               fontWeight: 700,
               flexShrink: 0,
             }}

@@ -834,7 +834,10 @@ function contactField(lvl: LevelResult, ci: number): Float64Array | null {
  * For safety this is the display cap: the safety factor above which everything is blue. */
 function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
   const cases = lvl.meta.cases;
+  const ov = activeTransientOverride(lvl, ci);
+  const trStep = ov ? ov.report.timeline[ov.step] : null;
   if (mode === 'deflection' || mode === 'vectors') {
+    if (trStep) return Math.max(1e-9, trStep.max_displacement);
     return Math.max(1e-9, ...(ci >= 0 ? [cases[ci].max_displacement] : cases.map((c) => c.max_displacement)));
   }
   if (mode === 'safety') {
@@ -856,9 +859,11 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     if (!t) return 1;
     let hi = -Infinity;
     for (const v of t) if (v > hi) hi = v;
-    const tr = activeTransientReport(lvl, ci);
-    if (tr?.timeline?.length) {
-      for (const s of tr.timeline) if (s.max_temp_c > hi) hi = s.max_temp_c;
+    if (!ov) {
+      const tr = activeTransientReport(lvl, ci);
+      if (tr?.timeline?.length) {
+        for (const s of tr.timeline) if (s.max_temp_c > hi) hi = s.max_temp_c;
+      }
     }
     return hi;
   }
@@ -891,10 +896,12 @@ function modeMax(lvl: LevelResult, mode: ResultMode, ci: number): number {
     for (const v of pp) if (v > hi) hi = v;
     return Number.isFinite(hi) ? hi : 1;
   }
-  const peakVm = Math.max(
-    1e-9,
-    ...(ci >= 0 ? [cases[ci].max_vm_elem] : cases.map((c) => c.max_vm_elem)),
-  );
+  const peakVm = trStep
+    ? Math.max(1e-9, trStep.max_vm_elem)
+    : Math.max(
+        1e-9,
+        ...(ci >= 0 ? [cases[ci].max_vm_elem] : cases.map((c) => c.max_vm_elem)),
+      );
   if (mode === 'strain_energy') {
     return Math.max(1e-9, strainEnergyOfVm(peakVm));
   }
@@ -925,9 +932,11 @@ function modeMin(lvl: LevelResult, mode: ResultMode, ci: number): number {
   if (!t) return 0;
   let lo = Infinity;
   for (const v of t) if (v < lo) lo = v;
-  const tr = activeTransientReport(lvl, ci);
-  if (tr?.timeline?.length) {
-    for (const s of tr.timeline) if (s.min_temp_c < lo) lo = s.min_temp_c;
+  if (!activeTransientOverride(lvl, ci)) {
+    const tr = activeTransientReport(lvl, ci);
+    if (tr?.timeline?.length) {
+      for (const s of tr.timeline) if (s.min_temp_c < lo) lo = s.min_temp_c;
+    }
   }
   return lo;
 }
@@ -2385,13 +2394,31 @@ function syncResults(vp: Viewport) {
     return;
   }
   if (ui.resultsTransientStep >= 0) {
-    const maxFrames = lvl?.transientFrames?.[0]?.temperature.length ?? 0;
+    const maxFrames = Math.max(
+      0,
+      ...(lvl?.transientFrames?.map((p) => p.temperature.length) ?? [0]),
+    );
     if (maxFrames === 0 || ui.resultsTransientStep >= maxFrames) {
       ui.set('resultsTransientStep', -1);
       return;
     }
   }
   ensureTicker(lvl);
+  // Ensure viewport clip plane is up-to-date even when `results.tsx`'s module-level
+  // `ui.subscribe` runs before `ViewportHost`'s `useEffect` clip listener.
+  const clipUi = ui.clip;
+  const clipBounds = vp.bounds;
+  if (!clipUi.on || !clipBounds || clipUi.t <= 0) {
+    vp.setClip(null);
+  } else {
+    const ax = clipUi.axis;
+    const lo = clipBounds[0][ax];
+    const hi = clipBounds[1][ax];
+    const pos = clipUi.dir === 1 ? lo + clipUi.t * (hi - lo) : hi - clipUi.t * (hi - lo);
+    const n: [number, number, number] = [0, 0, 0];
+    n[ax] = clipUi.dir;
+    vp.setClip({ n, d: clipUi.dir === 1 ? pos : -pos });
+  }
   const planes = vp.clipPlanes();
   const clipPlane0 = planes?.[0] ?? null;
   const clipSig = clipPlane0
@@ -3337,8 +3364,18 @@ function ResultsPanel() {
   }
   const hfSummary = lvl && (activeDisc === 'thermal' || !!tFieldSummary) ? heatFluxField(lvl, ci) : null;
   const flSummary = lvl && (activeDisc === 'fluid' || primaryDisc === 'fluid') ? flowFieldData(lvl, ci) : null;
-  const peakVmSummary = lvl ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem)) : 0;
-  const peakDeflSummary = lvl ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement)) : 0;
+  const activeTrOv = lvl ? activeTransientOverride(lvl, ci) : null;
+  const activeTrStep = activeTrOv ? activeTrOv.report.timeline[activeTrOv.step] : null;
+  const peakVmSummary = activeTrStep
+    ? Math.max(1e-9, activeTrStep.max_vm_elem)
+    : lvl
+      ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_vm_elem))
+      : 0;
+  const peakDeflSummary = activeTrStep
+    ? Math.max(1e-9, activeTrStep.max_displacement)
+    : lvl
+      ? Math.max(1e-9, ...lvl.meta.cases.map((c) => c.max_displacement))
+      : 0;
   const peakWeSummary = strainEnergyOfVm(peakVmSummary);
   // Arrow-key step inside the legend inputs: a tenth of the top bound, on the input's decade.
   const rangeStep = rng ? Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rng.hi))) - 1) : 1;
@@ -3504,7 +3541,14 @@ function ResultsPanel() {
               <span class="meta" style={{ fontSize: '9.5px', marginRight: '2px' }}>Continuum fields:</span>
               {([
                 { value: 'heat_flux', label: '🔥 Heat Flux |q|', title: 'Fourier heat-flux magnitude |q| = k|∇T| (kW/m²)' },
-                { value: 'flow_field', label: '🌊 Flow Speed |v|', title: 'Rayleigh–Stokes continuum flow velocity |v| (mm/s) & wall shear' },
+                {
+                  value: 'flow_field',
+                  label: matSpec.continuumClass === 'solid_elastic' ? '🌊 Stokes Analog |v|' : '🌊 Flow Speed |v|',
+                  title:
+                    matSpec.continuumClass === 'solid_elastic'
+                      ? 'Rayleigh–Stokes correspondence velocity |v| (mm/s) — mathematical analog on solid elastic parts'
+                      : 'Rayleigh–Stokes continuum flow velocity |v| (mm/s) & wall shear',
+                },
                 { value: 'strain_energy', label: '⚡ Strain Energy W_e', title: 'Elastic strain energy density W_e = σ_vM² / (2E) (kJ/m³)' },
                 { value: 'plastic_strain', label: '🧬 Plastic Strain ε_p', title: '3D J₂ / Ramberg–Osgood–Hollomon equivalent plastic strain ε_p (%)' },
                 { value: 'contact_pressure', label: '⊥ Contact Pressure p_n', title: '3D unilateral Signorini–Winkler bearing pressure p_n (MPa, ≥ 0; 0 where lifted off)' },
@@ -3739,7 +3783,9 @@ function ResultsPanel() {
               <>
                 <span class="plain">Continuum medium</span>
                 <span class="num" data-testid="results-fluid-medium">
-                  {matSpec.label} (μ = {fmt(matSpec.viscosityPas, 2)} Pa·s · γ = {fmt(matSpec.surfaceTensionNPerM, 3)} N/m)
+                  {matSpec.continuumClass === 'solid_elastic'
+                    ? `${matSpec.label} — Stokes analog (μ_ref = ${fmt(matSpec.viscosityPas, 2)} Pa·s · γ_ref = ${fmt(matSpec.surfaceTensionNPerM, 3)} N/m)`
+                    : `${matSpec.label} (μ = ${fmt(matSpec.viscosityPas, 2)} Pa·s · γ = ${fmt(matSpec.surfaceTensionNPerM, 3)} N/m)`}
                 </span>
                 <span class="plain">Peak flow |v| & shear</span>
                 <span class="num" data-testid="results-fluid-kinematics">
@@ -3761,9 +3807,12 @@ function ResultsPanel() {
             )}
             {(activeDisc === 'structural' || peakVmSummary > 1e-6) && (
               <>
-                <span class="plain">{activeDisc === 'thermal' ? 'Thermomech σ_vM' : activeDisc === 'fluid' ? 'Deviatoric traction' : 'Peak von Mises'}</span>
+                <span class="plain">
+                  {activeDisc === 'thermal' ? 'Thermomech σ_vM' : activeDisc === 'fluid' ? 'Deviatoric traction' : 'Peak von Mises'}
+                  {activeTrStep ? ` (t=${fmt(activeTrStep.time_s, 1)}s)` : ''}
+                </span>
                 <span class="num">{fmt(peakVmSummary)} MPa{mode === 'strain_energy' ? ` · W_e ${fmt(peakWeSummary, 2)} kJ/m³` : ''}</span>
-                <span class="plain">Max deflection</span>
+                <span class="plain">Max deflection{activeTrStep ? ` (t=${fmt(activeTrStep.time_s, 1)}s)` : ''}</span>
                 <span class="num">{fmt(peakDeflSummary)} mm</span>
               </>
             )}
@@ -3865,7 +3914,7 @@ function ResultsPanel() {
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: '#6ee7b7' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--ok)' }}>
                   ⊥ Unilateral Signorini Contact &amp; Flange Liftoff
                 </span>
                 <button
@@ -3887,9 +3936,9 @@ function ResultsPanel() {
                     data-testid={`contact-report-${c.name}-${cr.id}`}
                     style={{
                       padding: '4px 6px',
-                      background: 'rgba(15, 23, 42, 0.6)',
+                      background: 'var(--panel-2)',
                       borderRadius: '4px',
-                      border: '1px solid rgba(148, 163, 184, 0.18)',
+                      border: '1px solid var(--line)',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '2px',
@@ -3897,14 +3946,14 @@ function ResultsPanel() {
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 600, color: '#e2e8f0' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>
                         {c.name} · <code>{cr.id}</code> ({cr.region})
                       </span>
-                      <span class="num" style={{ color: '#6ee7b7', fontWeight: 600 }}>
+                      <span class="num" style={{ color: 'var(--ok)', fontWeight: 600 }}>
                         Active {(cr.contact_area_ratio * 100).toFixed(1)}% ({fmt(cr.active_area_mm2, 1)} / {fmt(cr.total_area_mm2, 1)} mm²) · {cr.active_set_iters} SSN iters
                       </span>
                     </div>
-                    <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                    <div class="num" style={{ color: 'var(--text-2)', fontSize: '10px' }}>
                       Peak p_n: <strong>{fmt(cr.max_contact_pressure_mpa, 2)} MPa</strong> · Bearing Force:{' '}
                       <strong>{fmt(cr.contact_force_n, 1)} N</strong> · Penetration:{' '}
                       <strong>{fmt(cr.max_penetration_mm, 4)} mm</strong> · Max Liftoff:{' '}
@@ -3930,7 +3979,7 @@ function ResultsPanel() {
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: '#7dd3fc' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}>
                   💧 TPMS Porous Flow &amp; Conjugate HX ({lvl.meta.fill.hx.arrangement})
                 </span>
                 <button
@@ -3948,9 +3997,9 @@ function ResultsPanel() {
               <div
                 style={{
                   padding: '4px 6px',
-                  background: 'rgba(15, 23, 42, 0.6)',
+                  background: 'var(--panel-2)',
                   borderRadius: '4px',
-                  border: '1px solid rgba(148, 163, 184, 0.18)',
+                  border: '1px solid var(--line)',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '2px',
@@ -3958,21 +4007,21 @@ function ResultsPanel() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>
                     <code>{lvl.meta.fill.hx.inlet}</code> → <code>{lvl.meta.fill.hx.outlet}</code> · {lvl.meta.fill.hx.fluid}
                     {lvl.meta.fill.hx.cold_fluid !== lvl.meta.fill.hx.fluid ? ` / ${lvl.meta.fill.hx.cold_fluid}` : ''}
                   </span>
-                  <span class="num" style={{ color: '#7dd3fc', fontWeight: 600 }}>
+                  <span class="num" style={{ color: 'var(--accent)', fontWeight: 600 }}>
                     Q = {fmt(lvl.meta.fill.hx.heat_duty_w / 1000, 2)} kW ({fmt(lvl.meta.fill.hx.power_density_kw_per_l, 1)} kW/L) · ε {(lvl.meta.fill.hx.effectiveness * 100).toFixed(1)}%
                   </span>
                 </div>
-                <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                <div class="num" style={{ color: 'var(--text-2)', fontSize: '10px' }}>
                   Δp: <strong>{fmt(lvl.meta.fill.hx.pressure_drop_kpa, 2)} kPa</strong> (Darcy {fmt(lvl.meta.fill.hx.darcy_share_pct, 0)}%, {lvl.meta.fill.hx.picard_iters} iters) · Pump:{' '}
                   <strong>{fmt(lvl.meta.fill.hx.pumping_power_w, 2)} W</strong> · K_eff:{' '}
                   <strong>{fmt(lvl.meta.fill.hx.effective_permeability_mm2, 4)} mm²</strong> · a_v:{' '}
                   <strong>{fmt(lvl.meta.fill.hx.mean_area_density_per_m, 0)} m⁻¹</strong>
                 </div>
-                <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                <div class="num" style={{ color: 'var(--text-2)', fontSize: '10px' }}>
                   Hot: <strong>{fmt(lvl.meta.fill.hx.hot_inlet_temp_c, 1)} → {fmt(lvl.meta.fill.hx.hot_outlet_temp_c, 1)} °C</strong> · Cold:{' '}
                   <strong>{fmt(lvl.meta.fill.hx.cold_inlet_temp_c, 1)} → {fmt(lvl.meta.fill.hx.cold_outlet_temp_c, 1)} °C</strong> · UA:{' '}
                   <strong>{fmt(lvl.meta.fill.hx.ua_w_k, 1)} W/K</strong> · NTU: <strong>{fmt(lvl.meta.fill.hx.ntu, 2)}</strong> · Re_h:{' '}

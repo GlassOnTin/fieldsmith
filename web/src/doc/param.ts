@@ -14,7 +14,7 @@
 // Rust-Display twin.
 
 import type { Consumer, Document, Let, Node } from './types';
-import { findNode, walk } from './types';
+import { allIds, findNode, walk } from './types';
 import { rustFloat } from './numfmt';
 import { isWasmLoaded, syncSketchFeatures } from './wasm';
 
@@ -395,6 +395,28 @@ function consumerSpec(c: Consumer): string {
   return c.comp === null ? `${c.target}.${c.attr}` : `${c.target}.${c.attr}.${c.comp}`;
 }
 
+function syncExtrudeHoleNodes(
+  nodes: Document['root'],
+  prefix: string,
+  heightOpt: number | null,
+  translate: [number, number, number],
+  rotate: [number, number, number],
+): void {
+  for (const n of nodes) {
+    if (n.id.startsWith(prefix)) {
+      const rest = n.id.slice(prefix.length);
+      if (/^\d+$/.test(rest) && n.op === 'subtract' && n.kind.type === 'extrude') {
+        if (heightOpt !== null) n.kind.height = Math.max(0.5, heightOpt + 1);
+        n.transform.translate = [...translate];
+        n.transform.rotate = [...rotate];
+      }
+    }
+    if (n.kind.type === 'group') {
+      syncExtrudeHoleNodes(n.kind.children, prefix, heightOpt, translate, rotate);
+    }
+  }
+}
+
 /** Write one number into the plain field of the addressed statement. Checked callers
  * only: [`applyAddr`] after resolve, [`applyLet`] for recorded consumers (parse-time
  * recorded, removed with their statement). */
@@ -402,9 +424,17 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
   const node = findNode(doc, target);
   if (node) {
     const k = node.kind;
-    if (attr === 'at') node.transform.translate[comp as number] = v;
-    else if (attr === 'rotate') node.transform.rotate[comp as number] = v;
-    else if (k.type === 'box') {
+    if (attr === 'at') {
+      node.transform.translate[comp as number] = v;
+      if (k.type === 'extrude') {
+        syncExtrudeHoleNodes(doc.root, `${target}_hole`, null, node.transform.translate, node.transform.rotate);
+      }
+    } else if (attr === 'rotate') {
+      node.transform.rotate[comp as number] = v;
+      if (k.type === 'extrude') {
+        syncExtrudeHoleNodes(doc.root, `${target}_hole`, null, node.transform.translate, node.transform.rotate);
+      }
+    } else if (k.type === 'box') {
       if (attr === 'size') k.size[comp as number] = v;
       else k.round = v;
     } else if (k.type === 'cylinder') {
@@ -418,8 +448,28 @@ function writePlain(doc: Document, target: string, attr: string, comp: number | 
     } else if (k.type === 'torus') {
       if (attr === 'major') k.major = v;
       else k.minor = v;
-    } else if (k.type === 'extrude') k.height = v;
-    else if (k.type === 'revolve') k.angle = v;
+    } else if (k.type === 'extrude') {
+      k.height = v;
+      for (const sf of doc.sketch_features ?? []) {
+        if (sf.feature_id === target) {
+          if (sf.operation.kind === 'boss_extrude') sf.operation.height = v;
+          else if (sf.operation.kind === 'pocket_cut' && !sf.operation.through_all) {
+            sf.operation.depth = Math.max(0.1, v - 0.5);
+          }
+        }
+      }
+      syncExtrudeHoleNodes(doc.root, `${target}_hole`, v, node.transform.translate, node.transform.rotate);
+    } else if (k.type === 'revolve') {
+      k.angle = v;
+      for (const sf of doc.sketch_features ?? []) {
+        if (
+          sf.feature_id === target &&
+          (sf.operation.kind === 'revolve_boss' || sf.operation.kind === 'revolve_cut')
+        ) {
+          sf.operation.angle_deg = v;
+        }
+      }
+    }
     return;
   }
   const load = doc.loads.find((l) => l.id === target);
@@ -871,4 +921,160 @@ export function drivenExpr(doc: Document, target: string, attr: string, comp: nu
  * consumers go with them). */
 export function pruneConsumers(doc: Document, gone: Set<string>): void {
   doc.consumed = (doc.consumed ?? []).filter((c) => !gone.has(c.target));
+}
+
+const RESERVED_EXPR_IDENTS = new Set([
+  'pi',
+  'e',
+  'sin',
+  'cos',
+  'tan',
+  'sqrt',
+  'abs',
+  'exp',
+  'ln',
+  'min',
+  'max',
+  'pow',
+]);
+
+/** Ordered `(name, value)` scope of `doc.lets` for expression evaluation. */
+export function letScope(doc: Document): [string, number][] {
+  return (doc.lets ?? []).map((l) => [l.name, l.value]);
+}
+
+/** Whether `text` references at least one identifier declared in `doc.lets`. */
+export function exprReferencesLet(doc: Document, text: string): boolean {
+  const names = new Set((doc.lets ?? []).map((l) => l.name));
+  if (names.size === 0) return false;
+  try {
+    const toks = fsmTokens(text);
+    return toks.some((t) => t.t === 'ident' && names.has(t.s));
+  } catch {
+    return false;
+  }
+}
+
+/** Re-evaluate all `doc.lets` in declaration order and propagate `doc.consumed`. */
+export function recomputeAllLets(doc: Document): void {
+  const lets = doc.lets ?? [];
+  const values: [string, number][] = [];
+  for (const l of lets) {
+    const v = evalFsmExpr(l.expr, values);
+    if (!Number.isFinite(v)) {
+      throw new Error(`let '${l.name}' value is not finite`);
+    }
+    l.value = v;
+    values.push([l.name, v]);
+  }
+  for (const c of (doc.consumed ?? []).slice()) {
+    const v = evalFsmExpr(c.expr, values);
+    if (!Number.isFinite(v)) {
+      throw new Error(`expression for '${consumerSpec(c)}' value is not finite`);
+    }
+    writePlain(doc, c.target, c.attr, c.comp, v);
+  }
+  syncBoundSketches(doc);
+}
+
+function replaceIdentInExpr(expr: string, from: string, to: string): string {
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return expr.replace(new RegExp(`\\b${esc}\\b`, 'g'), to);
+}
+
+/** Rename a `let` parameter across `doc.lets`, `doc.consumed`, and `doc.uncertainties`.
+ * Returns an error message on invalid/colliding name, or `null` on success. */
+export function renameLet(doc: Document, from: string, to: string): string | null {
+  const next = to.trim();
+  if (!next || next === from) return null;
+  if (!isIdent(next)) {
+    return `Parameter name "${next}" must start with a letter or '_' and use only letters, digits, or '_'.`;
+  }
+  if (RESERVED_EXPR_IDENTS.has(next)) {
+    return `"${next}" is a reserved math identifier in .fsm expressions.`;
+  }
+  const lets = doc.lets ?? [];
+  if (lets.some((l) => l.name === next) || allIds(doc).has(next)) {
+    return `Name "${next}" is already in use in this document.`;
+  }
+  const slot = lets.find((l) => l.name === from);
+  if (!slot) return `No parameter named "${from}".`;
+  slot.name = next;
+  for (const l of lets) {
+    l.expr = replaceIdentInExpr(l.expr, from, next);
+  }
+  for (const c of doc.consumed ?? []) {
+    c.expr = replaceIdentInExpr(c.expr, from, next);
+  }
+  for (const u of doc.uncertainties ?? []) {
+    if (u.param === from) u.param = next;
+  }
+  recomputeAllLets(doc);
+  return null;
+}
+
+/** Delete a `let` parameter, unbinding any dependent `doc.consumed` entries (keeping their
+ * current evaluated numeric values) and removing matching `doc.uncertainties` entries. */
+export function deleteLet(doc: Document, name: string): void {
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${esc}\\b`);
+  doc.lets = (doc.lets ?? []).filter((l) => l.name !== name);
+  for (const l of doc.lets) {
+    if (re.test(l.expr)) {
+      l.expr = rustFloat(l.value);
+    }
+  }
+  doc.consumed = (doc.consumed ?? []).filter((c) => !re.test(c.expr));
+  if (doc.uncertainties) {
+    doc.uncertainties = doc.uncertainties.filter((u) => u.param !== name);
+  }
+  recomputeAllLets(doc);
+}
+
+/** Bind or update a `Consumer` expression on `(target, attr, comp)` and return the evaluated
+ * display-unit value (`scale = 0.5` converts Diameter input expressions to `radius = expr / 2`). */
+export function upsertConsumerExpr(
+  doc: Document,
+  target: string,
+  attr: string,
+  comp: number | null,
+  rawInput: string,
+  scale = 1,
+): number {
+  const clean = rawInput.trim().replace(/^=\s*/, '');
+  if (!clean) throw new Error('Expression cannot be empty');
+  const scope = letScope(doc);
+  const displayVal = evalFsmExpr(clean, scope);
+  if (!Number.isFinite(displayVal)) throw new Error('Expression value is not finite');
+  const simpleAtom = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(clean);
+  const storedExpr =
+    scale === 1
+      ? clean
+      : scale === 0.5
+        ? simpleAtom
+          ? `${clean} / 2`
+          : `(${clean}) / 2`
+        : simpleAtom
+          ? `${clean} * ${scale}`
+          : `(${clean}) * ${scale}`;
+  const storedVal = evalFsmExpr(storedExpr, scope);
+  if (!Number.isFinite(storedVal)) throw new Error('Scaled expression value is not finite');
+  const list = doc.consumed ?? (doc.consumed = []);
+  const existing = list.find((c) => c.target === target && c.attr === attr && c.comp === comp);
+  if (existing) existing.expr = storedExpr;
+  else list.push({ target, attr, comp, expr: storedExpr });
+  return displayVal;
+}
+
+/** Unlink any `Consumer` expression driving `(target, attr, comp)`. */
+export function removeConsumerExpr(
+  doc: Document,
+  target: string,
+  attr: string,
+  comp: number | null = null,
+): void {
+  if (!doc.consumed) return;
+  doc.consumed = doc.consumed.filter(
+    (c) => !(c.target === target && c.attr === attr && c.comp === comp),
+  );
 }

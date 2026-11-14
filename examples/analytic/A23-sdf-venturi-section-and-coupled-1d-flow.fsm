@@ -31,11 +31,11 @@ fieldsmith 1
 # @assert: 3D thermo-mechanical peak von Mises stress || max_vm_elem:VenturiThermal || <= 240.0 || <= 240.0 || MPa
 # ---
 # @step: 1. Inspect the 3D Revolved Bi-Conical Venturi & Declarative `section` Block || systems
-#   Open **Systems (4)**. `system venturi_1d` slices the 3D revolved CuCrZr Venturi (`R_o = 14 mm`, `R_i(z): 8 → 4 → 8 mm` over `z ∈ [0, 80] mm`) across `41` stations (`h = 0.18 mm`) using `section A_flow prop=area mode=void`, `section P_wet prop=perimeter mode=void`, and `section D_h prop=dh mode=void`.
+#   Open **Coupled Systems**. `system venturi_1d` slices the 3D revolved CuCrZr Venturi (`R_o = 14 mm`, `R_i(z): 8 → 4 → 8 mm` over `z ∈ [0, 80] mm`) across `41` stations (`h = 0.18 mm`) using `section A_flow prop=area mode=void`, `section P_wet prop=perimeter mode=void`, and `section D_h prop=dh mode=void`.
 # @expected:
 #   The **Extracted 3D SDF & TPMS Cross-Section Profiles** table reports `A_flow = 201.06 mm²` at inlet/exit (`z = 0, 80 mm`) and `50.27 mm²` (`D_h = 8.00 mm`) at the `z = 40 mm` throat, with sparse adjoint sensitivity `d(dp_throat)/d(r_throat) < 0` differentiated directly through the 3D SDF cross-sections.
 # @step: 2. Verify Bernoulli Throat Suction, Diffuser Recovery & 3D CuCrZr Wall Stress in Results (3) || results
-#   Close Systems or click **Sync to 3D Viewport** and switch to **3. Results**.
+#   Close Coupled Systems or click **Sync Coupled State to 3D Part** and switch to **3. Results**.
 # @expected:
 #   In the converging cone (`z: 0 → 40 mm`), fluid accelerates `4×` (`0.997 → 3.987 m/s`), creating a `7.79 kPa` throat suction (`p_f = 192.21 kPa`) and boosting turbulent-like convective cooling at the throat; in the symmetric diffuser (`z: 40 → 80 mm`), `d_ds(q_dyn)` recovers reversible kinetic head, leaving only the `0.70 kPa` closed-form viscous loss at the exit (`p_f = 199.30 kPa`).
 # ---

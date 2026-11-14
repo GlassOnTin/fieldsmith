@@ -10,6 +10,7 @@ import {
 } from '../doc/workspace-sync';
 import { FACE_LABEL } from '../doc/types';
 import type { Face } from '../doc/types';
+import { parseFsm, printFsm } from '../doc/wasm';
 import { Tree } from './Tree';
 import { Inspector } from './Inspector';
 import { ViewportHost } from './ViewportHost';
@@ -107,12 +108,16 @@ function Lenses() {
           class={store.lens === l.id ? 'on' : ''}
           aria-selected={store.lens === l.id}
           data-lens={l.id}
-          title={l.id === 'theory' && store.lens === 'theory' ? 'Close Theory & return to Shape (1)' : `${l.label} (${l.key})`}
+          title={
+            l.id === 'theory' && store.lens === 'theory'
+              ? `Close Theory & return to ${store.previousNonTheoryLens} (Esc)`
+              : `${l.label} (${l.key})`
+          }
           onClick={() => {
             if (ui.tutorialsOpen && !ui.tutorialMinimised) {
               ui.set('tutorialMinimised', true);
             }
-            store.setLens(l.id === 'theory' && store.lens === 'theory' ? 'shape' : l.id);
+            store.setLens(l.id === 'theory' && store.lens === 'theory' ? store.previousNonTheoryLens : l.id);
           }}
         >
           {l.label}
@@ -153,9 +158,17 @@ function ViewTools() {
         <Icon.sidebarsBoth />
       </button>
       <button
+        class={`btn icon ${ui.fsmDrawerOpen ? 'on' : ''}`}
+        data-testid="hud-open-fsm-drawer"
+        title="Live .fsm source editor (Ctrl E)"
+        onClick={() => runCommand('file.editFsmSource')}
+      >
+        <span style={{ fontWeight: 700, fontSize: '11px', fontFamily: 'var(--mono)' }}>{'{}'}</span>
+      </button>
+      <button
         class={`btn icon ${ui.tutorialsOpen ? 'on' : ''}`}
         data-testid="open-tutorials-drawer"
-        title="Tutorials, Analytic Verification Tests (A1–A20) & Case Studies (T1–T19)"
+        title="Tutorials, Analytic Verification Tests (A1–A25) & Case Studies (T1–T28)"
         onClick={() => runCommand('tutorials.open')}
       >
         <span style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'var(--mono)' }}>?</span>
@@ -347,7 +360,7 @@ function EmptyState() {
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                <span><strong>Track 0 (A1–A20)</strong>: Elasticity, Thermal, Gerris &amp; Capillary Benchmarks</span>
+                <span><strong>Track 0 (A1–A25)</strong>: Elasticity, Thermal, Gerris &amp; Capillary Benchmarks</span>
                 <button
                   type="button"
                   class="btn ghost small"
@@ -452,7 +465,7 @@ function StatusBar() {
         class="btn ghost small"
         data-testid="footer-analytic-tests"
         style={{ height: '20px', padding: '0 5px', fontSize: '11px', color: '#22d3ee' }}
-        title="Open Closed-Form Analytic Verification Benchmarks Contents (A1–A20)"
+        title="Open Closed-Form Analytic Verification Benchmarks Contents (A1–A25)"
         onClick={() => {
           ui.set('tutorialMinimised', false);
           ui.set('tutorialCategoryFilter', 'analytic');
@@ -460,7 +473,7 @@ function StatusBar() {
           ui.set('tutorialsOpen', true);
         }}
       >
-        📐 A1–A20
+        📐 A1–A25
       </button>
       <span class="sep">|</span>
       <button
@@ -540,6 +553,152 @@ function RenderErrorSurface() {
     <div class="render-error" role="alert" data-testid="render-error" data-kind={e.kind}>
       <div class="head">{label}</div>
       <pre>{e.text}</pre>
+    </div>
+  );
+}
+
+function FsmSourceDrawer() {
+  useApp();
+  const [draft, setDraft] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [parseErr, setParseErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ui.fsmDrawerOpen) {
+      setDirty(false);
+      setParseErr(null);
+      return;
+    }
+    if (!dirty) {
+      try {
+        setDraft(printFsm(store.doc));
+        setParseErr(null);
+      } catch (e) {
+        setParseErr(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [ui.fsmDrawerOpen, store.docVersion, dirty]);
+
+  if (!ui.fsmDrawerOpen) return null;
+
+  const validateText = (txt: string) => {
+    const r = parseFsm(txt);
+    if ('error' in r) {
+      setParseErr(`Line ${r.error.line}: ${r.error.message}`);
+      return null;
+    }
+    setParseErr(null);
+    return r.ok;
+  };
+
+  const applySource = () => {
+    const ok = validateText(draft);
+    if (!ok) {
+      ui.notify(parseErr ?? 'Invalid .fsm syntax', 'error');
+      return;
+    }
+    const changed = store.replaceDoc(ok, 'Edit .fsm source');
+    setDirty(false);
+    setDraft(printFsm(store.doc));
+    ui.notify(changed ? 'Applied .fsm source (Ctrl+Z to undo)' : '.fsm source is already up to date');
+  };
+
+  return (
+    <div
+      class="modal-backdrop"
+      data-testid="fsm-source-drawer"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) ui.set('fsmDrawerOpen', false);
+      }}
+    >
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-label=".fsm Source Editor"
+        style={{ width: 'min(780px, 95vw)', height: 'min(680px, 88vh)' }}
+      >
+        <div class="modal-head">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span class="sys-badge">{'{}'} .FSM</span>
+            <strong style={{ fontSize: '13px' }}>Declarative .fsm Source ({store.doc.name})</strong>
+            <span
+              data-testid="fsm-source-status"
+              class={parseErr ? 'bad-pill' : 'ok-pill'}
+              style={{ fontWeight: 600 }}
+            >
+              {parseErr ? parseErr : dirty ? 'Valid · unapplied edits' : 'Synced'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              class="btn small"
+              data-testid="fsm-source-reset-btn"
+              disabled={!dirty}
+              onClick={() => {
+                setDraft(printFsm(store.doc));
+                setDirty(false);
+                setParseErr(null);
+              }}
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              class="btn small primary"
+              data-testid="fsm-source-apply-btn"
+              disabled={!!parseErr}
+              title="Parse and apply .fsm source as an undoable edit (Ctrl+Enter)"
+              onClick={applySource}
+            >
+              Apply .fsm (Ctrl+Enter)
+            </button>
+            <button
+              type="button"
+              class="btn small ghost"
+              data-testid="fsm-source-close-btn"
+              title="Close .fsm editor (Esc)"
+              onClick={() => ui.set('fsmDrawerOpen', false)}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <textarea
+          data-testid="fsm-source-textarea"
+          value={draft}
+          spellcheck={false}
+          onInput={(e) => {
+            const next = (e.target as HTMLTextAreaElement).value;
+            setDraft(next);
+            setDirty(true);
+            validateText(next);
+          }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+              e.preventDefault();
+              applySource();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              ui.set('fsmDrawerOpen', false);
+            }
+          }}
+          style={{
+            flex: 1,
+            width: '100%',
+            resize: 'none',
+            border: 'none',
+            outline: 'none',
+            padding: '12px 14px',
+            fontFamily: 'var(--mono)',
+            fontSize: '12px',
+            lineHeight: 1.5,
+            background: 'var(--panel)',
+            color: 'var(--text)',
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -721,6 +880,7 @@ export function App() {
       <StatusBar />
       <Palette />
       <Menus />
+      <FsmSourceDrawer />
       <LazyMount
         active={ui.sketchOpen}
         load={() => import('./SketchWorkbench').then((m) => m.SketchWorkbenchModal)}

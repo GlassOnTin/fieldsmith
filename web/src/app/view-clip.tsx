@@ -116,7 +116,22 @@ function ClipPanel() {
         value={clip.t}
         title="Section depth along the axis"
         data-testid="clip-slider"
-        onInput={(e) => ui.set('clip', { ...ui.clip, t: Number.parseFloat((e.target as HTMLInputElement).value) })}
+        onInput={(e) => {
+          const nextT = Number.parseFloat((e.target as HTMLInputElement).value);
+          if (!ui.clip.on && nextT > 0) {
+            const vp = liveViewport;
+            const b = vp?.bounds;
+            let dir: 1 | -1 = ui.clip.dir;
+            if (b && vp) {
+              const cam = vp.camera.position.toArray();
+              const mid = (b[0][ui.clip.axis] + b[1][ui.clip.axis]) / 2;
+              dir = cam[ui.clip.axis] > mid ? -1 : 1;
+            }
+            ui.set('clip', { ...ui.clip, on: true, dir, t: nextT });
+          } else {
+            ui.set('clip', { ...ui.clip, t: nextT });
+          }
+        }}
       />
       <span class="num" data-testid="clip-value">
         {Math.round(clip.t * 100)}%

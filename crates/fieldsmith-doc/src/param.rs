@@ -384,9 +384,39 @@ fn consumer_spec(c: &Consumer) -> String {
     }
 }
 
+fn sync_extrude_hole_nodes(
+    nodes: &mut [crate::model::Node],
+    prefix: &str,
+    height_opt: Option<f64>,
+    translate: [f64; 3],
+    rotate: [f64; 3],
+) {
+    for n in nodes {
+        if let Some(rest) = n.id.strip_prefix(prefix) {
+            if !rest.is_empty()
+                && rest.chars().all(|c| c.is_ascii_digit())
+                && n.op == crate::model::Op::Subtract
+            {
+                if let NodeKind::Extrude { height, .. } = &mut n.kind {
+                    if let Some(h) = height_opt {
+                        *height = (h + 1.0).max(0.5);
+                    }
+                    n.transform.translate = translate;
+                    n.transform.rotate = rotate;
+                }
+            }
+        }
+        if let NodeKind::Group { children, .. } = &mut n.kind {
+            sync_extrude_hole_nodes(children, prefix, height_opt, translate, rotate);
+        }
+    }
+}
+
 /// Write one number into the plain field of the addressed statement. Checked callers
 /// only: `resolve` for addresses, parse/validate for recorded consumers.
 fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>, v: f64) {
+    let mut sync_extrude: Option<(Option<f64>, [f64; 3], [f64; 3])> = None;
+    let mut sync_revolve_angle: Option<f64> = None;
     if let Some(node) = doc.find_mut(target) {
         match (&mut node.kind, attr, comp) {
             (NodeKind::Box { size, .. }, "size", Some(k)) => size[k] = v,
@@ -399,11 +429,63 @@ fn write_plain(doc: &mut Document, target: &str, attr: &str, comp: Option<usize>
             (NodeKind::Capsule { length, .. }, "length", None) => *length = v,
             (NodeKind::Torus { major, .. }, "major", None) => *major = v,
             (NodeKind::Torus { minor, .. }, "minor", None) => *minor = v,
-            (NodeKind::Extrude { height, .. }, "height", None) => *height = v,
-            (NodeKind::Revolve { angle, .. }, "angle", None) => *angle = v,
-            (_, "at", Some(k)) => node.transform.translate[k] = v,
-            (_, "rotate", Some(k)) => node.transform.rotate[k] = v,
+            (NodeKind::Extrude { height, .. }, "height", None) => {
+                *height = v;
+                sync_extrude = Some((Some(v), node.transform.translate, node.transform.rotate));
+            }
+            (NodeKind::Revolve { angle, .. }, "angle", None) => {
+                *angle = v;
+                sync_revolve_angle = Some(v);
+            }
+            (_, "at", Some(k)) => {
+                node.transform.translate[k] = v;
+                if matches!(node.kind, NodeKind::Extrude { .. }) {
+                    sync_extrude = Some((None, node.transform.translate, node.transform.rotate));
+                }
+            }
+            (_, "rotate", Some(k)) => {
+                node.transform.rotate[k] = v;
+                if matches!(node.kind, NodeKind::Extrude { .. }) {
+                    sync_extrude = Some((None, node.transform.translate, node.transform.rotate));
+                }
+            }
             _ => unreachable!("the writer was checked against this statement"),
+        }
+        if let Some((h_opt, tr, rot)) = sync_extrude {
+            if let Some(h) = h_opt {
+                for sf in doc
+                    .sketch_features
+                    .iter_mut()
+                    .filter(|b| b.feature_id == target)
+                {
+                    match &mut sf.operation {
+                        crate::sketch::SketchFeatureOp::BossExtrude { height, .. } => *height = h,
+                        crate::sketch::SketchFeatureOp::PocketCut {
+                            depth,
+                            through_all: false,
+                            ..
+                        } => *depth = (h - 0.5).max(0.1),
+                        _ => {}
+                    }
+                }
+            }
+            let prefix = format!("{target}_hole");
+            sync_extrude_hole_nodes(&mut doc.root, &prefix, h_opt, tr, rot);
+        }
+        if let Some(ang) = sync_revolve_angle {
+            for sf in doc
+                .sketch_features
+                .iter_mut()
+                .filter(|b| b.feature_id == target)
+            {
+                match &mut sf.operation {
+                    crate::sketch::SketchFeatureOp::RevolveBoss { angle_deg, .. }
+                    | crate::sketch::SketchFeatureOp::RevolveCut { angle_deg, .. } => {
+                        *angle_deg = ang;
+                    }
+                    _ => {}
+                }
+            }
         }
         return;
     }
@@ -768,5 +850,68 @@ heatflux lead coldface q=10 * qv
         assert!(e.contains("written by an expression"), "{e}");
         apply(&mut d, &ParamAddr::parse("qv").unwrap(), 2e-3).expect("sweep the let");
         assert_eq!(d.heat_fluxes[0].q, 0.02);
+    }
+
+    #[test]
+    fn extrude_height_sweep_updates_sketch_feature_and_hole_cutouts() {
+        use crate::sketch::{
+            apply_sketch_feature_to_document, ParametricSketch, SketchFeatureOp,
+            SketchFeatureRequest, SketchMacro, SketchPlane,
+        };
+        let mut d = Document {
+            material: "al6061".into(),
+            ..Default::default()
+        };
+        let sk = ParametricSketch {
+            id: "sk_plate".into(),
+            plane: SketchPlane::Xy { offset: 0.0 },
+            macros: vec![
+                SketchMacro::CenterRect {
+                    id: "outer".into(),
+                    cx: 0.0,
+                    cy: 0.0,
+                    width: 60.0,
+                    height: 40.0,
+                    fillet: 0.0,
+                    construction: false,
+                },
+                SketchMacro::Circle {
+                    id: "h1".into(),
+                    cx: 0.0,
+                    cy: 0.0,
+                    radius: 5.0,
+                    construction: false,
+                },
+            ],
+            ..Default::default()
+        };
+        apply_sketch_feature_to_document(
+            &mut d,
+            &SketchFeatureRequest {
+                feature_id: "plate".into(),
+                sketch_id: None,
+                sketch: sk,
+                preset: None,
+                on: None,
+                operation: SketchFeatureOp::BossExtrude {
+                    height: 12.0,
+                    blend: 0.0,
+                    symmetric: false,
+                },
+                associate_with_host: false,
+                lets: std::collections::BTreeMap::new(),
+            },
+        )
+        .expect("compile sketch feature");
+
+        apply(&mut d, &ParamAddr::parse("plate.height").unwrap(), 28.0).expect("apply height");
+        let NodeKind::Extrude { height: h_boss, .. } = &d.find("plate").unwrap().kind else {
+            panic!("expected extrude boss");
+        };
+        let NodeKind::Extrude { height: h_hole, .. } = &d.find("plate_hole1").unwrap().kind else {
+            panic!("expected extrude hole");
+        };
+        assert_eq!(*h_boss, 28.0);
+        assert_eq!(*h_hole, 29.0);
     }
 }

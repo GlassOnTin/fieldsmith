@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { store } from '../doc/store';
 import type { Document } from '../doc/types';
+import { exprReferencesLet, removeConsumerExpr, upsertConsumerExpr } from '../doc/param';
 import { ui } from './ui';
 
 /** A record the expression table holds. `driven` carries the expression, so the row
@@ -63,6 +64,14 @@ export function evalExpr(src: string): number | null {
 
 export function fmt(v: number, digits = 4): string {
   if (!Number.isFinite(v)) return '';
+  if (v === 0) return '0';
+  const abs = Math.abs(v);
+  if (abs < 10 ** -digits || abs >= 1e7) {
+    return Number(v.toPrecision(4)).toExponential();
+  }
+  if (abs < 0.01) {
+    return String(Number(v.toPrecision(4)));
+  }
   const r = Math.round(v * 10 ** digits) / 10 ** digits;
   return String(Object.is(r, -0) ? 0 : r);
 }
@@ -78,6 +87,10 @@ interface NumProps {
   /** Called with the committed value. `live` = during a scrub/drag (transient). */
   onChange: (v: number, live: boolean) => void;
   onCommit?: () => void;
+  /** Optional `.fsm` `let`-expression binder. Returns evaluated display value on success, or `null` on error. */
+  onCommitExpr?: (rawExpr: string) => number | null;
+  onClearExpr?: () => void;
+  driven?: string | null;
   label?: string;
   testId?: string;
   title?: string;
@@ -98,8 +111,27 @@ export function NumberInput(p: NumProps) {
     if (!focused) setText(fmt(p.value));
   }, [p.value, focused]);
   const commit = () => {
+    const trimmed = text.trim();
+    if (p.onCommitExpr && (trimmed.startsWith('=') || exprReferencesLet(store.doc, trimmed))) {
+      const ev = p.onCommitExpr(trimmed);
+      if (ev === null) {
+        setInvalid(true);
+        return;
+      }
+      setInvalid(false);
+      setText(fmt(ev));
+      return;
+    }
     const v = evalExpr(text);
     if (v === null) {
+      if (p.onCommitExpr && /[a-zA-Z_]/.test(trimmed)) {
+        const ev = p.onCommitExpr(trimmed);
+        if (ev !== null) {
+          setInvalid(false);
+          setText(fmt(ev));
+          return;
+        }
+      }
       setInvalid(true);
       return;
     }
@@ -109,7 +141,7 @@ export function NumberInput(p: NumProps) {
     setText(fmt(c));
   };
   return (
-    <div class={`numbox ${p.axis ? 'has-axis' : ''}`}>
+    <div class={`numbox ${p.axis ? 'has-axis' : ''} ${invalid ? 'invalid' : ''}`}>
       {p.axis && <span class={`axis ${p.axis}`}>{p.axis.toUpperCase()}</span>}
       <input
         class={`num ${invalid ? 'invalid' : ''}`}
@@ -149,6 +181,25 @@ export function NumberInput(p: NumProps) {
           }
         }}
       />
+      {p.driven && (
+        <button
+          type="button"
+          class="fx-chip"
+          data-testid={p.testId ? `${p.testId}-fx` : undefined}
+          title={
+            p.onClearExpr
+              ? `Driven by '${p.driven}' — click to unlink expression`
+              : `Driven by '${p.driven}'`
+          }
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            p.onClearExpr?.();
+          }}
+        >
+          fx
+        </button>
+      )}
       {p.unit && <span class="unit">{p.unit}</span>}
     </div>
   );
@@ -209,6 +260,7 @@ export function NumRow(props: {
   testId?: string;
   title?: string;
   driven?: string | null;
+  exprTarget?: { target: string; attr: string; comp?: number | null; scale?: number };
 }) {
   const value = props.get(store.doc);
   const apply = (v: number, live: boolean) => {
@@ -221,12 +273,66 @@ export function NumRow(props: {
     if (live) store.transient((d) => props.set(d, v));
     else store.transact(props.undoLabel, (d) => props.set(d, v));
   };
+  const commitExpr = props.exprTarget
+    ? (raw: string): number | null => {
+        const et = props.exprTarget!;
+        let outVal: number | null = null;
+        let errMsg: string | null = null;
+        try {
+          store.transact(`Bind ${props.label} expression`, (d) => {
+            const rawVal = upsertConsumerExpr(d, et.target, et.attr, et.comp ?? null, raw, et.scale ?? 1);
+            let clamped = rawVal;
+            if (props.min !== undefined && clamped < props.min) {
+              throw new Error(`${props.label} must be ≥ ${props.min}`);
+            }
+            if (props.max !== undefined && clamped > props.max) {
+              throw new Error(`${props.label} must be ≤ ${props.max}`);
+            }
+            if (props.integer) clamped = Math.round(clamped);
+            props.set(d, clamped);
+            outVal = clamped;
+          });
+        } catch (e) {
+          errMsg = e instanceof Error ? e.message : String(e);
+        }
+        if (errMsg) {
+          ui.notify(`${props.label}: ${errMsg}`, 'error');
+          return null;
+        }
+        return outVal;
+      }
+    : undefined;
+  const clearExpr =
+    props.exprTarget && props.driven
+      ? () => {
+          const et = props.exprTarget!;
+          const oldExpr = props.driven!;
+          store.transact(`Unlink ${props.label} expression`, (d) => {
+            removeConsumerExpr(d, et.target, et.attr, et.comp ?? null);
+          });
+          ui.notify(`Unlinked '${oldExpr}' from ${props.label}`);
+        }
+      : undefined;
   return (
     <>
       <ScrubLabel value={value} step={props.step} min={props.min} max={props.max} integer={props.integer} onChange={apply} title={props.driven ? drivenNote(props.label, props.driven) : props.title}>
         {props.label}
       </ScrubLabel>
-      <NumberInput value={value} unit={props.unit} min={props.min} max={props.max} step={props.step} integer={props.integer} onChange={apply} label={props.label} testId={props.testId} title={props.driven ? drivenNote(props.label, props.driven) : undefined} />
+      <NumberInput
+        value={value}
+        unit={props.unit}
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        integer={props.integer}
+        onChange={apply}
+        onCommitExpr={commitExpr}
+        onClearExpr={clearExpr}
+        driven={props.driven}
+        label={props.label}
+        testId={props.testId}
+        title={props.driven ? drivenNote(props.label, props.driven) : undefined}
+      />
     </>
   );
 }
@@ -243,25 +349,66 @@ export function VecRow(props: {
   undoLabel: string;
   testId?: string;
   driven?: (i: number) => string | null;
+  exprTarget?: { target: string; attr: string };
 }) {
   const v = props.get(store.doc);
   const axes = ['x', 'y', 'z'] as const;
   const note = (i: number) => props.driven?.(i) ?? null;
   return (
     <>
-      <label class="plain">{props.label}</label>
+      <label class="plain">{props.unit ? `${props.label} (${props.unit})` : props.label}</label>
       <div class="vec">
         {axes.map((a, i) => (
           <NumberInput
             key={a}
             axis={a}
             value={v[i]}
-            unit={props.unit}
             step={props.step}
             min={props.min}
             label={`${props.label} ${a}`}
             testId={props.testId ? `${props.testId}-${a}` : undefined}
+            driven={note(i)}
             title={note(i) ? drivenNote(`${props.label} ${a}`, note(i)!) : undefined}
+            onCommitExpr={
+              props.exprTarget
+                ? (raw): number | null => {
+                    const et = props.exprTarget!;
+                    let outVal: number | null = null;
+                    let errMsg: string | null = null;
+                    try {
+                      store.transact(`Bind ${props.label} ${a} expression`, (d) => {
+                        const rawVal = upsertConsumerExpr(d, et.target, et.attr, i, raw, 1);
+                        if (props.min !== undefined && rawVal < props.min) {
+                          throw new Error(`${props.label} ${a} must be ≥ ${props.min}`);
+                        }
+                        const cur = [...props.get(d)] as [number, number, number];
+                        cur[i] = rawVal;
+                        props.set(d, cur);
+                        outVal = rawVal;
+                      });
+                    } catch (e) {
+                      errMsg = e instanceof Error ? e.message : String(e);
+                    }
+                    if (errMsg) {
+                      ui.notify(`${props.label} ${a}: ${errMsg}`, 'error');
+                      return null;
+                    }
+                    return outVal;
+                  }
+                : undefined
+            }
+            onClearExpr={
+              props.exprTarget && note(i)
+                ? () => {
+                    const et = props.exprTarget!;
+                    const oldExpr = note(i)!;
+                    store.transact(`Unlink ${props.label} ${a} expression`, (d) => {
+                      removeConsumerExpr(d, et.target, et.attr, i);
+                    });
+                    ui.notify(`Unlinked '${oldExpr}' from ${props.label} ${a}`);
+                  }
+                : undefined
+            }
             onChange={(x, live) => {
               if (note(i)) {
                 ui.notify(drivenNote(`${props.label} ${a}`, note(i)!), 'error');

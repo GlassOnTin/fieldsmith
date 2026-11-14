@@ -1381,6 +1381,7 @@ export interface FixingInsertSpec {
   includeWasher?: boolean;
   associatedNut?: AssociatedNutKind;
   preloadCv?: number;
+  loadCase?: string;
   fastenerMaterial: string;
   substrateMaterial?: string;
   vibrationG: number;

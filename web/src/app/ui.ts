@@ -57,6 +57,10 @@ class Ui {
   freeSurfaceOpen = false;
   /** 1D–4D Coordinate Mappings, Conformal Wing Potential Flow & N-D Pullback FEM modal. */
   coordMappingOpen = false;
+  /** Live `.fsm` source text editor drawer (`Ctrl+E`). */
+  fsmDrawerOpen = false;
+  /** Previous non-Theory lens to return to on pressing `Escape` inside Theory (`6`). */
+  lastNonTheoryLens: 'shape' | 'setup' | 'results' | 'fill' | 'make' = 'shape';
   /** Whether the floating Semi-transparent (opacity) overlay bar has been dismissed with its ✕ button. */
   opacityDismissed = false;
   /** Whether the floating Section (clip) overlay bar has been dismissed with its ✕ button. */

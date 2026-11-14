@@ -8,14 +8,14 @@ import * as THREE from 'three';
 import { store } from '../doc/store';
 import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
 import type { Contact, Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
-import { FACE_CODES, evalBody, loadFnProbe, spatialFnProbe } from '../doc/wasm';
+import { FACE_CODES, evalBody, isWasmLoaded, loadFnProbe, nodeFaces, spatialFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
 import type { LevelResult, LoadFnProbe, PickHit, SpatialFnProbe } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
 import { inspectors, NameField } from './Inspector';
 import { RenameInput, treeSections } from './Tree';
-import { NumberInput, NumRow, VecRow, Seg } from './fields';
+import { fmt, NumberInput, NumRow, VecRow, Seg } from './fields';
 import {
   detectCoupledPhysicsRegime,
   evaluateDocumentFieldEquations,
@@ -567,9 +567,10 @@ function addAnalysis(kind: 'support' | 'contact' | 'load' | 'temperature' | 'con
   store.transact(label, (d) => {
     id = freshId(d, kind);
     if (kind === 'support') d.supports.push({ id, region: rid, fixed: [true, true, true] });
-    else if (kind === 'load')
-      d.loads.push({ id, region: rid, case: 'main', kind: { type: 'force', vector: [0, 0, -100] } });
-    else if (kind === 'temperature') d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
+    else if (kind === 'load') {
+      const defaultCase = d.loads[0]?.case || 'Load 1';
+      d.loads.push({ id, region: rid, case: defaultCase, kind: { type: 'force', vector: [0, 0, -100] } });
+    } else if (kind === 'temperature') d.temperatures.push({ id, region: rid, celsius: 80, case: 'Thermal 1' });
     else if (kind === 'convection') d.convections.push({ id, region: rid, h: 5e-6, t_inf: 20, case: 'Thermal 1' });
     else d.heat_fluxes.push({ id, region: rid, q: 1e-3, case: 'Thermal 1' });
   });
@@ -706,14 +707,64 @@ function AnalysisRow(props: { kind: 'region' | 'support' | 'contact' | 'load' | 
   );
 }
 
+function addNewRegion() {
+  const shapes = selectableShapes(store.doc).filter((n) => !n.suppressed && n.op !== 'subtract');
+  const pool = shapes.length > 0 ? shapes : selectableShapes(store.doc);
+  if (pool.length === 0) {
+    ui.notify('Add a shape in Shape (1) first before creating a region.', 'error');
+    return;
+  }
+  let rid = '';
+  store.transact('Add region', (d) => {
+    rid = freshId(d, 'region');
+    const claimed = new Set(
+      d.regions.flatMap((r) => r.selectors.map((s) => `${s.shape}:${s.patch ?? s.face}`)),
+    );
+    let picked: { shape: string; face: Face; patch?: number } | null = null;
+    for (const sh of pool) {
+      const opts = faceOptionsForDoc(d, sh);
+      for (const o of opts) {
+        const [k, val] = o.value.split(':');
+        if (k === 'f' && val === 'all' && opts.length > 1) continue;
+        const key = `${sh.id}:${val}`;
+        if (!claimed.has(key)) {
+          picked = k === 'p' ? { shape: sh.id, face: 'all', patch: Number(val) } : { shape: sh.id, face: val as Face };
+          break;
+        }
+      }
+      if (picked) break;
+    }
+    if (!picked) {
+      const sh = pool[0];
+      const opts = faceOptionsForDoc(d, sh);
+      const first = opts.find((o) => o.value !== 'f:all') ?? opts[0];
+      const [k, val] = (first?.value ?? 'f:all').split(':');
+      picked = k === 'p' ? { shape: sh.id, face: 'all', patch: Number(val) } : { shape: sh.id, face: val as Face };
+    }
+    d.regions.push({ id: rid, selectors: [picked] });
+  });
+  if (rid) {
+    store.select({ kind: 'region', id: rid });
+    if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+      ui.set('treeOpen', false);
+      ui.set('inspOpen', true);
+    }
+  }
+}
+
 function SetupTree() {
   useApp();
   if (store.lens !== 'setup') return null;
   const doc = store.doc;
   return (
     <>
-      <SectionHead label="Regions" />
-      {doc.regions.length === 0 && <div class="hint">Click a surface of the model to make a region.</div>}
+      <SectionHead
+        label="Regions"
+        add={addNewRegion}
+        title="Create a new surface region (or press Esc then click a surface in 3D)"
+        testId="add-region"
+      />
+      {doc.regions.length === 0 && <div class="hint">Click a surface of the model (or +) to make a region.</div>}
       {doc.regions.map((r, ri) => (
         <AnalysisRow
           key={r.id}
@@ -742,7 +793,7 @@ function SetupTree() {
           key={ct.id}
           kind="contact"
           id={ct.id}
-          meta={`${ct.region} · k ${ct.k} · gap ${ct.gap}`}
+          meta={`${ct.region} · k ${fmt(ct.k)} · gap ${fmt(ct.gap)}`}
         />
       ))}
       <SectionHead label="Loads" add={() => addAnalysis('load')} title="Add load on the selected region" testId="add-load" />
@@ -765,7 +816,7 @@ function SetupTree() {
         <div class="hint">Select a region, then add a fixed temperature.</div>
       )}
       {doc.temperatures.map((t) => (
-        <AnalysisRow key={t.id} kind="temperature" id={t.id} meta={`${t.celsius} °C · ${t.case}`} />
+        <AnalysisRow key={t.id} kind="temperature" id={t.id} meta={`${fmt(t.celsius)} °C · ${t.case}`} />
       ))}
       <SectionHead
         label="Convections"
@@ -777,7 +828,7 @@ function SetupTree() {
         <div class="hint">Select a region, then add a convective boundary.</div>
       )}
       {doc.convections.map((c) => (
-        <AnalysisRow key={c.id} kind="convection" id={c.id} meta={`h ${c.h} · ${c.t_inf} °C · ${c.case}`} />
+        <AnalysisRow key={c.id} kind="convection" id={c.id} meta={`h ${fmt(c.h)} · ${fmt(c.t_inf)} °C · ${c.case}`} />
       ))}
       <SectionHead
         label="Heat fluxes"
@@ -789,7 +840,7 @@ function SetupTree() {
         <div class="hint">Select a region, then add a heat flux.</div>
       )}
       {doc.heat_fluxes.map((f) => (
-        <AnalysisRow key={f.id} kind="heatflux" id={f.id} meta={`q ${f.q} · ${f.case}`} />
+        <AnalysisRow key={f.id} kind="heatflux" id={f.id} meta={`q ${fmt(f.q)} · ${f.case}`} />
       ))}
       <SetupMultiphysicsSection doc={doc} />
     </>
@@ -1066,11 +1117,14 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
           onClick={() => openChannelProfileModal()}
           style={{
             width: '100%',
+            height: 'auto',
+            whiteSpace: 'normal',
+            lineHeight: 1.25,
             marginTop: '7px',
             fontSize: '10.5px',
             padding: '5px 8px',
-            borderColor: '#22d3ee',
-            color: '#67e8f9',
+            borderColor: 'color-mix(in srgb, #0891b2 55%, var(--line-strong))',
+            color: 'color-mix(in srgb, #0891b2 75%, var(--text))',
             fontWeight: 600,
           }}
         >
@@ -1081,18 +1135,19 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
       <details open={hasCoupledRegime} style={{ marginBottom: '8px' }}>
         <summary
           class="section-label"
-          style={{ paddingLeft: '2px', cursor: 'pointer', userSelect: 'none' }}
+          style={{ paddingLeft: '2px', cursor: 'pointer', userSelect: 'none', justifyContent: 'flex-start', gap: '5px' }}
         >
+          <span aria-hidden="true" style={{ fontSize: '10px' }}>▸</span>
           <span>Multiphysics BCs &amp; Couplings</span>
         </summary>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginTop: '6px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '4px', marginTop: '6px' }}>
           <button
             type="button"
             class="btn small"
             data-testid="add-mp-vft-pull"
             title="Add Viscoelastic / VFT Creep Pull Traction & Thermal BC to selected region"
             onClick={() => addMultiphysicsPresetBc('vft_pull')}
-            style={{ fontSize: '10px', padding: '4px 6px' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left' }}
           >
             + Viscous / Creep Pull
           </button>
@@ -1102,7 +1157,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="add-mp-em-lorentz"
             title="Add Electromagnetic Lorentz Pressure (J × B) & Joule Heating BCs to selected region"
             onClick={() => addMultiphysicsPresetBc('em_lorentz')}
-            style={{ fontSize: '10px', padding: '4px 6px' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left' }}
           >
             + EM Lorentz Force
           </button>
@@ -1112,7 +1167,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="add-mp-optical-beam"
             title="Add Collimated Optical Ray Beam Irradiance & Focal Heat Flux BC to selected region"
             onClick={() => addMultiphysicsPresetBc('optical_beam')}
-            style={{ fontSize: '10px', padding: '4px 6px' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left' }}
           >
             + Optical Ray Beam
           </button>
@@ -1122,7 +1177,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="add-mp-combustor-spray"
             title="Add Swirl / Reactive Thermal Jet BC to selected region"
             onClick={() => addMultiphysicsPresetBc('combustor_spray')}
-            style={{ fontSize: '10px', padding: '4px 6px' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left' }}
           >
             + Swirl / Thermal Jet
           </button>
@@ -1132,7 +1187,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="open-systems-workbench-setup"
             title="Open Coupled 1D/2D Engineering PDE Systems Workbench"
             onClick={() => ui.set('systemsOpen', true)}
-            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#f59e0b', color: '#f59e0b' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left', borderColor: 'color-mix(in srgb, #d97706 55%, var(--line-strong))', color: 'color-mix(in srgb, #d97706 75%, var(--text))' }}
           >
             ⚡ Coupled PDE Workbench
           </button>
@@ -1142,7 +1197,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="open-free-surface-sph-setup"
             title="Open 3D Multi-Regime Free-Surface & Capillary Fluid Workbench (1100 °C Spout-Lip Heel to Knurl, Howell Peregrine Wave Air Entrainment, Young–Laplace & TPMS Wicking)"
             onClick={() => openFreeSurfaceModal()}
-            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#38bdf8', color: '#38bdf8' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left', borderColor: 'color-mix(in srgb, #0284c7 55%, var(--line-strong))', color: 'color-mix(in srgb, #0284c7 75%, var(--text))' }}
           >
             🌊 Free-Surface &amp; Capillary Workbench
           </button>
@@ -1152,7 +1207,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="open-fixings-workbench-setup"
             title="Open Engineering Fixings, Fastener Torque & Weibull Preload Workbench"
             onClick={() => openFixingsCatalogueModal()}
-            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#10b981', color: '#10b981' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left', borderColor: 'color-mix(in srgb, #059669 55%, var(--line-strong))', color: 'color-mix(in srgb, #059669 75%, var(--text))' }}
           >
             🔩 Fastener &amp; Weibull Workbench
           </button>
@@ -1162,7 +1217,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="open-antenna-workbench-setup"
             title="Open Dual-Band RF VNA Scattering, 50 Ω Smith Chart & 3D Lobe Workbench"
             onClick={() => openAntennaWorkbenchModal()}
-            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#a855f7', color: '#a855f7' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left', borderColor: 'color-mix(in srgb, #7c3aed 55%, var(--line-strong))', color: 'color-mix(in srgb, #7c3aed 75%, var(--text))' }}
           >
             📡 RF VNA &amp; Smith Chart Workbench
           </button>
@@ -1172,7 +1227,7 @@ function SetupMultiphysicsSection({ doc }: { doc: Document }) {
             data-testid="open-coord-mapping-setup"
             title="Open 1D–4D Coordinate Mappings & Pullback FEM Suite (Polar, Cylindrical, Spherical, Confocal Elliptic, Parabolic, Toroidal & 4D Hyperspherical)"
             onClick={() => openCoordMappingModal()}
-            style={{ fontSize: '10px', padding: '4px 6px', borderColor: '#22d3ee', color: '#22d3ee' }}
+            style={{ fontSize: '10.5px', padding: '4px 8px', height: 'auto', whiteSpace: 'normal', justifyContent: 'flex-start', textAlign: 'left', borderColor: 'color-mix(in srgb, #0891b2 55%, var(--line-strong))', color: 'color-mix(in srgb, #0891b2 75%, var(--text))' }}
           >
             🌐 1D–4D Coordinate Mappings &amp; Pullback FEM
           </button>
@@ -1364,17 +1419,47 @@ function selectableShapes(doc: Document): Node[] {
  * segmented patch; prims keep the full face list — a prim without the named face simply
  * claims nothing at the solve. An extend lists its axis faces without `all` or `side`
  * (validate refuses those on a derived solid: the swept surface has no side wall). */
-function faceOptions(node: Node | null): { value: string; label: string }[] {
+function primAllowedFaces(doc: Document, node: Node): Set<Face> {
+  if (isWasmLoaded()) {
+    try {
+      const faces = nodeFaces(doc, node.id) as Face[];
+      return new Set<Face>([...faces, 'all']);
+    } catch {
+      // Fall back to static primitive face table below
+    }
+  }
+  switch (node.kind.type) {
+    case 'box':
+      return new Set<Face>(['px', 'nx', 'py', 'ny', 'pz', 'nz', 'all']);
+    case 'cylinder':
+    case 'extrude':
+    case 'capsule':
+      return new Set<Face>(['top', 'bottom', 'side', 'all']);
+    case 'revolve':
+      return node.kind.angle < 360
+        ? new Set<Face>(['top', 'bottom', 'side', 'all'])
+        : new Set<Face>(['side', 'all']);
+    default:
+      return new Set<Face>(['all']);
+  }
+}
+
+function faceOptionsForDoc(doc: Document, node: Node | null): { value: string; label: string }[] {
   if (!node) return [];
   if (node.kind.type === 'extend') {
     return FACE_CODES.filter((f) => f !== 'all' && f !== 'side').map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
   }
   if (node.kind.type !== 'mesh') {
-    return FACE_CODES.map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
+    const allowed = primAllowedFaces(doc, node);
+    return FACE_CODES.filter((f) => allowed.has(f)).map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
   }
   const opts = FACE_CODES.filter((f) => f !== 'side').map((f) => ({ value: `f:${f}`, label: FACE_LABEL[f] }));
   for (let p = 1; p <= node.kind.patches; p++) opts.push({ value: `p:${p}`, label: `Patch ${p}` });
   return opts;
+}
+
+function faceOptions(node: Node | null): { value: string; label: string }[] {
+  return faceOptionsForDoc(store.doc, node);
 }
 
 /** Hand-build a selector: shape and face chosen from menus instead of a surface click. */
@@ -1456,17 +1541,47 @@ function RegionInspector({ id }: { id: string }) {
       </div>
       <NameField id={r.id} />
       <div class="field-grid">
-        {r.selectors.map((sl, i) => (
-          <Fragment key={i}>
-            <span class="plain">{selectorLabel(sl)}</span>
-            <span class="sel-face">
-              <span>{sl.shape}</span>
-              <button class="mini icon" title="Remove this face" onClick={() => removeFace(id, i)}>
-                <Icon.trash />
-              </button>
-            </span>
-          </Fragment>
-        ))}
+        {r.selectors.map((sl, i) => {
+          const shapeNode = findNode(store.doc, sl.shape);
+          const validOpts = faceOptions(shapeNode);
+          const curVal = sl.patch != null ? `p:${sl.patch}` : `f:${sl.face}`;
+          return (
+            <Fragment key={i}>
+              <select
+                class="select"
+                data-testid={`region-selector-face-${i}`}
+                value={curVal}
+                title="Change which face of this shape the region claims"
+                onChange={(e) => {
+                  const [kind, val] = (e.target as HTMLSelectElement).value.split(':');
+                  const nextSel =
+                    kind === 'p'
+                      ? { shape: sl.shape, face: 'all' as Face, patch: Number(val) }
+                      : { shape: sl.shape, face: val as Face };
+                  store.transact(`Change face on ${r.id}`, (d) => {
+                    const reg = regionIn(d, id);
+                    reg.selectors[i] = nextSel;
+                  });
+                }}
+              >
+                {!validOpts.some((o) => o.value === curVal) && (
+                  <option value={curVal}>⚠ {selectorLabel(sl)} (invalid)</option>
+                )}
+                {validOpts.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <span class="sel-face">
+                <span>{sl.shape}</span>
+                <button class="mini icon" title="Remove this face" onClick={() => removeFace(id, i)}>
+                  <Icon.trash />
+                </button>
+              </span>
+            </Fragment>
+          );
+        })}
       </div>
       <AddFaceRow regionId={id} />
       <div class="section-label" style={{ marginTop: '10px' }}>
@@ -1677,6 +1792,7 @@ function ContactInspector({ id }: { id: string }) {
           testId="contact-k"
           title="Unilateral Winkler/penalty contact bed stiffness k in MPa/mm (p_n = k · max(0, u·n − gap))"
           driven={drivenExpr(store.doc, id, 'k')}
+          exprTarget={{ target: id, attr: 'k' }}
         />
         <NumRow
           label="Initial gap"
@@ -1690,6 +1806,7 @@ function ContactInspector({ id }: { id: string }) {
           testId="contact-gap"
           title="Initial clearance gap (> 0) or press interference (< 0) in mm along the contact normal"
           driven={drivenExpr(store.doc, id, 'gap')}
+          exprTarget={{ target: id, attr: 'gap' }}
         />
         <VecRow
           label="Normal n"
@@ -1998,6 +2115,7 @@ function LoadInspector({ id }: { id: string }) {
               testId="force"
               step={10}
               driven={(i) => drivenExpr(store.doc, id, 'force', i)}
+              exprTarget={{ target: id, attr: 'force' }}
             />
             <TextInputRow
               label="Case"
@@ -2026,6 +2144,7 @@ function LoadInspector({ id }: { id: string }) {
               testId="pressure"
               title="Positive pushes into the face"
               driven={drivenExpr(store.doc, id, 'mpa')}
+              exprTarget={{ target: id, attr: 'mpa' }}
             />
             <SpatialFnField
               label="Profile p(x)"
@@ -2070,6 +2189,7 @@ function LoadInspector({ id }: { id: string }) {
               testId="preload"
               title="Total axial bolt clamping force (N) distributed over the washer seat or split across opposed clamping faces"
               driven={drivenExpr(store.doc, id, 'newtons')}
+              exprTarget={{ target: id, attr: 'newtons' }}
             />
             <VecRow
               label="Pinch axis"
@@ -2231,6 +2351,7 @@ function TemperatureInspector({ id }: { id: string }) {
           step={10}
           title="Fixed boundary temperature for the conduction solve; faces without one stay insulated"
           driven={drivenExpr(store.doc, id, 'celsius')}
+          exprTarget={{ target: id, attr: 'celsius' }}
         />
         <SpatialFnField
           label="Profile T(x)"
@@ -2293,7 +2414,7 @@ function ConvectionInspector({ id }: { id: string }) {
           }
         />
         <NumRow
-          label="Heat-transfer coeff"
+          label="Coeff h (mm²)"
           unit="W/(mm²·K)"
           get={(d) => convectionIn(d, id).h}
           set={(d, v) => {
@@ -2304,6 +2425,21 @@ function ConvectionInspector({ id }: { id: string }) {
           step={1e-5}
           title="Heat loss per unit area, h·(T − ambient), in W/(mm²·K) — natural convection in air (5 W/(m²·K)) is 5e-6 in these units"
           driven={drivenExpr(store.doc, id, 'h')}
+          exprTarget={{ target: id, attr: 'h' }}
+        />
+        <NumRow
+          label="Coeff h (SI)"
+          unit="W/(m²·K)"
+          get={(d) => convectionIn(d, id).h * 1e6}
+          set={(d, v) => {
+            convectionIn(d, id).h = v * 1e-6;
+          }}
+          undoLabel="Set convection h (SI)"
+          testId="convection-h-si"
+          step={5}
+          title="SI engineering companion: 1 W/(m²·K) = 1e-6 W/(mm²·K) (e.g. still air ≈ 5–10, forced air ≈ 25–150, water ≈ 1000–5000 W/(m²·K))"
+          driven={drivenExpr(store.doc, id, 'h')}
+          exprTarget={{ target: id, attr: 'h', scale: 1e-6 }}
         />
         <SpatialFnField
           label="Profile h(x)"
@@ -2332,6 +2468,7 @@ function ConvectionInspector({ id }: { id: string }) {
           step={10}
           title="Ambient or coolant temperature the region loses heat to"
           driven={drivenExpr(store.doc, id, 'tinf')}
+          exprTarget={{ target: id, attr: 'tinf' }}
         />
         <SpatialFnField
           label="Profile T∞(x)"
@@ -2394,7 +2531,7 @@ function HeatFluxInspector({ id }: { id: string }) {
           }
         />
         <NumRow
-          label="Flux q"
+          label="Flux q (mm²)"
           unit="W/mm²"
           get={(d) => heatfluxIn(d, id).q}
           set={(d, v) => {
@@ -2405,6 +2542,21 @@ function HeatFluxInspector({ id }: { id: string }) {
           step={1e-3}
           title="Heat entering per unit area in W/mm²; positive is into the solid, negative is out (1 kW/m² is 1e-3)"
           driven={drivenExpr(store.doc, id, 'q')}
+          exprTarget={{ target: id, attr: 'q' }}
+        />
+        <NumRow
+          label="Flux q (SI)"
+          unit="kW/m²"
+          get={(d) => heatfluxIn(d, id).q * 1e3}
+          set={(d, v) => {
+            heatfluxIn(d, id).q = v * 1e-3;
+          }}
+          undoLabel="Set heat flux q (kW/m²)"
+          testId="heatflux-q-kwm2"
+          step={5}
+          title="SI engineering companion: 1 kW/m² = 1e-3 W/mm² (1000 kW/m² = 1 MW/m² = 1 W/mm²)"
+          driven={drivenExpr(store.doc, id, 'q')}
+          exprTarget={{ target: id, attr: 'q', scale: 1e-3 }}
         />
         <SpatialFnField
           label="Profile q(x)"

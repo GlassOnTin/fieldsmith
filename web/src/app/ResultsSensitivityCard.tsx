@@ -3,7 +3,8 @@
 // Works on ANY .fsm document via `computeFsmSensitivities`, `verifyFsmContracts`,
 // and `DocCommand` (`upsert_assert` / `delete_assert`) in `fieldsmith-wasm`.
 
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
+import { addressableParams } from '../doc/param';
 import { store } from '../doc/store';
 import {
   calibrateFsmDocument,
@@ -89,6 +90,7 @@ export function ResultsSensitivityCard() {
   const [addOpen, setAddOpen] = useState(false);
   const [label, setLabel] = useState('Peak stress margin');
   const [metric, setMetric] = useState('max_vm_elem');
+  const [contractCase, setContractCase] = useState('');
   const [target, setTarget] = useState('<= 180');
   const [tolerance, setTolerance] = useState('');
   const [unit, setUnit] = useState('MPa');
@@ -103,9 +105,49 @@ export function ResultsSensitivityCard() {
   const [addObsOpen, setAddObsOpen] = useState(false);
   const [obsLabel, setObsLabel] = useState('Bench sensor');
   const [obsMetric, setObsMetric] = useState('max_displacement');
+  const [obsCase, setObsCase] = useState('');
   const [obsMeasured, setObsMeasured] = useState('0.25');
   const [obsStd, setObsStd] = useState('0.01');
   const [obsUnit, setObsUnit] = useState('mm');
+
+  useEffect(() => {
+    setSensReport(null);
+    setUqReport(null);
+    setContractReport(null);
+    setOptBundle(null);
+    setCalBundle(null);
+    setErr(null);
+  }, [store.docVersion]);
+
+  const docCases: string[] = [];
+  const pushCase = (c?: string | null) => {
+    const t = c?.trim();
+    if (t && !docCases.includes(t)) docCases.push(t);
+  };
+  for (const l of doc.loads) pushCase(l.case);
+  for (const t of doc.temperatures) pushCase(t.case);
+  for (const c of doc.convections) pushCase(c.case);
+  for (const q of doc.heat_fluxes) pushCase(q.case);
+
+  const paramSuggestions: string[] = [];
+  const pushSuggestion = (s: string) => {
+    if (s && !paramSuggestions.includes(s)) paramSuggestions.push(s);
+  };
+  for (const l of doc.lets ?? []) pushSuggestion(l.name);
+  if (doc.material) {
+    for (const attr of ['e', 'yield', 'k', 'alpha', 'density']) {
+      pushSuggestion(`${doc.material}.${attr}`);
+    }
+  }
+  for (const cm of doc.custom_materials ?? []) {
+    for (const attr of ['e', 'yield', 'k', 'alpha', 'density']) {
+      pushSuggestion(`${cm.id}.${attr}`);
+    }
+  }
+  for (const c of doc.convections) pushSuggestion(`${c.id}.h`);
+  for (const q of doc.heat_fluxes) pushSuggestion(`${q.id}.q`);
+  for (const ct of doc.contacts ?? []) pushSuggestion(`${ct.id}.k`);
+  for (const ap of addressableParams(doc)) pushSuggestion(ap.addr);
 
   const runSensitivities = () => {
     setBusy('sens');
@@ -221,15 +263,31 @@ export function ResultsSensitivityCard() {
 
   const onObsMetricInput = (nextMetric: string) => {
     setObsMetric(nextMetric);
-    const baseMetric = nextMetric.split(':')[0]?.trim() ?? '';
+    const parts = nextMetric.split(':');
+    const baseMetric = parts[0]?.trim() ?? '';
+    const suffix = parts.slice(1).join(':').trim();
+    if (suffix && docCases.includes(suffix)) {
+      setObsCase(suffix);
+    } else if (!suffix) {
+      setObsCase('');
+    }
     const preset = CONTRACT_METRICS.find((m) => m.value === baseMetric);
     if (preset && preset.defaultUnit) {
       setObsUnit(preset.defaultUnit);
     }
   };
 
+  const onObsCaseChange = (nextCase: string) => {
+    setObsCase(nextCase);
+    const baseMetric = obsMetric.split(':')[0]?.trim() ?? '';
+    if (!baseMetric) return;
+    setObsMetric(nextCase ? `${baseMetric}:${nextCase}` : baseMetric);
+  };
+
   const saveObserve = () => {
-    const trimmedMetric = obsMetric.trim();
+    const baseOrFull = obsMetric.trim();
+    const trimmedMetric =
+      obsCase && baseOrFull && !baseOrFull.includes(':') ? `${baseOrFull}:${obsCase}` : baseOrFull;
     const measuredVal = Number(obsMeasured.trim());
     const stdVal = Number(obsStd.trim());
     if (!trimmedMetric || !Number.isFinite(measuredVal) || !Number.isFinite(stdVal) || stdVal <= 0) {
@@ -301,7 +359,11 @@ export function ResultsSensitivityCard() {
   };
 
   const saveContract = () => {
-    const trimmedMetric = metric.trim();
+    const baseMetric = metric.trim();
+    const trimmedMetric =
+      contractCase && baseMetric && !baseMetric.includes(':')
+        ? `${baseMetric}:${contractCase}`
+        : baseMetric;
     const trimmedTarget = target.trim();
     if (!trimmedMetric || !trimmedTarget) {
       setErr('Contract metric and target are required.');
@@ -354,8 +416,8 @@ export function ResultsSensitivityCard() {
       style={{
         margin: '6px 0',
         padding: '7px 9px',
-        background: 'rgba(16, 185, 129, 0.06)',
-        border: '1px solid rgba(16, 185, 129, 0.32)',
+        background: 'color-mix(in srgb, #10b981 7%, var(--panel))',
+        border: '1px solid color-mix(in srgb, #10b981 36%, var(--line))',
         borderRadius: '6px',
         display: 'flex',
         flexDirection: 'column',
@@ -364,7 +426,7 @@ export function ResultsSensitivityCard() {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700, color: '#6ee7b7', fontSize: '11px' }}>
+        <span style={{ fontWeight: 700, color: 'color-mix(in srgb, #059669 78%, var(--text))', fontSize: '11px' }}>
           ∇ 3D Continuum Sensitivities &amp; .fsm Contracts
         </span>
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -386,7 +448,7 @@ export function ResultsSensitivityCard() {
                 value={optObjective}
                 disabled={busy !== null}
                 onChange={(e) => setOptObjective((e.target as HTMLSelectElement).value as OptObjective)}
-                style={{ fontSize: '9.5px', padding: '1px 4px', height: '20px' }}
+                style={{ fontSize: '9.5px', padding: '1px 4px', height: '22px' }}
                 title="Objective minimised by the 3D contract-constrained adjoint optimiser"
               >
                 {OPT_OBJECTIVES.map((o) => (
@@ -401,7 +463,11 @@ export function ResultsSensitivityCard() {
                 data-testid="results-run-optimise-btn"
                 disabled={busy !== null}
                 onClick={runOptimiser}
-                style={{ borderColor: 'rgba(16, 185, 129, 0.5)', color: '#6ee7b7', fontWeight: 700 }}
+                style={{
+                  borderColor: 'color-mix(in srgb, #10b981 55%, var(--line))',
+                  color: 'color-mix(in srgb, #059669 78%, var(--text))',
+                  fontWeight: 700,
+                }}
                 title="Run trust-region SQP 3D + 0D/1D adjoint optimiser subject to all .fsm assert contracts"
               >
                 {busy === 'opt' ? 'Optimising…' : 'Optimise'}
@@ -439,7 +505,11 @@ export function ResultsSensitivityCard() {
               data-testid="results-run-calibrate-btn"
               disabled={busy !== null}
               onClick={runCalibrate}
-              style={{ borderColor: 'rgba(56, 189, 248, 0.55)', color: '#7dd3fc', fontWeight: 700 }}
+              style={{
+                borderColor: 'color-mix(in srgb, #0ea5e9 55%, var(--line))',
+                color: 'var(--accent)',
+                fontWeight: 700,
+              }}
               title="Fuse empirical bench readings (observe ...) with parameter priors via 3D adjoint Gauss–Newton Bayesian MAP calibration"
             >
               {busy === 'cal' ? 'Calibrating…' : `Calibrate MAP (${observations.length})`}
@@ -484,33 +554,33 @@ export function ResultsSensitivityCard() {
             gap: '4px',
             padding: '6px',
             borderRadius: '4px',
-            background: 'var(--bg-2)',
+            background: 'var(--panel-2)',
             border: '1px solid var(--line)',
             alignItems: 'end',
           }}
         >
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Sensor Label
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="observe-label-input"
               value={obsLabel}
               onInput={(e) => setObsLabel((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Metric Selector
             <input
               type="text"
-              class="input"
+              class="text-input"
               list="observe-metric-datalist"
               data-testid="observe-metric-input"
               placeholder="max_temp or max_displacement:Load 1"
               value={obsMetric}
               onInput={(e) => onObsMetricInput((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px', fontFamily: 'var(--mono)' }}
             />
             <datalist id="observe-metric-datalist">
               {CONTRACT_METRICS.filter((m) => !m.value.startsWith('p10.') && !m.value.startsWith('p90.')).map((m) => (
@@ -520,37 +590,56 @@ export function ResultsSensitivityCard() {
               ))}
             </datalist>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          {docCases.length > 0 && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
+              Case
+              <select
+                class="select"
+                data-testid="observe-case-select"
+                value={obsCase}
+                onChange={(e) => onObsCaseChange((e.target as HTMLSelectElement).value)}
+                style={{ fontSize: '10px', padding: '2px 4px', height: '24px' }}
+              >
+                <option value="">Envelope / All</option>
+                {docCases.map((cn) => (
+                  <option key={cn} value={cn}>
+                    {cn}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Measured (y)
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="observe-measured-input"
               value={obsMeasured}
               onInput={(e) => setObsMeasured((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px', fontFamily: 'var(--mono)' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Noise 1-σ / Unit
             <div style={{ display: 'flex', gap: '3px' }}>
               <input
                 type="text"
-                class="input"
+                class="text-input"
                 data-testid="observe-std-input"
                 placeholder="σ"
                 value={obsStd}
                 onInput={(e) => setObsStd((e.target as HTMLInputElement).value)}
-                style={{ width: '52%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+                style={{ width: '52%', fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
               />
               <input
                 type="text"
-                class="input"
+                class="text-input"
                 data-testid="observe-unit-input"
                 placeholder="unit"
                 value={obsUnit}
                 onInput={(e) => setObsUnit((e.target as HTMLInputElement).value)}
-                style={{ width: '48%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+                style={{ width: '48%', fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
               />
             </div>
           </label>
@@ -559,7 +648,7 @@ export function ResultsSensitivityCard() {
             class="mini-btn"
             data-testid="observe-save-btn"
             onClick={saveObserve}
-            style={{ height: '22px', fontWeight: 700, color: '#7dd3fc' }}
+            style={{ height: '24px', fontWeight: 700, color: 'var(--accent)' }}
           >
             Save Obs
           </button>
@@ -578,7 +667,7 @@ export function ResultsSensitivityCard() {
                 gap: '6px',
                 fontFamily: 'var(--mono)',
                 fontSize: '9.5px',
-                color: '#bae6fd',
+                color: 'var(--accent)',
               }}
             >
               <span>
@@ -608,35 +697,41 @@ export function ResultsSensitivityCard() {
             gap: '4px',
             padding: '6px',
             borderRadius: '4px',
-            background: 'var(--bg-2)',
+            background: 'var(--panel-2)',
             border: '1px solid var(--line)',
             alignItems: 'end',
           }}
         >
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Label
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="uncertainty-label-input"
               value={uqLabel}
               onInput={(e) => setUqLabel((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Param Addr
             <input
               type="text"
-              class="input"
+              class="text-input"
+              list="uncertainty-param-datalist"
               data-testid="uncertainty-param-input"
               placeholder="d or ss316l.e"
               value={uqParam}
               onInput={(e) => setUqParam((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px', fontFamily: 'var(--mono)' }}
             />
+            <datalist id="uncertainty-param-datalist">
+              {paramSuggestions.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Spread (1-σ)
             <div style={{ display: 'flex', gap: '3px' }}>
               <select
@@ -644,31 +739,31 @@ export function ResultsSensitivityCard() {
                 data-testid="uncertainty-mode-select"
                 value={uqMode}
                 onChange={(e) => setUqMode((e.target as HTMLSelectElement).value as 'std' | 'cv')}
-                style={{ width: '46%', fontSize: '10px', padding: '2px 3px' }}
+                style={{ width: '46%', fontSize: '10px', padding: '2px 3px', height: '24px' }}
               >
                 <option value="cv">cv</option>
                 <option value="std">std</option>
               </select>
               <input
                 type="text"
-                class="input"
+                class="text-input"
                 data-testid="uncertainty-val-input"
                 value={uqVal}
                 onInput={(e) => setUqVal((e.target as HTMLInputElement).value)}
-                style={{ width: '54%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+                style={{ width: '54%', fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
               />
             </div>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Unit
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="uncertainty-unit-input"
               placeholder="mm / MPa"
               value={uqUnit}
               onInput={(e) => setUqUnit((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+              style={{ fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
             />
           </label>
           <button
@@ -676,7 +771,7 @@ export function ResultsSensitivityCard() {
             class="mini-btn"
             data-testid="uncertainty-save-btn"
             onClick={saveUncertainty}
-            style={{ height: '22px', fontWeight: 700, color: '#6ee7b7' }}
+            style={{ height: '24px', fontWeight: 700, color: 'color-mix(in srgb, #059669 78%, var(--text))' }}
           >
             Save UQ
           </button>
@@ -727,30 +822,30 @@ export function ResultsSensitivityCard() {
             gap: '4px',
             padding: '6px',
             borderRadius: '4px',
-            background: 'var(--bg-2)',
+            background: 'var(--panel-2)',
             border: '1px solid var(--line)',
             alignItems: 'end',
           }}
         >
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Label
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="contract-label-input"
               value={label}
               onInput={(e) => setLabel((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Metric
             <select
               class="select"
               data-testid="contract-metric-select"
               value={metric}
               onChange={(e) => onMetricChange((e.target as HTMLSelectElement).value)}
-              style={{ fontSize: '10px', padding: '2px 4px' }}
+              style={{ fontSize: '10px', padding: '2px 4px', height: '24px' }}
             >
               {CONTRACT_METRICS.map((m) => (
                 <option key={m.value} value={m.value}>
@@ -759,38 +854,57 @@ export function ResultsSensitivityCard() {
               ))}
             </select>
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          {docCases.length > 0 && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
+              Case
+              <select
+                class="select"
+                data-testid="contract-case-select"
+                value={contractCase}
+                onChange={(e) => setContractCase((e.target as HTMLSelectElement).value)}
+                style={{ fontSize: '10px', padding: '2px 4px', height: '24px' }}
+              >
+                <option value="">Envelope / All</option>
+                {docCases.map((cn) => (
+                  <option key={cn} value={cn}>
+                    {cn}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Target
             <input
               type="text"
-              class="input"
+              class="text-input"
               data-testid="contract-target-input"
               placeholder="<= 180"
               value={target}
               onInput={(e) => setTarget((e.target as HTMLInputElement).value)}
-              style={{ fontSize: '10px', padding: '2px 5px', fontFamily: 'var(--mono)' }}
+              style={{ fontSize: '10px', padding: '2px 5px', height: '24px', fontFamily: 'var(--mono)' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-3)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9.5px', color: 'var(--text-2)' }}>
             Unit / Tol
             <div style={{ display: 'flex', gap: '3px' }}>
               <input
                 type="text"
-                class="input"
+                class="text-input"
                 data-testid="contract-unit-input"
                 placeholder="unit"
                 value={unit}
                 onInput={(e) => setUnit((e.target as HTMLInputElement).value)}
-                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
               />
               <input
                 type="text"
-                class="input"
+                class="text-input"
                 data-testid="contract-tol-input"
                 placeholder="tol"
                 value={tolerance}
                 onInput={(e) => setTolerance((e.target as HTMLInputElement).value)}
-                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', fontFamily: 'var(--mono)' }}
+                style={{ width: '50%', fontSize: '10px', padding: '2px 4px', height: '24px', fontFamily: 'var(--mono)' }}
               />
             </div>
           </label>
@@ -799,7 +913,7 @@ export function ResultsSensitivityCard() {
             class="mini-btn"
             data-testid="contract-save-btn"
             onClick={saveContract}
-            style={{ height: '22px', fontWeight: 700, color: '#6ee7b7' }}
+            style={{ height: '24px', fontWeight: 700, color: 'color-mix(in srgb, #059669 78%, var(--text))' }}
           >
             Save Contract
           </button>
@@ -850,7 +964,7 @@ export function ResultsSensitivityCard() {
 
       {contractReport && (
         <div data-testid="results-contracts-output" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: contractReport.all_passed ? '#4ade80' : '#f87171' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 600, color: contractReport.all_passed ? 'var(--ok)' : 'var(--danger)' }}>
             {contractReport.all_passed ? '✓' : '✗'} {contractReport.passed}/{contractReport.total} .fsm contracts passed
           </div>
           {contractReport.outcomes.map((r, i) => (
@@ -897,8 +1011,8 @@ export function ResultsSensitivityCard() {
           style={{
             padding: '6px 8px',
             borderRadius: '5px',
-            background: 'rgba(16, 185, 129, 0.10)',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
+            background: 'color-mix(in srgb, #10b981 9%, var(--panel))',
+            border: '1px solid color-mix(in srgb, #10b981 42%, var(--line))',
             display: 'flex',
             flexDirection: 'column',
             gap: '4px',
@@ -907,7 +1021,7 @@ export function ResultsSensitivityCard() {
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, color: optBundle.report.final_verification.all_passed ? '#4ade80' : '#fbbf24' }}>
+            <span style={{ fontWeight: 700, color: optBundle.report.final_verification.all_passed ? 'var(--ok)' : 'var(--warn)' }}>
               {optBundle.report.final_verification.all_passed ? '✓' : '⚠'} {optBundle.report.objective}:{' '}
               {optBundle.report.initial_objective.toPrecision(4)} → {optBundle.report.final_objective.toPrecision(4)}{' '}
               {optBundle.report.objective_unit} ({optBundle.report.objective_change_pct >= 0 ? '+' : ''}
@@ -918,7 +1032,11 @@ export function ResultsSensitivityCard() {
               class="mini-btn"
               data-testid="results-apply-optimised-btn"
               onClick={applyOptimisedDesign}
-              style={{ fontWeight: 700, color: '#6ee7b7', borderColor: 'rgba(16, 185, 129, 0.5)' }}
+              style={{
+                fontWeight: 700,
+                color: 'color-mix(in srgb, #059669 78%, var(--text))',
+                borderColor: 'color-mix(in srgb, #10b981 50%, var(--line))',
+              }}
             >
               Apply to 3D Model
             </button>
@@ -939,8 +1057,8 @@ export function ResultsSensitivityCard() {
           style={{
             padding: '6px 8px',
             borderRadius: '5px',
-            background: 'rgba(14, 165, 233, 0.10)',
-            border: '1px solid rgba(56, 189, 248, 0.45)',
+            background: 'color-mix(in srgb, #0ea5e9 9%, var(--panel))',
+            border: '1px solid color-mix(in srgb, #0ea5e9 45%, var(--line))',
             display: 'flex',
             flexDirection: 'column',
             gap: '4px',
@@ -949,7 +1067,7 @@ export function ResultsSensitivityCard() {
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, color: calBundle.report.final_verification.all_passed ? '#7dd3fc' : '#fbbf24' }}>
+            <span style={{ fontWeight: 700, color: calBundle.report.final_verification.all_passed ? 'var(--accent)' : 'var(--warn)' }}>
               {calBundle.report.final_verification.all_passed ? '✓' : '⚠'} Bayesian MAP · J_MAP:{' '}
               {calBundle.report.initial_cost.toPrecision(4)} → {calBundle.report.final_cost.toPrecision(4)} · χ²/m={' '}
               {calBundle.report.reduced_chi2.toFixed(3)} · {calBundle.report.iterations} iters ({calBundle.report.solves_run} solves)
@@ -959,12 +1077,16 @@ export function ResultsSensitivityCard() {
               class="mini-btn"
               data-testid="results-apply-posterior-btn"
               onClick={applyCalibratedPosterior}
-              style={{ fontWeight: 700, color: '#7dd3fc', borderColor: 'rgba(56, 189, 248, 0.55)' }}
+              style={{
+                fontWeight: 700,
+                color: 'var(--accent)',
+                borderColor: 'color-mix(in srgb, #0ea5e9 55%, var(--line))',
+              }}
             >
               Apply Posterior to .fsm
             </button>
           </div>
-          <div style={{ fontSize: '9px', color: 'var(--text-3)' }}>
+          <div style={{ fontSize: '9px', color: 'var(--text-2)' }}>
             Laplace posterior Σ_post around θ_MAP (h={calBundle.report.h.toFixed(2)} mm); marginal posterior σ written to .fsm uncertainty
           </div>
           <table
@@ -972,7 +1094,7 @@ export function ResultsSensitivityCard() {
             style={{ width: '100%', borderCollapse: 'collapse', fontSize: '9.5px' }}
           >
             <thead>
-              <tr style={{ color: 'var(--text-3)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
+              <tr style={{ color: 'var(--text-2)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
                 <th style={{ textAlign: 'left', padding: '2px 4px' }}>param</th>
                 <th style={{ padding: '2px 4px' }}>prior μ ± σ</th>
                 <th style={{ padding: '2px 4px' }}>posterior μ ± σ</th>
@@ -982,17 +1104,17 @@ export function ResultsSensitivityCard() {
             </thead>
             <tbody>
               {calBundle.report.parameters.map((p) => (
-                <tr key={p.param} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
+                <tr key={p.param} style={{ textAlign: 'right', borderTop: '1px solid var(--line)' }}>
                   <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
                     {p.param} {p.unit ? `(${p.unit})` : ''}
                   </td>
                   <td style={{ padding: '2px 4px' }}>
                     {p.prior_mean.toPrecision(4)} ± {p.prior_sigma.toPrecision(3)}
                   </td>
-                  <td style={{ padding: '2px 4px', color: '#7dd3fc', fontWeight: 600 }}>
+                  <td style={{ padding: '2px 4px', color: 'var(--accent)', fontWeight: 600 }}>
                     {p.posterior_mean.toPrecision(4)} ± {p.posterior_sigma.toPrecision(3)}
                   </td>
-                  <td style={{ padding: '2px 4px', color: '#4ade80' }}>
+                  <td style={{ padding: '2px 4px', color: 'var(--ok)', fontWeight: 600 }}>
                     −{p.sigma_reduction_pct.toFixed(1)}%
                   </td>
                   <td style={{ padding: '2px 4px', color: 'var(--text-2)' }}>
@@ -1019,12 +1141,12 @@ export function ResultsSensitivityCard() {
 
       {uqReport && uqReport.metrics.length > 0 && (
         <div style={{ overflowX: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' }} data-testid="results-uq-table">
-          <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--text-3)' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--text-2)' }}>
             uq: {uqReport.method} · {uqReport.inputs.length} inputs · {uqReport.solves_run} solves · h={uqReport.h.toFixed(2)} mm ({uqReport.elements} P2 tets)
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: '9.5px' }}>
             <thead>
-              <tr style={{ color: 'var(--text-3)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
+              <tr style={{ color: 'var(--text-2)', textAlign: 'right', borderBottom: '1px solid var(--line)' }}>
                 <th style={{ textAlign: 'left', padding: '2px 4px' }}>metric</th>
                 <th style={{ padding: '2px 4px' }}>p10</th>
                 <th style={{ padding: '2px 4px' }}>p50</th>
@@ -1037,13 +1159,13 @@ export function ResultsSensitivityCard() {
               {uqReport.metrics.map((m) => {
                 const top = m.contributors[0];
                 return (
-                  <tr key={m.metric} style={{ textAlign: 'right', borderTop: '1px solid rgba(148,163,184,0.12)' }}>
+                  <tr key={m.metric} style={{ textAlign: 'right', borderTop: '1px solid var(--line)' }}>
                     <td style={{ textAlign: 'left', padding: '2px 4px', fontWeight: 600 }}>
                       {m.metric} {m.unit ? `(${m.unit})` : ''}
                     </td>
                     <td style={{ padding: '2px 4px' }}>{m.p10.toPrecision(4)}</td>
                     <td style={{ padding: '2px 4px' }}>{m.p50.toPrecision(4)}</td>
-                    <td style={{ padding: '2px 4px', color: '#fbbf24', fontWeight: 600 }}>{m.p90.toPrecision(4)}</td>
+                    <td style={{ padding: '2px 4px', color: 'var(--warn)', fontWeight: 600 }}>{m.p90.toPrecision(4)}</td>
                     <td style={{ padding: '2px 4px' }}>±{m.std_dev.toPrecision(3)}</td>
                     <td style={{ textAlign: 'left', padding: '2px 4px', color: 'var(--text-2)' }}>
                       {top && top.variance_share > 0
