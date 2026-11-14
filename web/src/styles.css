@@ -51,6 +51,18 @@
 }
 
 * { box-sizing: border-box; }
+/* Honour the OS "reduce motion" setting: collapse every transition and animation to a
+   near-instant 0.01ms (not 0s, so any end events still fire) and stop infinite loops. The
+   universal selector needs !important to beat the class-level `transition` shorthands below
+   (.pareto-pt, the mobile drawers) and inline styles; this is the only place it is used. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 html, body, #app { height: 100%; margin: 0; }
 body {
   font: 13px/1.4 var(--sans);
