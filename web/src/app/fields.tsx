@@ -107,6 +107,12 @@ export function NumberInput(p: NumProps) {
   const [text, setText] = useState(fmt(p.value));
   const [focused, setFocused] = useState(false);
   const [invalid, setInvalid] = useState(false);
+  // The field commits on blur. Escape reverts the text then blurs, but the blur fires
+  // synchronously, before the reverted text state lands, so commit() would still read the
+  // edited draft and write it. This flag marks that blur as a cancel: Escape sets it, the
+  // blur honours it once and skips the commit. Enter and blur-only are unchanged; a repeated
+  // Enter commit is already a no-op at the store's transact idempotency guard.
+  const cancelRef = useRef(false);
   useEffect(() => {
     if (!focused) setText(fmt(p.value));
   }, [p.value, focused]);
@@ -151,11 +157,16 @@ export function NumberInput(p: NumProps) {
         title={p.title}
         spellcheck={false}
         onFocus={(e) => {
+          cancelRef.current = false;
           setFocused(true);
           (e.target as HTMLInputElement).select();
         }}
         onBlur={() => {
           setFocused(false);
+          if (cancelRef.current) {
+            cancelRef.current = false;
+            return;
+          }
           commit();
         }}
         onInput={(e) => {
@@ -168,6 +179,7 @@ export function NumberInput(p: NumProps) {
             commit();
             (e.target as HTMLInputElement).blur();
           } else if (e.key === 'Escape') {
+            cancelRef.current = true;
             setText(fmt(p.value));
             setInvalid(false);
             (e.target as HTMLInputElement).blur();
