@@ -178,6 +178,22 @@ try {
     dishonest.length === 0,
     `${examples.filter((e) => claimsVerification(e.verificationBadge)).length} claim verification, ${pendingCount} pending, ${dishonest.length} dishonest${dishonest.length ? ': ' + dishonest.join('; ') : ''}`);
 
+  // Hard invariant 10: a fallback-map entry must not contradict the literate header. The header is
+  // the source of truth and shadows the map at runtime; where both declare the same directive they
+  // must agree, so a dropped header directive can never resurrect a stale fallback reference. A
+  // map-only entry (no header directive) is a legitimate fallback and is not flagged here.
+  const eqArr = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const mirrorBad = [];
+  for (const e of examples) {
+    if (!e.id) continue;
+    if (e.docPath != null && docMap[e.id] != null && docMap[e.id] !== e.docPath) mirrorBad.push(`${e.id}.doc_path`);
+    if (e.fsmPath != null && fsmMap[e.id] != null && fsmMap[e.id] !== e.fsmPath) mirrorBad.push(`${e.id}.fsm_path`);
+    if (e.verificationRefs.length > 0 && refsMap[e.id] != null && !eqArr(refsMap[e.id], e.verificationRefs)) mirrorBad.push(`${e.id}.verification_refs`);
+  }
+  check('fallback-map entries mirror the literate header (no map↔header contradiction)',
+    mirrorBad.length === 0,
+    `${mirrorBad.length} divergent${mirrorBad.length ? ': ' + mirrorBad.join(', ') : ''}`);
+
   check('registry scan completed', true, `${examples.length} examples, ${Object.keys(docMap).length} doc-map / ${Object.keys(fsmMap).length} fsm-map entries`);
 
   const ok = checks.every((c) => c.pass);
@@ -197,8 +213,10 @@ try {
     'does not resolve on disk is a false claim. This Node-only gate walks every shipped example',
     'header and every fallback-map entry and asserts each declared doc_path / fsm_path resolves',
     '(fs.existsSync relative to the repo root), that every shipped example has a resolvable `.fsm`,',
-    'and that no fallback-map key is an orphan. docs/ and examples/ sit outside the Vite web root, so',
-    'this is a filesystem check rather than a browser probe.',
+    'and that no fallback-map key is an orphan. Where a header and a fallback map both declare the',
+    'same directive they must agree: the header shadows the map at runtime, so a contradiction would',
+    'resurrect a stale reference if the header directive were ever dropped. docs/ and examples/ sit',
+    'outside the Vite web root, so this is a filesystem check rather than a browser probe.',
     '',
     '## Checks',
     '',
@@ -217,7 +235,7 @@ try {
     '## Limits',
     '',
     '- Asserts path resolution on disk, not that a doc\'s prose matches its sheet (content drift is out of scope).',
-    '- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; only existence and badge honesty are checked.',
+    '- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; existence, badge honesty, and map↔header agreement are checked.',
     '- Map literals are extracted from literate-fsm.ts by regex (flat Record literals); a reformatted map would need the extractor updated.',
     '',
     '---',

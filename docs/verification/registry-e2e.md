@@ -8,8 +8,10 @@ fallback maps. The UI renders these as "Repository Markdown: <path>" provenance,
 does not resolve on disk is a false claim. This Node-only gate walks every shipped example
 header and every fallback-map entry and asserts each declared doc_path / fsm_path resolves
 (fs.existsSync relative to the repo root), that every shipped example has a resolvable `.fsm`,
-and that no fallback-map key is an orphan. docs/ and examples/ sit outside the Vite web root, so
-this is a filesystem check rather than a browser probe.
+and that no fallback-map key is an orphan. Where a header and a fallback map both declare the
+same directive they must agree: the header shadows the map at runtime, so a contradiction would
+resurrect a stale reference if the header directive were ever dropped. docs/ and examples/ sit
+outside the Vite web root, so this is a filesystem check rather than a browser probe.
 
 ## Checks
 
@@ -22,8 +24,9 @@ this is a filesystem check rather than a browser probe.
 | every shipped example has resolvable .fsm coverage (header or map) | pass | 53 examples, 0 without coverage
 | no orphan fallback-map keys (every key is a shipped example) | pass | 0 orphan
 | every example header @verification_refs resolves | pass | 99 declared, 0 dead
-| every DEFAULT_VERIFICATION_REFS value resolves | pass | 90 entries, 0 dead
+| every DEFAULT_VERIFICATION_REFS value resolves | pass | 98 entries, 0 dead
 | verification badges are honest (no PASS claim without a shipped reference; pending never claims PASS) | pass | 35 claim verification, 5 pending, 0 dishonest
+| fallback-map entries mirror the literate header (no map↔header contradiction) | pass | 0 divergent
 | registry scan completed | pass | 53 examples, 31 doc-map / 53 fsm-map entries
 
 ## Verification honesty
@@ -39,7 +42,7 @@ unshipped verification.
 ## Limits
 
 - Asserts path resolution on disk, not that a doc's prose matches its sheet (content drift is out of scope).
-- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; only existence and badge honesty are checked.
+- Topical correctness of a reference (does V# actually cover this sheet?) is out of scope; existence, badge honesty, and map↔header agreement are checked.
 - Map literals are extracted from literate-fsm.ts by regex (flat Record literals); a reformatted map would need the extractor updated.
 
 ---
