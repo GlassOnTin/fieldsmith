@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -39,6 +39,7 @@ import { combinationsTest } from './combinations.mjs';
 import { renderfailTest } from './renderfail.mjs';
 import { paretoTest } from './pareto.mjs';
 import { tokensTest } from './tokens.mjs';
+import { focusTest } from './focus.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -229,6 +230,11 @@ try {
   if (!only || only === 'tokens') {
     const ok = await tokensTest(browser, url, { screens, docsDir });
     console.log(`tokens test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'focus') {
+    const ok = await focusTest(browser, url, { screens, docsDir });
+    console.log(`focus test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {
