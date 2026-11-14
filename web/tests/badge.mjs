@@ -9,10 +9,10 @@
 // Samples all five pending sheets (A15, A16, A18, A25, T18) and A1 (verified, V1.md & V2.md
 // shipped) across both view modes (contents list + detailed cards) under both light and dark
 // colour schemes, reading chip colour from getComputedStyle against live --warn / --ok
-// probes. It then drives the sheet-detail analytic-reference num span for the same six
-// sheets and asserts the pending state uses the same amber --warn convention there (5S
-// standardise: one pending state, one colour), while a verified sheet stays neutral
-// --text-2. Fails on any console error.
+// probes. It then drives the sheet-detail analytic-reference num span and the markdown
+// "Linked verification artifacts" column for the same six sheets and asserts the pending
+// state uses the same amber --warn convention on every surface (5S standardise: one pending
+// state, one colour), while a verified sheet stays neutral --text-2. Fails on any console error.
 //
 // Run with node tests/run-e2e.mjs --only badge.
 import { writeFileSync } from 'node:fs';
@@ -73,6 +73,34 @@ function readNumSpan() {
     text: span ? (span.textContent || '').trim() : '',
     color: span ? getComputedStyle(span).color : '',
     title: span ? (span.getAttribute('title') || '') : '',
+  };
+}
+
+// Self-contained in-page reader (no args): the "Linked verification artifacts" line in the
+// sheet-detail markdown column, plus resolved --warn / --text-2 probes. A pending sheet must
+// carry an amber --warn status pill (data-testid tutorial-md-verification-status) beside the
+// listed artifacts; a verified sheet lists artifacts with no pending pill.
+function readMarkdownStatus() {
+  const probe = (token) => {
+    const el = document.createElement('span');
+    el.style.color = `var(${token})`;
+    document.body.appendChild(el);
+    const c = getComputedStyle(el).color;
+    el.remove();
+    return c;
+  };
+  const col = document.querySelector('[data-testid="tutorial-col-markdown"]');
+  const status = col ? col.querySelector('[data-testid="tutorial-md-verification-status"]') : null;
+  const bodyText = col ? (col.textContent || '') : '';
+  return {
+    warnRgb: probe('--warn'),
+    text2Rgb: probe('--text-2'),
+    colPresent: !!col,
+    statusPresent: !!status,
+    statusText: status ? (status.textContent || '').trim() : '',
+    statusColor: status ? getComputedStyle(status).color : '',
+    statusTitle: status ? (status.getAttribute('title') || '') : '',
+    hasArtifactsLabel: /Linked verification artifacts/i.test(bodyText),
   };
 }
 
@@ -179,6 +207,37 @@ export async function badgeTest(browser, url, { docsDir }) {
           check(`${tag}: ${id} num span is neutral (--text-2)`, ns.color === ns.text2Rgb, `${ns.color} (want ${ns.text2Rgb})`);
         }
       }
+
+      // Markdown column "Linked verification artifacts" line: a pending sheet must flag the
+      // pending state in the same amber --warn convention as the chips and num span (5S
+      // standardise), not list artifacts silently as if they were shipped reports. The
+      // markdown tab is local state, so click it; detach the column between ids so the read
+      // cannot land on a stale column left over from the previous sheet.
+      for (const id of [...PENDING, ...VERIFIED]) {
+        await page.evaluate(() => { window.fieldsmith.ui.set('tutorialContentsOpen', true); });
+        await page.waitForSelector('[data-testid="tutorial-col-markdown"]', { state: 'detached', timeout: 30000 }).catch(() => {});
+        await page.evaluate((sid) => {
+          const { ui } = window.fieldsmith;
+          ui.set('tutorialsOpen', true);
+          ui.set('tutorialMinimised', false);
+          ui.set('tutorialSheetId', sid);
+          ui.set('tutorialContentsOpen', false);
+        }, id);
+        await page.click('[data-testid="tutorial-tab-markdown"]');
+        await page.waitForSelector('[data-testid="tutorial-col-markdown"]', { state: 'visible', timeout: 30000 });
+        const md = await page.evaluate(readMarkdownStatus);
+        const tag = `${scheme}/markdown`;
+        check(`${tag}: ${id} markdown column present`, md.colPresent);
+        check(`${tag}: ${id} artifacts line listed`, md.hasArtifactsLabel);
+        if (PENDING.includes(id)) {
+          check(`${tag}: ${id} shows a pending status pill`, md.statusPresent);
+          check(`${tag}: ${id} status pill reads pending`, md.statusText === 'verification pending', md.statusText);
+          check(`${tag}: ${id} status pill is amber (--warn)`, md.statusColor === md.warnRgb, `${md.statusColor} (want ${md.warnRgb})`);
+          check(`${tag}: ${id} status pill title flags pending`, /pending/i.test(md.statusTitle), md.statusTitle);
+        } else {
+          check(`${tag}: ${id} shows NO pending status pill`, !md.statusPresent);
+        }
+      }
     }
 
     const unexpected = errors.filter((e) => !/favicon/i.test(e));
@@ -200,9 +259,10 @@ export async function badgeTest(browser, url, { docsDir }) {
       'sheet keeps its green `--ok` ✓ chip. This gates the rendered surface in both view modes',
       '(contents list + detailed cards) under both light and dark, reading chip colour from',
       '`getComputedStyle` against live `--warn` / `--ok` probes, and drives the sheet-detail',
-      'analytic-reference num span for the same sheets so the pending state uses one amber',
-      'convention everywhere (5S standardise). The data-layer honesty (badge text and refs',
-      'resolving on disk) is gated separately by `web/tests/registry.mjs`.',
+      'analytic-reference num span and the markdown "Linked verification artifacts" column for',
+      'the same sheets so the pending state uses one amber convention everywhere (5S',
+      'standardise). The data-layer honesty (badge text and refs resolving on disk) is gated',
+      'separately by `web/tests/registry.mjs`.',
       '',
       '## Checks',
       '',
@@ -211,9 +271,10 @@ export async function badgeTest(browser, url, { docsDir }) {
       '## Limits',
       '',
       '- Covers all five pending sheets (A15, A16, A18, A25, T18) and A1 (verified) on the',
-      '  contents-list chips, detailed-card chips, and the analytic-reference num span.',
-      '- The markdown "Linked verification artifacts" column is not driven by this suite;',
-      '  its underlying status/refs are covered by the registry gate.',
+      '  contents-list chips, detailed-card chips, the analytic-reference num span, and the',
+      '  markdown "Linked verification artifacts" column.',
+      '- Topical correctness of refs (does the cited V# actually cover the sheet) is out of',
+      '  scope; the registry gate checks that refs resolve on disk, not that they are on-topic.',
       '',
       `Console errors: **${unexpected.length}**`,
       '',

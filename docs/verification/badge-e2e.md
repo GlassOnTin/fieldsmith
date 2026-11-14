@@ -9,9 +9,10 @@ A sheet whose verification report is not shipped must not advertise a green
 sheet keeps its green `--ok` ✓ chip. This gates the rendered surface in both view modes
 (contents list + detailed cards) under both light and dark, reading chip colour from
 `getComputedStyle` against live `--warn` / `--ok` probes, and drives the sheet-detail
-analytic-reference num span for the same sheets so the pending state uses one amber
-convention everywhere (5S standardise). The data-layer honesty (badge text and refs
-resolving on disk) is gated separately by `web/tests/registry.mjs`.
+analytic-reference num span and the markdown "Linked verification artifacts" column for
+the same sheets so the pending state uses one amber convention everywhere (5S
+standardise). The data-layer honesty (badge text and refs resolving on disk) is gated
+separately by `web/tests/registry.mjs`.
 
 ## Checks
 
@@ -104,6 +105,39 @@ resolving on disk) is gated separately by `web/tests/registry.mjs`.
 | light/numspan: A1 num span is NOT pending | pass | V1 · V2 |
 | light/numspan: A1 num span shows refs | pass | V1 · V2 |
 | light/numspan: A1 num span is neutral (--text-2) | pass | rgb(93, 93, 88) (want rgb(93, 93, 88)) |
+| light/markdown: A15 markdown column present | pass |  |
+| light/markdown: A15 artifacts line listed | pass |  |
+| light/markdown: A15 shows a pending status pill | pass |  |
+| light/markdown: A15 status pill reads pending | pass | verification pending |
+| light/markdown: A15 status pill is amber (--warn) | pass | rgb(183, 121, 31) (want rgb(183, 121, 31)) |
+| light/markdown: A15 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| light/markdown: A16 markdown column present | pass |  |
+| light/markdown: A16 artifacts line listed | pass |  |
+| light/markdown: A16 shows a pending status pill | pass |  |
+| light/markdown: A16 status pill reads pending | pass | verification pending |
+| light/markdown: A16 status pill is amber (--warn) | pass | rgb(183, 121, 31) (want rgb(183, 121, 31)) |
+| light/markdown: A16 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| light/markdown: A18 markdown column present | pass |  |
+| light/markdown: A18 artifacts line listed | pass |  |
+| light/markdown: A18 shows a pending status pill | pass |  |
+| light/markdown: A18 status pill reads pending | pass | verification pending |
+| light/markdown: A18 status pill is amber (--warn) | pass | rgb(183, 121, 31) (want rgb(183, 121, 31)) |
+| light/markdown: A18 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| light/markdown: A25 markdown column present | pass |  |
+| light/markdown: A25 artifacts line listed | pass |  |
+| light/markdown: A25 shows a pending status pill | pass |  |
+| light/markdown: A25 status pill reads pending | pass | verification pending |
+| light/markdown: A25 status pill is amber (--warn) | pass | rgb(183, 121, 31) (want rgb(183, 121, 31)) |
+| light/markdown: A25 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| light/markdown: T18 markdown column present | pass |  |
+| light/markdown: T18 artifacts line listed | pass |  |
+| light/markdown: T18 shows a pending status pill | pass |  |
+| light/markdown: T18 status pill reads pending | pass | verification pending |
+| light/markdown: T18 status pill is amber (--warn) | pass | rgb(183, 121, 31) (want rgb(183, 121, 31)) |
+| light/markdown: T18 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| light/markdown: A1 markdown column present | pass |  |
+| light/markdown: A1 artifacts line listed | pass |  |
+| light/markdown: A1 shows NO pending status pill | pass |  |
 | dark/contents: A15 card present | pass |  |
 | dark/contents: A15 shows a pending chip | pass | [{"text":"verification pending","color":"rgb(217, 164, 65)","title":"Verification pending — no report shipped yet; benchmark source linked"}] |
 | dark/contents: A15 shows NO green ✓ chip | pass | [] |
@@ -190,14 +224,48 @@ resolving on disk) is gated separately by `web/tests/registry.mjs`.
 | dark/numspan: A1 num span is NOT pending | pass | V1 · V2 |
 | dark/numspan: A1 num span shows refs | pass | V1 · V2 |
 | dark/numspan: A1 num span is neutral (--text-2) | pass | rgb(165, 166, 162) (want rgb(165, 166, 162)) |
+| dark/markdown: A15 markdown column present | pass |  |
+| dark/markdown: A15 artifacts line listed | pass |  |
+| dark/markdown: A15 shows a pending status pill | pass |  |
+| dark/markdown: A15 status pill reads pending | pass | verification pending |
+| dark/markdown: A15 status pill is amber (--warn) | pass | rgb(217, 164, 65) (want rgb(217, 164, 65)) |
+| dark/markdown: A15 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| dark/markdown: A16 markdown column present | pass |  |
+| dark/markdown: A16 artifacts line listed | pass |  |
+| dark/markdown: A16 shows a pending status pill | pass |  |
+| dark/markdown: A16 status pill reads pending | pass | verification pending |
+| dark/markdown: A16 status pill is amber (--warn) | pass | rgb(217, 164, 65) (want rgb(217, 164, 65)) |
+| dark/markdown: A16 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| dark/markdown: A18 markdown column present | pass |  |
+| dark/markdown: A18 artifacts line listed | pass |  |
+| dark/markdown: A18 shows a pending status pill | pass |  |
+| dark/markdown: A18 status pill reads pending | pass | verification pending |
+| dark/markdown: A18 status pill is amber (--warn) | pass | rgb(217, 164, 65) (want rgb(217, 164, 65)) |
+| dark/markdown: A18 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| dark/markdown: A25 markdown column present | pass |  |
+| dark/markdown: A25 artifacts line listed | pass |  |
+| dark/markdown: A25 shows a pending status pill | pass |  |
+| dark/markdown: A25 status pill reads pending | pass | verification pending |
+| dark/markdown: A25 status pill is amber (--warn) | pass | rgb(217, 164, 65) (want rgb(217, 164, 65)) |
+| dark/markdown: A25 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| dark/markdown: T18 markdown column present | pass |  |
+| dark/markdown: T18 artifacts line listed | pass |  |
+| dark/markdown: T18 shows a pending status pill | pass |  |
+| dark/markdown: T18 status pill reads pending | pass | verification pending |
+| dark/markdown: T18 status pill is amber (--warn) | pass | rgb(217, 164, 65) (want rgb(217, 164, 65)) |
+| dark/markdown: T18 status pill title flags pending | pass | Verification pending — no report shipped yet; benchmark source linked |
+| dark/markdown: A1 markdown column present | pass |  |
+| dark/markdown: A1 artifacts line listed | pass |  |
+| dark/markdown: A1 shows NO pending status pill | pass |  |
 | no console errors | pass | 0 |
 
 ## Limits
 
 - Covers all five pending sheets (A15, A16, A18, A25, T18) and A1 (verified) on the
-  contents-list chips, detailed-card chips, and the analytic-reference num span.
-- The markdown "Linked verification artifacts" column is not driven by this suite;
-  its underlying status/refs are covered by the registry gate.
+  contents-list chips, detailed-card chips, the analytic-reference num span, and the
+  markdown "Linked verification artifacts" column.
+- Topical correctness of refs (does the cited V# actually cover the sheet) is out of
+  scope; the registry gate checks that refs resolve on disk, not that they are on-topic.
 
 Console errors: **0**
 

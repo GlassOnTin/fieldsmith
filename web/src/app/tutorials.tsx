@@ -3027,6 +3027,7 @@ function TutorialsDrawer() {
     const docPath = getDocPathForSheet(sheet);
     const fsmPath = getFsmPathForSheet(sheet);
     const vRefs = getVerificationRefsForSheet(sheet);
+    const mdPending = getVerificationStatusForSheet(sheet) === 'pending';
     const mdText = renderSheetMarkdown(sheet);
     const literateFsmText = formatLiterateFsm(sheet);
     return (
@@ -3038,9 +3039,30 @@ function TutorialsDrawer() {
               <strong>
                 <code>{fsmPath}</code>{docPath ? <> · <code>{docPath}</code></> : null}
               </strong>
-              {vRefs.length > 0 && (
+              {(vRefs.length > 0 || mdPending) && (
                 <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
-                  Linked verification artifacts: {vRefs.map((r) => <code key={r} style={{ marginRight: '6px' }}>{r}</code>)}
+                  {mdPending && (
+                    <span
+                      class="num"
+                      data-testid="tutorial-md-verification-status"
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 7px',
+                        borderRadius: '4px',
+                        marginRight: '6px',
+                        background: 'color-mix(in srgb, var(--warn) 14%, var(--panel))',
+                        color: 'var(--warn)',
+                        border: '1px solid color-mix(in srgb, var(--warn) 38%, var(--line))',
+                      }}
+                      title="Verification pending — no report shipped yet; benchmark source linked"
+                    >
+                      verification pending
+                    </span>
+                  )}
+                  {vRefs.length > 0 && (
+                    <>Linked verification artifacts: {vRefs.map((r) => <code key={r} style={{ marginRight: '6px' }}>{r}</code>)}</>
+                  )}
                 </div>
               )}
             </div>
