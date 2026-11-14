@@ -5941,6 +5941,7 @@ export function SystemsWorkbench() {
               </div>
             )}
             <textarea
+              class="decl-source"
               data-testid="decl-system-textarea"
               value={authorText}
               onInput={(e) => setAuthorText((e.target as HTMLTextAreaElement).value)}

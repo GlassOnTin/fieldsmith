@@ -665,6 +665,7 @@ function FsmSourceDrawer() {
           </div>
         </div>
         <textarea
+          class="fsm-source"
           data-testid="fsm-source-textarea"
           value={draft}
           spellcheck={false}
