@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Stress-Graded AlSi10Mg Gyroid Counterflow Recuperator with Protected Boss Detour
 # @subtitle: Co-design a pressurized AlSi10Mg additive recuperator (`skin = 1.2 mm`, cell-graded `4.5 → 2.8 mm` Gyroid sheet lattice, protected central M6 mounting boss) combining 3D thermo-mechanical stress grading with 3D P2 nonlinear Darcy–Forchheimer porous flow and unbalanced Glycol/Water counterflow `ε–NTU` heat exchange.
 # @verification_badge: Verified by A22 & V63 · 3D P2 Darcy–Forchheimer Obstacle Detour + Graded Gyroid Glycol/Water Counterflow HX
-# @doc_path: docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md
 # @fsm_path: examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm
 # @starter_fsm_name: t26-graded-gyroid-counterflow-recuperator.fsm
 # @verification_refs: docs/verification/V36.md, docs/verification/V54.md, docs/verification/V63.md, examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm

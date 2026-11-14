@@ -514,17 +514,6 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   T15: 'docs/tutorials/T15-parametric-2d-sketch-constraints.md',
   T16: 'docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md',
   T17: 'docs/case-studies/T17-regenerative-rocket-nozzle.md',
-  T18: 'docs/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.md',
-  T19: 'docs/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.md',
-  T20: 'docs/tutorials/T20-declarative-cooled-pipe.md',
-  T21: 'docs/tutorials/T21-epistemic-robust-cantilever.md',
-  T22: 'docs/tutorials/T22-preloaded-bolted-flange-joint.md',
-  T23: 'docs/tutorials/T23-clinching-process-window-and-slock-codesign.md',
-  T24: 'docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md',
-  T25: 'docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md',
-  T26: 'docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md',
-  T27: 'docs/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.md',
-  T28: 'docs/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.md',
   A1: 'docs/analytic-tests/A1-cantilever-beam-theory.md',
   A2: 'docs/analytic-tests/A2-kirsch-plate-with-hole.md',
   A3: 'docs/analytic-tests/A3-de-laval-revolve-pappus-volume.md',
@@ -539,16 +528,6 @@ export const DEFAULT_DOC_PATHS: Record<string, string> = {
   A12: 'docs/analytic-tests/A12-additive-overhang-and-layer-peel.md',
   A13: 'docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md',
   A14: 'docs/analytic-tests/A14-rf-smith-chart-vswr-dipole-lobes.md',
-  A15: 'docs/analytic-tests/A15-young-laplace-droplet-and-rayleigh-lamb.md',
-  A16: 'docs/analytic-tests/A16-jurin-capillary-rise-and-tpms-gyroid-wick.md',
-  A17: 'docs/analytic-tests/A17-gerris-capillary-suite-spurious-capwave-plateau.md',
-  A18: 'docs/analytic-tests/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.md',
-  A19: 'docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md',
-  A20: 'docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md',
-  A21: 'docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md',
-  A22: 'docs/analytic-tests/A22-darcy-forchheimer-tpms-porous-hx.md',
-  A23: 'docs/analytic-tests/A23-sdf-venturi-section-and-coupled-1d-flow.md',
-  A24: 'docs/analytic-tests/A24-bayesian-map-coupon-and-thermal-calibration.md',
 };
 
 export const DEFAULT_FSM_PATHS: Record<string, string> = {
@@ -604,6 +583,7 @@ export const DEFAULT_FSM_PATHS: Record<string, string> = {
   A22: 'examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm',
   A23: 'examples/analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm',
   A24: 'examples/analytic/A24-bayesian-map-coupon-and-thermal-calibration.fsm',
+  A25: 'examples/analytic/A25-spurious-capillary-eddies-geometry-error.fsm',
 };
 
 export const DEFAULT_VERIFICATION_REFS: Record<string, string[]> = {
@@ -670,23 +650,30 @@ export function getCategoryForSheet(sheet: Pick<TutorialSheet, 'id' | 'category'
   return 'tutorial';
 }
 
-export function getDocPathForSheet(sheet: Pick<TutorialSheet, 'id' | 'docPath' | 'category'>): string {
-  if (sheet.docPath) return sheet.docPath;
-  if (DEFAULT_DOC_PATHS[sheet.id]) return DEFAULT_DOC_PATHS[sheet.id];
-  const cat = getCategoryForSheet(sheet);
-  const folder = cat === 'analytic' ? 'analytic-tests' : cat === 'case-study' ? 'case-studies' : 'tutorials';
-  return `docs/${folder}/${sheet.id}.md`;
+/** The repository Markdown path for a sheet, or undefined when no such file is shipped.
+ * Only a real `@doc_path` header or a DEFAULT_DOC_PATHS entry counts; we no longer synthesise a
+ * `docs/<folder>/<id>.md` path, because that pointed at a file which does not exist and the UI
+ * rendered it as a "Repository Markdown" provenance claim. The registry gate (web/tests/registry.mjs)
+ * keeps every declared path resolvable. */
+export function getDocPathForSheet(sheet: Pick<TutorialSheet, 'id' | 'docPath' | 'category'>): string | undefined {
+  return sheet.docPath ?? DEFAULT_DOC_PATHS[sheet.id] ?? undefined;
 }
 
 export function getFsmPathForSheet(sheet: Pick<TutorialSheet, 'id' | 'fsmPath' | 'docPath' | 'category'>): string {
   if (sheet.fsmPath) return sheet.fsmPath;
   if (DEFAULT_FSM_PATHS[sheet.id]) return DEFAULT_FSM_PATHS[sheet.id];
   const docPath = getDocPathForSheet(sheet);
-  return docPath
-    .replace(/^docs\/analytic-tests\//, 'examples/analytic/')
-    .replace(/^docs\/tutorials\//, 'examples/tutorials/')
-    .replace(/^docs\/case-studies\//, 'examples/case-studies/')
-    .replace(/\.md$/, '.fsm');
+  if (docPath) {
+    return docPath
+      .replace(/^docs\/analytic-tests\//, 'examples/analytic/')
+      .replace(/^docs\/tutorials\//, 'examples/tutorials/')
+      .replace(/^docs\/case-studies\//, 'examples/case-studies/')
+      .replace(/\.md$/, '.fsm');
+  }
+  // No doc path to derive from: fall back to the category's examples folder.
+  const cat = getCategoryForSheet(sheet);
+  const folder = cat === 'analytic' ? 'analytic' : cat === 'case-study' ? 'case-studies' : 'tutorials';
+  return `examples/${folder}/${sheet.id}.fsm`;
 }
 
 export function getVerificationRefsForSheet(sheet: Pick<TutorialSheet, 'id' | 'verificationRefs'>): string[] {
@@ -752,7 +739,7 @@ export function formatLiterateFsm(sheet: TutorialSheet): string {
   out.push(`# @title: ${sheet.title}`);
   out.push(`# @subtitle: ${sheet.subtitle}`);
   out.push(`# @verification_badge: ${sheet.verificationBadge}`);
-  out.push(`# @doc_path: ${docPath}`);
+  if (docPath) out.push(`# @doc_path: ${docPath}`);
   out.push(`# @fsm_path: ${fsmPath}`);
   out.push(`# @starter_fsm_name: ${sheet.starterFsmName}`);
   if (sheet.opensSystemsWorkbench) {

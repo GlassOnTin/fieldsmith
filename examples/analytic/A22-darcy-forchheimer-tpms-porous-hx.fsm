@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A22: 3D P2 Darcy–Forchheimer TPMS Porous Flow & Balanced Counterflow ε–NTU Heat Exchange
 # @subtitle: Verify 3D quadratic P2 nonlinear Darcy–Forchheimer porous-media pressure-drop (`−∇·(κ_eff(|∇p|) ∇p) = 0`), minimal-surface partition area density `a_v`, Kozeny–Carman permeability `K`, Ergun–Forchheimer drag `β`, and balanced two-stream counterflow `ε = NTU / (1 + NTU)` conjugate heat transfer on a uniform AlSi10Mg Gyroid sheet core.
 # @verification_badge: Verified by A22 & V63 · Exact 3D P2 Nonlinear Darcy–Forchheimer Patch Test + Counterflow ε–NTU
-# @doc_path: docs/analytic-tests/A22-darcy-forchheimer-tpms-porous-hx.md
 # @fsm_path: examples/analytic/A22-darcy-forchheimer-tpms-porous-hx.fsm
 # @starter_fsm_name: a22-darcy-forchheimer-tpms-porous-hx.fsm
 # @verification_refs: docs/verification/V36.md, docs/verification/V63.md, crates/fieldsmith-core/src/porous_hx.rs

@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A20: 3D P2 BDF2 Transient Fourier–Biot Quench & Pure Thermal-Shock Spike
 # @subtitle: Verify 3D quadratic P2 backward-differentiation-formula (BDF2) transient heat conduction and Duhamel–Neumann thermo-elasticity on a water-spray-quenched 316L slab (Bi = 5.0, Fo = 0.10) against the exact 40-term 1D Fourier–Biot eigenfunction series and zero-stress steady limit.
 # @verification_badge: Verified by A20 · Exact 1D Fourier–Biot Eigenfunction Series (Bi = 5, Fo = 0.10) · PASS (< 1.5%)
-# @doc_path: docs/analytic-tests/A20-transient-biot-quench-thermal-shock.md
 # @fsm_path: examples/analytic/A20-transient-biot-quench-thermal-shock.fsm
 # @starter_fsm_name: a20-transient-biot-quench-thermal-shock.fsm
 # @verification_refs: docs/verification/V20.md, docs/verification/V63.md

@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A24: Conjugate Linear-Gaussian & Nonlinear Robin Thermal Bayesian MAP Calibration
 # @subtitle: Verify 3D adjoint Gauss–Newton / Levenberg–Marquardt Bayesian Maximum-A-Posteriori (MAP) inverse calibration and Laplace posterior covariance (`Σ_post = diag(σ_0) (I + Aᵀ A)⁻¹ diag(σ_0)`) against exact closed-form conjugate Gaussian and 1D Robin conduction analytical solutions on a 3D P2 uniaxial/thermal coupon.
 # @verification_badge: Verified by A24 & V63 · Exact Conjugate Gaussian MAP + Laplace Posterior σ_post + Nonlinear Robin Inverse
-# @doc_path: docs/analytic-tests/A24-bayesian-map-coupon-and-thermal-calibration.md
 # @fsm_path: examples/analytic/A24-bayesian-map-coupon-and-thermal-calibration.fsm
 # @starter_fsm_name: a24-bayesian-map-coupon-and-thermal-calibration.fsm
 # @verification_refs: docs/verification/V1.md, docs/verification/V20.md, docs/verification/V63.md, crates/fieldsmith-core/src/calibrate.rs

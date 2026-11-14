@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A23: 3D Revolved Venturi SDF Cross-Sections, Coupled 1D Bernoulli–Poiseuille Flow & 3D Thermo-Elasticity
 # @subtitle: Verify 2D marching-squares `section` extraction (`area`, `perimeter`, `dh`) from a 3D revolved CuCrZr bi-conical Venturi shell (`R(z): 8 → 4 → 8 mm`), Dual-AD spatial stencil `d_ds(q_dyn)` Bernoulli throat suction + Hagen–Poiseuille recovery, enthalpy conservation, and 1D→3D convective/pressure BC projection.
 # @verification_badge: Verified by A23 & V63 · Exact 3D Revolve SDF Sections + 1D Bernoulli–Poiseuille + 3D CuCrZr Thermo-Elasticity
-# @doc_path: docs/analytic-tests/A23-sdf-venturi-section-and-coupled-1d-flow.md
 # @fsm_path: examples/analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm
 # @starter_fsm_name: a23-sdf-venturi-section-and-coupled-1d-flow.fsm
 # @opens_systems_workbench: true

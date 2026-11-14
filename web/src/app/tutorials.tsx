@@ -128,7 +128,7 @@ export function renderSheetMarkdown(sheet: TutorialSheet): string {
   lines.push(`# ${sheet.code} — ${sheet.title}`);
   lines.push('');
   lines.push(`> **Category**: ${getCategoryLabel(cat)} · **Level**: ${sheet.level} · **Verification**: ${sheet.verificationBadge}`);
-  lines.push(`> **Literate .fsm Source**: \`${fsmPath}\` · **Repository Markdown**: \`${docPath}\`${vRefs.length > 0 ? ` · **Verification Reports**: ${vRefs.map((r) => `\`${r}\``).join(', ')}` : ''}`);
+  lines.push(`> **Literate .fsm Source**: \`${fsmPath}\`${docPath ? ` · **Repository Markdown**: \`${docPath}\`` : ''}${vRefs.length > 0 ? ` · **Verification Reports**: ${vRefs.map((r) => `\`${r}\``).join(', ')}` : ''}`);
   lines.push('');
   lines.push(sheet.subtitle);
   lines.push('');
@@ -1134,7 +1134,7 @@ function TutorialsContentsPage({
       s.level,
       s.verificationBadge,
       s.starterFsmName,
-      getDocPathForSheet(s),
+      getDocPathForSheet(s) ?? '',
       ...getVerificationRefsForSheet(s),
       s.theoryChapter.chapterTitle,
       ...info.materials.map((m) => `${m.id} ${m.name} ${m.phaseLabel}`),
@@ -1541,7 +1541,7 @@ function TutorialsContentsPage({
                             type="button"
                             class="btn ghost small"
                             data-testid={`contents-md-${s.id}`}
-                            title={`Read full repository Markdown (${docPath})`}
+                            title={docPath ? `Read full repository Markdown (${docPath})` : 'Read generated Markdown preview'}
                             onClick={() => onOpenSheetMarkdown(s.id)}
                             style={{ padding: '1px 5px', fontSize: '10.5px' }}
                           >
@@ -1613,7 +1613,7 @@ function TutorialsContentsPage({
                             <span>
                               {info.shapeCount} shapes · {info.regionCount} regions · {s.userSteps.length} steps · {s.mcpSteps.length} API tools
                             </span>
-                            <code>{docPath} · {s.starterFsmName}</code>
+                            <code>{docPath ? `${docPath} · ` : ''}{s.starterFsmName}</code>
                           </div>
                         </div>
                       )}
@@ -1703,9 +1703,11 @@ function TutorialsContentsPage({
                               </span>
                             ))}
                           </div>
-                          <code style={{ fontSize: '10px', color: 'var(--text-3)' }} title={`Repo Markdown: ${docPath}`}>
-                            {docPath}
-                          </code>
+                          {docPath && (
+                            <code style={{ fontSize: '10px', color: 'var(--text-3)' }} title={`Repo Markdown: ${docPath}`}>
+                              {docPath}
+                            </code>
+                          )}
                         </div>
                         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>
                           {s.title}
@@ -1795,7 +1797,7 @@ function TutorialsContentsPage({
                             type="button"
                             class="btn small"
                             data-testid={`contents-md-${s.id}`}
-                            title={`Read full repository Markdown (${docPath})`}
+                            title={docPath ? `Read full repository Markdown (${docPath})` : 'Read generated Markdown preview'}
                             onClick={() => onOpenSheetMarkdown(s.id)}
                           >
                             📄 Markdown
@@ -2986,12 +2988,12 @@ function TutorialsDrawer() {
     const literateFsmText = formatLiterateFsm(sheet);
     return (
       <div class="tut-col-body" data-testid="tutorial-col-markdown">
-        <div class="tut-col-head">4. Literate .fsm Source ({fsmPath}) &amp; Repo Markdown ({docPath})</div>
+        <div class="tut-col-head">4. Literate .fsm Source ({fsmPath}){docPath ? ` & Repo Markdown (${docPath})` : ''}</div>
         <div class="tut-step-card">
           <div class="tut-step-top" style={{ flexWrap: 'wrap', gap: '6px' }}>
             <div>
               <strong>
-                <code>{fsmPath}</code> · <code>{docPath}</code>
+                <code>{fsmPath}</code>{docPath ? <> · <code>{docPath}</code></> : null}
               </strong>
               {vRefs.length > 0 && (
                 <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
@@ -3035,7 +3037,7 @@ function TutorialsDrawer() {
                 data-testid="tutorial-copy-markdown"
                 onClick={() => {
                   navigator.clipboard?.writeText(mdText).catch(() => {});
-                  ui.notify(`Copied ${docPath} Markdown to clipboard`, 'info');
+                  ui.notify(`Copied ${docPath ?? `${sheet.id}.md`} Markdown to clipboard`, 'info');
                 }}
               >
                 Copy Markdown
@@ -3049,7 +3051,7 @@ function TutorialsDrawer() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = docPath.split('/').pop() || `${sheet.id}.md`;
+                  a.download = (docPath ?? `${sheet.id}.md`).split('/').pop() || `${sheet.id}.md`;
                   document.body.appendChild(a);
                   a.click();
                   document.body.removeChild(a);
@@ -3211,7 +3213,7 @@ function TutorialsDrawer() {
             >
               {isContentsOpen
                 ? `${TUTORIAL_SHEETS.length} Guided Sheets + ${EXAMPLES.length} Examples`
-                : `${getDocPathForSheet(sheet)} · ${sheet.verificationBadge}`}
+                : `${getDocPathForSheet(sheet) ?? getFsmPathForSheet(sheet)} · ${sheet.verificationBadge}`}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>

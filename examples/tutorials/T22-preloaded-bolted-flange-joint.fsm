@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Host-Associative Bolted Flange Joint, VDI 2230 Preload Envelope, & 3D ISO 16047 Scatter UQ
 # @subtitle: Evaluate Motosh + FED-STD-H28 + VDI 2230 fastener mechanics, insert a 4-corner M5 cap-bolt + washer + nyloc-nut pattern onto a 3D Al7075 flange via `DocCommand`, reconfigure hardware in place, and propagate 15% ISO 16047 tightening-torque scatter in O(1) 3D FEA solves.
 # @verification_badge: Verified by V57 & V63 · Unified Rust Fastener Kernel + 3D Preload Adjoint UQ
-# @doc_path: docs/tutorials/T22-preloaded-bolted-flange-joint.md
 # @fsm_path: examples/tutorials/T22-preloaded-bolted-flange-joint.fsm
 # @starter_fsm_name: t22-preloaded-bolted-flange-joint.fsm
 # @verification_refs: crates/fieldsmith-verify/tests/v57_fixings_torque_weibull.rs, crates/fieldsmith-verify/tests/v63_architecture_lock.rs

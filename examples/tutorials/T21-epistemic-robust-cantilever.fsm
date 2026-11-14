@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Epistemic Uncertainty Quantification (O(1)-Solve 3D Adjoint UQ) & Robust p90/p10 Sizing
 # @subtitle: Declare machining tolerances, load scatter, and material yield variability directly in `.fsm` (`uncertainty ...`), propagate p10 / p50 / p90 quantiles and ranked variance shares in O(1) linear FEA solves, and size a 3D SS316L cantilever against robust `p90.max_vm_elem` and `p10.min_safety_factor` contracts.
 # @verification_badge: Verified by V63 · O(1)-Solve 3D FOSM Adjoint UQ + Robust Quantile SQP
-# @doc_path: docs/tutorials/T21-epistemic-robust-cantilever.md
 # @fsm_path: examples/tutorials/T21-epistemic-robust-cantilever.fsm
 # @starter_fsm_name: t21-epistemic-robust-cantilever.fsm
 # @verification_refs: crates/fieldsmith-verify/tests/v63_architecture_lock.rs

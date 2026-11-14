@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: 3D P2 Transient Thermal-Shock Quench & Timeline Co-Design on a 316L Valve Seat Ring
 # @subtitle: Model cold-blowdown thermal shock on an austenitic 316L flanged valve seat ring (`solve tref=280 t_end=4.0 steps=16 t_init=280`), scrub the 3D P2 BDF2 temperature and stress wave across time in Results (3), and enforce peak transient thermal-shock contracts over MCP.
 # @verification_badge: Verified by A20 & V63 · 3D P2 BDF2 Conduction + Batched Multi-RHS Thermal Shock
-# @doc_path: docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md
 # @fsm_path: examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm
 # @starter_fsm_name: t24-transient-thermal-shock-quench-and-ramp.fsm
 # @verification_refs: docs/verification/V20.md, docs/verification/V63.md

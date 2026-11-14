@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A15: 3D Young–Laplace Capillary Droplet & Rayleigh–Lamb (n = 2) Quadrupole Oscillation (V61)
 # @subtitle: Live 3D Rayleigh–Lamb (n = 2) prolate ↔ oblate quadrupole capillary oscillation and P2 Young–Laplace surface tension containment, paired with 3D MLS Monge–Pratt curvature κ = 2/R₀ and Δp = 2γ/R₀ verification (V61).
 # @verification_badge: Verified by V61 · 3D MLS-CSF + Akinci Pairwise Cohesion · PASS (< 0.1%)
-# @doc_path: docs/analytic-tests/A15-young-laplace-droplet-and-rayleigh-lamb.md
 # @fsm_path: examples/analytic/A15-young-laplace-droplet-and-rayleigh-lamb.fsm
 # @starter_fsm_name: a15-young-laplace-droplet.fsm
 # @verification_refs: docs/verification/V61.md

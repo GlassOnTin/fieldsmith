@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A18: 3D Concentric Taylor–Couette Stator Structural FEA + 1D/2D Analytic Gerris Flow Reference Suite (G5–G8, V64)
 # @subtitle: Solve 3D P2 structural stress in a concentric Ti-6Al-4V stator vessel under annular pressure, paired with the companion 1D/2D analytic Gerris fluid reference suite (Popinet 2003: G5 Nusselt/Poiseuille film profile, G6 Taylor–Couette radial shear, G7 Taylor–Green energy decay, and G8 Thacker parabolic basin slosh).
 # @verification_badge: Verified by V64 · Gerris Navier–Stokes & Shallow-Water Suite G5–G8 (Popinet 2003) · 4/4 PASS (< 0.05%)
-# @doc_path: docs/analytic-tests/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.md
 # @fsm_path: examples/analytic/A18-gerris-navier-stokes-poiseuille-couette-taylor-thacker.fsm
 # @starter_fsm_name: a18-gerris-navier-stokes-suite.fsm
 # @verification_refs: docs/verification/V64.md

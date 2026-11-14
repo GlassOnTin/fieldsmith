@@ -33,6 +33,7 @@ step() {
 }
 step 'cargo clippy -D warnings' cargo clippy --workspace --all-targets -- -D warnings
 step 'TypeScript typecheck' npm --prefix web run typecheck
+step 'sheet-provenance registry integrity (doc_path / fsm_path resolve on disk)' node web/tests/registry.mjs
 step 'workspace tests (V1-V4, V8-V13, V15, V17-V23 + V14 standard + unit tests)' cargo test --workspace
 step 'wasm package build' npm --prefix web run wasm
 step 'headless browser suite (V5 + V16 + bracket + shape + make + mesh)' npm --prefix web run test:e2e

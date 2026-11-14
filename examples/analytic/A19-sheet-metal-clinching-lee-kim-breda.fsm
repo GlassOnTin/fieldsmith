@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A19: 1D Analytic Clinching Process Window (Lee–Kim / Breda) + 3D Parametric S-Lock Pull-Out Secant FEM
 # @subtitle: Verify the 1D analytic clinching process window — Breda–Avitzur forming force F_punch(X), Varis–Mucha isochoric (t_n(X), t_u(X)) closure, and the Lee–Kim (2010) hat-curve failure envelope F_joint(X) = min(F_neck(X), F_pull(X)) — alongside a 3D parametric S-lock pull-out coupon solved with J2 secant elasto-plasticity.
 # @verification_badge: Verified by A19 · Lee–Kim (2010) & Breda–Coppieters (2018) Clinch S-Lock · PASS (< 1.5%)
-# @doc_path: docs/analytic-tests/A19-sheet-metal-clinching-lee-kim-breda.md
 # @fsm_path: examples/analytic/A19-sheet-metal-clinching-lee-kim-breda.fsm
 # @starter_fsm_name: a19-sheet-metal-clinching-lee-kim.fsm
 # @verification_refs: docs/verification/V53.md, docs/verification/V60.md

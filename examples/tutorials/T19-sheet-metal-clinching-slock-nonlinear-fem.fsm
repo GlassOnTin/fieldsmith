@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Dialing In Sheet Metal Clinching — 1D Analytic Clinching Process Window (Lee–Kim / Breda) + 3D Parametric S-Lock Pull-Out Secant FEM
 # @subtitle: Explore how shop-floor press-joining dials in bottom coin thickness X between Button Pull-Out (under-clinched) and Neck Fracture (over-clinched) via the 1D analytic clinching process window (Lee–Kim / Breda) coupled with a 3D parametric S-lock pull-out secant FEM model.
 # @verification_badge: Verified by A19 & V53 · 3D J2 Secant Elasto-Plasticity + Lee–Kim Hat-Curve
-# @doc_path: docs/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.md
 # @fsm_path: examples/tutorials/T19-sheet-metal-clinching-slock-nonlinear-fem.fsm
 # @starter_fsm_name: t19-sheet-metal-clinching-slock.fsm
 # @verification_refs: docs/verification/V53.md, docs/verification/V60.md

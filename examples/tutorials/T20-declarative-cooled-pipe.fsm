@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Declarative 1D Coolant Channel + 3D Staggered Thermo-Elastic Adjoint Co-Design
 # @subtitle: Author a composable 1D thermal-hydraulic `system` block directly inside `.fsm`, project station-resolved `lerp(z, ...)` film and pressure profiles onto a 3D SS316L cooling liner, verify engineering `assert` contracts, and differentiate 3D peak temperature and von Mises stress in O(1) staggered adjoint solves.
 # @verification_badge: Verified by V63 · Dual-AD 1D System + 3D Staggered Thermo-Elastic Adjoints
-# @doc_path: docs/tutorials/T20-declarative-cooled-pipe.md
 # @fsm_path: examples/tutorials/T20-declarative-cooled-pipe.fsm
 # @starter_fsm_name: t20-declarative-cooled-pipe.fsm
 # @verification_refs: crates/fieldsmith-verify/tests/v63_architecture_lock.rs

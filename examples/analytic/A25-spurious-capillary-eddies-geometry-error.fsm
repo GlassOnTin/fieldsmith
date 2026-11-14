@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A25: 3D Droplet Containment Vessel Structural FEA + 2D Analytic Biharmonic Spurious Capillary Eddy Workbench (V65)
 # @subtitle: Solve 3D P2 membrane stress on a spherical containment shell, paired with the 2D analytic biharmonic streamfunction workbench quantifying 8-vortex quadrupolar parasitic capillary currents (Ca_max) across five discrete surface-curvature approximations (Voxel CSF, Kernel CSF, Parabolic Monge MLS, Height-Function, and Pratt Quadric MLS).
 # @verification_badge: Verified by V65 · 5-Scheme Curvature Error & 8-Eddy Parasitic Current Hierarchy · Ca_Pratt = 6.35×10⁻¹⁰ (> 2×10⁵× Suppression)
-# @doc_path: docs/analytic-tests/A25-spurious-capillary-eddies-geometry-error.md
 # @fsm_path: examples/analytic/A25-spurious-capillary-eddies-geometry-error.fsm
 # @starter_fsm_name: a25-spurious-capillary-eddies-geometry-error.fsm
 # @verification_refs: docs/verification/V65.md

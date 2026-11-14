@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: 3D Contoured AlSi10Mg Regenerative Cooling Jacket with Section-Coupled Graded Gyroid Core
 # @subtitle: Co-design an annular AlSi10Mg regenerative thruster jacket (`R_bore = 8 mm`, `R_jacket = 16 mm` with mid-span throat stiffening torus and `let`-driven `fill gyroid sheet cell=c_cell`) where `section` declarations extract 3D SDF & TPMS cross-section profiles (`fill_area`, `fill_perm`, `fill_beta`, `fill_awet`, `fill_dh`) directly into a Dual-AD 1D Darcy–Forchheimer + regenerative thermal system and project `lerp(z, ...)` BCs back onto 3D P2 thermo-elastic FEA.
 # @verification_badge: Verified by A23 & V63 · Two-Way 3D SDF + Graded TPMS Sections ↔ 1D Adjoint System ↔ 3D P2 Thermo-Elastic FEA
-# @doc_path: docs/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.md
 # @fsm_path: examples/tutorials/T27-sdf-coupled-regenerative-cooling-jacket.fsm
 # @starter_fsm_name: t27-sdf-coupled-regenerative-cooling-jacket.fsm
 # @opens_systems_workbench: true

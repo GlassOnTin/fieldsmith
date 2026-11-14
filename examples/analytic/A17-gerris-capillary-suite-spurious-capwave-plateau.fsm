@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A17: 3D Capillary Jet Nozzle Structural FEA + Analytic Gerris Surface-Tension Reference Suite (G1–G4, V63)
 # @subtitle: Solve 3D P2 hoop stress on a Ti-6Al-4V capillary jet nozzle under internal Laplace pressure, paired with the companion analytic/reduced-order Gerris surface-tension benchmark suite (Popinet 2009: G1 Laplace jump, G2 Prosperetti damped capillary wave ODE, G3 Rayleigh–Lamb spectrum, and G4 Rayleigh–Plateau Bessel dispersion).
 # @verification_badge: Verified by V63 · Gerris Surface-Tension Suite G1–G4 (Popinet 2009) · 4/4 PASS (< 0.25%)
-# @doc_path: docs/analytic-tests/A17-gerris-capillary-suite-spurious-capwave-plateau.md
 # @fsm_path: examples/analytic/A17-gerris-capillary-suite-spurious-capwave-plateau.fsm
 # @starter_fsm_name: a17-gerris-capillary-suite.fsm
 # @verification_refs: docs/verification/V63.md

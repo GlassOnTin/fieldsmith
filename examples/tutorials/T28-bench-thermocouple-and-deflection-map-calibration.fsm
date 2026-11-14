@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Bench Thermocouple & Dial-Gauge Bayesian MAP Calibration (Closing the Hardware-to-Simulation Loop)
 # @subtitle: Fuse bench K-type thermocouple (`max_temp:Thermal 1`) and dial-indicator (`max_displacement:Load 1`) measurements with conservative datasheet priors (`uncertainty`) on an as-cast Al-Mg-Si actuator bracket (`observe`), cutting parameter uncertainty by >75% to pass tight `p90` flight qualification contracts without over-thickening hardware.
 # @verification_badge: Verified by T28 & V63 · 3D Adjoint Bayesian MAP Calibration + Laplace Posterior p90 Qualification
-# @doc_path: docs/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.md
 # @fsm_path: examples/tutorials/T28-bench-thermocouple-and-deflection-map-calibration.fsm
 # @starter_fsm_name: t28-bench-thermocouple-and-deflection-map-calibration.fsm
 # @verification_refs: docs/verification/V20.md, docs/verification/V63.md, crates/fieldsmith-core/src/calibrate.rs

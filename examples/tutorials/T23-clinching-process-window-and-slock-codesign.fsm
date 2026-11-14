@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Host-Stamped DC04 Clinching S-Lock Co-Design, Optimal X* Dial-In, & 45° Mixed-Peel J2 FEA
 # @subtitle: Stamp a parametric 3D S-Lock clinched joint onto a DC04 mild-steel lap coupon via `DocCommand`, evaluate the 51-point Lee–Kim / Breda hat-curve process window, dial residual coin thickness to optimal `X*`, rotate the service load to 45° mixed peel/shear, and verify 3D J2 secant elasto-plastic contracts.
 # @verification_badge: Verified by A19 & V63 · Unified Rust Clinching Kernel + 3D J2 Secant FEA
-# @doc_path: docs/tutorials/T23-clinching-process-window-and-slock-codesign.md
 # @fsm_path: examples/tutorials/T23-clinching-process-window-and-slock-codesign.fsm
 # @starter_fsm_name: t23-clinching-process-window-and-slock-codesign.fsm
 # @verification_refs: docs/verification/V53.md, crates/fieldsmith-verify/tests/v63_architecture_lock.rs

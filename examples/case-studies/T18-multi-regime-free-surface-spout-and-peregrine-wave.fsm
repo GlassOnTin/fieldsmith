@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: 3D FSI Slosh Baffle & Graded TPMS Wick FEA + 1D/2D Reduced-Order Free-Surface Spout-Lip & Peregrine Wave Workbench
 # @subtitle: Solve 3D P2 hydro-structural and thermocapillary stress on a stress-graded TPMS Gyroid slosh baffle (.fsm), paired with a companion 1D/2D reduced-order multi-regime free-surface workbench (1100 °C spout-lip lubrication profile, Peregrine wave shoaling/breaking kinematics, and Jurin capillary wicking).
 # @verification_badge: Verified by V61/V62 · Multi-Regime Free-Surface [Potential ↔ DFSPH ↔ MLS-CSF ↔ Implicit Stokes] · PASS
-# @doc_path: docs/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.md
 # @fsm_path: examples/case-studies/T18-multi-regime-free-surface-spout-and-peregrine-wave.fsm
 # @starter_fsm_name: t18-multi-regime-free-surface-fsi.fsm
 # @verification_refs: docs/verification/V61.md, docs/verification/V62.md

@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Preloaded Bolted Flange Gasket Contact, Inner-Bore Liftoff & Toe Prying Concentration
 # @subtitle: Replace artificial bilateral `fixed=z` flange supports with a true 3D P2 unilateral Signorini contact seat (`contact gasket_seat mating_face k=8000`), compare pure M6 bolt preload clamping against axial pipe blow-off prying, and visualise 3D normal bearing pressure `p_n` and inner-heel liftoff separation.
 # @verification_badge: Verified by A21 & V63 · 3D P2 Unilateral Signorini Contact + Semi-Smooth Newton Active Set
-# @doc_path: docs/tutorials/T25-preloaded-flange-gasket-liftoff-contact.md
 # @fsm_path: examples/tutorials/T25-preloaded-flange-gasket-liftoff-contact.fsm
 # @starter_fsm_name: t25-preloaded-flange-gasket-liftoff-contact.fsm
 # @verification_refs: docs/verification/V63.md, examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm

@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A21: 3D P2 Unilateral Signorini–Winkler Contact, Initial Clearance Gap & Prying Liftoff
 # @subtitle: Verify 3D quadratic P2 unilateral Signorini boundary contact (u·n − g₀ ≤ 0, p_n ≥ 0, p_n(u·n − g₀) = 0) integrated by positive-weight 9-point Duffy surface quadrature and solved via Semi-Smooth Newton (SSN) active-set iteration against exact analytical Winkler gap-closure equilibrium and eccentric prying liftoff.
 # @verification_badge: Verified by A21 & V63 · Exact 3D P2 Signorini Gap Patch Test + Prying Liftoff Equilibrium
-# @doc_path: docs/analytic-tests/A21-signorini-unilateral-contact-and-prying-liftoff.md
 # @fsm_path: examples/analytic/A21-signorini-unilateral-contact-and-prying-liftoff.fsm
 # @starter_fsm_name: a21-signorini-unilateral-contact-and-prying-liftoff.fsm
 # @verification_refs: docs/verification/V63.md, crates/fieldsmith-solve/src/contact.rs

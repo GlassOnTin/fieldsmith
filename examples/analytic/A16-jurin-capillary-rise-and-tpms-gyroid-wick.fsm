@@ -7,7 +7,6 @@ fieldsmith 1
 # @title: Analytic Benchmark A16: 3D Graded TPMS Gyroid Capillary Wick Column FEA + 1D Jurin & Lucas–Washburn Wicking Workbench (V62)
 # @subtitle: Solve 3D two-pass homogenised P2 stress and mass savings in a Ti-6Al-4V TPMS Gyroid wick column, paired with the 1D Young–Dupré contact angle, Jurin equilibrium capillary rise h_Jurin = 2γ cos θ_e / (ρ g r_eff), and Lucas–Washburn wicking ODE workbench (V62).
 # @verification_badge: Verified by V62 · Jurin + Lucas–Washburn + TPMS Hydraulic Radius · PASS (< 0.2%)
-# @doc_path: docs/analytic-tests/A16-jurin-capillary-rise-and-tpms-gyroid-wick.md
 # @fsm_path: examples/analytic/A16-jurin-capillary-rise-and-tpms-gyroid-wick.fsm
 # @starter_fsm_name: a16-jurin-capillary-tpms.fsm
 # @verification_refs: docs/verification/V62.md
