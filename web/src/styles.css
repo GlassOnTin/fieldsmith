@@ -66,6 +66,13 @@
 }
 
 * { box-sizing: border-box; }
+/* Text selection and placeholders speak the palette, not the UA defaults. The implied universal
+   subject reaches every element. Selection paints the accent with panel as the text colour: panel
+   is near-white in light and near-black in dark, the right contrast inversion against the accent in
+   each theme (>= 4.5:1). Placeholder uses the AA-legible secondary text token; opacity:1 overrides
+   the UA dimming so the computed colour is the token verbatim. */
+::selection { background: var(--accent); color: var(--panel); }
+::placeholder { color: var(--text-2); opacity: 1; }
 /* Honour the OS "reduce motion" setting: collapse every transition and animation to a
    near-instant 0.01ms (not 0s, so any end events still fire) and stop infinite loops. The
    universal selector needs !important to beat the class-level `transition` shorthands below

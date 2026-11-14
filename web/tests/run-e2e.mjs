@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar|textaccent] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -44,6 +44,7 @@ import { motionTest } from './motion.mjs';
 import { formfocusTest } from './formfocus.mjs';
 import { nativeaccentTest } from './nativeaccent.mjs';
 import { scrollbarTest } from './scrollbar.mjs';
+import { textaccentTest } from './textaccent.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -259,6 +260,11 @@ try {
   if (!only || only === 'scrollbar') {
     const ok = await scrollbarTest(browser, url, { screens, docsDir });
     console.log(`scrollbar test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'textaccent') {
+    const ok = await textaccentTest(browser, url, { screens, docsDir });
+    console.log(`textaccent test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {
