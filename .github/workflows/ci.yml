@@ -48,7 +48,7 @@ jobs:
 
   rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60  # 3D engine tests ~38m + V14 ladder + cold cache restore
     env:
       CARGO_PROFILE_DEV_OPT_LEVEL: "3"
     steps:
