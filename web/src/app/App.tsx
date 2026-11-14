@@ -240,6 +240,9 @@ function EmptyState() {
           <button class="btn" onClick={() => addShape('cylinder')}>
             <Icon.cylinder /> Cylinder
           </button>
+          <button class="btn" onClick={() => openSketchWorkbenchModal()} data-testid="empty-start-sketch">
+            <Icon.sketcher /> Start from a sketch
+          </button>
           <button class="btn" onClick={importMeshCommand} data-testid="empty-import-mesh">
             <Icon.mesh /> Import mesh…
           </button>

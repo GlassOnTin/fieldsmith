@@ -14,8 +14,9 @@ import { chromium } from 'playwright';
 import { selpruneTest } from './selprune.mjs';
 import { renameTest } from './rename.mjs';
 import { regiondeleteTest } from './regiondelete.mjs';
+import { sketchstartTest } from './sketchstart.mjs';
 
-const GATES = { selprune: selpruneTest, rename: renameTest, regiondelete: regiondeleteTest };
+const GATES = { selprune: selpruneTest, rename: renameTest, regiondelete: regiondeleteTest, sketchstart: sketchstartTest };
 const names = (process.argv[2] || 'selprune,rename,regiondelete').split(',').map((s) => s.trim()).filter(Boolean);
 const url = process.argv[3] || 'http://localhost:5173/';
 const docsDir = process.argv[4] || '/tmp/android-verify';
@@ -34,6 +35,49 @@ const watchdog = setTimeout(() => {
   process.exit(3);
 }, 480000);
 
+// Android Chrome keeps a persistent new-tab/prerender target with no committed frame
+// (url:'', title:''). connectOverCDP waits for EVERY target to initialise, so that
+// frameless target stalls the connect to its 60s timeout even though raw CDP works.
+// Target.closeTarget does not stick (Chrome re-creates the NTP target); navigating it to
+// about:blank commits a frame and unblocks the connect. Best-effort and idempotent: a
+// missing forward/device falls through to connectOverCDP's own error, and real-content
+// tabs (a url or a title) are never matched, so the user's tabs are left alone.
+async function commitFramelessTargets() {
+  try {
+    const ver = await (await fetch('http://localhost:9222/json/version')).json();
+    const list = await (await fetch('http://localhost:9222/json/list')).json();
+    const blanks = list.filter((t) => t.type === 'page' && (!t.url || t.url === 'about:blank') && !t.title);
+    if (blanks.length === 0) return;
+    const ws = new WebSocket(ver.webSocketDebuggerUrl);
+    await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('ws error')); });
+    let id = 0;
+    const pending = new Map();
+    ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+    const send = (method, params, sessionId) => new Promise((res) => {
+      const myId = ++id;
+      const timer = setTimeout(() => { if (pending.has(myId)) { pending.delete(myId); res({}); } }, 8000);
+      pending.set(myId, (m) => { clearTimeout(timer); res(m); });
+      ws.send(JSON.stringify({ id: myId, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+    try {
+      for (const t of blanks) {
+        const att = await send('Target.attachToTarget', { targetId: t.id, flatten: true });
+        const sid = att.result && att.result.sessionId;
+        if (!sid) continue;
+        await send('Page.enable', {}, sid);
+        await send('Page.navigate', { url: 'about:blank' }, sid);
+        console.log(`android-cdp: committed frame on frameless target ${t.id}`);
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    } finally {
+      ws.close();
+    }
+  } catch (e) {
+    console.error(`android-cdp: pre-connect frameless-target fix skipped (${e.message}); continuing`);
+  }
+}
+
+await commitFramelessTargets();
 const cdp = await chromium.connectOverCDP('http://localhost:9222/', { timeout: 60000 });
 // Android Chrome rejects Browser.setWindowBounds, so force viewport:null (use the
 // real window, no emulation) on every newPage the gates request. All other Browser
