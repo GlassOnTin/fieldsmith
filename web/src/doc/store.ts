@@ -202,6 +202,14 @@ export class Store {
     this.emit(false);
   }
 
+  /** Drop a selection whose target no longer exists (e.g. after a cascade delete).
+   * Reuses the undo/redo existence check so delete paths cannot drift from it. */
+  pruneSelection() {
+    const before = this.selection;
+    this.fixSelection();
+    if (this.selection !== before) this.emit(false);
+  }
+
   /** Replace `doc` via a local user edit (e.g. `.fsm` source drawer), preserving undo history and syncing workspace. */
   replaceDoc(doc: Document, label: string): boolean {
     const base = this.transientBase ?? this.doc;
@@ -227,7 +235,7 @@ export class Store {
     this.emit(false);
   }
 
-  /** Drop a selection that no longer exists after undo/redo. */
+  /** Drop a selection that no longer exists after undo/redo or a cascade delete. */
   private fixSelection() {
     const s = this.selection;
     if (!s) return;

@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar|textaccent|minibtn|veriftheme|minibtnaa|badge|letlifecycle|numinput|namefield|setupfields|docname|rename|regiondelete] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar|textaccent|minibtn|veriftheme|minibtnaa|badge|letlifecycle|numinput|namefield|setupfields|docname|rename|regiondelete|selprune] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -56,6 +56,7 @@ import { setupfieldsTest } from './setupfields.mjs';
 import { docnameTest } from './docname.mjs';
 import { renameTest } from './rename.mjs';
 import { regiondeleteTest } from './regiondelete.mjs';
+import { selpruneTest } from './selprune.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -331,6 +332,11 @@ try {
   if (!only || only === 'regiondelete') {
     const ok = await regiondeleteTest(browser, url, { screens, docsDir });
     console.log(`regiondelete test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'selprune') {
+    const ok = await selpruneTest(browser, url, { screens, docsDir });
+    console.log(`selprune test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {

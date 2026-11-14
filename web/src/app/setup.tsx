@@ -608,26 +608,7 @@ export function deleteAnalysis(
       pruneConsumers(d, new Set([id]));
     }
   });
-  const sel = store.selection;
-  if (sel) {
-    const stillExists =
-      sel.kind === 'region'
-        ? store.doc.regions.some((r) => r.id === sel.id)
-        : sel.kind === 'support'
-          ? store.doc.supports.some((r) => r.id === sel.id)
-          : sel.kind === 'contact'
-            ? (store.doc.contacts ?? []).some((r) => r.id === sel.id)
-            : sel.kind === 'load'
-              ? store.doc.loads.some((r) => r.id === sel.id)
-              : sel.kind === 'temperature'
-                ? store.doc.temperatures.some((r) => r.id === sel.id)
-                : sel.kind === 'convection'
-                  ? store.doc.convections.some((r) => r.id === sel.id)
-                  : sel.kind === 'heatflux'
-                    ? store.doc.heat_fluxes.some((r) => r.id === sel.id)
-                    : true;
-    if (!stillExists) store.select(null);
-  }
+  store.pruneSelection();
 }
 
 // ---- tree -----------------------------------------------------------------------------
