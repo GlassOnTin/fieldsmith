@@ -110,6 +110,42 @@ export function removeNode(doc: Document, id: string): Node | null {
   return n;
 }
 
+/** Delete a region and EVERY dependent so the document still validates: the six
+ * analysis-statement types that name it, the fill.protect entry, consumers, any
+ * extend node swept from it (removeNode also prunes that node's downstream
+ * selectors), and the hx spec when either port names it. An extend or hx left
+ * pointing at a deleted region is rejected by the validator ("Extend '…' refers
+ * to missing region", "hx inlet refers to missing region"). Shared by
+ * deleteAnalysis('region', …) and removeFace's last-selector branch so the two
+ * paths cannot drift — the delete-side twin of renameId's region rewire. */
+export function deleteRegion(doc: Document, id: string): void {
+  const gone = new Set<string>([id]);
+  for (const ct of doc.contacts ?? []) if (ct.region === id) gone.add(ct.id);
+  for (const l of doc.loads) if (l.region === id) gone.add(l.id);
+  for (const t of doc.temperatures) if (t.region === id) gone.add(t.id);
+  for (const c of doc.convections) if (c.region === id) gone.add(c.id);
+  for (const f of doc.heat_fluxes) if (f.region === id) gone.add(f.id);
+  doc.regions = doc.regions.filter((r) => r.id !== id);
+  doc.supports = doc.supports.filter((r) => r.region !== id);
+  doc.contacts = (doc.contacts ?? []).filter((r) => r.region !== id);
+  doc.loads = doc.loads.filter((r) => r.region !== id);
+  doc.temperatures = doc.temperatures.filter((r) => r.region !== id);
+  doc.convections = doc.convections.filter((r) => r.region !== id);
+  doc.heat_fluxes = doc.heat_fluxes.filter((r) => r.region !== id);
+  if (doc.fill) doc.fill.protect = doc.fill.protect.filter((r) => r !== id);
+  pruneConsumers(doc, gone);
+  // An extend swept from this region names it; remove the node (removeNode prunes
+  // selectors/consumers that referenced the extend) rather than leave it dangling.
+  // Collect ids first so removal doesn't disturb the walk.
+  const extendIds: string[] = [];
+  walk(doc.root, (n) => {
+    if (n.kind.type === 'extend' && n.kind.region === id) extendIds.push(n.id);
+  });
+  for (const eid of extendIds) removeNode(doc, eid);
+  // The hx spec names two regions; if either is gone the spec is invalid, so drop it.
+  if (doc.hx && (doc.hx.inlet === id || doc.hx.outlet === id)) doc.hx = null;
+}
+
 function isAncestor(doc: Document, ancestorId: string, id: string): boolean {
   const a = findNode(doc, ancestorId);
   if (!a) return false;

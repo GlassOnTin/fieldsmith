@@ -10,6 +10,7 @@ import { FACE_LABEL, findNode, freshId, walk } from '../doc/types';
 import type { Contact, Convection, Document, Face, HeatFlux, Load, Node, Region, Support, Temperature } from '../doc/types';
 import { FACE_CODES, evalBody, isWasmLoaded, loadFnProbe, nodeFaces, spatialFnProbe } from '../doc/wasm';
 import { drivenExpr, pruneConsumers } from '../doc/param';
+import { deleteRegion } from '../doc/ops';
 import type { LevelResult, LoadFnProbe, PickHit, SpatialFnProbe } from '../doc/wasm';
 import { viewportExtensions } from './ViewportHost';
 import type { Viewport, Highlight } from '../view/viewport';
@@ -587,21 +588,7 @@ export function deleteAnalysis(
 ) {
   store.transact(`Delete ${id}`, (d) => {
     if (kind === 'region') {
-      const gone = new Set<string>([id]);
-      for (const ct of d.contacts ?? []) if (ct.region === id) gone.add(ct.id);
-      for (const l of d.loads) if (l.region === id) gone.add(l.id);
-      for (const t of d.temperatures) if (t.region === id) gone.add(t.id);
-      for (const c of d.convections) if (c.region === id) gone.add(c.id);
-      for (const f of d.heat_fluxes) if (f.region === id) gone.add(f.id);
-      d.regions = d.regions.filter((r) => r.id !== id);
-      d.supports = d.supports.filter((r) => r.region !== id);
-      d.contacts = (d.contacts ?? []).filter((r) => r.region !== id);
-      d.loads = d.loads.filter((r) => r.region !== id);
-      d.temperatures = d.temperatures.filter((r) => r.region !== id);
-      d.convections = d.convections.filter((r) => r.region !== id);
-      d.heat_fluxes = d.heat_fluxes.filter((r) => r.region !== id);
-      if (d.fill) d.fill.protect = d.fill.protect.filter((r) => r !== id);
-      pruneConsumers(d, gone);
+      deleteRegion(d, id);
     } else if (kind === 'support') {
       d.supports = d.supports.filter((r) => r.id !== id);
     } else if (kind === 'contact') {
@@ -1399,21 +1386,7 @@ function removeFace(regionId: string, index: number) {
     if (!r) return;
     r.selectors.splice(index, 1);
     if (r.selectors.length === 0) {
-      const gone = new Set<string>([regionId]);
-      for (const ct of d.contacts ?? []) if (ct.region === regionId) gone.add(ct.id);
-      for (const l of d.loads) if (l.region === regionId) gone.add(l.id);
-      for (const t of d.temperatures) if (t.region === regionId) gone.add(t.id);
-      for (const c of d.convections) if (c.region === regionId) gone.add(c.id);
-      for (const f of d.heat_fluxes) if (f.region === regionId) gone.add(f.id);
-      d.regions = d.regions.filter((x) => x.id !== regionId);
-      d.supports = d.supports.filter((s) => s.region !== regionId);
-      d.contacts = (d.contacts ?? []).filter((ct) => ct.region !== regionId);
-      d.loads = d.loads.filter((l) => l.region !== regionId);
-      d.temperatures = d.temperatures.filter((t) => t.region !== regionId);
-      d.convections = d.convections.filter((c) => c.region !== regionId);
-      d.heat_fluxes = d.heat_fluxes.filter((f) => f.region !== regionId);
-      if (d.fill) d.fill.protect = d.fill.protect.filter((p) => p !== regionId);
-      pruneConsumers(d, gone);
+      deleteRegion(d, regionId);
     }
   });
 }
