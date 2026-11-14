@@ -155,6 +155,23 @@ export function openFsmz(bytes: Uint8Array, fileName?: string): boolean {
   }
 }
 
+/** A document opened from a file lands on a lens that fits its content: an
+ * analysable study opens in Setup so the engine auto-solves and the region rows
+ * are visible; a bare shape opens in Shape. Open must not inherit the previous
+ * document's lens — after New (Shape) a reopened study would otherwise sit in
+ * Shape and never re-solve. */
+function lensForOpenedDocument(doc: Document): Lens {
+  const study =
+    doc.regions.length > 0 ||
+    doc.supports.length > 0 ||
+    doc.loads.length > 0 ||
+    doc.temperatures.length > 0 ||
+    (doc.contacts ?? []).length > 0 ||
+    (doc.convections ?? []).length > 0 ||
+    (doc.heat_fluxes ?? []).length > 0;
+  return study ? 'setup' : 'shape';
+}
+
 export function openFile() {
   const input = document.createElement('input');
   input.type = 'file';
@@ -162,11 +179,10 @@ export function openFile() {
   input.onchange = async () => {
     const f = input.files?.[0];
     if (!f) return;
-    if (f.name.toLowerCase().endsWith('.fsmz')) {
-      openFsmz(new Uint8Array(await f.arrayBuffer()), f.name);
-    } else {
-      openText(await f.text(), f.name);
-    }
+    const ok = f.name.toLowerCase().endsWith('.fsmz')
+      ? openFsmz(new Uint8Array(await f.arrayBuffer()), f.name)
+      : openText(await f.text(), f.name);
+    if (ok) store.setLens(lensForOpenedDocument(store.doc));
   };
   input.click();
 }

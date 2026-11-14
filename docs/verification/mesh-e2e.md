@@ -13,7 +13,7 @@
 | setup | support on bottom, force load on top defaults down 100 N | pass | supports ["bottom"], loads [["top",[0,0,-100]]] | mesh-07.png |
 | solve | the mesh document solves to ready | pass | ready; levels ["coarse mesh","refined · 150k DOF"] | mesh-08.png |
 | solve | the last level carries a stress and a displacement, and matches the document | pass | 0.5 MPa, 0.0032 mm | mesh-09.png |
-| save | a mesh document saves as a .fsmz ZIP sidecar | pass | untitled.fsmz, 109682 bytes, starts 504b0304 | mesh-10.png |
+| save | a mesh document saves as a .fsmz ZIP sidecar | pass | untitled.fsmz, 109684 bytes, starts 504b0304 | mesh-10.png |
 | open | File → Open of the .fsmz restores the same document | pass | mesh hash ca39761b67d28047; canonical text identical: true | mesh-11.png |
 | open | the mesh grid rehydrates and the same patch is still pickable | pass | meshcache.has(…) → true; patch 1 pick → true | mesh-12.png |
 | open | the reopened document re-solves without a fresh import | pass | status ready, levels ["coarse mesh","refined · 150k DOF"] | mesh-13.png |
