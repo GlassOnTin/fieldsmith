@@ -4069,8 +4069,8 @@ function ResultsPanel() {
                 style={{
                   margin: '6px 0',
                   padding: '7px 9px',
-                  background: 'rgba(59, 130, 246, 0.08)',
-                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  background: 'var(--panel-2)',
+                  border: '1px solid var(--line)',
                   borderRadius: '6px',
                   display: 'flex',
                   flexDirection: 'column',
@@ -4078,13 +4078,14 @@ function ResultsPanel() {
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#93c5fd' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)' }}>
                     📐 Literate .fsm Verification · {litSheet.id} ({litSheet.verificationBadge})
                   </span>
                   <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       class="mini-btn"
+                      style={{ color: 'var(--text-2)' }}
                       data-testid="results-open-literate-sheet"
                       onClick={() => {
                         ui.set('tutorialSheetId', litSheet.id);
@@ -4097,6 +4098,7 @@ function ResultsPanel() {
                     <button
                       type="button"
                       class="mini-btn"
+                      style={{ color: 'var(--text-2)' }}
                       data-testid="results-open-theory-lens"
                       onClick={() => store.setLens('theory')}
                     >
@@ -4114,17 +4116,17 @@ function ResultsPanel() {
                       flexDirection: 'column',
                       gap: '3px',
                       padding: '5px 7px',
-                      background: allPass ? 'rgba(16, 185, 129, 0.07)' : 'rgba(239, 68, 68, 0.09)',
-                      border: allPass ? '1px solid rgba(16, 185, 129, 0.32)' : '1px solid rgba(239, 68, 68, 0.42)',
+                      background: 'var(--panel)',
+                      border: allPass ? '1px solid var(--ok)' : '1px solid var(--danger)',
                       borderRadius: '5px',
                       fontSize: '10.5px',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontWeight: 700, color: allPass ? '#6ee7b7' : '#fca5a5' }}>
+                      <span style={{ fontWeight: 700, color: allPass ? 'var(--ok)' : 'var(--danger)' }}>
                         {allPass ? '✓' : '✗'} Live @assert Contracts ({passCount} / {liveAsserts.length} PASS on {lvl.label})
                       </span>
-                      <span class="num" style={{ color: allPass ? '#a7f3d0' : '#fecaca', fontSize: '9.5px' }}>
+                      <span class="num" style={{ color: 'var(--text-2)', fontSize: '9.5px' }}>
                         fieldsmith solve --verify
                       </span>
                     </div>
@@ -4146,17 +4148,17 @@ function ResultsPanel() {
                             gap: '6px',
                             flexWrap: 'wrap',
                             padding: '2px 4px',
-                            background: 'rgba(15, 23, 42, 0.55)',
+                            background: 'var(--panel-2)',
                             borderRadius: '3px',
                           }}
                         >
-                          <span style={{ color: '#e2e8f0', fontWeight: 500 }}>
-                            {ev.assert.label} <code style={{ color: '#94a3b8', fontSize: '9.5px' }}>({ev.assert.metric})</code>
+                          <span style={{ color: 'var(--text)', fontWeight: 500 }}>
+                            {ev.assert.label} <code style={{ color: 'var(--text-2)', fontSize: '9.5px' }}>({ev.assert.metric})</code>
                           </span>
                           <span
                             class="num"
                             style={{
-                              color: ev.passed ? '#4ade80' : '#f87171',
+                              color: ev.passed ? 'var(--ok)' : 'var(--danger)',
                               fontWeight: 600,
                             }}
                           >
@@ -4172,7 +4174,7 @@ function ResultsPanel() {
                 })()}
                 {checks.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '10.5px' }}>
-                    <span style={{ fontSize: '9.5px', fontWeight: 600, color: '#94a3b8' }}>
+                    <span style={{ fontSize: '9.5px', fontWeight: 600, color: 'var(--text-2)' }}>
                       Static Reference Notes (@check comments in .fsm — see Live @assert above for verified FEA)
                     </span>
                     {checks.slice(0, compact ? 2 : 6).map((chk, idx) => (
@@ -4180,24 +4182,24 @@ function ResultsPanel() {
                         key={idx}
                         style={{
                           padding: '4px 6px',
-                          background: 'rgba(15, 23, 42, 0.65)',
+                          background: 'var(--panel)',
                           borderRadius: '4px',
-                          border: '1px solid rgba(148, 163, 184, 0.18)',
+                          border: '1px solid var(--line)',
                           display: 'flex',
                           flexDirection: 'column',
                           gap: '2px',
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{chk.quantity}</span>
-                          <span class="num" style={{ color: '#94a3b8', fontWeight: 500 }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text)' }}>{chk.quantity}</span>
+                          <span class="num" style={{ color: 'var(--text-2)', fontWeight: 500 }}>
                             doc note: {chk.relError} ({chk.tolerance})
                           </span>
                         </div>
-                        <div class="num" style={{ color: '#93c5fd', fontSize: '10px' }}>
+                        <div class="num" style={{ color: 'var(--accent)', fontSize: '10px' }}>
                           {chk.formula}
                         </div>
-                        <div class="num" style={{ color: '#cbd5e1', fontSize: '10px' }}>
+                        <div class="num" style={{ color: 'var(--text-2)', fontSize: '10px' }}>
                           Analytic Formula: <strong>{chk.analyticRef}</strong> · Doc Baseline: <strong>{chk.measuredFea}</strong>
                         </div>
                       </div>
