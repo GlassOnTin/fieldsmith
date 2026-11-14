@@ -1,6 +1,6 @@
 // Inspector: exact values for whatever is selected (or the document when nothing is).
 import type { JSX } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { store } from '../doc/store';
 import { containerOf, findNode, kindLabel, walk } from '../doc/types';
 import type { Document, Face, Material, Modifier, Node, NodeKind, Op } from '../doc/types';
@@ -1693,6 +1693,12 @@ function DocumentInspector() {
 
   const [renamingLet, setRenamingLet] = useState<string | null>(null);
   const [letRenameDraft, setLetRenameDraft] = useState('');
+  // The rename input commits on blur, and both Enter and Escape unmount it — which fires blur
+  // too. This token names the let whose rename session is still open; the first disposition
+  // (commit or cancel) clears it, so the trailing unmount-blur is inert. Without it Enter ran a
+  // second stale rename (a spurious "already in use" toast on a rename that had worked) and
+  // Escape committed the edited draft instead of cancelling.
+  const renameTokenRef = useRef<string | null>(null);
 
   const editOrCreateCustomMaterial = (label: string, mutate: (target: Material) => void) => {
     store.transact(label, (d) => {
@@ -1727,6 +1733,10 @@ function DocumentInspector() {
   };
 
   const commitLetRename = (from: string) => {
+    // Only the first disposition for this rename session counts; the token is cleared here
+    // (commit) or by Escape (cancel), so the trailing unmount-blur is inert.
+    if (renameTokenRef.current !== from) return;
+    renameTokenRef.current = null;
     const to = letRenameDraft.trim();
     setRenamingLet(null);
     if (!to || to === from) return;
@@ -2103,7 +2113,10 @@ function DocumentInspector() {
                     onKeyDown={(e) => {
                       e.stopPropagation();
                       if (e.key === 'Enter') commitLetRename(l.name);
-                      else if (e.key === 'Escape') setRenamingLet(null);
+                      else if (e.key === 'Escape') {
+                        renameTokenRef.current = null;
+                        setRenamingLet(null);
+                      }
                     }}
                   />
                 ) : (
@@ -2112,6 +2125,7 @@ function DocumentInspector() {
                     title={`let ${l.name} = ${l.expr} (double-click or click ✎ to rename)`}
                     style={{ cursor: 'pointer' }}
                     onDblClick={() => {
+                      renameTokenRef.current = l.name;
                       setLetRenameDraft(l.name);
                       setRenamingLet(l.name);
                     }}
@@ -2185,6 +2199,7 @@ function DocumentInspector() {
                     data-testid={`rename-let-${l.name}`}
                     title={`Rename parameter ${l.name}`}
                     onClick={() => {
+                      renameTokenRef.current = l.name;
                       setLetRenameDraft(l.name);
                       setRenamingLet(l.name);
                     }}
