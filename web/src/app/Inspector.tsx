@@ -537,6 +537,10 @@ function ModifierCard({ node, m, index }: { node: Node; m: Modifier; index: numb
 export function NameField({ id }: { id: string }) {
   const [text, setText] = useState(id);
   useEffect(() => setText(id), [id]);
+  // Escape reverts the text then blurs, but the blur fires synchronously before the reverted
+  // state lands, so onBlur would commit the edited draft. This flag makes Escape's trailing
+  // blur skip the commit; it is cleared on focus and by the blur itself, so it cannot leak.
+  const cancelRef = useRef(false);
   const commit = () => {
     const to = text.trim();
     if (!to || to === id) {
@@ -561,13 +565,23 @@ export function NameField({ id }: { id: string }) {
       value={text}
       spellcheck={false}
       data-testid="name"
-      onFocus={(e) => (e.target as HTMLInputElement).select()}
+      onFocus={(e) => {
+        cancelRef.current = false;
+        (e.target as HTMLInputElement).select();
+      }}
       onInput={(e) => setText((e.target as HTMLInputElement).value)}
-      onBlur={commit}
+      onBlur={() => {
+        if (cancelRef.current) {
+          cancelRef.current = false;
+          return;
+        }
+        commit();
+      }}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         if (e.key === 'Escape') {
+          cancelRef.current = true;
           setText(id);
           (e.target as HTMLInputElement).blur();
         }

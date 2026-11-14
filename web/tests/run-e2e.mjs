@@ -1,6 +1,6 @@
 // Headless browser checks: browser verification cases (V5, V16) and the scripted acceptance runs.
 //
-//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar|textaccent|minibtn|veriftheme|minibtnaa|badge|letlifecycle|numinput] [--screens DIR]
+//   node tests/run-e2e.mjs [--headed] [--only v5|interior|bracket|shape|make|mesh|sweep|mobile|section|params|modes|convection|heatflux|profilesketch|gradedthermal|gradedresults|gradedyield|gradedbuckling|combinations|renderfail|pareto|tokens|focus|motion|formfocus|nativeaccent|scrollbar|textaccent|minibtn|veriftheme|minibtnaa|badge|letlifecycle|numinput|namefield] [--screens DIR]
 //
 // Starts a Vite dev server, drives Chromium with Playwright, writes docs/verification/V5.md,
 // docs/verification/V16.md, docs/verification/bracket-e2e.md, docs/verification/mesh-e2e.md,
@@ -51,6 +51,7 @@ import { minibtnaaTest } from './minibtnaa.mjs';
 import { badgeTest } from './badge.mjs';
 import { letlifecycleTest } from './letlifecycle.mjs';
 import { numinputTest } from './numinput.mjs';
+import { namefieldTest } from './namefield.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -301,6 +302,11 @@ try {
   if (!only || only === 'numinput') {
     const ok = await numinputTest(browser, url, { screens, docsDir });
     console.log(`numinput test ${ok ? 'PASS' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (!only || only === 'namefield') {
+    const ok = await namefieldTest(browser, url, { screens, docsDir });
+    console.log(`namefield test ${ok ? 'PASS' : 'FAIL'}`);
     if (!ok) failed = true;
   }
 } catch (e) {
