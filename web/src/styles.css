@@ -18,6 +18,15 @@
   --radius: 6px;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Vocabulary aliases used by Systems / Tutorials / Fixings. Each resolves against the
+     theme tokens above, so they track light/dark without a second definition below. */
+  --text-1: var(--text);
+  --fg: var(--text);
+  --fg-dim: var(--text-2);
+  --err: var(--danger);
+  --bg-1: var(--panel);
+  --bg-2: var(--panel-2);
+  --bg-3: var(--panel-2);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
