@@ -2744,6 +2744,7 @@ function TutorialsDrawer() {
       ? sheet.asserts.map((a) => evaluateLiterateAssertOnLevel(a, activeLvl))
       : null;
   const livePassCount = liveAssertResults ? liveAssertResults.filter((r) => r.passed).length : 0;
+  const userPending = getVerificationStatusForSheet(sheet) === 'pending';
 
   const renderUserColumn = () => (
     <div class="tut-col-body" data-testid="tutorial-col-user">
@@ -2768,11 +2769,13 @@ function TutorialsDrawer() {
                 fontWeight: 700,
                 padding: '2px 7px',
                 borderRadius: '4px',
-                background: 'var(--bg-2)',
-                color: 'var(--text-2)',
+                background: userPending ? 'color-mix(in srgb, var(--warn) 14%, var(--panel))' : 'var(--bg-2)',
+                color: userPending ? 'var(--warn)' : 'var(--text-2)',
+                border: userPending ? '1px solid color-mix(in srgb, var(--warn) 38%, var(--line))' : undefined,
               }}
+              title={userPending ? 'Verification pending — no report shipped yet; benchmark source linked' : undefined}
             >
-              {getVerificationStatusForSheet(sheet) === 'pending'
+              {userPending
                 ? 'verification pending'
                 : getVerificationRefsForSheet(sheet)
                     .map((r) => r.replace('docs/verification/', '').replace('.md', ''))

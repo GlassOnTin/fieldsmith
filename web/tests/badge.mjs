@@ -6,16 +6,19 @@
 // resolving on disk) is gated separately by web/tests/registry.mjs; this suite gates the
 // rendered surface so the UI cannot quietly re-green a pending sheet.
 //
-// Samples A15 + T18 (pending) and A1 (verified, V1.md & V2.md shipped) across both view
-// modes (contents list + detailed cards) under both light and dark colour schemes, reading
-// chip colour from getComputedStyle against live --warn / --ok probes, and fails on any
-// console error.
+// Samples all five pending sheets (A15, A16, A18, A25, T18) and A1 (verified, V1.md & V2.md
+// shipped) across both view modes (contents list + detailed cards) under both light and dark
+// colour schemes, reading chip colour from getComputedStyle against live --warn / --ok
+// probes. It then drives the sheet-detail analytic-reference num span for the same six
+// sheets and asserts the pending state uses the same amber --warn convention there (5S
+// standardise: one pending state, one colour), while a verified sheet stays neutral
+// --text-2. Fails on any console error.
 //
 // Run with node tests/run-e2e.mjs --only badge.
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const PENDING = ['A15', 'T18'];
+const PENDING = ['A15', 'A16', 'A18', 'A25', 'T18'];
 const VERIFIED = ['A1'];
 
 // Self-contained in-page reader (arg-last): collect the verification chips inside each
@@ -46,6 +49,31 @@ function readSurface(ids) {
     out[id] = { present: !!card, chips };
   }
   return { warnRgb, okRgb, cards: out };
+}
+
+// Self-contained in-page reader (no args): the analytic-reference status span in the
+// sheet-detail user column, plus resolved --warn / --text-2 probes. The span is the first
+// span.num inside the analytic-checks card head (.tut-step-top); the @check table below is
+// a <table class="num">, not a span, so it is not matched.
+function readNumSpan() {
+  const probe = (token) => {
+    const el = document.createElement('span');
+    el.style.color = `var(${token})`;
+    document.body.appendChild(el);
+    const c = getComputedStyle(el).color;
+    el.remove();
+    return c;
+  };
+  const card = document.querySelector('[data-testid="tutorial-analytic-checks-card"]');
+  const span = card ? card.querySelector('.tut-step-top span.num') : null;
+  return {
+    warnRgb: probe('--warn'),
+    text2Rgb: probe('--text-2'),
+    present: !!span,
+    text: span ? (span.textContent || '').trim() : '',
+    color: span ? getComputedStyle(span).color : '',
+    title: span ? (span.getAttribute('title') || '') : '',
+  };
 }
 
 async function openDrawer(page) {
@@ -121,6 +149,36 @@ export async function badgeTest(browser, url, { docsDir }) {
           }
         }
       }
+
+      // Analytic-reference num span (sheet-detail user column): the same pending state must
+      // use the same amber --warn convention as the list/card chips (5S standardise). The
+      // span renders from the static parsed @check header, so no FE solve / model load is
+      // needed. Hide the detail first so the card detaches, then select the sheet — this
+      // avoids reading a stale card left over from the previous id.
+      for (const id of [...PENDING, ...VERIFIED]) {
+        await page.evaluate(() => { window.fieldsmith.ui.set('tutorialContentsOpen', true); });
+        await page.waitForSelector('[data-testid="tutorial-analytic-checks-card"]', { state: 'detached', timeout: 30000 }).catch(() => {});
+        await page.evaluate((sid) => {
+          const { ui } = window.fieldsmith;
+          ui.set('tutorialsOpen', true);
+          ui.set('tutorialMinimised', false);
+          ui.set('tutorialSheetId', sid);
+          ui.set('tutorialContentsOpen', false);
+        }, id);
+        await page.waitForSelector('[data-testid="tutorial-analytic-checks-card"]', { state: 'visible', timeout: 30000 });
+        const ns = await page.evaluate(readNumSpan);
+        const tag = `${scheme}/numspan`;
+        check(`${tag}: ${id} analytic num span present`, ns.present);
+        if (PENDING.includes(id)) {
+          check(`${tag}: ${id} num span reads pending`, ns.text === 'verification pending', ns.text);
+          check(`${tag}: ${id} num span is amber (--warn)`, ns.color === ns.warnRgb, `${ns.color} (want ${ns.warnRgb})`);
+          check(`${tag}: ${id} num span title flags pending`, /pending/i.test(ns.title), ns.title);
+        } else {
+          check(`${tag}: ${id} num span is NOT pending`, ns.text !== 'verification pending', ns.text);
+          check(`${tag}: ${id} num span shows refs`, /V\d/.test(ns.text), ns.text);
+          check(`${tag}: ${id} num span is neutral (--text-2)`, ns.color === ns.text2Rgb, `${ns.color} (want ${ns.text2Rgb})`);
+        }
+      }
     }
 
     const unexpected = errors.filter((e) => !/favicon/i.test(e));
@@ -141,8 +199,10 @@ export async function badgeTest(browser, url, { docsDir }) {
       '`--warn` "verification pending" chip and no green check, while a genuinely verified',
       'sheet keeps its green `--ok` ✓ chip. This gates the rendered surface in both view modes',
       '(contents list + detailed cards) under both light and dark, reading chip colour from',
-      '`getComputedStyle` against live `--warn` / `--ok` probes. The data-layer honesty (badge',
-      'text and refs resolving on disk) is gated separately by `web/tests/registry.mjs`.',
+      '`getComputedStyle` against live `--warn` / `--ok` probes, and drives the sheet-detail',
+      'analytic-reference num span for the same sheets so the pending state uses one amber',
+      'convention everywhere (5S standardise). The data-layer honesty (badge text and refs',
+      'resolving on disk) is gated separately by `web/tests/registry.mjs`.',
       '',
       '## Checks',
       '',
@@ -150,11 +210,10 @@ export async function badgeTest(browser, url, { docsDir }) {
       '',
       '## Limits',
       '',
-      '- Samples A15 + T18 (pending) and A1 (verified) only; the other three pending sheets',
-      '  (A16, A18, A25) share the same render path but are not individually asserted here.',
-      '- Exercises the contents-list and detailed-card chips. The analytic-reference num span',
-      '  and the markdown "Linked verification artifacts" column are not driven by this suite;',
-      '  their underlying status/refs are covered by the registry gate.',
+      '- Covers all five pending sheets (A15, A16, A18, A25, T18) and A1 (verified) on the',
+      '  contents-list chips, detailed-card chips, and the analytic-reference num span.',
+      '- The markdown "Linked verification artifacts" column is not driven by this suite;',
+      '  its underlying status/refs are covered by the registry gate.',
       '',
       `Console errors: **${unexpected.length}**`,
       '',
