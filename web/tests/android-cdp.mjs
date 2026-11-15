@@ -15,8 +15,9 @@ import { selpruneTest } from './selprune.mjs';
 import { renameTest } from './rename.mjs';
 import { regiondeleteTest } from './regiondelete.mjs';
 import { sketchstartTest } from './sketchstart.mjs';
+import { sketchcutTest } from './sketchcut.mjs';
 
-const GATES = { selprune: selpruneTest, rename: renameTest, regiondelete: regiondeleteTest, sketchstart: sketchstartTest };
+const GATES = { selprune: selpruneTest, rename: renameTest, regiondelete: regiondeleteTest, sketchstart: sketchstartTest, sketchcut: sketchcutTest };
 const names = (process.argv[2] || 'selprune,rename,regiondelete').split(',').map((s) => s.trim()).filter(Boolean);
 const url = process.argv[3] || 'http://localhost:5173/';
 const docsDir = process.argv[4] || '/tmp/android-verify';

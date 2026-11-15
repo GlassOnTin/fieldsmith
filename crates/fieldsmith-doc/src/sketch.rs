@@ -2512,6 +2512,17 @@ pub enum SketchFeatureOp {
     },
 }
 
+impl SketchFeatureOp {
+    /// Whether this operation removes material and so needs an existing solid to cut
+    /// from, as opposed to adding material (`BossExtrude`, `RevolveBoss`).
+    pub fn is_subtractive(&self) -> bool {
+        matches!(
+            self,
+            SketchFeatureOp::PocketCut { .. } | SketchFeatureOp::RevolveCut { .. }
+        )
+    }
+}
+
 fn default_pocket_depth() -> f64 {
     10.0
 }
@@ -3125,6 +3136,22 @@ pub fn apply_sketch_feature_to_document(
         return Err("feature_id must not be empty".into());
     }
 
+    // A subtractive feature removes material from an existing solid. With no additive
+    // (non-suppressed `Add`) node in the document there is nothing to cut from: staging a
+    // lone `Subtract` would report success yet leave an empty part that later fails to mesh
+    // or solve ("document has no solid"). Reject early, before any mutation, so the UI can
+    // surface an actionable message and the document stays empty.
+    if req.operation.is_subtractive() && !doc.root.iter().any(|n| !n.suppressed && n.op == Op::Add) {
+        let kind = match req.operation {
+            SketchFeatureOp::PocketCut { .. } => "pocket cut",
+            SketchFeatureOp::RevolveCut { .. } => "revolve cut",
+            _ => "cut",
+        };
+        return Err(format!(
+            "a {kind} needs an existing solid to cut from; add a shape first or use an additive boss"
+        ));
+    }
+
     // 1. Upsert any requested `.fsm` `let` bindings
     for (k, v) in &req.lets {
         if doc.lets.iter().any(|l| &l.name == k) {
@@ -3272,6 +3299,86 @@ pub fn apply_sketch_feature_to_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Subtractive features need an existing solid to cut from (empty-document guard) ---
+
+    fn empty_doc() -> Document {
+        crate::fsm::parse("fieldsmith 1\nname \"empty\"\nmaterial alsi10mg\n")
+            .expect("parse empty doc")
+    }
+
+    fn feature_request(operation: SketchFeatureOp, preset: &str) -> SketchFeatureRequest {
+        SketchFeatureRequest {
+            feature_id: "feat1".into(),
+            sketch_id: None,
+            sketch: ParametricSketch::default(),
+            preset: Some(preset.into()),
+            on: Some("xy".into()),
+            operation,
+            associate_with_host: false,
+            lets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn pocket_cut_on_empty_document_is_rejected() {
+        let mut doc = empty_doc();
+        let req = feature_request(
+            SketchFeatureOp::PocketCut { depth: 8.0, through_all: false, blend: 0.0 },
+            "flanged_mounting_bracket",
+        );
+        let err = apply_sketch_feature_to_document(&mut doc, &req)
+            .expect_err("a pocket cut with no solid to cut from must be rejected");
+        assert!(err.contains("solid"), "error should name the missing solid, got: {err}");
+        // The rejected path stages no node and persists no sketch or binding.
+        assert!(doc.root.is_empty(), "no dangling subtract node may be created");
+        assert!(doc.sketches.is_empty());
+        assert!(doc.sketch_features.is_empty());
+    }
+
+    #[test]
+    fn revolve_cut_on_empty_document_is_rejected() {
+        let mut doc = empty_doc();
+        let req = feature_request(
+            SketchFeatureOp::RevolveCut { angle_deg: 360.0, blend: 0.0 },
+            "turned_aerospace_spool",
+        );
+        let err = apply_sketch_feature_to_document(&mut doc, &req)
+            .expect_err("a revolve cut with no solid to cut from must be rejected");
+        assert!(err.contains("solid"), "error should name the missing solid, got: {err}");
+        assert!(doc.root.is_empty(), "no dangling subtract node may be created");
+        assert!(doc.sketch_features.is_empty());
+    }
+
+    #[test]
+    fn boss_extrude_on_empty_document_still_applies() {
+        // The additive "start from a sketch" path must keep working on an empty doc.
+        let mut doc = empty_doc();
+        let req = feature_request(
+            SketchFeatureOp::BossExtrude { height: 10.0, blend: 0.0, symmetric: false },
+            "flanged_mounting_bracket",
+        );
+        let summary = apply_sketch_feature_to_document(&mut doc, &req)
+            .expect("an additive boss on an empty document is valid");
+        assert!(!summary.created_node_ids.is_empty());
+        assert!(!doc.root.is_empty());
+    }
+
+    #[test]
+    fn pocket_cut_on_document_with_a_host_applies() {
+        // Regression: a cut against an existing Add host must not be over-blocked.
+        let mut doc = crate::fsm::parse(
+            "fieldsmith 1\nname \"host\"\nmaterial alsi10mg\nbox base_plate size=(80, 80, 12) at=(0, 0, 6)\n",
+        )
+        .expect("parse host doc");
+        let req = feature_request(
+            SketchFeatureOp::PocketCut { depth: 6.0, through_all: false, blend: 0.0 },
+            "flanged_mounting_bracket",
+        );
+        let summary = apply_sketch_feature_to_document(&mut doc, &req)
+            .expect("a pocket cut against an existing solid is valid");
+        assert!(!summary.created_node_ids.is_empty());
+    }
 
     #[test]
     fn rectangle_constraints_solve_with_zero_dof() {
