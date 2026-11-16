@@ -141,7 +141,7 @@ jobs:
       !cancelled() &&
       (needs.verify-ci.outputs.ci-passed == 'true' || needs.test.result == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -158,35 +158,46 @@ jobs:
           key: ${{ runner.os }}-web-${{ hashFiles('**/Cargo.lock', 'web/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-web-
-      - name: Install Rust wasm toolchains and wasm-bindgen 0.2.129
+      - name: Install pinned toolchains (Rust 1.97.1, wasm-bindgen 0.2.129, cargo-ndk 3.5.4)
         run: |
-          rustup target add wasm32-unknown-unknown
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+          rustup target add wasm32-unknown-unknown aarch64-linux-android
           rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
-          curl -fsSL -o /tmp/wasm-bindgen.tar.gz \
-            https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz
-          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  /tmp/wasm-bindgen.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/wasm-bindgen.tar.gz -C ~/.cargo/bin --strip-components=1 wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen
-      - name: Build web bundle
+          cargo install cargo-ndk@3.5.4 --locked
+          cargo install wasm-bindgen-cli@0.2.129 --locked
+      - name: Build esbuild v0.28.2 and rollup v4.64.0 from source (F-Droid reproducible recipe)
         run: |
-          npm --prefix web ci
+          git clone --depth 1 --branch v0.28.2 https://github.com/evanw/esbuild.git /tmp/esbuild-src
+          (cd /tmp/esbuild-src && go build ./cmd/esbuild)
+          git clone --depth 1 --branch v4.64.0 https://github.com/rollup/rollup.git /tmp/rollup-src
+          (cd /tmp/rollup-src && npm install --no-save --no-audit --no-fund @napi-rs/cli@3.4.1 \
+            && ./node_modules/.bin/napi build --cwd rust/bindings_napi --platform --release \
+               --no-js --dts native.d.ts --output-dir ../.. --package-json-path ../../package.json)
+      - name: Build web bundle (threaded wasm, for the standalone web archive)
+        run: |
+          npm --prefix web ci --ignore-scripts
+          rm -f web/node_modules/@rollup/rollup-linux-x64-gnu/rollup.linux-x64-gnu.node
+          cp -f /tmp/rollup-src/rollup.linux-x64-gnu.node web/node_modules/@rollup/rollup-linux-x64-gnu/rollup.linux-x64-gnu.node
           bash scripts/build-wasm.sh
           npm --prefix web run typecheck
-          npm --prefix web run build
+          ESBUILD_BINARY_PATH=/tmp/esbuild-src/esbuild npm --prefix web run build
           tag="${GITHUB_REF_NAME}"
           stage="fieldsmith-${tag}-web"
           mkdir -p "dist/${stage}"
           cp -r web/dist/* "dist/${stage}/"
           cp LICENSE README.md "dist/${stage}/"
           tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
-      - name: Build signed Android APK (arm64-v8a)
+      - name: Build signed Android APK (arm64-v8a, single-thread wasm to match F-Droid)
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          rustup target add aarch64-linux-android
-          cargo install cargo-ndk@3.5.4 --locked
+          rm -rf web/src/pkg-mt
+          FIELDSMITH_WASM_ST_ONLY=1 bash scripts/build-wasm.sh
+          ESBUILD_BINARY_PATH=/tmp/esbuild-src/esbuild npm --prefix web run build
           echo "y" | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-35" "build-tools;35.0.0"
           ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/29.0.14206865" cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p fieldsmith-mcp
           export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
