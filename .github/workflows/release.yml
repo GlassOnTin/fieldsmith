@@ -195,6 +195,10 @@ jobs:
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
+          # Rust embeds absolute crate-source paths in panic locations. F-Droid builds
+          # with CARGO_HOME=/home/vagrant/.cargo, so remap our cargo-registry prefix to
+          # that path to make the wasm and native lib byte-identical to F-Droid's build.
+          export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/home/vagrant/.cargo/registry/src"
           rm -rf web/src/pkg-mt
           FIELDSMITH_WASM_ST_ONLY=1 bash scripts/build-wasm.sh
           ESBUILD_BINARY_PATH=/tmp/esbuild-src/esbuild npm --prefix web run build
