@@ -1,0 +1,4 @@
+v0.19.0:
+- Start from a sketch: the empty state offers a sketch entry point, and subtractive sketch features on an empty document are rejected before they mutate it.
+- Honest verification claims: a new CI gate checks that every docs claim links a shipped report; the missing V9/V57/V58/V59 reports now ship, and the README describes the transient, contact, porous-flow, multi-material and adjoint capabilities added in v0.18.0.
+- The release APK is built to the F-Droid reproducible recipe, byte-identical to F-Droid's source build.
