@@ -9,7 +9,174 @@
 use fieldsmith_core::fill::{graded_of, Graded};
 use fieldsmith_core::{analyse, Analysis, Resolution};
 use fieldsmith_doc::Document;
-use fieldsmith_verify::example;
+use fieldsmith_verify::{example, Check, Report};
+
+/// 1 if two f64 differ at the bit level, else 0.
+fn bit_diff(x: f64, y: f64) -> u64 {
+    (x.to_bits() != y.to_bits()) as u64
+}
+
+/// Count f64 fields whose bits differ between two analyses (the fields
+/// `assert_same_results` compares). 0 means bit-identical.
+fn count_result_diffs(a: &Analysis, b: &Analysis) -> u64 {
+    let mut n = 0u64;
+    if a.provenance.elements != b.provenance.elements { n += 1; }
+    if a.provenance.dofs != b.provenance.dofs { n += 1; }
+    n += bit_diff(a.provenance.element_size, b.provenance.element_size);
+    if a.cases.len() != b.cases.len() { n += 1; }
+    for (ca, cb) in a.cases.iter().zip(b.cases.iter()) {
+        if ca.name != cb.name { n += 1; }
+        n += bit_diff(ca.max_von_mises, cb.max_von_mises);
+        n += bit_diff(ca.max_vm_elem, cb.max_vm_elem);
+        n += bit_diff(ca.max_layer_peel, cb.max_layer_peel);
+        n += bit_diff(ca.max_displacement, cb.max_displacement);
+        n += bit_diff(ca.compliance, cb.compliance);
+        for (x, y) in ca.sigma_min_elem.iter().zip(cb.sigma_min_elem.iter()) { n += bit_diff(*x, *y); }
+        for (x, y) in ca.peel_elem.iter().zip(cb.peel_elem.iter()) { n += bit_diff(*x, *y); }
+        match (&ca.compliance_upper, &cb.compliance_upper) {
+            (Some(x), Some(y)) => n += bit_diff(*x, *y),
+            (None, None) => {}
+            _ => n += 1,
+        }
+    }
+    for (x, y) in a.envelope_elem.iter().zip(b.envelope_elem.iter()) { n += bit_diff(*x, *y); }
+    for (x, y) in a.peel_envelope_elem.iter().zip(b.peel_envelope_elem.iter()) { n += bit_diff(*x, *y); }
+    if a.build_angles != b.build_angles { n += 1; }
+    if a.best_build_angles != b.best_build_angles { n += 1; }
+    n += bit_diff(a.min_peak_peel, b.min_peak_peel);
+    n
+}
+
+/// Count bit-differing fields between two graded fills (mirrors `assert_same_graded`).
+fn count_graded_diffs(a: &Graded, b: &Graded) -> u64 {
+    let mut n = 0u64;
+    n += bit_diff(a.mass_g, b.mass_g);
+    n += bit_diff(a.solid_mass_g, b.solid_mass_g);
+    n += bit_diff(a.sigma_ref, b.sigma_ref);
+    if a.rho_design != b.rho_design { n += 1; }
+    if a.class != b.class { n += 1; }
+    for (ca, cb) in a.cases.iter().zip(b.cases.iter()) {
+        n += bit_diff(ca.max_von_mises, cb.max_von_mises);
+        n += bit_diff(ca.max_displacement, cb.max_displacement);
+        n += bit_diff(ca.compliance, cb.compliance);
+        match (&ca.compliance_upper, &cb.compliance_upper) {
+            (Some(x), Some(y)) => n += bit_diff(*x, *y),
+            (None, None) => {}
+            _ => n += 1,
+        }
+    }
+    if a.yield_utilization.len() != b.yield_utilization.len() { n += 1; }
+    for (x, y) in a.yield_utilization.iter().zip(b.yield_utilization.iter()) {
+        match (x, y) {
+            (Some(p), Some(q)) => n += bit_diff(*p, *q),
+            (None, None) => {}
+            _ => n += 1,
+        }
+    }
+    n
+}
+
+/// Emit `docs/verification/V9.md`. Records the save → reload → re-solve bit-identity as
+/// mismatch counts (0 = identical) at CI-budget resolutions; the sibling tests assert the
+/// same property at 120 k DOF and panic on the first differing bit.
+#[test]
+fn v9_report() {
+    let mut r = Report::new(
+        "V9",
+        "Save → Reload → Re-solve Bit-Identity (canonical .fsm round-trip)",
+    );
+    let res = Resolution::Dofs(8_000);
+
+    // Solid bracket: print/parse fixed point + bit-identical re-solve.
+    let solid = example("bracket.fsm");
+    let reloaded = round_trip(&solid);
+    let a1 = analyse(&solid, res, now).expect("solid analysis");
+    let a2 = analyse(&reloaded, res, now).expect("solid analysis after reload");
+    r.check(Check::absolute("Solid bracket re-solve bit mismatches", 0.0, count_result_diffs(&a1, &a2) as f64, "fields", 0.0));
+
+    // Graded fill: bit-identical graded re-solve, including a rotated lattice.
+    let filled = example("bracket-filled.fsm");
+    let reloaded_filled = round_trip(&filled);
+    let base1 = analyse(&filled, res, now).expect("filled solid analysis");
+    let base2 = analyse(&reloaded_filled, res, now).expect("filled solid analysis after reload");
+    let g1 = graded_of(&filled, &base1, now, false).expect("graded");
+    let g2 = graded_of(&reloaded_filled, &base2, now, false).expect("graded after reload");
+    r.check(Check::absolute("Graded fill re-solve bit mismatches", 0.0, count_graded_diffs(&g1, &g2) as f64, "fields", 0.0));
+    let mut rotated = filled.clone();
+    rotated.fill.as_mut().expect("fill").rotate = [15.0, 25.0, 45.0];
+    let reloaded_rot = round_trip(&rotated);
+    let gr1 = graded_of(&rotated, &base1, now, false).expect("graded rotated");
+    let gr2 = graded_of(&reloaded_rot, &base2, now, false).expect("graded rotated after reload");
+    r.check(Check::absolute("Rotated-lattice graded re-solve bit mismatches", 0.0, count_graded_diffs(&gr1, &gr2) as f64, "fields", 0.0));
+
+    // Mesh document round-trips to an equal document (no field solve in this version).
+    let mesh_doc = fieldsmith_doc::fsm::parse(
+        "fieldsmith 1\n\
+         name \"Import\"\n\
+         material petg\n\
+         mesh mesh1 src=\"/tmp/part.stl\" units=m up=y vox=0.8 hash=\"0123456789abcdef\" bbox=(0, 0, 0, 15.24, 17.25, 5) tris=87286 patches=6 open_edges=0\n\
+         region bottom = mesh1.p3\n\
+         support hold bottom fixed=xyz\n\
+         load press bottom pressure=0.5 case=\"Load 1\"\n",
+    )
+    .expect("mesh document parses");
+    let mesh_reloaded = round_trip(&mesh_doc);
+    r.check(Check::absolute(
+        "Mesh document save → reload reaches an equal document",
+        1.0,
+        if mesh_reloaded == mesh_doc && mesh_doc.validate().is_empty() { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+
+    // Equilibrated bracket: recovered upper end round-trips and brackets the lower end.
+    let eq_res = Resolution::Dofs(6_000);
+    let e1 = fieldsmith_core::analyse_full(&solid, eq_res, now, None, true).expect("equilibrated analysis");
+    let e2 = fieldsmith_core::analyse_full(&reloaded, eq_res, now, None, true).expect("equilibrated analysis after reload");
+    r.check(Check::absolute("Equilibrated bracket re-solve bit mismatches", 0.0, count_result_diffs(&e1, &e2) as f64, "fields", 0.0));
+    let mut upper_ok = true;
+    for (ca, cb) in e1.cases.iter().zip(e2.cases.iter()) {
+        match (&ca.compliance_upper, &cb.compliance_upper) {
+            (Some(x), Some(y)) => {
+                if x.to_bits() != y.to_bits() || *x < ca.compliance - 1e-4 * ca.compliance {
+                    upper_ok = false;
+                }
+            }
+            _ => upper_ok = false,
+        }
+    }
+    r.check(Check::absolute(
+        "Recovered compliance upper end round-trips and brackets the lower end",
+        1.0,
+        if upper_ok { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+
+    r.section(
+        "Summary",
+        format!(
+            "Save is the canonical document text (fsm::print), reload is fsm::parse, and \
+             save → reload → save is a fixed point. At {} DOF the solid bracket, the graded \
+             gyroid fill, and a rotated-lattice (15, 25, 45) fill all re-solve with 0 \
+             bit-differing fields; the mesh document reloads to an equal document; and the \
+             equilibrated bracket's recovered compliance upper end round-trips bit for bit \
+             at 6 k DOF while staying above the conforming lower end. Wall-clock provenance \
+             (mesh_ms, solve_ms) is excluded — it is not a property of the document.",
+            8_000,
+        ),
+    );
+    r.section(
+        "Limits",
+        "The report records bit-identity at CI-budget resolutions (8 k DOF solid/graded, \
+         6 k DOF equilibrated); the sibling tests assert the same property at 120 k DOF and \
+         panic on the first differing bit. Bit-identity is a property of this build's \
+         deterministic solve on one machine; cross-machine fp divergence is measured \
+         separately (V25, data/costs) and is not promised here. Mesh-node grids are compared \
+         by hash in the V10 .fsmz tests, not by a field solve here.",
+    );
+    r.finish();
+}
 
 fn now() -> f64 {
     std::time::Instant::now().elapsed().as_secs_f64() * 1000.0

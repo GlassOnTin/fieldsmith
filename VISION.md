@@ -89,7 +89,7 @@ Stéphane Popinet's Gerris and Basilisk codes:
 │   ├─ fieldsmith-api     versioned JSON request/response runner (sweeps)   │
 │   ├─ fieldsmith-mcp     stdio & HTTP MCP server + LAN peer discovery      │
 │   ├─ fieldsmith-worker  Noise-encrypted session/worker remote execution   │
-│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V60)        │
+│   └─ fieldsmith-cli / fieldsmith-wasm / fieldsmith-verify (V1–V63)        │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -158,7 +158,7 @@ Every feature or verification case (`V#`) added to the repository must satisfy f
 2. **Pixels and first-user paths, not state-only assertions.** Every UI control joins the
    feature-combination pixel matrix (`web/tests/combinations.mjs`), surfaces rendering or
    empty-field failures loudly through `ui.renderError`, and keeps the fresh-clone README
-   new-user gate (`scripts/v41-fresh-clone.sh`) green.
+   new-user gate (`scripts/v41-newuser.sh`) green.
 3. **Report immutability on routine test runs (`FIELDSMITH_BLESS`).** `cargo test -p fieldsmith-verify`
    checks every tolerance on every run but only overwrites existing `docs/verification/V*.md`
    files when `FIELDSMITH_BLESS=1` is set (or when a new report is created or a check fails).
@@ -174,12 +174,12 @@ Every feature or verification case (`V#`) added to the repository must satisfy f
 
 ## 5. Delivered foundation (`v0.1` – `v0.14`) and the strategic direction ahead (`v0.15` → `v1.0`)
 
-### 5.1 What is proven and shipping today (`V1` – `V60`)
+### 5.1 What is proven and shipping today (`V1` – `V63`)
 
 Across versions `v0.1` through `v0.14` ([`README.md`](README.md), [`docs/README.md`](docs/README.md),
 [`docs/verification/`](docs/verification/)), Fieldsmith has established:
 
-- **Certified 3D P2 continuum mechanics (`V1`–`V48`)**: isotropic and cubic-anisotropic linear
+- **Certified 3D P2 continuum mechanics**: isotropic and cubic-anisotropic linear
   elasticity, steady Fourier conduction with Robin convection (`h, T_∞`) and Neumann heat flux (`q`),
   coupled Duhamel–Neumann thermo-elasticity, Lanczos/shift-invert modal vibration, Prager–Synge
   dual compliance bounds, 6 TPMS lattice families (`gyroid`, `schwarz_p`, `diamond`, `lidinoid`,

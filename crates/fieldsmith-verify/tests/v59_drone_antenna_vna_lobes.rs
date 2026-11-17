@@ -11,6 +11,205 @@ use fieldsmith_solve::antenna::{
 use fieldsmith_solve::coupled_system::{
     CoupledEngineeringSystem, EngineConfig, MonolithicSystemEngine,
 };
+use fieldsmith_verify::{Check, Report};
+
+/// Emit `docs/verification/V59.md`. Mirrors the assertions in the three tests below as
+/// report checks (identities at their stated tolerances; one-sided engineering targets as
+/// 0/1 indicators, the V56 convention) so the "Verified by V59" claims in docs/README.md
+/// (A14, T16) point at a shipped report. The sibling tests remain the asserting source.
+#[test]
+fn v59_report() {
+    let mut r = Report::new(
+        "V59",
+        "DeadCat FPV Drone Gemini Dual-Band Antenna VNA, 50 Ω Smith Chart & 3D Radiation Lobes",
+    );
+
+    // Smith-chart identities (test 1).
+    let (_, _, mag50) = complex_gamma_50(50.0, 0.0);
+    r.check(Check::absolute("Matched 50 Ω load |Γ|", 0.0, mag50, "-", 1e-5));
+    let (re100, _, mag100) = complex_gamma_50(100.0, 0.0);
+    r.check(Check::absolute("100 Ω resistive load Re Γ", 1.0 / 3.0, re100, "-", 1e-9));
+    let vswr100 = (1.0 + mag100) / (1.0 - mag100);
+    r.check(Check::absolute("100 Ω resistive load VSWR", 2.0, vswr100, "-", 1e-6));
+    let (_, _, mag_react) = complex_gamma_50(0.05, 50.0);
+    r.check(Check::absolute(
+        "Pure reactive j50 Ω |Γ| > 0.998",
+        1.0,
+        if mag_react > 0.998 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+
+    // Unoptimised tucked preset vs automated Gemini optimiser (test 2).
+    let tucked = DroneAntennaDesignSpec::unoptimised_tucked_preset();
+    let rep_tucked = analyze_drone_antenna(&tucked);
+    let opt = optimise_drone_antenna(&tucked, 8);
+    let rep_opt = &opt.optimised_report;
+    let (lo_t, hi_t) = (&rep_tucked.low_band_summary, &rep_tucked.high_band_summary);
+    let (lo_o, hi_o) = (&rep_opt.low_band_summary, &rep_opt.high_band_summary);
+
+    r.check(Check::absolute(
+        "Tucked preset CFRP eddy-current loss > 25 %",
+        1.0,
+        if lo_t.cfrp_power_loss_pct > 25.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Tucked preset fails dual-band qualification",
+        1.0,
+        if !rep_tucked.all_targets_met { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised 915 MHz S11 ≤ −12 dB",
+        1.0,
+        if lo_o.s11_at_target_db <= -12.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised 2.44 GHz S11 ≤ −12 dB",
+        1.0,
+        if hi_o.s11_at_target_db <= -12.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised port isolation S21 ≤ −15 dB (both bands)",
+        1.0,
+        if lo_o.s21_isolation_db <= -15.0 && hi_o.s21_isolation_db <= -15.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised total efficiency ≥ 70 % (both bands)",
+        1.0,
+        if lo_o.total_efficiency_pct >= 70.0 && hi_o.total_efficiency_pct >= 70.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised p10 blind-spot floor raised > 3 dB over tucked",
+        1.0,
+        if hi_o.p10_blind_spot_floor_dbi > hi_t.p10_blind_spot_floor_dbi + 3.0 { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Optimised report meets all dual-band targets",
+        1.0,
+        if rep_opt.all_targets_met { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+
+    // Generated 3D .fsm parses, validates, and solves (No Engine Islands reachability).
+    let mut fsm_with_lobes = opt.fsm_3d.clone();
+    fsm_with_lobes.push_str(
+        r##"
+group rf_3d_radiation_lobe_envelope {
+  torus lobe_rear_main_toroid major=38.0 minor=12.4 at=(0, -104.0, 24.0) rotate=(12, 0, 0)
+  torus lobe_forward_diffraction_sector major=24.0 minor=7.5 at=(0, -68.0, 28.0) rotate=(-8, 0, 0)
+}
+color "#10B981" on rf_3d_radiation_lobe_envelope
+"##,
+    );
+    let doc = fsm::parse(&fsm_with_lobes).expect("generated DeadCat drone .fsm must parse");
+    r.check(Check::absolute(
+        "Generated DeadCat .fsm validation problems",
+        0.0,
+        doc.validate().len() as f64,
+        "problems",
+        0.0,
+    ));
+    let analysis = fieldsmith_core::analyse_full(
+        &doc,
+        fieldsmith_core::Resolution::Dofs(12_000),
+        || 0.0,
+        Some(3),
+        false,
+    )
+    .expect("3D P2 structural + modal FEA on DeadCat drone + lobe envelope must succeed");
+    r.check(Check::absolute(
+        "3D P2 solve converged with positive finite von Mises",
+        1.0,
+        if analysis.cases[0].solve.converged
+            && analysis.cases[0].max_von_mises > 0.0
+            && analysis.cases[0].max_von_mises.is_finite()
+        {
+            1.0
+        } else {
+            0.0
+        },
+        "-",
+        0.0,
+    ));
+    r.check(Check::absolute(
+        "Modal frequencies extracted",
+        3.0,
+        analysis.modes.as_ref().unwrap().frequencies.len() as f64,
+        "modes",
+        0.0,
+    ));
+
+    // Topology sweep + coupled-system conservation (test 3).
+    let spec = DroneAntennaDesignSpec {
+        topology: DroneAntennaTopology::RearTpuVDipolePod,
+        ..DroneAntennaDesignSpec::default()
+    };
+    let rep = analyze_drone_antenna(&spec);
+    r.check(Check::absolute("Low-band sweep points", 41.0, rep.low_band_sweep.len() as f64, "pts", 0.0));
+    r.check(Check::absolute("High-band sweep points", 41.0, rep.high_band_sweep.len() as f64, "pts", 0.0));
+    r.check(Check::absolute("Yaw horizon cut points", 72.0, rep.high_band_summary.yaw_horizon_cut.len() as f64, "pts", 0.0));
+    r.check(Check::absolute("3D lobe rings", 13.0, rep.high_band_summary.lobe_3d_rings.len() as f64, "rings", 0.0));
+    let sys = DeadCatGeminiAntennaSystem::new();
+    let res = MonolithicSystemEngine::solve_and_analyze(
+        &sys,
+        &EngineConfig::default(),
+        &sys.nominal_design_vector(),
+        &sys.nominal_epistemic_vector(),
+    )
+    .expect("DeadCatGeminiAntennaSystem coupled solve must converge");
+    r.check(Check::absolute(
+        "Coupled-system conservation audits all pass",
+        1.0,
+        if res.conservation_audits.iter().all(|a| a.passed()) { 1.0 } else { 0.0 },
+        "-",
+        0.0,
+    ));
+
+    r.section(
+        "Summary",
+        format!(
+            "Unoptimised tucked preset: 915 MHz S11 = {:.2} dB (VSWR {:.2}, eff {:.1} %), \
+             2.44 GHz S11 = {:.2} dB (VSWR {:.2}, eff {:.1} %), CFRP eddy loss {:.1} %. \
+             Optimised Gemini: 915 MHz S11 = {:.2} dB (VSWR {:.2}, eff {:.1} %), \
+             2.44 GHz S11 = {:.2} dB (VSWR {:.2}, eff {:.1} %), S21 = {:.2}/{:.2} dB, \
+             p10 floor {:.2} → {:.2} dBi. All dual-band VNA, Smith-chart, efficiency and \
+             3D-lobe blind-spot targets met; the generated drone .fsm validates and solves \
+             in the 3D P2 pipeline with the radiation-lobe envelope present.",
+            lo_t.s11_at_target_db, lo_t.vswr_at_target, lo_t.total_efficiency_pct,
+            hi_t.s11_at_target_db, hi_t.vswr_at_target, hi_t.total_efficiency_pct,
+            lo_t.cfrp_power_loss_pct,
+            lo_o.s11_at_target_db, lo_o.vswr_at_target, lo_o.total_efficiency_pct,
+            hi_o.s11_at_target_db, hi_o.vswr_at_target, hi_o.total_efficiency_pct,
+            lo_o.s21_isolation_db, hi_o.s21_isolation_db,
+            hi_t.p10_blind_spot_floor_dbi, hi_o.p10_blind_spot_floor_dbi,
+        ),
+    );
+    r.section(
+        "Limits",
+        "The antenna model is a closed-form dipole/Smith-chart and eddy-current image-loss \
+         surrogate, not a full-wave 3D surface-current EM solve; the CFRP loss and lobe \
+         floors are model estimates. One-sided engineering targets are recorded as 0/1 \
+         indicator checks (the V56 convention); the measured dB values are in the Summary. \
+         The 3D FEA round-trip is a reachability check at 12 k DOF, not a refined stress \
+         convergence study.",
+    );
+    r.finish();
+}
 
 #[test]
 fn v59_smith_chart_gamma_and_vswr_identities() {

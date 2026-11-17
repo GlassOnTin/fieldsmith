@@ -128,6 +128,12 @@ the solved field.
   `fieldsmith-mcp` binary (stdio MCP server and live browser `/api/mcp` bridge over that API
   with closed-loop parametric synthesis tools, `V51`), and the `session` and `worker` verbs to
   hand jobs to machines you own over Noise-encrypted connections.
+- Coupled and transient physics (`V63`): unilateral contact (`contact`, flange liftoff),
+  BDF2 transient thermal shock (`solve t_end=… steps=…`), Darcy–Forchheimer TPMS porous flow
+  with conjugate heat exchange (`hx`), declarative 0D/1D system blocks coupled to the 3D
+  document, contract-constrained adjoint optimisation over shape, lattice, modal and
+  build-angle problems with O(1) epistemic UQ and p90/p10 contract sizing, and Bayesian
+  calibration from bench observations.
 - Interactive Tutorials & Theory Manual (`T1–T16`, `Ch. 1–16`) and Coupled Multi-Physics Systems (`V52`,
   Pilkington float-bath tin/glass/H₂-N₂ roof coupled PDE solver and swirl atomiser combustor
   NOx predictor), plus multi-body assembly mechanics & bolt preload (`V53`, `T10`), spatially
@@ -156,7 +162,7 @@ By what you want to do:
 
 The full build, including the verification suite:
 
-    cargo test -p fieldsmith-verify           # verification cases (V1–V55; V24/V25/V41 in scripts/)
+    cargo test -p fieldsmith-verify           # verification cases (V1–V63; V24/V25/V41 in scripts/)
     npm --prefix web install                  # once (if not done in Run the web app)
     bash scripts/build-wasm.sh                # build the WebAssembly analysis
     npm --prefix web -- run build             # production build into web/dist
@@ -198,7 +204,8 @@ edges and `manifold = yes` in PrusaSlicer 2.9.6 (slicer.md).
 
 Physics
 
-- Linear-elastic, small strain. The body's material is isotropic per element. The fill's
+- The default body solve is linear-elastic, small strain, isotropic per element, with
+  unilateral contact (`contact`) for flange liftoff and mating faces. The fill's
   lattice elements carry the measured cubic anisotropy law on the five TPMS families whose
   45°/0° coupon ratio V36 measured from 13.6 % to 130 %, homogenising in the lattice's own
   axes, with the density exponent the family's measured isotropic one; that the direction exponents stay equal at other
@@ -215,21 +222,25 @@ Physics
 
 Modelling and files
 
-- One material per part: the solve is single-material, and a volume's material label
-  travels with the 3MF export (validation reports unknown label ids as errors and mixed
-  labels as a warning). Per-part colours are render colours only.
-- No topology optimisation, no CFD analysis, no g-code generation, no mobile layout.
+- Per-volume materials (`material <id> on <node>`) solve multi-material assemblies
+  (`V53`); a volume's material label travels with the 3MF export (validation reports unknown
+  label ids as errors and mixed labels as a warning). Per-part colours are render colours only.
+- No machine-specific g-code generation (slicers generate toolpaths), no full
+  Navier–Stokes CFD (the porous-flow solver is macroscopic Darcy–Forchheimer), and no B-rep
+  topology kernel; topology change is via level-set boundary evolution (`erode`, `V55`) and
+  adjoint shape+lattice co-optimisation.
 - Per-node material labels are not adopted on 3MF import (another tool's ids are not
   fieldsmith material ids). STEP import is CLI-only, tessellated; no B-rep editing.
 
 Thermal
 
-- Steady conduction only. `temperature`, `convection`, `heatflux` on labelled regions;
-  everything else insulated. Each thermal case expands the part by α·(T − tref) (tref is
-  the solve statement's, 20 °C when unstated). One isotropic conductivity: its value drops
-  out of the steady solution, so there is no k to set; the graded fill's re-solve instead
-  maps k per element through its material fraction. Radiation, transient heat, and
-  per-region conductivity are not modelled. Materials need a sourced CTE for thermal
+- Steady Fourier conduction plus BDF2 transient thermal shock (`solve t_end=… steps=…
+  t_init=…`, using the material's c_p). `temperature`, `convection`, `heatflux` on labelled
+  regions; everything else insulated. Each thermal case expands the part by α·(T − tref)
+  (tref is the solve statement's, 20 °C when unstated). For steady cases the isotropic
+  conductivity's value drops out of the solution, so there is no k to set; the graded fill's
+  re-solve maps k per element through its material fraction. Radiation and a per-region
+  conductivity statement are not modelled. Materials need a sourced CTE for thermal
   cases, which validation refuses without one (the web setup lens has no editor for a
   custom material's `a=` value; custom materials state it through the `.fsm` statement).
 
