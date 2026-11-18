@@ -8,9 +8,9 @@ Because `#` is a standard comment character in the `.fsm` grammar (`crates/field
 
 | Track | Source `.fsm` Directory | Generated Markdown Mirror | ID Prefix | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| **📐 Analytic Verification Test** | `examples/analytic/` | `docs/analytic-tests/` + `docs/verification/` | `A1`–`A14`, `A15`… | Closed-form mathematical solution compared quantitatively against Fieldsmith P2 FEA with automated CI tolerance gates. |
-| **📘 Guided Tutorial** | `examples/tutorials/` | `docs/tutorials/` | `T1`–`T7`, `T14`–`T15` | Step-by-step instructional lesson teaching a modelling, meshing, lattice, or physics workflow. |
-| **🚀 Multiphysics Case Study** | `examples/case-studies/` | `docs/case-studies/` | `T8`–`T13`, `T16`–`T17` | End-to-end analysis of real open-source hardware (e.g. rocket chambers, CVD coaters, SOFC stacks, RF structures). |
+| **📐 Analytic Verification Test** | `examples/analytic/` | `docs/analytic-tests/` + `docs/verification/` | `A1`–`A25` | Closed-form mathematical solution compared quantitatively against Fieldsmith P2 FEA with automated CI tolerance gates. |
+| **📘 Guided Tutorial** | `examples/tutorials/` | `docs/tutorials/` | `T1`–`T7`, `T14`–`T15`, `T19`–`T28` | Step-by-step instructional lesson teaching a modelling, meshing, lattice, or physics workflow. |
+| **🚀 Multiphysics Case Study** | `examples/case-studies/` | `docs/case-studies/` | `T8`–`T13`, `T16`–`T18` | End-to-end analysis of real open-source hardware (e.g. rocket chambers, CVD coaters, SOFC stacks, RF structures). |
 | **📦 Starter `.fsm` Template** | `examples/` | — | `<slug>.fsm` | Compact starter `.fsm` script in the `Examples ▾` toolbar menu. |
 
 ---

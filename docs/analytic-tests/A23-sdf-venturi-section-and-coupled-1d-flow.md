@@ -1,0 +1,153 @@
+# A23 — Analytic Benchmark A23: 3D Revolved Venturi SDF Cross-Sections, Coupled 1D Bernoulli–Poiseuille Flow & 3D Thermo-Elasticity
+
+> **Category**: Analytic Verification Test · **Level**: Analytic Verification · **Verification**: Verified by A23 & V63 · Exact 3D Revolve SDF Sections + 1D Bernoulli–Poiseuille + 3D CuCrZr Thermo-Elasticity
+> **Repository Path**: `docs/analytic-tests/A23-sdf-venturi-section-and-coupled-1d-flow.md` · **Starter Model**: `a23-sdf-venturi-section-and-coupled-1d-flow.fsm` · **Verification Reports**: `docs/verification/V4.md`, `docs/verification/V20.md`, `docs/verification/V63.md`
+
+Verify 2D marching-squares `section` extraction (`area`, `perimeter`, `dh`) from a 3D revolved CuCrZr bi-conical Venturi shell (`R(z): 8 → 4 → 8 mm`), Dual-AD spatial stencil `d_ds(q_dyn)` Bernoulli throat suction + Hagen–Poiseuille recovery, enthalpy conservation, and 1D→3D convective/pressure BC projection.
+
+## Closed-Form Analytic Reference vs Fieldsmith P2 FEA
+
+| Quantity | Closed-Form Formula | Analytic Reference | Fieldsmith Measured | Difference | Tolerance |
+| :--- | :--- | ---: | ---: | ---: | :--- |
+| Pappus Bi-Conical CuCrZr Shell Mass (R_o = 14 mm, R_i: 8 → 4 → 8 mm) | `V = (38,080 / 3) π mm³ = 39.8773 cm³,  m = ρ_CuCrZr V` | **354.91 g** | **354.83 g** | 0.02% | ≤ 1.0% |
+| Extracted Inlet & Throat Flow Areas A(0), A(40) | `A_in = 64 π = 201.062 mm²,  A_th = 16 π = 50.265 mm²` | **201.062 / 50.265 mm²** | **201.006 / 50.249 mm²** | 0.03% | ≤ 1.0% |
+| Throat Static Suction Δp_th (Bernoulli + Half-Frustum Viscous) | `Δp_th = ½ ρ_f (u_th² − u_in²) + ½ Δp_visc  (u_th = 4 u_in = 3.987 m/s)` | **7.785 kPa** | **7.788 kPa** | 0.04% | ≤ 1.5% |
+| Diffuser Exit Irreversible Loss Δp_exit (100% Bernoulli Recovery) | `∫₀ᴸ d_ds(q_dyn) ds = 0,  Δp_exit = (8 μ Q / π) ∫₀ᴸ ds / R(s)⁴` | **0.6977 kPa** | **0.6942 kPa** | 0.50% | ≤ 3.0% |
+| Coolant Exit Temperature T_f(L) under Outer Wall Heat Flux | `T_out = T_in + (2π R_o L q_ext) / (m_dot c_p)  (Q = 351.86 W)` | **25.4207 °C** | **25.4207 °C** | 0.00% | ≤ 0.5% |
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+name "A23 — 3D Revolved Venturi SDF Sections & Coupled 1D Flow"
+material cucrzr
+
+let r_in = 8.0
+let r_throat = 4.0
+let mdot = 0.20
+
+revolve outer_shell profile=[(0, 0), (14, 0), (14, 80), (0, 80)]
+revolve venturi_bore profile=[(0, -1), (8, -1), (8, 0), (4, 40), (8, 80), (8, 81), (0, 81)] subtract
+
+region inlet_flange = outer_shell.bottom
+region bore_wall = venturi_bore.side
+region outer_wall = outer_shell.side
+
+support hold_flange inlet_flange fixed=xyz
+load bore_press bore_wall pressure=0.20 case="VenturiPressure"
+convection bore_cool bore_wall h=0.018 tinf=25.2 case="VenturiThermal"
+heatflux ext_heat outer_wall q=0.05 case="VenturiThermal"
+
+system venturi_1d title="3D Revolved Venturi 1D Bernoulli-Poiseuille Flow" sector="3D-1D Coupled Fluids" nodes=41 span=(0, 80) axis=z {
+  section A_flow prop=area mode=void h=0.18
+  section P_wet prop=perimeter mode=void h=0.18
+  section D_h prop=dh mode=void h=0.18
+  design mdot nominal=0.20 min=0.08 max=0.45 unit="kg/s" symbol="m_dot" category=process
+  epistemic mu_mult nominal=1.0 sigma=0.08 min=0.80 max=1.20 unit="-" symbol="k_mu"
+  state p_f init="200" scale=200 unit="kPa" symbol="p_f"
+  state T_f init="25" scale=50 unit="C" symbol="T_f"
+  aux u_f expr="(mdot / 998.0) / (A_flow * 1e-6)"
+  aux q_dyn expr="0.5 * 998.0 * u_f * u_f * 1e-3"
+  aux dp_visc expr="32.0 * (0.015 * mu_mult) * u_f / (D_h * D_h)"
+  aux Re_d expr="998.0 * u_f * (D_h * 1e-3) / (0.015 * mu_mult)"
+  aux Nu_d expr="3.66 + 0.023 * pow(max(Re_d, 10.0), 0.8) * pow(4182.0 * 0.015 / 0.60, 0.4)"
+  aux h_conv expr="Nu_d * 0.00060 / D_h"
+  aux q_lin expr="0.05 * 2.0 * pi * 14.0"
+  aux p_mpa expr="p_f * 1e-3"
+  residual p_f eq="d_ds(p_f) + d_ds(q_dyn) + dp_visc" bc_left="p_f - 200.0"
+  residual T_f eq="4182.0 * mdot * d_ds(T_f) - q_lin" bc_left="T_f - 25.0"
+  objective dp_throat expr="200.0 - p_f" reduce=max kind=upper limit=15.0 unit="kPa" symbol="dp_th"
+  objective dp_exit expr="200.0 - p_f" reduce=exit kind=upper limit=3.0 unit="kPa" symbol="dp_out"
+  objective t_exit expr="T_f" reduce=exit kind=upper limit=40.0 unit="C" symbol="T_out"
+  audit enthalpy inflow="4182.0 * mdot * entry(T_f)" outflow="4182.0 * mdot * exit(T_f)" source="integral(q_lin)" tol=0.02 unit="W"
+  bind bore_cool attr=h expr="h_conv"
+  bind bore_cool attr=tinf expr="T_f"
+  bind bore_press attr=pressure expr="p_mpa"
+}
+
+solve tref=25
+
+assert "Pappus CuCrZr Venturi shell mass" metric="mass_g" target=354.91 tol="1.0%" unit="g"
+assert "Extracted inlet bore area A(0)" metric="section.A_flow.entry" target=201.062 tol="1.0%" unit="mm^2"
+assert "Extracted sonic/throat bore area A(40)" metric="section.A_flow.min" target=50.2655 tol="1.0%" unit="mm^2"
+assert "Extracted throat hydraulic diameter D_h(40)" metric="section.D_h.min" target=8.0000 tol="1.0%" unit="mm"
+assert "Extracted inlet hydraulic diameter D_h(0)" metric="section.D_h.entry" target=16.0000 tol="1.0%" unit="mm"
+assert "Venturi throat static suction dp_throat" metric="sys.dp_throat" target=7.785 tol="1.5%" unit="kPa"
+assert "Diffuser exit irreversible viscous loss dp_exit" metric="sys.dp_exit" target=0.6977 tol="3.0%" unit="kPa"
+assert "Coolant exit temperature T_out" metric="sys.t_exit" target=25.4207 tol="0.5%" unit="C"
+assert "3D CuCrZr wall peak temperature bounded" metric="max_temp:VenturiThermal" target="<= 95.0" tol="<= 95.0" unit="C"
+assert "3D thermo-mechanical peak von Mises stress" metric="max_vm_elem:VenturiThermal" target="<= 240.0" tol="<= 240.0" unit="MPa"
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Inspect the 3D Revolved Bi-Conical Venturi & Declarative `section` Block *(Lens: `SYSTEMS`)*
+
+Open **Coupled Systems**. `system venturi_1d` slices the 3D revolved CuCrZr Venturi (`R_o = 14 mm`, `R_i(z): 8 → 4 → 8 mm` over `z ∈ [0, 80] mm`) across `41` stations (`h = 0.18 mm`) using `section A_flow prop=area mode=void`, `section P_wet prop=perimeter mode=void`, and `section D_h prop=dh mode=void`.
+
+- **Expected Check**: The **Extracted 3D SDF & TPMS Cross-Section Profiles** table reports `A_flow = 201.06 mm²` at inlet/exit (`z = 0, 80 mm`) and `50.27 mm²` (`D_h = 8.00 mm`) at the `z = 40 mm` throat, with sparse adjoint sensitivity `d(dp_throat)/d(r_throat) < 0` differentiated directly through the 3D SDF cross-sections.
+
+### 2. Verify Bernoulli Throat Suction, Diffuser Recovery & 3D CuCrZr Wall Stress in Results (3) *(Lens: `RESULTS`)*
+
+Close Coupled Systems or click **Sync Coupled State to 3D Part** and switch to **3. Results**.
+
+- **Expected Check**: In the converging cone (`z: 0 → 40 mm`), fluid accelerates `4×` (`0.997 → 3.987 m/s`), creating a `7.79 kPa` throat suction (`p_f = 192.21 kPa`) and boosting turbulent-like convective cooling at the throat; in the symmetric diffuser (`z: 40 → 80 mm`), `d_ds(q_dyn)` recovers reversible kinetic head, leaving only the `0.70 kPa` closed-form viscous loss at the exit (`p_f = 199.30 kPa`).
+
+## 3. Theoretical Manual — Analytic Verification A23 — 3D SDF Cross-Section Extraction & Coupled 1D–3D Venturi Thermo-Fluid Mechanics
+
+Verifies two-way coupling between an arbitrary 3D `.fsm` implicit geometry (`revolve`), 2D marching-squares cross-section extraction (`A(s)`, `P_w(s)`, `D_h(s)`), Dual-AD 1D conservation equations with spatial expression stencils (`d_ds(q_dyn)`), and 3D P2 thermo-elasticity.
+
+### A23.1 Exact Bi-Conical Cross-Section Profiles & Bernoulli–Poiseuille Momentum Balance
+
+```text
+R(z) = R_in − (R_in − R_th) |1 − 2z/L|,   A(z) = π R(z)²,   P_w(z) = 2π R(z),   D_h(z) = 4A / P_w = 2 R(z)
+dp_f/dz + d/dz (½ ρ_f u(z)²) + 32 μ_eff u(z) / D_h(z)² = 0,   ∫₀ᴸ (dz / R(z)⁴) = L (R_in² + R_in R_th + R_th²) / (3 R_in³ R_th³)
+```
+
+Because inlet and outlet radii are equal (`R(0) = R(L) = 8 mm`), the conservative dynamic-head derivative `d_ds(q_dyn)` integrates to zero from inlet to exit (`q_dyn(L) − q_dyn(0) = 0`), recovering reversible kinetic energy while attaining a `16×` dynamic-head peak at the `z = 40 mm` throat (`R_th = 4 mm`).
+
+### A23.2 Enthalpy Balance & Two-Way Geometric Adjoint Sensitivity
+
+```text
+m_dot c_p dT_f/dz = 2π R_o q_ext   ⟹   T_f(L) = T_in + (2π R_o L q_ext) / (m_dot c_p)
+Jᵀ λ = (∂Φ / ∂W)ᵀ,   dΦ / dp_geom = ∂Φ / ∂p_geom − λᵀ (∂R / ∂A_sec · ∂A_sec / ∂p_geom)
+```
+
+Perturbing geometric `let` levers (`r_throat`) on a locked transverse marching-squares domain propagates shape sensitivities `∂A_flow/∂r_throat` directly into the sparse 1D adjoint `Jᵀ λ = (∂Φ/∂W)ᵀ` and onward into 3D P2 boundary-condition sensitivities.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Solve coupled 1D Venturi system with 3D SDF cross-sections
+
+```json
+{
+  "tool": "solve_coupled_system",
+  "arguments": {}
+}
+```
+
+### Solve 3D P2 CuCrZr thermo-elasticity with projected 1D BCs
+
+```json
+{
+  "tool": "solve",
+  "arguments": {
+    "dofs": 14000
+  }
+}
+```
+
+### Verify all 10 analytical geometry, flow, and 3D FEA contracts
+
+```json
+{
+  "tool": "verify",
+  "arguments": {
+    "dofs": 14000
+  }
+}
+```
+
+---
+*Generated from `examples/analytic/A23-sdf-venturi-section-and-coupled-1d-flow.fsm` by `node scripts/gen-sheet-docs.mjs`.*

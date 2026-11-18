@@ -1,7 +1,7 @@
 # T14 — Engineering Fixings: Minimal & Maximal Torque, Weibull/Creep Spreadsheet & JWST Qualification
 
 > **Category**: Guided Tutorial · **Level**: Flagship Multi-Physics · **Verification**: Verified by V57 (Motosh Sliding Surface + Weibull Regression R² > 0.999 + 72-DOF Adjoint)
-> **Repository Path**: `docs/tutorials/T14-fastener-torque-weibull-preload.md` · **Starter Model**: `t14-self-tapping-fixing-torque.fsm` · **Verification Reports**: `docs/verification/V53.md`
+> **Repository Path**: `docs/tutorials/T14-fastener-torque-weibull-preload.md` · **Starter Model**: `t14-self-tapping-fixing-torque.fsm` · **Verification Reports**: `docs/verification/V57.md`
 
 Built-in catalogue of self-tapping screws, hex head screws, socket cap bolts, washers, nuts, Nyloc nuts, and cantilever hook-clip plastic boxes — with automatic host tapping, Motosh sliding-surface torque T_min, and material-adaptive T_max (Plastic Creep vs Metal Yield vs JWST Weibull Fracture + 3K Woven CFRP).
 

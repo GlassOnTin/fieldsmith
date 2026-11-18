@@ -1,7 +1,7 @@
 # A14 — Analytic Benchmark A14: Electromagnetics & RF — 50 Ω Smith Chart Möbius Reflection Γ(Z_L), VSWR & Dipole Lobes (V59)
 
 > **Category**: Analytic Verification Test · **Level**: Analytic Verification · **Verification**: Verified by V59 · Exact Smith Chart & RF Scattering Identities · PASS (0.000%)
-> **Repository Path**: `docs/analytic-tests/A14-rf-smith-chart-vswr-dipole-lobes.md` · **Starter Model**: `a14-rf-smith-chart-dipole-benchmark.fsm` · **Verification Reports**: `docs/verification/V42.md`
+> **Repository Path**: `docs/analytic-tests/A14-rf-smith-chart-vswr-dipole-lobes.md` · **Starter Model**: `a14-rf-smith-chart-dipole-benchmark.fsm` · **Verification Reports**: `docs/verification/V59.md`
 
 Verify exact bilinear Möbius reflection identities Γ = (Z_L − Z₀)/(Z_L + Z₀) on the 50 Ω Smith chart, VSWR = (1 + |Γ|)/(1 − |Γ|), CFRP eddy-current skin-depth absorption, and half-wave dipole radiation gain G(θ, φ) (V59).
 

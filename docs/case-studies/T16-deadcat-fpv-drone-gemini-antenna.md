@@ -1,7 +1,7 @@
 # T16 — 4-Inch DeadCat FPV Drone & Gemini Dual-Band (900 MHz + 2.4 GHz) Antenna VNA, 50 Ω Smith Chart & 3D Lobe Optimisation
 
 > **Category**: Multiphysics Case Study · **Level**: Flagship Multi-Physics · **Verification**: Verified by V59 (Dual-Band VNA S₁₁/S₂₁ + 50 Ω Smith Chart + 3D Polar Lobes + CFRP Eddy Loss + Auto-Optimiser)
-> **Repository Path**: `docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md` · **Starter Model**: `t16-deadcat-4in-gemini-antenna.fsm` · **Verification Reports**: `docs/verification/V42.md`
+> **Repository Path**: `docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md` · **Starter Model**: `t16-deadcat-4in-gemini-antenna.fsm` · **Verification Reports**: `docs/verification/V59.md`
 
 Design a 4-inch DeadCat carbon-fibre (CFRP) FPV drone airframe with 4 × 1404 brushless motors, 20×20 mm FC/ESC/ELRS stack, Al 7075 camera cage, 4S LiPo, and 3D-printed TPU/PA12 Gemini dual-band antenna pod. Eliminate CFRP eddy-current absorption, dielectric boot detuning, and nose-on shadow nulls via VNA S₁₁/S₂₁ sweeps, 50 Ω Smith Chart matching, and 3D radiation lobe synthesis.
 

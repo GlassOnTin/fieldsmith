@@ -17,15 +17,15 @@ shipped report number.
 
 | Check | Result | Measured |
 | :-- | :-- | :-- |
-| every relative link in docs/README.md resolves | pass | 106 links, 0 dead
-| every "Verified by" V# is linked in its own row | pass | 16 claiming rows, 0 mismatched
+| every relative link in docs/README.md resolves | pass | 172 links, 0 dead
+| every "Verified by" V# is linked in its own row | pass | 23 claiming rows, 0 mismatched
 | every "Verified by" V# has a shipped report | pass | 0 unshipped
 | every shipped V# report has a live emitter | pass | 62 reports, 0 without an emitter
 | every v<n> verification test ships its V<n> report | pass | 44 test files, 0 without a report
 | every V# cited in README.md / VISION.md has a shipped report | pass | 0 unshipped citations
 | every scripts/ path cited in README.md / VISION.md exists | pass | 3 citations, 0 dead
 | every V1–V<n> suite-range claim matches the shipped suite | pass | 6 range claims, 0 stale
-| docs-claim scan completed | pass | 62 shipped reports (max V63), 102 emitter sources, 16 claiming rows
+| docs-claim scan completed | pass | 62 shipped reports (max V63), 104 emitter sources, 23 claiming rows
 
 ## Limits
 

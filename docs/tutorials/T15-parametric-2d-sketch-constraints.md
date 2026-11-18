@@ -1,7 +1,7 @@
 # T15 — Parametric 2D Sketching, Jacobian QR Constraint Solver & Surface-Attached 3D Feature Engine
 
 > **Category**: Guided Tutorial · **Level**: Intermediate · **Verification**: Verified by V58 (LM + Homotopy + QR Rank DOF + Surface-Attached Extrude/Revolve + MCP Round-Trip)
-> **Repository Path**: `docs/tutorials/T15-parametric-2d-sketch-constraints.md` · **Starter Model**: `t15-parametric-sketch-bracket.fsm` · **Verification Reports**: `docs/verification/V4.md`
+> **Repository Path**: `docs/tutorials/T15-parametric-2d-sketch-constraints.md` · **Starter Model**: `t15-parametric-sketch-bracket.fsm` · **Verification Reports**: `docs/verification/V58.md`
 
 Solve geometric & dimensional 2D sketch constraints via Damped Levenberg–Marquardt with homotopy continuation and column-pivoted QR rank diagnostics (DOF = N_vars − rank(J)), drag along the constraint nullspace, and project profiles onto any 3D face as Boss Extrudes, Pocket Cuts, or Revolves.
 

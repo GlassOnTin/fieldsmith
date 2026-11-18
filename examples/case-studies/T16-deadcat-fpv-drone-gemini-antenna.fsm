@@ -10,7 +10,7 @@ fieldsmith 1
 # @doc_path: docs/case-studies/T16-deadcat-fpv-drone-gemini-antenna.md
 # @fsm_path: examples/case-studies/T16-deadcat-fpv-drone-gemini-antenna.fsm
 # @starter_fsm_name: t16-deadcat-4in-gemini-antenna.fsm
-# @verification_refs: docs/verification/V42.md
+# @verification_refs: docs/verification/V59.md
 # ---
 # @step: 1. Inspect the Unoptimised Tucked CFRP Build (d_cfrp = 6.5 mm, Detuned TPU Boot, 38° Skew) || shape
 #   In the embedded Gemini Dual-Band Antenna VNA & Smith Chart Workbench card above (or by clicking "📡 Open Full Smith / VNA / Lobe Workbench…"), click "⚠️ Load Unoptimised Tucked Build (6.5 mm Standoff)". When the coaxial dipole is tucked only 6.5 mm behind the conductive 3K woven carbon-fibre plate inside a thick 3.2 mm TPU boot (ε_r = 2.95) at a narrow 38° V-angle, image currents in the carbon plate cancel radiation resistance R_rad while inducing heavy Leontovich eddy-current ohmic loss R_cfrp. Both 915 MHz (S₁₁ = −0.5 dB, VSWR 35.4, η = 6.5%) and 2.44 GHz (S₁₁ = −1.2 dB, VSWR 14.0, η = 16.7%) sit near the outer rim of the 50 Ω Smith Chart.

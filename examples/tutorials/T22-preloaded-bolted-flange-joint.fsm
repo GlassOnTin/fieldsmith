@@ -9,7 +9,7 @@ fieldsmith 1
 # @verification_badge: Verified by V57 & V63 · Unified Rust Fastener Kernel + 3D Preload Adjoint UQ
 # @fsm_path: examples/tutorials/T22-preloaded-bolted-flange-joint.fsm
 # @starter_fsm_name: t22-preloaded-bolted-flange-joint.fsm
-# @verification_refs: crates/fieldsmith-verify/tests/v57_fixings_torque_weibull.rs, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
+# @verification_refs: docs/verification/V57.md, docs/verification/V63.md, crates/fieldsmith-verify/tests/v57_fixings_torque_weibull.rs, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
 # ---
 # @mcp: Evaluate M5 Class 10.9 bolt + washer + nyloc envelope & open-standard benchmarks || evaluate_fixing || {"input":{"fixing_kind":"hex_cap_bolt","nominal_d_mm":5.0,"pitch_mm":0.8,"engagement_length_mm":10.0,"substrate_material":"al7075","fastener_material":"steel_10_9","include_washer":true,"associated_nut":"nyloc_nut","vibration_g":12.0,"payload_mass_kg":1.8}}
 # @mcp: Insert 4-corner M5 cap-bolt + washer + nyloc stack with 15% ISO 16047 preload UQ || insert_fixing || {"kind":"hex_cap_bolt","size":"M5","engagement_mm":10.0,"host_id":"flange","host_face":"top","placement_mode":"flange_4_corners","flange_inset_x_mm":12.0,"flange_inset_y_mm":10.0,"fastener_material":"steel_10_9","include_washer":true,"associated_nut":"nyloc_nut","preload_cv":0.15,"vibration_g":12.0,"payload_mass_kg":1.8}

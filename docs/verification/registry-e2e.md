@@ -25,8 +25,8 @@ this is a filesystem check rather than a browser probe.
 | every DEFAULT_DOC_PATHS value resolves | pass | 31 entries, 0 dead
 | every shipped example has resolvable .fsm coverage (header or map) | pass | 53 examples, 0 without coverage
 | no orphan fallback-map keys (every key is a shipped example) | pass | 0 orphan
-| every example header @verification_refs resolves | pass | 99 declared, 0 dead
-| every DEFAULT_VERIFICATION_REFS value resolves | pass | 98 entries, 0 dead
+| every example header @verification_refs resolves | pass | 104 declared, 0 dead
+| every DEFAULT_VERIFICATION_REFS value resolves | pass | 103 entries, 0 dead
 | verification badges are honest (no PASS claim without a shipped reference; pending never claims PASS) | pass | 35 claim verification, 5 pending, 0 dishonest
 | fallback-map entries mirror the literate header (no map↔header contradiction) | pass | 0 divergent
 | category fallback mirrors the literate header @category | pass | 53 categorised, 0 divergent

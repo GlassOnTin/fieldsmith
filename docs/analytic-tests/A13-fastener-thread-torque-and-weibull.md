@@ -1,7 +1,7 @@
 # A13 — Analytic Benchmark A13: Fastener Inclined-Plane Thread Torque Envelope [T_min, T_max] & Weibull Regression (V57)
 
 > **Category**: Analytic Verification Test · **Level**: Analytic Verification · **Verification**: Verified by V57 · NASA/ECSS/VDI 2230 Fastener Standards · PASS (< 0.1%)
-> **Repository Path**: `docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md` · **Starter Model**: `a13-fastener-torque-weibull.fsm` · **Verification Reports**: `docs/verification/V53.md`
+> **Repository Path**: `docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md` · **Starter Model**: `a13-fastener-torque-weibull.fsm` · **Verification Reports**: `docs/verification/V57.md`
 
 Verify Kellermann–Klein / VDI 2230 thread-plus-collar torque decomposition T = F [½ d₂ tan(ψ + ρ') + μ_b r_b] against NASA-STD-5020B, ECSS-E-ST-32-08C, and Bossard boss-tapping benchmarks plus closed-form Weibull MLE/OLS regression.
 

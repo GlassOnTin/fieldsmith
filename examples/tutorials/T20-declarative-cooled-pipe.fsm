@@ -9,7 +9,7 @@ fieldsmith 1
 # @verification_badge: Verified by V63 · Dual-AD 1D System + 3D Staggered Thermo-Elastic Adjoints
 # @fsm_path: examples/tutorials/T20-declarative-cooled-pipe.fsm
 # @starter_fsm_name: t20-declarative-cooled-pipe.fsm
-# @verification_refs: crates/fieldsmith-verify/tests/v63_architecture_lock.rs
+# @verification_refs: docs/verification/V63.md, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
 # ---
 # @mcp: Solve 1D coolant channel and sync 3D lerp BCs || solve_coupled_system || {"sync_cad":true}
 # @mcp: Verify initial 3D thermo-elastic contracts || verify || {"h":4.5}

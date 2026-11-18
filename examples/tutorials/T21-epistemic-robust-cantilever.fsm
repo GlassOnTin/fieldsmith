@@ -9,7 +9,7 @@ fieldsmith 1
 # @verification_badge: Verified by V63 · O(1)-Solve 3D FOSM Adjoint UQ + Robust Quantile SQP
 # @fsm_path: examples/tutorials/T21-epistemic-robust-cantilever.fsm
 # @starter_fsm_name: t21-epistemic-robust-cantilever.fsm
-# @verification_refs: crates/fieldsmith-verify/tests/v63_architecture_lock.rs
+# @verification_refs: docs/verification/V63.md, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
 # ---
 # @mcp: Propagate 3 epistemic uncertainties in O(1) FEA solves || uq || {"dofs":4000}
 # @mcp: Verify initial robust p90/p10 contracts || verify || {"dofs":4000}

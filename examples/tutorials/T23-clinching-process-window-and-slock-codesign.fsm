@@ -9,7 +9,7 @@ fieldsmith 1
 # @verification_badge: Verified by A19 & V63 · Unified Rust Clinching Kernel + 3D J2 Secant FEA
 # @fsm_path: examples/tutorials/T23-clinching-process-window-and-slock-codesign.fsm
 # @starter_fsm_name: t23-clinching-process-window-and-slock-codesign.fsm
-# @verification_refs: docs/verification/V53.md, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
+# @verification_refs: docs/verification/V53.md, docs/verification/V63.md, crates/fieldsmith-verify/tests/v63_architecture_lock.rs
 # ---
 # @mcp: Stamp under-clinched 3D S-Lock joint (X = 1.20 mm) onto DC04 lap coupon with 3D J2 plasticity || apply_clinching || {"insert_joint":true,"host_id":"sheet","bottom_thickness_x_mm":1.20,"service_load_n":2200.0,"j2_plasticity":true,"bottom_x_std_mm":0.04}
 # @mcp: Evaluate 51-point Lee-Kim / Breda hat-curve process window and springback-adjusted interlock || evaluate_clinching || {}

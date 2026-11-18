@@ -1,0 +1,87 @@
+# T24 — 3D P2 Transient Thermal-Shock Quench & Timeline Co-Design on a 316L Valve Seat Ring
+
+> **Category**: Guided Tutorial · **Level**: Advanced · **Verification**: Verified by A20 & V63 · 3D P2 BDF2 Conduction + Batched Multi-RHS Thermal Shock
+> **Repository Path**: `docs/tutorials/T24-transient-thermal-shock-quench-and-ramp.md` · **Starter Model**: `t24-transient-thermal-shock-quench-and-ramp.fsm` · **Verification Reports**: `docs/verification/V20.md`, `docs/verification/V63.md`
+
+Model cold-blowdown thermal shock on an austenitic 316L flanged valve seat ring (`solve tref=280 t_end=4.0 steps=16 t_init=280`), scrub the 3D P2 BDF2 temperature and stress wave across time in Results (3), and enforce peak transient thermal-shock contracts over MCP.
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+name "T24 — 316L Valve Seat Ring Cold-Blowdown Thermal Shock"
+material ss316l
+
+cylinder outer_flange r=18 h=8 at=(0, 0, 4)
+cylinder seat_neck r=12 h=12 at=(0, 0, 6)
+cylinder seat_bore r=7 h=20 at=(0, 0, 6) subtract
+
+region bore_wall = seat_bore.side
+region outer_rim = outer_flange.side
+region base_seat = outer_flange.bottom
+
+support axial_seat base_seat fixed=xyz
+convection cold_blowdown bore_wall h=0.010 tinf=20 case="Blowdown"
+convection warm_casing outer_rim h=0.0004 tinf=280 case="Blowdown"
+
+solve tref=280 t_end=4.0 steps=16 t_init=280
+
+assert "Transient bore thermal-shock stress active" metric="peak_transient_vm" target=">= 120.0" tol=">= 120.0" unit="MPa"
+assert "Quenched bore skin cools below 190 degC by t_end" metric="final_min_temp" target="<= 190.0" tol="<= 190.0" unit="°C"
+assert "Outer flange thermal core remains above 230 degC at t_end" metric="final_max_temp" target=">= 230.0" tol=">= 230.0" unit="°C"
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Inspect the 316L Flanged Valve Seat Ring & Blowdown BCs *(Lens: `SETUP`)*
+
+Open **Setup (2)**. The 316L stainless seat ring (`outer_flange` Ø36 × 8 mm with Ø14 mm inner bore `seat_bore`) starts at `T₀ = 280 °C` (`solve tref=280 t_end=4.0 steps=16 t_init=280`). Cold `20 °C` blowdown fluid quenches the inner bore (`h = 0.010 W/(mm²·K)`) while the lower mounting rim is restrained axially (`fixed=z`) and anchored against rigid-body drift.
+
+- **Expected Check**: Physical material diffusivity `α_th = k / (ρ c_p) = 4.06 mm²/s` governs how fast the cold thermal boundary layer penetrates from the Ø14 mm bore toward the Ø36 mm outer rim.
+
+### 2. Scrub Peak Shock vs. Late-Time Relaxation in Results (3) *(Lens: `RESULTS`)*
+
+Switch to **Results (3)**. In the **3D P2 BDF2 Transient Conduction & Thermal Shock** card, compare **Peak Shock σ_vM(t*)** against **Steady Limit (t → ∞)**, drag the time slider from `Step 0` (`t = 0 s`) to `Step 16` (`t = 4.0 s`), and toggle between **Stress** and **Temperature** colourmaps.
+
+- **Expected Check**: Click **`⚡ Peak (t*)`** to snap back to the worst-case hoop thermal-shock frame, or click **`Steady (t → ∞)`** + **`Undo`** to compare transient vs. steady conduction in one undoable transaction.
+
+## 3. Theoretical Manual — Tutorial T24 — Transient Blowdown Thermal Shock in Thick-Walled Rings
+
+Demonstrates why rapid internal cooling of a thick metallic ring produces a transient hoop tensile spike at the inner bore skin well before the outer flange cools, and how one shared `.fsm` `solve t_end=<s> steps=<n> t_init=<°C>` specification drives CLI, MCP `transient_solve`, `verify`, and browser 3D scrubbing.
+
+### T24.1 Bore Quench Skin Tension & Multi-RHS Reuse
+
+```text
+(3M / (2Δt) + A) Tᵐ = M (4 Tᵐ⁻¹ − Tᵐ⁻²) / (2Δt) + q_conv
+K_el [u⁰, u¹, …, uᴺ] = [f_th(T⁰), f_th(T¹), …, f_th(Tᴺ)]
+```
+
+Because elastic stiffness K_el is independent of time t, Fieldsmith constructs the two-level P1-coarse Cholesky preconditioner once and solves all N + 1 Duhamel–Neumann thermal-load right-hand sides on the same factorisation, delivering the full 3D stress timeline at a fraction of independent re-solves.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Run 16-step 3D P2 BDF2 transient blowdown quench on the 316L valve seat ring
+
+```json
+{
+  "tool": "transient_solve",
+  "arguments": {
+    "dofs": 12000
+  }
+}
+```
+
+### Verify transient thermal-shock peak and bore cooldown contracts
+
+```json
+{
+  "tool": "verify",
+  "arguments": {
+    "dofs": 12000
+  }
+}
+```
+
+---
+*Generated from `examples/tutorials/T24-transient-thermal-shock-quench-and-ramp.fsm` by `node scripts/gen-sheet-docs.mjs`.*

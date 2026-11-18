@@ -1,0 +1,107 @@
+# T26 — Stress-Graded AlSi10Mg Gyroid Counterflow Recuperator with Protected Boss Detour
+
+> **Category**: Guided Tutorial · **Level**: Advanced · **Verification**: Verified by A22 & V63 · 3D P2 Darcy–Forchheimer Obstacle Detour + Graded Gyroid Glycol/Water Counterflow HX
+> **Repository Path**: `docs/tutorials/T26-graded-gyroid-counterflow-recuperator.md` · **Starter Model**: `t26-graded-gyroid-counterflow-recuperator.fsm` · **Verification Reports**: `docs/verification/V36.md`, `docs/verification/V54.md`, `docs/verification/V63.md`
+
+Co-design a pressurized AlSi10Mg additive recuperator (`skin = 1.2 mm`, cell-graded `4.5 → 2.8 mm` Gyroid sheet lattice, protected central M6 mounting boss) combining 3D thermo-mechanical stress grading with 3D P2 nonlinear Darcy–Forchheimer porous flow and unbalanced Glycol/Water counterflow `ε–NTU` heat exchange.
+
+## 1. Starter `.fsm` Model
+
+Save or load this script in the Fieldsmith UI (**Tutorials & Benchmarks** drawer) or run via CLI (`fieldsmith solve --report`):
+
+```fsm
+name "T26 — Graded AlSi10Mg Gyroid Counterflow Recuperator"
+material alsi10mg
+
+let mdot_hot = 0.09
+let mdot_cold = 0.11
+
+box body size=(72, 36, 18) at=(36, 18, 9)
+cylinder bolt_hole r=3.5 h=24 at=(36, 18, 9) subtract
+
+region inlet_header = body.nx
+region outlet_header = body.px
+region bolt_pad = bolt_hole.side
+region hot_base = body.nz
+region top_lid = body.pz
+
+support mount_clamp bolt_pad fixed=xyz
+load proof_p top_lid pressure=1.2 case="InternalPressure"
+temperature base_hot hot_base temp=90 case="ThermalDuty"
+convection lid_cool top_lid h=0.002 tinf=25 case="ThermalDuty"
+
+fill gyroid sheet cell=4.5 cell_min=2.8 skin=1.2 rho=(0.20, 0.55) curve=1.0 wall=0.35 protect=(bolt_hole) margin=3.5
+hx inlet=inlet_header outlet=outlet_header mdot=mdot_hot tin=90 fluid=glycol50 arrangement=counterflow cold_mdot=mdot_cold cold_tin=20 cold_fluid=water pout=120
+
+solve tref=25 build=(0, 0)
+
+assert "Counterflow heat duty exceeds 8 kW" metric="hx_heat_duty_w" target=">= 8000.0" tol=">= 8000.0" unit="W"
+assert "Volumetric power density exceeds 180 kW/L" metric="hx_power_density_kw_l" target=">= 180.0" tol=">= 180.0" unit="kW/L"
+assert "Counterflow effectiveness in compact recuperator band" metric="hx_effectiveness" target=">= 0.35" tol=">= 0.35" unit="-"
+assert "Glycol hot-side pressure drop stays below 60 kPa" metric="hx_pressure_drop_kpa" target="<= 60.0" tol="<= 60.0" unit="kPa"
+assert "Two-stream pumping power stays below 8 W" metric="hx_pumping_power_w" target="<= 8.0" tol="<= 8.0" unit="W"
+assert "Graded lattice structural yield utilization stays safe" metric="graded.yield_utilization:InternalPressure" target="<= 0.85" tol="<= 0.85" unit="-"
+assert "Graded core saves over 35% mass vs solid housing" metric="mass_saved_pct" target=">= 35.0" tol=">= 35.0" unit="%"
+```
+
+## 2. Step-by-Step Guided Walkthrough
+
+### 1. Inspect the Protected M6 Mounting Boss, Skin Shell & Graded Gyroid Core in Fill (4) *(Lens: `FILL`)*
+
+Open **4. Fill**. The `72 × 36 × 18 mm` AlSi10Mg housing is clamped at its central M6 bore (`bolt_hole`) under `1.2 MPa` proof pressure (`InternalPressure`) and `90 → 25 °C` thermal loading (`ThermalDuty`). `fill gyroid sheet cell=4.5 cell_min=2.8 skin=1.2 rho=(0.20, 0.55) protect=(bolt_hole)` keeps a leak-tight `1.2 mm` outer skin and a solid boss collar around the central fastener while grading cell size (`4.5 → 2.8 mm`) and relative density (`0.20 → 0.55`) toward high-stress zones.
+
+- **Expected Check**: The `inlet_header` (`x = 0`) and `outlet_header` (`x = 72 mm`) ports open cleanly through the outer skin into the two interpenetrating Gyroid labyrinths, while the solid central boss collar blocks porous flow (`κ_solid = 10⁻⁹ κ_core`), forcing the 3D fluid streamlines to bifurcate around the fastener.
+
+### 2. Visualise 3D Porous Pressure Detour & Glycol/Water Counterflow Duty in Results (3) *(Lens: `RESULTS`)*
+
+Switch to **3. Results**, inspect the **TPMS Porous Flow & Conjugate HX** card (`glycol50` hot loop at `0.09 kg/s, 90 °C` vs `water` cold loop at `0.11 kg/s, 20 °C`), and click **Show Porous Pressure p**.
+
+- **Expected Check**: The 3D P2 `porous_pressure` field shows steeper isobar crowding where flow accelerates around the central mounting boss, while the graded Gyroid core transfers `> 8 kW` (`> 180 kW/L`) at `< 8 W` total pumping power and saves `> 35%` mass relative to a solid AlSi10Mg block.
+
+## 3. Theoretical Manual — Tutorial T26 — Co-Designing Structural Bosses, Leak-Tight Skins & 3D Graded TPMS Heat Exchangers
+
+Real additive heat exchangers are never uniform rectangular bricks: they require leak-tight outer skins, solid fastener bosses, internal proof-pressure strength, and bounded pressure drop around 3D geometric obstacles.
+
+### T26.1 Coupled Structural-Hydraulic Trade-Off in Stress-Graded TPMS Cores
+
+```text
+ρ(x) ↑ ,  a(x) ↓   ⟹   E_eff(x) ↑ ,  a_v(x) = c_area / a(x) ↑ ,  UA ↑   but   K(x) ∝ φ_f(x)³ a(x)² ↓ ,  Δp ↑
+```
+
+Refining unit-cell size (`6 → 4 mm`) and thickening walls (`ρ: 0.20 → 0.55`) around the central mounting boss simultaneously boosts Gibson–Ashby structural stiffness/yield resistance and local interstitial surface-area density `a_v`, while decreasing local permeability `K(x)`. Solving `-∇·(κ_eff(x, |∇p|) ∇p) = 0` directly on the 3D graded tetrahedral mesh captures both the solid boss blockage and spatially varying permeability/Forchheimer drag without 1D rectangular-duct approximations.
+
+## 4. Reproducible Automation (MCP / REST API & CLI)
+
+### Inspect graded Gyroid fill and Glycol/Water counterflow HX setup
+
+```json
+{
+  "tool": "inspect",
+  "arguments": {}
+}
+```
+
+### Solve 3D thermo-mechanical grading and Darcy-Forchheimer counterflow HX
+
+```json
+{
+  "tool": "solve",
+  "arguments": {
+    "dofs": 14000
+  }
+}
+```
+
+### Verify thermal duty, pressure drop, yield margin, and mass-saving contracts
+
+```json
+{
+  "tool": "verify",
+  "arguments": {
+    "dofs": 14000
+  }
+}
+```
+
+---
+*Generated from `examples/tutorials/T26-graded-gyroid-counterflow-recuperator.fsm` by `node scripts/gen-sheet-docs.mjs`.*

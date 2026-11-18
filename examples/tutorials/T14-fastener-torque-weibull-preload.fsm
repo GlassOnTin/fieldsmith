@@ -10,7 +10,7 @@ fieldsmith 1
 # @doc_path: docs/tutorials/T14-fastener-torque-weibull-preload.md
 # @fsm_path: examples/tutorials/T14-fastener-torque-weibull-preload.fsm
 # @starter_fsm_name: t14-self-tapping-fixing-torque.fsm
-# @verification_refs: docs/verification/V53.md
+# @verification_refs: docs/verification/V57.md
 # ---
 # @assert: Applied Self-Tapping Screw Preload |F_preload| || resultant_mag || 795.00 || 0.5% || N
 # @assert: Boss Clamping von Mises Stress σ_vM || max_vm_elem || >= 10.0 || >= 10.0 || MPa

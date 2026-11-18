@@ -10,7 +10,7 @@ fieldsmith 1
 # @doc_path: docs/analytic-tests/A13-fastener-thread-torque-and-weibull.md
 # @fsm_path: examples/analytic/A13-fastener-thread-torque-and-weibull.fsm
 # @starter_fsm_name: a13-fastener-torque-weibull.fsm
-# @verification_refs: docs/verification/V53.md
+# @verification_refs: docs/verification/V57.md
 # ---
 # @check: Kellermann–Klein / VDI 2230 Thread + Collar Torque Decomposition T(F) || T = F [½ d₂ tan(ψ + ρ') + μ_b r_b],   tan ρ' = μ_t / cos(α/2),   tan ψ = P / (π d₂) || Exact Algebraic Identity (T_thread + T_collar = T_total) || Exact Match across all 7 Fixing Kinds || 0.000% || ≤ 10⁻⁹
 # @check: Open-Standard Qualification Benchmarks (NASA-STD-5020B M6 / ECSS M4 / Bossard M3) || F_proof = A_t (0.75 σ_y) = 14,472 N (A286 M6×1.0);   T_max > T_min Safe Window || 4 / 4 Open Standards PASS (NASA, ECSS, VDI 2230, Bossard) || 4 / 4 PASS (T_rec within [T_min, T_max]) || 0.000% || Exact
