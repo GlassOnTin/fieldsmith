@@ -1,0 +1,4 @@
+v0.20.0:
+- The full benchmark library is now documented: all 53 literate sheets (A1-A25, T1-T28) are indexed and have a markdown mirror, generated from each sheet's literate header.
+- A new CI gate checks that every shipped sheet is indexed and mirrored and that every verification claim links the report it names.
+- Verification provenance corrected across nine sheets so badges, headers, and mirrors agree on the shipped report.
